@@ -1,0 +1,56 @@
+symbol: BTC/USD
+exchange: kraken
+exchange_fallbacks:
+  - coinbase
+  - bitstamp
+
+# Prediction horizon: predict price direction over next N minutes
+prediction_horizon_minutes: 5
+prediction_interval_minutes: 5
+
+# Candle intervals to collect and use
+intervals:
+  - 1m
+  - 5m
+  - 15m
+
+# Historical data collection (Phase 1)
+historical_years: 3
+
+# Trading costs (used for edge calculation)
+fees:
+  maker_pct: 0.10   # 0.10% maker
+  taker_pct: 0.10   # 0.10% taker
+slippage_pct: 0.05  # 0.05% estimated slippage
+
+# Edge threshold: only signal trade when prob exceeds this after costs
+min_edge_confidence: 0.57
+no_trade_band: 0.03
+
+# Paper trading (Stage 3 / Phase 5)
+paper:
+  bankroll: 100.0
+  risk_per_trade_pct: 1.0
+  max_consecutive_losses: 3
+  max_daily_drawdown_pct: 5.0
+
+# Feature windows (in candles of respective timeframe)
+features:
+  momentum_windows: [5, 15, 30]
+  volatility_window: 20
+  rsi_period: 14
+  volume_spike_window: 20
+  vwap_window: 48
+
+# Model
+model:
+  type: lightgbm
+  train_test_split: 0.2
+  min_train_samples: 10000
+
+# Data paths (relative to project root)
+paths:
+  candles: data/candles
+  models: data/models
+  logs: data/logs
+  db: data/logs/predictions.db
