@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -224,10 +225,17 @@ class PostgresPredictionStore(PredictionStore):
 
 
 def create_prediction_store(cfg: dict[str, Any]) -> PredictionStore:
+  log = logging.getLogger(__name__)
   db_url = os.getenv("DATABASE_URL") or cfg.get("database_url")
   if db_url:
-    store = PostgresPredictionStore(db_url)
-  else:
-    store = SqlitePredictionStore(cfg["paths"]["db"])
+    try:
+      store = PostgresPredictionStore(db_url)
+      store.init()
+      log.info("Using PostgreSQL for predictions")
+      return store
+    except Exception as e:
+      log.warning("PostgreSQL unavailable (%s), falling back to SQLite", e)
+  store = SqlitePredictionStore(cfg["paths"]["db"])
   store.init()
+  log.info("Using SQLite for predictions at %s", cfg["paths"]["db"])
   return store

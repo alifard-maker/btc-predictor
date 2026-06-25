@@ -120,13 +120,14 @@ class PredictionLoop:
   def start_background(self) -> BackgroundScheduler:
     """Non-blocking scheduler for FastAPI / Railway."""
     interval = self.cfg.get("prediction_interval_minutes", 5)
-    self.fetch_and_store()
-    self.run_prediction()
 
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(self.fetch_and_store, "interval", minutes=1, id="fetch", max_instances=1)
     scheduler.add_job(self.run_prediction, "interval", minutes=interval, id="predict", max_instances=1)
     scheduler.add_job(self.resolve_outcomes, "interval", minutes=1, id="resolve", max_instances=1)
+    # Run first fetch/predict immediately in background — don't block API startup
+    scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
+    scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=5), id="predict_now")
     scheduler.start()
     self._scheduler = scheduler
     log.info("Background scheduler started (predict every %dm)", interval)

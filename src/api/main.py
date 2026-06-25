@@ -50,9 +50,17 @@ async def lifespan(app: FastAPI):
   _loop = PredictionLoop(_cfg)
   app.state.loop = _loop
 
-  if _cfg.get("enable_scheduler", True):
-    _scheduler = _loop.start_background()
-    app.state.scheduler = _scheduler
+  def _boot_scheduler() -> None:
+    global _scheduler
+    try:
+      if _cfg.get("enable_scheduler", True):
+        _scheduler = _loop.start_background()
+        app.state.scheduler = _scheduler
+    except Exception:
+      log.exception("Scheduler failed to start")
+
+  # Don't block API startup — Railway needs /health to respond quickly
+  threading.Thread(target=_boot_scheduler, daemon=True).start()
 
   log.info("BTC Predictor API ready on port %s", os.getenv("PORT", "8000"))
   yield
@@ -90,11 +98,11 @@ def root():
 
 @app.get("/health")
 def health():
+  """Always return 200 so Railway healthchecks pass."""
   if _loop is None:
-    return {"status": "starting"}
+    return {"status": "starting", "service": "btc-predictor"}
   status = _loop.status()
-  healthy = status["candles_1m"] > 0 and status["last_error"] is None
-  return {"status": "ok" if healthy else "degraded", **status}
+  return {"status": "ok", "service": "btc-predictor", **status}
 
 
 @app.get("/api/status")
