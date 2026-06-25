@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config.yaml pyproject.toml ./
+COPY config.yaml pyproject.toml start.sh ./
 COPY src ./src
 COPY scripts ./scripts
 
@@ -17,9 +17,8 @@ ENV PYTHONPATH=/app
 ENV DATA_DIR=/data
 ENV ENABLE_SCHEDULER=true
 
-RUN mkdir -p /data/candles /data/models /data/logs
+RUN mkdir -p /data/candles /data/models /data/logs && chmod +x start.sh
 
 EXPOSE 8080
 
-# Railway injects $PORT at runtime — must use shell form to expand it
-CMD ["sh", "-c", "exec uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD ["./start.sh"]

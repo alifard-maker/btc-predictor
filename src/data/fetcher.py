@@ -31,7 +31,14 @@ class DataFetcher:
     self.cfg = cfg
     self.symbol = cfg["symbol"]
     self._exchange_id: str | None = None
+    self.exchange: ccxt.Exchange | None = None
+    self._last_connect_error: str | None = None
+
+  def _ensure_exchange(self) -> ccxt.Exchange:
+    if self.exchange is not None:
+      return self.exchange
     self.exchange = self._connect()
+    return self.exchange
 
   def _connect(self) -> ccxt.Exchange:
     candidates = [self.cfg.get("exchange", "kraken")] + self.cfg.get("exchange_fallbacks", [])
@@ -54,13 +61,17 @@ class DataFetcher:
 
     raise RuntimeError(f"No exchange available. Last error: {last_err}")
 
+  def is_connected(self) -> bool:
+    return self.exchange is not None
+
   def fetch_ohlcv(
     self,
     interval: str,
     since_ms: int | None = None,
     limit: int = 1000,
   ) -> pd.DataFrame:
-    raw = self.exchange.fetch_ohlcv(
+    ex = self._ensure_exchange()
+    raw = ex.fetch_ohlcv(
       self.symbol, timeframe=interval, since=since_ms, limit=limit
     )
     df = pd.DataFrame(raw, columns=CANDLE_COLUMNS)
@@ -87,7 +98,7 @@ class DataFetcher:
       if last_ts <= since_ms:
         break
       since_ms = last_ts + 1
-      time.sleep(self.exchange.rateLimit / 1000)
+      time.sleep(ex.rateLimit / 1000)
 
     if not frames:
       return pd.DataFrame(columns=CANDLE_COLUMNS)

@@ -47,11 +47,17 @@ def _verify_admin(x_api_key: str | None = Header(default=None)) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   global _loop, _scheduler
-  _loop = PredictionLoop(_cfg)
-  app.state.loop = _loop
+  try:
+    _loop = PredictionLoop(_cfg)
+    app.state.loop = _loop
+  except Exception as e:
+    log.exception("PredictionLoop init failed: %s", e)
+    _loop = None
 
   def _boot_scheduler() -> None:
     global _scheduler
+    if _loop is None:
+      return
     try:
       if _cfg.get("enable_scheduler", True):
         _scheduler = _loop.start_background()
@@ -59,10 +65,8 @@ async def lifespan(app: FastAPI):
     except Exception:
       log.exception("Scheduler failed to start")
 
-  # Don't block API startup — Railway needs /health to respond quickly
   threading.Thread(target=_boot_scheduler, daemon=True).start()
-
-  log.info("BTC Predictor API ready on port %s", os.getenv("PORT", "8000"))
+  log.info("BTC Predictor API ready on port %s", os.getenv("PORT", "8080"))
   yield
 
   if _scheduler:

@@ -108,7 +108,8 @@ class PredictionLoop:
     df_1m = self.storage.load("1m")
     return {
       "symbol": self.cfg["symbol"],
-      "exchange": getattr(self.fetcher, "_exchange_id", self.cfg.get("exchange")),
+      "exchange": getattr(self.fetcher, "_exchange_id", None) or self.cfg.get("exchange"),
+      "exchange_connected": self.fetcher.is_connected(),
       "model": "trained" if self.predictor.model else "baseline",
       "candles_1m": len(df_1m),
       "latest_candle": df_1m["timestamp"].iloc[-1].isoformat() if not df_1m.empty else None,

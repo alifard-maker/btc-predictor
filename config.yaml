@@ -1,6 +1,7 @@
-symbol: BTC/USD
-exchange: kraken
+symbol: BTC/USDT
+exchange: binance
 exchange_fallbacks:
+  - kraken
   - coinbase
   - bitstamp
 
