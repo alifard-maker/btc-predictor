@@ -53,6 +53,7 @@ class PredictionLoop:
     self._scheduler: BackgroundScheduler | BlockingScheduler | None = None
     self._ticker_cache: tuple[KalshiPriceQuote | None, float] | None = None
     self._slot_tick_cache: dict[str, dict[str, Any]] = {}
+    self._late_entry_logged: set[str] = set()
     self.train_status: dict[str, Any] = {"state": "idle"}
 
   def _default_model_path(self) -> str | None:
@@ -196,6 +197,7 @@ class PredictionLoop:
     stats = self.calibration.reset_stats(note=note)
     self.postmortems.clear()
     self.latest_prediction = None
+    self._late_entry_logged.clear()
     log.info("Calibration stats reset: %s", stats)
     return stats
 
@@ -459,7 +461,23 @@ class PredictionLoop:
     )
     monitor.live_price_age_sec = round(live_quote.age_sec, 1) if live_quote and live_quote.age_sec is not None else None
     monitor.kalshi = self.kalshi.active_market_summary()
+    self._maybe_log_late_entry(slot_s, monitor)
     return monitor
+
+  def _maybe_log_late_entry(self, slot_s: pd.Timestamp, monitor) -> None:
+    action = getattr(monitor, "late_entry_action", "") or ""
+    if action not in ("LATE LONG", "LATE SHORT"):
+      return
+    key = self._slot_cache_key(slot_s)
+    if key in self._late_entry_logged:
+      return
+    prob = monitor.reassessed_prob_up
+    if prob is None:
+      return
+    ts = floor_to_15m(slot_s, self.tz).isoformat()
+    if self.calibration.record_late_entry(ts, action, float(prob), int(monitor.seconds_remaining)):
+      self._late_entry_logged.add(key)
+      log.info("Late entry logged: %s %.0f%% UP (%ds left)", action, prob * 100, monitor.seconds_remaining)
 
   def poll_brti(self) -> None:
     """Background refresh of live price (BRTI or exchange)."""

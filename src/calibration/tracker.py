@@ -83,6 +83,15 @@ class CalibrationTracker:
     epoch = write_stats_epoch(self.cfg, note=note) if self.cfg else {}
     return {"deleted_predictions": deleted, **epoch}
 
+  def record_late_entry(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+  ) -> bool:
+    return self.store.record_late_entry(slot_timestamp, signal, prob_up, seconds_remaining)
+
   def stats_epoch(self) -> dict[str, Any] | None:
     if not self.cfg:
       return None
@@ -124,6 +133,77 @@ class CalibrationTracker:
 
   def _prediction_correct(self, df: pd.DataFrame) -> pd.Series:
     return (df["prob_up"] >= 0.5) == df["outcome"]
+
+  def _late_entry_correct(self, df: pd.DataFrame) -> pd.Series:
+    def _row(r: pd.Series) -> bool:
+      sig = str(r.get("late_entry_signal") or "")
+      if sig == "LATE LONG":
+        return bool(r["outcome"])
+      if sig == "LATE SHORT":
+        return not bool(r["outcome"])
+      return False
+
+    return df.apply(_row, axis=1)
+
+  def _late_entry_mask(self, df: pd.DataFrame) -> pd.Series:
+    if "late_entry_signal" not in df.columns:
+      return pd.Series(False, index=df.index)
+    return df["late_entry_signal"].notna() & (df["late_entry_signal"].astype(str).str.len() > 0)
+
+  def _late_entry_summary(self, df: pd.DataFrame) -> dict[str, Any]:
+    empty = {
+      "n_logged": 0,
+      "n_resolved": 0,
+      "accuracy": None,
+      "brier_score": None,
+      "late_long_signals": 0,
+      "late_long_accuracy": None,
+      "late_short_signals": 0,
+      "late_short_accuracy": None,
+      "avg_seconds_remaining": None,
+    }
+    if df.empty or "late_entry_signal" not in df.columns:
+      return empty
+
+    late = df[self._late_entry_mask(df)]
+    if late.empty:
+      return empty
+
+    resolved = late[late["outcome"].notna()]
+    out = {
+      "n_logged": int(len(late)),
+      "n_resolved": int(len(resolved)),
+      "accuracy": None,
+      "brier_score": None,
+      "late_long_signals": int((late["late_entry_signal"] == "LATE LONG").sum()),
+      "late_long_accuracy": None,
+      "late_short_signals": int((late["late_entry_signal"] == "LATE SHORT").sum()),
+      "late_short_accuracy": None,
+      "avg_seconds_remaining": None,
+    }
+    if "late_entry_seconds_remaining" in late.columns:
+      rem = pd.to_numeric(late["late_entry_seconds_remaining"], errors="coerce").dropna()
+      if len(rem):
+        out["avg_seconds_remaining"] = float(rem.mean())
+
+    if resolved.empty:
+      return out
+
+    correct = self._late_entry_correct(resolved)
+    out["accuracy"] = float(correct.mean())
+    if "late_entry_prob_up" in resolved.columns:
+      probs = pd.to_numeric(resolved["late_entry_prob_up"], errors="coerce")
+      valid = probs.notna()
+      if valid.any():
+        out["brier_score"] = float(((probs[valid] - resolved.loc[valid, "outcome"]) ** 2).mean())
+
+    longs = resolved[resolved["late_entry_signal"] == "LATE LONG"]
+    shorts = resolved[resolved["late_entry_signal"] == "LATE SHORT"]
+    if len(longs):
+      out["late_long_accuracy"] = float(self._late_entry_correct(longs).mean())
+    if len(shorts):
+      out["late_short_accuracy"] = float(self._late_entry_correct(shorts).mean())
+    return out
 
   def rolling_accuracy(self, windows_hours: list[int] | None = None) -> dict[str, dict[str, Any]]:
     """Correct/total counts for resolved predictions in each rolling time window."""
@@ -173,15 +253,22 @@ class CalibrationTracker:
     kalshi_n = len(df)
     total_n = len(all_resolved)
     if df.empty:
-      out = {"n_resolved": 0, "rolling_accuracy": self.rolling_accuracy(), "stats_epoch": self.stats_epoch()}
+      out = {
+        "n_resolved": 0,
+        "rolling_accuracy": self.rolling_accuracy(),
+        "stats_epoch": self.stats_epoch(),
+        "late_entry": self._late_entry_summary(df),
+        "open_at_slot": {"n_resolved": 0, "long_signals": 0, "short_signals": 0},
+      }
       if self.kalshi_only and total_n > kalshi_n:
         out["n_resolved_total"] = total_n
         out["n_excluded_non_kalshi"] = total_n - kalshi_n
       return out
 
     brier = ((df["prob_up"] - df["outcome"]) ** 2).mean()
-    longs = df[df["signal"] == "LONG"]
-    shorts = df[df["signal"] == "SHORT"]
+    open_df = df[df["signal"].isin(["LONG", "SHORT"])]
+    longs = open_df[open_df["signal"] == "LONG"]
+    shorts = open_df[open_df["signal"] == "SHORT"]
     cal = self.calibration_report()
 
     return {
@@ -193,6 +280,15 @@ class CalibrationTracker:
       "brier_score": float(brier),
       "overall_accuracy": float(self._prediction_correct(df).mean()),
       "rolling_accuracy": self.rolling_accuracy(),
+      "open_at_slot": {
+        "n_resolved": int(len(open_df)),
+        "long_signals": len(longs),
+        "long_accuracy": float(longs["outcome"].mean()) if len(longs) else None,
+        "short_signals": len(shorts),
+        "short_accuracy": float(1 - shorts["outcome"].mean()) if len(shorts) else None,
+        "brier_score": float(((open_df["prob_up"] - open_df["outcome"]) ** 2).mean()) if len(open_df) else None,
+      },
+      "late_entry": self._late_entry_summary(df),
       "long_signals": len(longs),
       "long_accuracy": float(longs["outcome"].mean()) if len(longs) else None,
       "short_signals": len(shorts),

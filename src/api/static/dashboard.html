@@ -587,9 +587,30 @@
       return `<div class="rolling-acc">${cards}</div>`;
     }
 
+    function renderLateEntryStats(le) {
+      if (!le || (!le.n_logged && !le.n_resolved)) return '';
+      const acc = le.accuracy != null ? pct(le.accuracy) : '—';
+      const brier = le.brier_score != null ? le.brier_score.toFixed(4) : '—';
+      const avgRem = le.avg_seconds_remaining != null ? Math.round(le.avg_seconds_remaining) + 's' : '—';
+      return `<div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--border)">
+        <p class="muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">Late entry (mid-slot)</p>
+        <div class="cal-stats">
+          <div><span>Logged</span><strong>${le.n_logged}</strong></div>
+          <div><span>Resolved</span><strong>${le.n_resolved}</strong></div>
+          <div><span>Late accuracy</span><strong>${acc}</strong></div>
+          <div><span>Late Brier</span><strong>${brier}</strong></div>
+          <div><span>Avg time left</span><strong>${avgRem}</strong></div>
+          ${le.late_long_signals ? `<div><span>LATE LONG</span><strong>${le.late_long_accuracy != null ? pct(le.late_long_accuracy) : '—'} (${le.late_long_signals})</strong></div>` : ''}
+          ${le.late_short_signals ? `<div><span>LATE SHORT</span><strong>${le.late_short_accuracy != null ? pct(le.late_short_accuracy) : '—'} (${le.late_short_signals})</strong></div>` : ''}
+        </div>
+        <p class="muted" style="font-size:.68rem;margin-top:.5rem">Uses outlook % at first LATE signal vs BRTI at close. Open LONG/SHORT stats exclude these rows.</p>
+      </div>`;
+    }
+
     function renderCalibration(data) {
       const s = data.summary;
-      if (!s.n_resolved) {
+      const le = s.late_entry || {};
+      if (!s.n_resolved && !le.n_logged) {
         const excluded = s.n_excluded_non_kalshi ? ` (${s.n_excluded_non_kalshi} older rows excluded — run Kalshi backfill)` : '';
         $('calibration').innerHTML = `<p class="muted">Not enough Kalshi-resolved predictions yet${excluded}. Check back after slots settle.</p>`;
         return;
@@ -600,17 +621,21 @@
       const epoch = s.stats_epoch?.stats_since
         ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Tracking since <strong>${time(s.stats_epoch.stats_since)}</strong>${s.stats_epoch.note ? ` · ${s.stats_epoch.note}` : ''}</p>`
         : '';
+      const open = s.open_at_slot || {};
       $('calibration').innerHTML = `
         ${kalshiNote}
         ${epoch}
-        <p class="muted" style="margin-bottom:.75rem">When model says X% UP, does BRTI finish above t=0 ~X% of the time?</p>
-        <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Rolling hit rate — one count per 15m slot (max 4/hour):</p>
+        <p class="muted" style="margin-bottom:.75rem">Open signal: when model says X% UP at slot open, does BRTI finish above t=0 ~X% of the time?</p>
+        <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Rolling hit rate (open lean) — one count per 15m slot:</p>
         ${renderRollingAccuracy(s.rolling_accuracy)}
         <div class="cal-stats">
-          <div><span>Resolved (Kalshi)</span><strong>${s.n_resolved}</strong></div>
-          ${s.brier_score!=null?`<div><span>Brier</span><strong>${s.brier_score.toFixed(4)}</strong></div>`:''}
-          ${s.overall_accuracy!=null?`<div><span>All-time accuracy</span><strong>${pct(s.overall_accuracy)}</strong></div>`:''}
-        </div>`;
+          <div><span>Resolved (Kalshi)</span><strong>${s.n_resolved || 0}</strong></div>
+          ${s.brier_score!=null?`<div><span>Open Brier</span><strong>${s.brier_score.toFixed(4)}</strong></div>`:''}
+          ${s.overall_accuracy!=null?`<div><span>Open accuracy</span><strong>${pct(s.overall_accuracy)}</strong></div>`:''}
+          ${open.long_signals ? `<div><span>LONG @ open</span><strong>${open.long_accuracy != null ? pct(open.long_accuracy) : '—'} (${open.long_signals})</strong></div>`:''}
+          ${open.short_signals ? `<div><span>SHORT @ open</span><strong>${open.short_accuracy != null ? pct(open.short_accuracy) : '—'} (${open.short_signals})</strong></div>`:''}
+        </div>
+        ${renderLateEntryStats(le)}`;
     }
 
     function renderPostmortems(rows) {
@@ -622,13 +647,15 @@
         <thead><tr><th>Slot</th><th>Signal</th><th>Move</th><th>Result</th><th>Lesson</th></tr></thead>
         <tbody>${rows.map(r => {
           const move = r.move_pct != null ? `${r.move_pct >= 0 ? '+' : ''}${r.move_pct.toFixed(2)}%` : '—';
-          const dir = r.direction_correct == null ? '—' : r.direction_correct ? '<span class="up">✓</span>' : '<span class="down">✗</span>';
-          const trade = r.trade_correct == null ? '' : r.trade_correct ? ' · trade ✓' : ' · trade ✗';
+          const sig = r.late_entry_signal ? `${r.signal} → ${r.late_entry_signal}` : (r.signal || 'NO TRADE');
+          const dir = r.late_entry_signal
+            ? (r.actual_up != null ? ((r.late_entry_signal === 'LATE LONG' ? r.actual_up : !r.actual_up) ? '<span class="up">✓</span>' : '<span class="down">✗</span>') : '—')
+            : (r.direction_correct == null ? '—' : r.direction_correct ? '<span class="up">✓</span>' : '<span class="down">✗</span>');
           return `<tr>
             <td>${time(r.slot_start || r.timestamp)}</td>
-            <td>${badge(r.signal || 'NO TRADE')}</td>
+            <td style="font-size:.78rem">${sig}</td>
             <td class="${(r.move_pct||0)>=0?'up':'down'}">${move}</td>
-            <td>${dir}${trade}</td>
+            <td>${dir}${r.trade_correct == null ? '' : r.trade_correct ? ' · trade ✓' : ' · trade ✗'}</td>
             <td style="font-size:.78rem;max-width:280px">${r.summary || (r.lessons && r.lessons[0]) || '—'}</td>
           </tr>`;
         }).join('')}</tbody></table>`;
@@ -640,12 +667,14 @@
         return;
       }
       $('history').innerHTML = `<table>
-        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>Close BRTI</th><th>UP</th><th>Signal</th><th>Outcome</th></tr></thead>
+        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>Close BRTI</th><th>UP</th><th>Open</th><th>Late</th><th>Outcome</th></tr></thead>
         <tbody>${rows.map(p => `<tr>
           <td>${p.slot_label || time(p.timestamp)}</td>
           <td title="${p.reference_source || ''}">${price(p.reference_price ?? p.price)}</td>
           <td title="${p.exit_source || ''}">${p.exit_price != null ? price(p.exit_price) : '—'}</td>
-          <td class="up">${pct(p.prob_up)}</td><td>${badge(p.signal)}</td>
+          <td class="up">${pct(p.prob_up)}</td>
+          <td>${badge(p.signal)}</td>
+          <td>${p.late_entry_signal ? badge(p.late_entry_signal) + (p.late_entry_prob_up != null ? ` <span class="muted">${pct(p.late_entry_prob_up)}</span>` : '') : '—'}</td>
           <td>${p.outcome==null?'—':(p.outcome?'<span class="up">UP</span>':'<span class="down">DOWN</span>')}</td>
         </tr>`).join('')}</tbody></table>`;
     }

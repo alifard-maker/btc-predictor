@@ -32,6 +32,10 @@ def build_postmortem(
     move_usd = exit_p - ref
     move_pct = move_usd / ref * 100
 
+  late_sig = str(r.get("late_entry_signal") or "")
+  late_prob = r.get("late_entry_prob_up")
+  late_prob = float(late_prob) if late_prob is not None and late_prob == late_prob else None
+
   pred_up = prob >= 0.5
   direction_correct = actual_up == pred_up if actual_up is not None else None
   traded = signal in ("LONG", "SHORT")
@@ -39,10 +43,20 @@ def build_postmortem(
   if traded and actual_up is not None:
     trade_correct = (signal == "LONG" and actual_up) or (signal == "SHORT" and not actual_up)
 
+  late_correct = None
+  if late_sig and actual_up is not None:
+    late_correct = (late_sig == "LATE LONG" and actual_up) or (late_sig == "LATE SHORT" and not actual_up)
+
   lessons: list[str] = []
   conf = abs(prob - 0.5) * 2
 
-  if not traded and move_pct is not None and abs(move_pct) >= 0.15:
+  if late_sig and late_correct is False:
+    lessons.append(
+      f"{late_sig} at close miss — said {late_prob*100:.0f}% UP" if late_prob is not None else f"{late_sig} at close miss"
+    )
+  if late_sig and late_correct is True:
+    lessons.append(f"{late_sig} would have won ({move_pct:+.2f}% BRTI move)" if move_pct is not None else f"{late_sig} would have won")
+  if not traded and not late_sig and move_pct is not None and abs(move_pct) >= 0.15:
     lessons.append(
       f"NO TRADE but slot moved {move_pct:+.2f}% — model conviction only {conf*100:.0f}%"
     )
@@ -58,6 +72,8 @@ def build_postmortem(
   return {
     "slot_start": slot.isoformat(),
     "signal": signal,
+    "late_entry_signal": late_sig or None,
+    "late_entry_prob_up": round(late_prob, 4) if late_prob is not None else None,
     "prob_up": round(prob, 4),
     "confidence": round(conf, 3),
     "reference_price": ref,

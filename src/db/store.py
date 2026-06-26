@@ -30,6 +30,10 @@ _EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
   ("exit_price", "REAL"),
   ("exit_source", "TEXT"),
   ("kalshi_market_ticker", "TEXT"),
+  ("late_entry_signal", "TEXT"),
+  ("late_entry_prob_up", "REAL"),
+  ("late_entry_at", "TEXT"),
+  ("late_entry_seconds_remaining", "INTEGER"),
 )
 
 _EXTRA_COLUMNS_PG: tuple[tuple[str, str], ...] = (
@@ -37,6 +41,10 @@ _EXTRA_COLUMNS_PG: tuple[tuple[str, str], ...] = (
   ("exit_price", "DOUBLE PRECISION"),
   ("exit_source", "TEXT"),
   ("kalshi_market_ticker", "TEXT"),
+  ("late_entry_signal", "TEXT"),
+  ("late_entry_prob_up", "DOUBLE PRECISION"),
+  ("late_entry_at", "TIMESTAMPTZ"),
+  ("late_entry_seconds_remaining", "INTEGER"),
 )
 
 
@@ -109,6 +117,15 @@ class PredictionStore(ABC):
 
   @abstractmethod
   def clear_all(self) -> int: ...
+
+  @abstractmethod
+  def record_late_entry(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+  ) -> bool: ...
 
 
 class SqlitePredictionStore(PredictionStore):
@@ -265,6 +282,29 @@ class SqlitePredictionStore(PredictionStore):
       n = int(cur.fetchone()[0])
       conn.execute("DELETE FROM predictions")
     return n
+
+  def record_late_entry(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+  ) -> bool:
+    ts = pd.Timestamp(slot_timestamp).isoformat()
+    prob_up = float(_py(prob_up))
+    with self._conn() as conn:
+      cur = conn.execute(
+        """UPDATE predictions SET
+             late_entry_signal = ?,
+             late_entry_prob_up = ?,
+             late_entry_at = datetime('now'),
+             late_entry_seconds_remaining = ?
+           WHERE timestamp = ?
+             AND (late_entry_signal IS NULL OR late_entry_signal = '')
+             AND signal = 'NO TRADE'""",
+        (signal, prob_up, int(seconds_remaining), ts),
+      )
+      return cur.rowcount > 0
 
 
 class PostgresPredictionStore(PredictionStore):
@@ -441,6 +481,32 @@ class PostgresPredictionStore(PredictionStore):
         cur.execute("DELETE FROM predictions")
       conn.commit()
     return n
+
+  def record_late_entry(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+  ) -> bool:
+    ts = pd.Timestamp(slot_timestamp).isoformat()
+    prob_up = float(_py(prob_up))
+    with self._conn() as conn:
+      with conn.cursor() as cur:
+        cur.execute(
+          """UPDATE predictions SET
+               late_entry_signal = %s,
+               late_entry_prob_up = %s,
+               late_entry_at = NOW(),
+               late_entry_seconds_remaining = %s
+             WHERE timestamp = %s
+               AND (late_entry_signal IS NULL OR late_entry_signal = '')
+               AND signal = 'NO TRADE'""",
+          (signal, prob_up, int(seconds_remaining), ts),
+        )
+        updated = cur.rowcount > 0
+      conn.commit()
+    return updated
 
 
 def create_prediction_store(cfg: dict[str, Any]) -> PredictionStore:
