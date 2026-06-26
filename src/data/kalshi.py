@@ -38,7 +38,10 @@ class KalshiSlotSettlement:
 
   @property
   def settled(self) -> bool:
-    return self.close_brti is not None and self.status in ("finalized", "settled", "closed")
+    # Kalshi sets expiration_value while status is still "determined" (before "finalized").
+    if self.close_brti is None:
+      return False
+    return self.status not in ("active", "open", "unopened", "inactive")
 
   @property
   def outcome_up(self) -> bool | None:
