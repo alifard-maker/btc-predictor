@@ -90,7 +90,7 @@ late_entry:
   enabled: true
   outlook_after_minutes: 2      # show outlook bars after this much slot history
   min_elapsed_minutes: 4        # earliest minute to recommend entering
-  min_remaining_minutes: 5      # need enough time left to justify fees
+  min_remaining_minutes: 3      # need enough time left to justify fees
   min_confidence: 0.62          # stricter than open (0.57)
   min_move_pct: 0.04            # min |move| vs t=0
   min_side_time_pct: 0.58       # share of slot minutes on favorable side of ref
