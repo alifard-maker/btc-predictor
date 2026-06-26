@@ -73,8 +73,8 @@
     .slot-progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), #818cf8); border-radius: 99px; transition: width .5s; }
     .monitor-reasons { margin: 0.65rem 0 0; padding-left: 1.1rem; font-size: 0.78rem; color: var(--muted); }
     .monitor-reasons li { margin: 0.25rem 0; }
-    .ref-override { margin-bottom: 0.85rem; padding: 0.75rem; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); }
-    .ref-override label { display: block; font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.4rem; }
+    .ref-override { margin-bottom: 0.85rem; padding: 0.85rem 1rem; background: var(--surface); border-radius: 10px; border: 1px solid var(--border); }
+    .ref-override label { display: block; font-size: 0.72rem; color: var(--text); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.45rem; font-weight: 600; }
     .ref-override-row { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; }
     .ref-override input { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 0.4rem 0.55rem; width: 9rem; font-size: 0.85rem; }
     .ref-override button { background: var(--surface); color: var(--text); border: 1px solid var(--border); padding: 0.4rem 0.65rem; border-radius: 6px; cursor: pointer; font-size: 0.78rem; margin-top: 0; }
@@ -101,6 +101,16 @@
 
     <div id="error" class="err"></div>
 
+    <div class="card ref-override" id="ref-override-panel">
+      <label for="ref-override-input">Your exact price at t=0 (if the app is off)</label>
+      <div class="ref-override-row">
+        <input type="number" id="ref-override-input" step="0.01" min="0" placeholder="e.g. 59504.44" />
+        <button type="button" class="primary" onclick="applyRefOverride()">Use my price</button>
+        <button type="button" onclick="clearRefOverride()">Reset to API</button>
+      </div>
+      <div class="ref-override-hint" id="ref-override-hint">Enter the price you actually got at slot open — P&amp;L and exit guidance use this instead of the API reference for the current slot.</div>
+    </div>
+
     <div class="grid">
       <div class="card" id="pred-card">
         <h2>Next 5 minutes</h2>
@@ -114,15 +124,6 @@
 
     <div class="card monitor-card" id="monitor-card">
       <h2>Live position · intra-slot exit</h2>
-      <div class="ref-override" id="ref-override-panel">
-        <label for="ref-override-input">Your exact price at t=0 (optional)</label>
-        <div class="ref-override-row">
-          <input type="number" id="ref-override-input" step="0.01" min="0" placeholder="e.g. 59504.44" />
-          <button type="button" class="primary" onclick="applyRefOverride()">Use my price</button>
-          <button type="button" onclick="clearRefOverride()">Reset to API</button>
-        </div>
-        <div class="ref-override-hint" id="ref-override-hint">Overrides API reference for this slot only — saved in your browser.</div>
-      </div>
       <div id="slot-monitor"><p class="muted">Loading…</p></div>
     </div>
 
@@ -343,8 +344,8 @@
       const ref = p.reference_price ?? p.price;
       const refApi = p.reference_price_api;
       const refLabel = p.using_override
-        ? `Your t=0 (API ${refApi != null ? price(refApi) : '—'})`
-        : 'Reference price (t=0) · Coinbase 1m open';
+        ? `Your t=0 entry (API was ${refApi != null ? price(refApi) : '—'})`
+        : 'Reference price (t=0) · Coinbase 1m open — edit above if your fill differed';
       const slot = p.slot_label ? `<div class="sub" style="margin-bottom:.5rem">${p.slot_label}</div>` : '';
       const live = p.current_price
         ? `<div class="live-price">Live now: ${price(p.current_price)}</div>` : '';
