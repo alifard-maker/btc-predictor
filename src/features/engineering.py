@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from src.features.slots import floor_to_15m
+
 
 def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
   delta = series.diff()
@@ -142,31 +144,73 @@ def compute_market_structure_features(df: pd.DataFrame) -> pd.DataFrame:
   return out
 
 
+def compute_slot_context_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+  """Summarize prior 4h of 15m slots (16 candles) for slot-based prediction."""
+  out = df.copy()
+  lookback = cfg.get("features", {}).get("slot_lookback_candles", 16)
+
+  if "return_1" not in out:
+    out["return_1"] = out["close"].pct_change()
+
+  # 4h window stats on 15m bars
+  out["slot_up_ratio"] = (out["return_1"] > 0).rolling(lookback).mean()
+  out["slot_return_4h"] = out["close"].pct_change(lookback)
+  out["slot_range_4h"] = (
+    (out["high"].rolling(lookback).max() - out["low"].rolling(lookback).min())
+    / out["close"].replace(0, np.nan)
+  )
+  out["slot_volume_4h"] = out["volume"].rolling(lookback).sum()
+  out["slot_volatility_4h"] = out["return_1"].rolling(lookback).std()
+  out["slot_higher_highs_4h"] = (out["high"] > out["high"].shift(1)).rolling(lookback).sum()
+  out["slot_lower_lows_4h"] = (out["low"] < out["low"].shift(1)).rolling(lookback).sum()
+
+  return out
+
+
 def build_feature_matrix(
-  df_1m: pd.DataFrame,
-  df_15m: pd.DataFrame | None,
-  cfg: dict,
+  df_primary: pd.DataFrame,
+  df_context: pd.DataFrame | None = None,
+  cfg: dict | None = None,
   include_phase2: bool = True,
+  primary_timeframe: str = "15m",
 ) -> pd.DataFrame:
-  """Merge 1m features with 15m context aligned to each 1m bar."""
-  base = compute_stage1_features(df_1m, cfg)
+  """
+  Build features on primary timeframe (default 15m).
+  df_context: optional 1m data merged for microstructure within slots.
+  """
+  cfg = cfg or {}
+  base = compute_stage1_features(df_primary, cfg)
 
   if include_phase2:
     base = compute_waveform_features(base)
     base = compute_market_structure_features(base)
 
-  if df_15m is not None and not df_15m.empty:
-    ctx = compute_stage1_features(df_15m, cfg)
-    ctx_cols = [c for c in ctx.columns if c not in ("timestamp", "open", "high", "low", "close", "volume")]
-    ctx = ctx[["timestamp"] + ctx_cols].rename(columns={c: f"ctx15_{c}" for c in ctx_cols})
-    base = pd.merge_asof(
-      base.sort_values("timestamp"),
-      ctx.sort_values("timestamp"),
-      on="timestamp",
-      direction="backward",
-    )
+  base = compute_slot_context_features(base, cfg)
+
+  if df_context is not None and not df_context.empty and primary_timeframe == "15m":
+    ctx = df_context.copy()
+    ctx["timestamp"] = pd.to_datetime(ctx["timestamp"], utc=True)
+    ctx["slot_start"] = ctx["timestamp"].apply(floor_to_15m)
+    agg = ctx.groupby("slot_start").agg(
+      m1_return=("close", lambda s: (s.iloc[-1] - s.iloc[0]) / s.iloc[0] if len(s) > 1 else 0),
+      m1_volatility=("close", lambda s: s.pct_change().std() if len(s) > 2 else 0),
+      m1_volume=("volume", "sum"),
+      m1_bars=("close", "count"),
+    ).reset_index().rename(columns={"slot_start": "timestamp"})
+    base = pd.merge(base, agg, on="timestamp", how="left")
 
   return base
+
+
+def build_feature_matrix_1m_15m(
+  df_1m: pd.DataFrame,
+  df_15m: pd.DataFrame | None,
+  cfg: dict,
+  include_phase2: bool = True,
+) -> pd.DataFrame:
+  """Backward-compatible: 15m primary with 1m context."""
+  primary = df_15m if df_15m is not None and not df_15m.empty else df_1m
+  return build_feature_matrix(primary, df_1m, cfg, include_phase2, "15m")
 
 
 def feature_columns(df: pd.DataFrame) -> list[str]:
@@ -175,10 +219,14 @@ def feature_columns(df: pd.DataFrame) -> list[str]:
   return [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
 
 
-def add_label(df: pd.DataFrame, horizon_minutes: int = 5) -> pd.DataFrame:
-  """Label: 1 if price is higher after horizon_minutes, else 0."""
+def add_label(df: pd.DataFrame, horizon_minutes: int = 15, timeframe_minutes: int = 15) -> pd.DataFrame:
+  """
+  Label: 1 if price is higher after the prediction horizon.
+  On 15m candles, horizon=15 means shift(-1) — next candle = next 15m slot.
+  """
   out = df.copy()
-  out["future_close"] = out["close"].shift(-horizon_minutes)
+  candles_ahead = max(1, horizon_minutes // timeframe_minutes)
+  out["future_close"] = out["close"].shift(-candles_ahead)
   out["future_return"] = (out["future_close"] - out["close"]) / out["close"]
   out["label"] = (out["future_return"] > 0).astype(int)
   return out

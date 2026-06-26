@@ -18,8 +18,8 @@ console = Console()
 
 
 @click.command()
-@click.option("--train-window", default=50_000, help="Rolling training window size")
-@click.option("--step", default=1000, help="Test step size per fold")
+@click.option("--train-window", default=2000, help="Rolling training window (15m bars)")
+@click.option("--step", default=200, help="Test step size per fold")
 @click.option("--output", default=None, help="Save results CSV path")
 def main(train_window: int, step: int, output: str | None) -> None:
   cfg = load_config()
@@ -27,13 +27,13 @@ def main(train_window: int, step: int, output: str | None) -> None:
   df_1m = storage.load("1m")
   df_15m = storage.load("15m")
 
-  if df_1m.empty:
-    console.print("[red]No data. Run collect_historical.py first.[/red]")
+  if df_15m.empty:
+    console.print("[red]No 15m data. Run collect_historical.py first.[/red]")
     sys.exit(1)
 
-  console.print(f"Backtesting on {len(df_1m):,} candles...")
+  console.print(f"Backtesting on {len(df_15m):,} 15m candles...")
   bt = Backtester(cfg)
-  results = bt.run(df_1m, df_15m if not df_15m.empty else None, train_window, step)
+  results = bt.run(df_15m, df_1m if not df_1m.empty else None, train_window, step)
   analysis = bt.analyze(results)
 
   table = Table(title="Backtest Results")

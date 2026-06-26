@@ -16,31 +16,27 @@ class Backtester:
   def __init__(self, cfg: dict[str, Any]):
     self.cfg = cfg
     self.edge = EdgeCalculator(cfg)
-    self.horizon = cfg.get("prediction_horizon_minutes", 5)
+    self.horizon = cfg.get("prediction_horizon_minutes", 15)
 
   def run(
     self,
-    df_1m: pd.DataFrame,
-    df_15m: pd.DataFrame | None = None,
-    train_window: int = 50_000,
-    step: int = 1000,
+    df_15m: pd.DataFrame,
+    df_1m: pd.DataFrame | None = None,
+    train_window: int = 2000,
+    step: int = 200,
   ) -> pd.DataFrame:
-    """
-    Walk-forward: train on rolling window, predict on next step bars.
-    Returns DataFrame of predictions with outcomes and PnL.
-    """
-    features = build_feature_matrix(df_1m, df_15m, self.cfg, include_phase2=True)
-    features = add_label(features, horizon_minutes=self.horizon)
+    features = build_feature_matrix(df_15m, df_1m, self.cfg, include_phase2=True, primary_timeframe="15m")
+    features = add_label(features, horizon_minutes=self.horizon, timeframe_minutes=15)
     cols = feature_columns(features)
     clean = features.dropna(subset=cols + ["label", "future_return"]).reset_index(drop=True)
 
     if len(clean) < train_window + step:
-      raise ValueError(f"Need at least {train_window + step} rows, got {len(clean)}")
+      raise ValueError(f"Need at least {train_window + step} 15m rows, got {len(clean)}")
 
     results = []
     trainer = ModelTrainer(self.cfg)
 
-    for start in range(train_window, len(clean) - self.horizon, step):
+    for start in range(train_window, len(clean) - 1, step):
       train_slice = clean.iloc[start - train_window : start]
       test_slice = clean.iloc[start : start + step]
 

@@ -5,51 +5,51 @@ exchange_fallbacks:
   - coinbase
   - bitstamp
 
-# Prediction horizon: predict price direction over next N minutes
-prediction_horizon_minutes: 5
-prediction_interval_minutes: 5
+# 15-minute slot predictions (:00, :15, :30, :45 each hour)
+prediction_horizon_minutes: 15
+prediction_interval_minutes: 15
+primary_timeframe: 15m
 
-# Candle intervals to collect and use
+# Context: prior 4h in 15m slots (16 bars) + min 30 fifteen-min candles for indicators
+lookback_hours: 4
+min_candles_15m: 30
+fetch_candles_15m: 64   # ~16h buffer for 30-period rolling features
+
+# Candle intervals to collect
 intervals:
   - 1m
-  - 5m
   - 15m
 
-# Historical data collection (Phase 1)
 historical_years: 3
 
-# Trading costs (used for edge calculation)
 fees:
-  maker_pct: 0.10   # 0.10% maker
-  taker_pct: 0.10   # 0.10% taker
-slippage_pct: 0.05  # 0.05% estimated slippage
+  maker_pct: 0.10
+  taker_pct: 0.10
+slippage_pct: 0.05
 
-# Edge threshold: only signal trade when prob exceeds this after costs
 min_edge_confidence: 0.57
 no_trade_band: 0.03
 
-# Paper trading (Stage 3 / Phase 5)
 paper:
   bankroll: 100.0
   risk_per_trade_pct: 1.0
   max_consecutive_losses: 3
   max_daily_drawdown_pct: 5.0
 
-# Feature windows (in candles of respective timeframe)
+# Feature windows — counts are 15m candles
 features:
-  momentum_windows: [5, 15, 30]
-  volatility_window: 20
+  momentum_windows: [4, 8, 16]   # 1h, 2h, 4h on 15m chart
+  volatility_window: 16            # 4h
   rsi_period: 14
-  volume_spike_window: 20
-  vwap_window: 48
+  volume_spike_window: 16
+  vwap_window: 16                  # 4h VWAP
+  slot_lookback_candles: 16        # 4h of 15m slots
 
-# Model
 model:
   type: lightgbm
   train_test_split: 0.2
-  min_train_samples: 10000
+  min_train_samples: 5000
 
-# Data paths (relative to project root)
 paths:
   candles: data/candles
   models: data/models

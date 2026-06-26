@@ -50,7 +50,7 @@
     <header>
       <div>
         <h1>BTC Predictor</h1>
-        <p class="sub">Live probabilities · Stage 1 · No trading</p>
+        <p class="sub">15-minute slots · :00 / :15 / :30 / :45 UTC · No trading</p>
       </div>
       <div class="meta">
         <div id="updated">—</div>
@@ -106,12 +106,14 @@
 
     function renderPrediction(p) {
       if (!p) {
-        $('pred-card').innerHTML = '<h2>Next 5 minutes</h2><p class="muted">No prediction yet</p>';
+        $('pred-card').innerHTML = '<h2>Next 15-minute slot</h2><p class="muted">No prediction yet</p>';
         return;
       }
       const up = p.prob_up * 100, down = p.prob_down * 100;
+      const slot = p.slot_label ? `<div class="sub" style="margin-bottom:.75rem">Slot ${p.slot_label}</div>` : '';
       $('pred-card').innerHTML = `
-        <h2>Next 5 minutes</h2>
+        <h2>Next 15-minute slot</h2>
+        ${slot}
         <div><span class="price">${price(p.price)}</span>${badge(p.signal)}</div>
         <div class="bar-row"><span class="up">UP</span><div class="track"><div class="fill-up" style="width:${up}%"></div></div><span>${up.toFixed(1)}%</span></div>
         <div class="bar-row"><span class="down">DOWN</span><div class="track"><div class="fill-down" style="width:${down}%"></div></div><span>${down.toFixed(1)}%</span></div>
@@ -128,7 +130,8 @@
         ['Scheduler', h.scheduler_running ? 'Running' : 'Stopped', h.scheduler_running],
         ['Exchange', h.exchange || '—', h.exchange_connected],
         ['Model', h.model || '—', true],
-        ['1m candles', String(h.candles_1m || 0), (h.candles_1m || 0) > 0],
+        ['15m candles', String(h.candles_15m || 0), (h.candles_15m || 0) >= (h.min_candles_15m || 30)],
+        ['Schedule', ':00/:15/:30/:45 UTC', true],
       ];
       $('status-list').innerHTML = items.map(([l,v,ok]) =>
         `<li><span class="dot" style="background:${ok?'var(--up)':'#f59e0b'}"></span><span class="muted">${l}</span><span>${v}</span></li>`

@@ -31,6 +31,10 @@ _scheduler = None
 def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
   return {
     "timestamp": pred.timestamp.isoformat() if hasattr(pred.timestamp, "isoformat") else str(pred.timestamp),
+    "slot_start": pred.slot_start.isoformat() if pred.slot_start is not None else None,
+    "slot_end": pred.slot_end.isoformat() if pred.slot_end is not None else None,
+    "slot_label": pred.slot_label,
+    "horizon_minutes": _cfg.get("prediction_horizon_minutes", 15),
     "price": pred.price,
     "prob_up": round(pred.prob_up, 4),
     "prob_down": round(pred.prob_down, 4),

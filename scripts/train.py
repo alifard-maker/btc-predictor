@@ -30,18 +30,18 @@ def main(model_type: str | None, cv: bool) -> None:
   df_1m = storage.load("1m")
   df_15m = storage.load("15m")
 
-  if df_1m.empty:
-    console.print("[red]No 1m candle data. Run collect_historical.py first.[/red]")
+  if df_15m.empty:
+    console.print("[red]No 15m candle data. Run collect_historical.py first.[/red]")
     sys.exit(1)
 
-  console.print(f"Training on {len(df_1m):,} 1m candles ({cfg['model']['type']})...")
+  console.print(f"Training on {len(df_15m):,} 15m candles ({cfg['model']['type']})...")
   trainer = ModelTrainer(cfg)
 
   if cv:
-    cv_results = trainer.cross_validate(df_1m, df_15m if not df_15m.empty else None)
+    cv_results = trainer.cross_validate(df_15m, df_1m if not df_1m.empty else None)
     console.print(f"CV AUC: {cv_results['cv_auc_mean']:.4f} ± {cv_results['cv_auc_std']:.4f}")
 
-  metrics = trainer.train(df_1m, df_15m if not df_15m.empty else None)
+  metrics = trainer.train(df_15m, df_1m if not df_1m.empty else None)
   for k, v in metrics.items():
     console.print(f"  {k}: {v}")
 

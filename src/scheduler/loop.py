@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -9,11 +8,13 @@ from typing import Any
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from src.calibration.tracker import CalibrationTracker
 from src.config import ensure_dirs, load_config
 from src.data.fetcher import DataFetcher
 from src.data.storage import CandleStorage
+from src.features.slots import floor_to_15m, slot_end
 from src.logging.prediction_log import PredictionLogger
 from src.models.predictor import Prediction, Predictor
 
@@ -21,7 +22,7 @@ log = logging.getLogger(__name__)
 
 
 class PredictionLoop:
-  """Fetch data every minute, predict every 5 minutes, resolve outcomes."""
+  """Fetch data every minute; predict at :00, :15, :30, :45 for next 15m slot."""
 
   def __init__(self, cfg: dict[str, Any] | None = None, model_path: str | None = None):
     self.cfg = cfg or load_config()
@@ -32,7 +33,9 @@ class PredictionLoop:
     self.predictor = Predictor(self.cfg, model_path=model_path or self._default_model_path())
     self.logger = PredictionLogger(self.cfg)
     self.calibration = CalibrationTracker(self.cfg)
-    self.horizon = self.cfg.get("prediction_horizon_minutes", 5)
+    self.horizon = self.cfg.get("prediction_horizon_minutes", 15)
+    self.min_candles = self.cfg.get("min_candles_15m", 30)
+    self.fetch_15m_count = self.cfg.get("fetch_candles_15m", 64)
     self.latest_prediction: Prediction | None = None
     self.last_error: str | None = None
     self._scheduler: BackgroundScheduler | BlockingScheduler | None = None
@@ -42,29 +45,40 @@ class PredictionLoop:
     return str(p) if p.exists() else None
 
   def fetch_and_store(self) -> None:
-    for interval in ["1m", "15m"]:
-      try:
-        df = self.fetcher.fetch_latest_candles(interval, count=500)
-        if not df.empty:
-          self.storage.save(interval, df)
-      except Exception as e:
-        log.warning("Failed to fetch %s: %s", interval, e)
-        self.last_error = str(e)
+    try:
+      df_1m = self.fetcher.fetch_latest_candles("1m", count=240)
+      if not df_1m.empty:
+        self.storage.save("1m", df_1m)
+    except Exception as e:
+      log.warning("Failed to fetch 1m: %s", e)
+      self.last_error = str(e)
+
+    try:
+      df_15m = self.fetcher.fetch_latest_candles("15m", count=self.fetch_15m_count)
+      if not df_15m.empty:
+        self.storage.save("15m", df_15m)
+    except Exception as e:
+      log.warning("Failed to fetch 15m: %s", e)
+      self.last_error = str(e)
 
   def resolve_outcomes(self) -> None:
-    df_1m = self.storage.load("1m")
-    if df_1m.empty:
+    df_15m = self.storage.load("15m")
+    if df_15m.empty:
       return
+
+    df_15m = df_15m.copy()
+    df_15m["timestamp"] = pd.to_datetime(df_15m["timestamp"], utc=True)
 
     pending = self.calibration.get_pending()
     price_lookup = {}
     for _row_id, ts_str, entry_price in pending:
-      ts = pd.Timestamp(ts_str)
-      exit_ts = ts + timedelta(minutes=self.horizon)
-      future = df_1m[df_1m["timestamp"] >= exit_ts]
-      if future.empty:
+      slot_s = floor_to_15m(pd.Timestamp(ts_str))
+      slot_e = slot_end(slot_s)
+      # Exit price = close of the 15m candle ending at slot_e
+      match = df_15m[df_15m["timestamp"] >= slot_e]
+      if match.empty:
         continue
-      exit_price = float(future.iloc[0]["close"])
+      exit_price = float(match.iloc[0]["close"])
       actual_return = (exit_price - entry_price) / entry_price
       price_lookup[ts_str] = (exit_price, actual_return)
 
@@ -77,26 +91,26 @@ class PredictionLoop:
       self.resolve_outcomes()
       self.fetch_and_store()
 
-      df_1m = self.storage.load("1m")
       df_15m = self.storage.load("15m")
+      df_1m = self.storage.load("1m")
 
-      if df_1m.empty or len(df_1m) < 100:
+      if df_15m.empty or len(df_15m) < self.min_candles:
         self.fetch_and_store()
-        df_1m = self.storage.load("1m")
         df_15m = self.storage.load("15m")
+        df_1m = self.storage.load("1m")
 
-      if df_1m.empty:
-        self.last_error = "No candle data available"
+      if df_15m.empty or len(df_15m) < self.min_candles:
+        self.last_error = f"Need {self.min_candles}+ fifteen-minute candles, have {len(df_15m)}"
         log.error(self.last_error)
         return None
 
-      pred = self.predictor.predict(df_1m, df_15m)
+      pred = self.predictor.predict(df_15m, df_1m if not df_1m.empty else None)
       self.logger.log(pred)
       self.latest_prediction = pred
       self.last_error = None
       log.info(
-        "Prediction: UP=%.1f%% signal=%s price=$%.2f",
-        pred.prob_up * 100, pred.signal.value, pred.price,
+        "Slot %s: UP=%.1f%% signal=%s price=$%.2f",
+        pred.slot_label, pred.prob_up * 100, pred.signal.value, pred.price,
       )
       return pred
     except Exception as e:
@@ -105,45 +119,54 @@ class PredictionLoop:
       return None
 
   def status(self) -> dict[str, Any]:
+    df_15m = self.storage.load("15m")
     df_1m = self.storage.load("1m")
     return {
       "symbol": self.cfg["symbol"],
       "exchange": getattr(self.fetcher, "_exchange_id", None) or self.cfg.get("exchange"),
       "exchange_connected": self.fetcher.is_connected(),
       "model": "trained" if self.predictor.model else "baseline",
+      "primary_timeframe": "15m",
+      "candles_15m": len(df_15m),
       "candles_1m": len(df_1m),
-      "latest_candle": df_1m["timestamp"].iloc[-1].isoformat() if not df_1m.empty else None,
+      "min_candles_15m": self.min_candles,
+      "lookback_hours": self.cfg.get("lookback_hours", 4),
+      "latest_candle_15m": df_15m["timestamp"].iloc[-1].isoformat() if not df_15m.empty else None,
       "horizon_minutes": self.horizon,
+      "prediction_schedule": "every :00, :15, :30, :45 UTC",
       "last_error": self.last_error,
       "scheduler_running": self._scheduler is not None and getattr(self._scheduler, "running", False),
     }
 
-  def start_background(self) -> BackgroundScheduler:
-    """Non-blocking scheduler for FastAPI / Railway."""
-    interval = self.cfg.get("prediction_interval_minutes", 5)
+  def _schedule_predictions(self, scheduler) -> None:
+    """Fire at each 15-minute slot boundary."""
+    scheduler.add_job(
+      self.run_prediction,
+      CronTrigger(minute="0,15,30,45", timezone="UTC"),
+      id="predict",
+      max_instances=1,
+    )
 
+  def start_background(self) -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(self.fetch_and_store, "interval", minutes=1, id="fetch", max_instances=1)
-    scheduler.add_job(self.run_prediction, "interval", minutes=interval, id="predict", max_instances=1)
     scheduler.add_job(self.resolve_outcomes, "interval", minutes=1, id="resolve", max_instances=1)
-    # Run first fetch/predict immediately in background — don't block API startup
+    self._schedule_predictions(scheduler)
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
-    scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=5), id="predict_now")
+    scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")
     scheduler.start()
     self._scheduler = scheduler
-    log.info("Background scheduler started (predict every %dm)", interval)
+    log.info("Scheduler started: 15m slots at :00/:15/:30/:45 UTC")
     return scheduler
 
   def start_blocking(self) -> None:
-    """CLI mode — blocks until interrupted."""
-    interval = self.cfg.get("prediction_interval_minutes", 5)
     self.fetch_and_store()
     self.run_prediction()
 
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(self.fetch_and_store, "interval", minutes=1, id="fetch")
-    scheduler.add_job(self.run_prediction, "interval", minutes=interval, id="predict")
     scheduler.add_job(self.resolve_outcomes, "interval", minutes=1, id="resolve")
+    self._schedule_predictions(scheduler)
     try:
       scheduler.start()
     except (KeyboardInterrupt, SystemExit):

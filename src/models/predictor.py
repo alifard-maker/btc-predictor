@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.features.engineering import build_feature_matrix, feature_columns
+from src.features.slots import floor_to_15m, slot_end, slot_label
 from src.trading.edge import EdgeCalculator, Signal
 
 
@@ -20,6 +21,9 @@ class Prediction:
   expected_move: float
   signal: Signal
   features_snapshot: dict[str, float]
+  slot_start: pd.Timestamp | None = None
+  slot_end: pd.Timestamp | None = None
+  slot_label: str = ""
 
 
 class Predictor:
@@ -58,13 +62,23 @@ class Predictor:
 
   def predict(
     self,
-    df_1m: pd.DataFrame,
-    df_15m: pd.DataFrame | None = None,
+    df_15m: pd.DataFrame,
+    df_1m: pd.DataFrame | None = None,
   ) -> Prediction:
-    features = build_feature_matrix(df_1m, df_15m, self.cfg, include_phase2=True)
+    min_candles = self.cfg.get("min_candles_15m", 30)
+    if len(df_15m) < min_candles:
+      raise ValueError(f"Need at least {min_candles} fifteen-minute candles, got {len(df_15m)}")
+
+    features = build_feature_matrix(df_15m, df_1m, self.cfg, include_phase2=True, primary_timeframe="15m")
     latest = features.iloc[-1]
     price = float(latest["close"])
-    ts = latest["timestamp"]
+    ts = pd.Timestamp(latest["timestamp"])
+    if ts.tzinfo is None:
+      ts = ts.tz_localize("UTC")
+
+    # Prediction is for the upcoming 15m slot starting at next boundary from candle time
+    slot_s = floor_to_15m(ts)
+    slot_e = slot_end(slot_s)
 
     if self.model is not None:
       cols = self.feature_names or feature_columns(features)
@@ -74,21 +88,20 @@ class Predictor:
       prob_up = self._baseline_prob(features)
 
     prob_down = 1.0 - prob_up
-    confidence = abs(prob_up - 0.5) * 2  # 0 at 50/50, 1 at 100/0
+    confidence = abs(prob_up - 0.5) * 2
+    horizon = self.cfg.get("prediction_horizon_minutes", 15)
 
-    # Expected move: rough estimate from recent volatility
-    vol = features["return_1"].rolling(20).std().iloc[-1]
+    vol = features["return_1"].rolling(16).std().iloc[-1]
     if pd.isna(vol):
-      vol = 0.001
+      vol = 0.002
     direction = 1 if prob_up >= 0.5 else -1
-    expected_move = direction * vol * price * np.sqrt(self.cfg.get("prediction_horizon_minutes", 5))
+    expected_move = direction * vol * price * np.sqrt(horizon)
 
     signal = self.edge.recommend(prob_up)
-
     snap = {c: float(latest[c]) for c in feature_columns(features) if c in latest and not pd.isna(latest[c])}
 
     return Prediction(
-      timestamp=ts,
+      timestamp=slot_s,
       price=price,
       prob_up=prob_up,
       prob_down=prob_down,
@@ -96,14 +109,20 @@ class Predictor:
       expected_move=expected_move,
       signal=signal,
       features_snapshot=snap,
+      slot_start=slot_s,
+      slot_end=slot_e,
+      slot_label=slot_label(slot_s),
     )
 
   def format_output(self, pred: Prediction) -> str:
+    horizon = self.cfg.get("prediction_horizon_minutes", 15)
+    window = pred.slot_label or f"next {horizon} min"
     lines = [
+      f"Slot: {window}",
       f"Timestamp: {pred.timestamp}",
       f"BTC Price: ${pred.price:,.2f}",
       "",
-      "Next 5 minutes:",
+      f"Next {horizon} minutes:",
       f"  UP    {pred.prob_up * 100:.1f}%",
       f"  DOWN  {pred.prob_down * 100:.1f}%",
       "",

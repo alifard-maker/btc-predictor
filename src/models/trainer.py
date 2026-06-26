@@ -57,12 +57,12 @@ class ModelTrainer:
 
   def prepare_training_data(
     self,
-    df_1m: pd.DataFrame,
-    df_15m: pd.DataFrame | None = None,
+    df_15m: pd.DataFrame,
+    df_1m: pd.DataFrame | None = None,
   ) -> tuple[pd.DataFrame, pd.Series]:
-    horizon = self.cfg.get("prediction_horizon_minutes", 5)
-    features = build_feature_matrix(df_1m, df_15m, self.cfg, include_phase2=True)
-    features = add_label(features, horizon_minutes=horizon)
+    horizon = self.cfg.get("prediction_horizon_minutes", 15)
+    features = build_feature_matrix(df_15m, df_1m, self.cfg, include_phase2=True, primary_timeframe="15m")
+    features = add_label(features, horizon_minutes=horizon, timeframe_minutes=15)
     cols = feature_columns(features)
     self.feature_names = cols
 
@@ -73,10 +73,10 @@ class ModelTrainer:
 
   def train(
     self,
-    df_1m: pd.DataFrame,
-    df_15m: pd.DataFrame | None = None,
+    df_15m: pd.DataFrame,
+    df_1m: pd.DataFrame | None = None,
   ) -> dict[str, float]:
-    X, y = self.prepare_training_data(df_1m, df_15m)
+    X, y = self.prepare_training_data(df_15m, df_1m)
     min_samples = self.cfg.get("model", {}).get("min_train_samples", 10000)
     if len(X) < min_samples:
       raise ValueError(f"Need at least {min_samples} samples, got {len(X)}")
@@ -103,8 +103,8 @@ class ModelTrainer:
     }
     return metrics
 
-  def cross_validate(self, df_1m: pd.DataFrame, df_15m: pd.DataFrame | None = None, n_splits: int = 5) -> dict:
-    X, y = self.prepare_training_data(df_1m, df_15m)
+  def cross_validate(self, df_15m: pd.DataFrame, df_1m: pd.DataFrame | None = None, n_splits: int = 5) -> dict:
+    X, y = self.prepare_training_data(df_15m, df_1m)
     tscv = TimeSeriesSplit(n_splits=n_splits)
     model_type = self.cfg.get("model", {}).get("type", "lightgbm")
     scores = []
