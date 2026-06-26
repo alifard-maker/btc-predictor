@@ -95,12 +95,19 @@ class SqlitePredictionStore(PredictionStore):
     price, prob_up, prob_down, confidence, expected_move = map(
       _py, (price, prob_up, prob_down, confidence, expected_move)
     )
+    ts = pd.Timestamp(timestamp).isoformat()
     with self._conn() as conn:
+      existing = conn.execute(
+        "SELECT id FROM predictions WHERE timestamp = ? LIMIT 1",
+        (ts,),
+      ).fetchone()
+      if existing:
+        return existing[0]
       cur = conn.execute(
         """INSERT INTO predictions
            (timestamp, price, prob_up, prob_down, confidence, signal, expected_move)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (timestamp, price, prob_up, prob_down, confidence, signal, expected_move),
+        (ts, price, prob_up, prob_down, confidence, signal, expected_move),
       )
       return cur.lastrowid
 
@@ -178,13 +185,21 @@ class PostgresPredictionStore(PredictionStore):
     price, prob_up, prob_down, confidence, expected_move = map(
       _py, (price, prob_up, prob_down, confidence, expected_move)
     )
+    ts = pd.Timestamp(timestamp).isoformat()
     with self._conn() as conn:
       with conn.cursor() as cur:
+        cur.execute(
+          "SELECT id FROM predictions WHERE timestamp = %s::timestamptz LIMIT 1",
+          (ts,),
+        )
+        row = cur.fetchone()
+        if row:
+          return row[0]
         cur.execute(
           """INSERT INTO predictions
              (timestamp, price, prob_up, prob_down, confidence, signal, expected_move)
              VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-          (timestamp, price, prob_up, prob_down, confidence, signal, expected_move),
+          (ts, price, prob_up, prob_down, confidence, signal, expected_move),
         )
         row_id = cur.fetchone()[0]
       conn.commit()

@@ -291,7 +291,7 @@
       }
       $('calibration').innerHTML = `
         <p class="muted" style="margin-bottom:.75rem">When model says X% UP, does price actually go up ~X% of the time?</p>
-        <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Rolling hit rate (predicted direction vs actual outcome):</p>
+        <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Rolling hit rate — one count per 15m slot (max 4/hour):</p>
         ${renderRollingAccuracy(s.rolling_accuracy)}
         <div class="cal-stats">
           <div><span>Resolved</span><strong>${s.n_resolved}</strong></div>
