@@ -46,6 +46,7 @@ class SlotMonitor:
   reference_source: str = ""
   current_price_as_of: str | None = None
   live_price_age_sec: float | None = None
+  kalshi: dict[str, Any] | None = None
 
   def to_dict(self) -> dict[str, Any]:
     out = {
@@ -73,6 +74,8 @@ class SlotMonitor:
       out["current_price_as_of"] = self.current_price_as_of
     if self.live_price_age_sec is not None:
       out["live_price_age_sec"] = self.live_price_age_sec
+    if self.kalshi:
+      out["kalshi"] = self.kalshi
     if self.reassessed_prob_up is not None:
       out["reassessed_prob_up"] = round(self.reassessed_prob_up, 4)
       out["reassessed_prob_down"] = round(self.reassessed_prob_down or (1 - self.reassessed_prob_up), 4)

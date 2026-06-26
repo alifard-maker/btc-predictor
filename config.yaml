@@ -16,6 +16,14 @@ price_feed:
   live_tick_window_sec: 120   # use live last trade for t=0 within this many seconds of slot open
   live_cache_sec: 2            # refresh live "Now" price at least this often
 
+# Kalshi — KXBTC15M BRTI settlement target (public market data; auth optional)
+kalshi:
+  enabled: true
+  series_ticker: KXBTC15M
+  base_url: https://api.elections.kalshi.com/trade-api/v2
+  cache_sec: 15
+  # Set KALSHI_KEY_ID + KALSHI_PRIVATE_KEY in env (see .env.example)
+
 # 15-minute slot predictions — Eastern Time (:00, :15, :30, :45 ET)
 prediction_horizon_minutes: 15
 prediction_interval_minutes: 15

@@ -14,6 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 from src.calibration.tracker import CalibrationTracker
 from src.config import ensure_dirs, load_config
 from src.data.fetcher import DataFetcher, TickerQuote
+from src.data.kalshi import KalshiClient
 from src.data.storage import CandleStorage
 from src.features.slots import current_slot_start, floor_to_15m, reference_price_at_slot, slot_end
 from src.logging.prediction_log import PredictionLogger
@@ -31,6 +32,7 @@ class PredictionLoop:
     ensure_dirs(self.cfg)
 
     self.fetcher = DataFetcher(self.cfg)
+    self.kalshi = KalshiClient(self.cfg)
     self.storage = CandleStorage(self.cfg)
     self.predictor = Predictor(self.cfg, model_path=model_path or self._default_model_path())
     self.logger = PredictionLogger(self.cfg)
@@ -296,7 +298,43 @@ class PredictionLoop:
       live_quote.trade_time.isoformat() if live_quote and live_quote.trade_time else None
     )
     monitor.live_price_age_sec = round(live_quote.age_sec, 1) if live_quote and live_quote.age_sec is not None else None
+    monitor.kalshi = self._kalshi_context(api_ref, current)
     return monitor
+
+  def _kalshi_context(self, coinbase_ref: float, current: float | None) -> dict[str, Any]:
+    """Kalshi KXBTC15M BRTI target vs Coinbase reference."""
+    active = self.kalshi.active_btc15m_market()
+    if not active:
+      return {
+        "enabled": self.kalshi.enabled,
+        "authenticated": self.kalshi.authenticated,
+        "connected": False,
+      }
+    target = active.target_price
+    diff = coinbase_ref - target if coinbase_ref else None
+    cur_diff = (current - target) if current is not None else None
+    yes_mid = None
+    if active.yes_bid is not None and active.yes_ask is not None:
+      yes_mid = (active.yes_bid + active.yes_ask) / 2
+    elif active.last_price is not None:
+      yes_mid = active.last_price
+    return {
+      "enabled": True,
+      "authenticated": self.kalshi.authenticated,
+      "connected": True,
+      "market_ticker": active.market_ticker,
+      "title": active.title,
+      "target_price": target,
+      "target_label": "BRTI 60s avg before slot open",
+      "open_time": active.open_time.isoformat(),
+      "close_time": active.close_time.isoformat(),
+      "yes_bid": active.yes_bid,
+      "yes_ask": active.yes_ask,
+      "yes_mid": round(yes_mid, 4) if yes_mid is not None else None,
+      "coinbase_ref": round(coinbase_ref, 2) if coinbase_ref else None,
+      "ref_vs_kalshi": round(diff, 2) if diff is not None else None,
+      "now_vs_kalshi": round(cur_diff, 2) if cur_diff is not None else None,
+    }
 
   def status(self) -> dict[str, Any]:
     df_15m = self.storage.load("15m")
@@ -315,6 +353,7 @@ class PredictionLoop:
       "volume_spike_window": f"{self.cfg.get('features', {}).get('volume_spike_window', 16)}×15m",
       "price_feed": self.fetcher.price_feed_label(),
       "settlement_reference": self.fetcher.settlement_reference_label(),
+      "kalshi": self.kalshi.status(),
       "latest_candle_15m": df_15m["timestamp"].iloc[-1].isoformat() if not df_15m.empty else None,
       "horizon_minutes": self.horizon,
       "timezone": self.tz,

@@ -226,6 +226,13 @@ def _apply_ref_override_fields(out: dict[str, Any], monitor: dict[str, Any]) -> 
     out["using_override"] = True
 
 
+@app.get("/api/kalshi/status")
+def kalshi_status():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.kalshi.status()
+
+
 @app.get("/api/slot/monitor")
 def slot_monitor(reference_override: float | None = Query(default=None, gt=0)):
   if _loop is None:

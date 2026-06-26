@@ -50,6 +50,9 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
 
   cfg["app_password"] = os.getenv("APP_PASSWORD", cfg.get("app_password") or "")
 
+  from src.data.kalshi import load_kalshi_config
+  cfg["kalshi"] = load_kalshi_config(cfg)
+
   return cfg
 
 
