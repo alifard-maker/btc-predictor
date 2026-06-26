@@ -46,6 +46,9 @@ class PredictionLogger:
       "confidence": pred.confidence,
       "signal": pred.signal.value,
       "expected_move": pred.expected_move,
+      "model_signal": pred.model_signal,
+      "regime_notes": pred.regime_notes or [],
+      "raw_prob_up": pred.raw_prob_up,
       "features": pred.features_snapshot,
       "logged_at": datetime.now(timezone.utc).isoformat(),
     }

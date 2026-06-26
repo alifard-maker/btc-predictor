@@ -17,6 +17,15 @@ PUBLIC_PATHS = frozenset({
   "/redoc",
 })
 
+# Read-only dashboard APIs allowed with X-API-Key (same as /api/admin/*).
+ADMIN_KEY_PATHS = frozenset({
+  "/api/predictions",
+  "/api/prediction/latest",
+  "/api/calibration",
+  "/api/postmortems",
+  "/api/slot/monitor",
+})
+
 
 def app_password(cfg: dict[str, Any]) -> str:
   return str(cfg.get("app_password") or "")
@@ -50,8 +59,8 @@ async def auth_middleware(request: Request, call_next, cfg: dict[str, Any]):
     return await call_next(request)
 
   admin_key = str(cfg.get("admin_api_key") or os.getenv("ADMIN_API_KEY") or "")
-  if path.startswith("/api/admin/") and admin_key:
-    if request.headers.get("x-api-key") == admin_key:
+  if admin_key and request.headers.get("x-api-key") == admin_key:
+    if path.startswith("/api/admin/") or path in ADMIN_KEY_PATHS:
       return await call_next(request)
 
   if is_authed(request):
