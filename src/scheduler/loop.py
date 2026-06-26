@@ -114,8 +114,8 @@ class PredictionLoop:
 
       slot_s = floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz)
       kalshi_ref = self.kalshi.lock_current_slot_reference(slot_s)
-      open_quote = self.kalshi.live_quote(fresh=True)
-      current_quote = self.kalshi.live_quote(fresh=True)
+      open_quote = self.live_price_quote(fresh=True)
+      current_quote = self.live_price_quote(fresh=True)
       locked = self._locked_slot_reference(slot_s)
       locked_ref = kalshi_ref
       if locked_ref is None and locked:
@@ -146,11 +146,54 @@ class PredictionLoop:
       return None
 
   def _live_cache_sec(self) -> float:
-    return float(self.cfg.get("kalshi", {}).get("brti_cache_sec", 2))
+    return float(self.cfg.get("kalshi", {}).get("brti_cache_sec", 0))
+
+  def _live_fallback_enabled(self) -> bool:
+    return bool(self.cfg.get("kalshi", {}).get("live_fallback_exchange", True))
+
+  def _exchange_tick_cache_sec(self) -> float:
+    return float(self.cfg.get("kalshi", {}).get("exchange_tick_cache_sec", 1.0))
+
+  def _exchange_live_quote(self, *, fresh: bool = True) -> KalshiPriceQuote | None:
+    """Fresh exchange last trade — used when BRTI auth is missing or stale."""
+    now_mono = time.monotonic()
+    cache_sec = self._exchange_tick_cache_sec()
+    if not fresh and self._ticker_cache and (now_mono - self._ticker_cache[1]) < cache_sec:
+      return self._ticker_cache[0]
+    try:
+      ticker = self.fetcher.fetch_ticker_quote()
+      trade_time = ticker.trade_time
+      if trade_time is None:
+        trade_time = datetime.now(timezone.utc)
+      elif trade_time.tzinfo is None:
+        trade_time = trade_time.replace(tzinfo=timezone.utc)
+      source = "exchange_live" if not self.kalshi.authenticated else "exchange_fallback"
+      quote = KalshiPriceQuote(price=ticker.price, source=source, trade_time=trade_time)
+      self._ticker_cache = (quote, now_mono)
+      return quote
+    except Exception as e:
+      log.warning("Exchange live tick failed: %s", e)
+      if self._ticker_cache:
+        return self._ticker_cache[0]
+      return None
 
   def _live_quote(self, *, fresh: bool = False) -> KalshiPriceQuote | None:
     """Kalshi BRTI live price for P&L and display."""
     return self.kalshi.live_quote(fresh=fresh)
+
+  def live_price_quote(self, *, fresh: bool = True) -> KalshiPriceQuote | None:
+    """BRTI when authed; otherwise always a fresh exchange tick (never static t=0)."""
+    max_stale = float(self.cfg.get("kalshi", {}).get("brti_max_stale_sec", 5))
+    if self.kalshi.authenticated:
+      brti = self.kalshi.fetch_brti_live(fresh=True)
+      if brti is not None:
+        return brti
+      last = self.kalshi.last_brti_quote()
+      if last is not None and last.age_sec is not None and last.age_sec <= max_stale:
+        return last
+    if self._live_fallback_enabled():
+      return self._exchange_live_quote(fresh=fresh)
+    return None
 
   def _live_price(self, max_age_sec: float | None = None) -> float | None:
     fresh = max_age_sec is not None and max_age_sec <= 0
@@ -227,7 +270,7 @@ class PredictionLoop:
     df_1m = self.storage.load("1m")
 
     pred = self._prediction_for_current_slot()
-    live_quote = self.kalshi.live_quote(fresh=True)
+    live_quote = self.live_price_quote(fresh=True)
     current = live_quote.price if live_quote else None
 
     api_ref, ref_source = self.kalshi.slot_t0_reference(slot_s, fresh=True)
@@ -250,16 +293,13 @@ class PredictionLoop:
       effective_ref = float(reference_override)
       using_override = True
 
-    if current is None:
-      current = effective_ref
-
     original_prob = float(pred.get("prob_up", 0.5)) if pred else 0.5
 
     if pred is None:
       monitor = self.exit_advisor.evaluate(
         now=now,
         reference_price=effective_ref,
-        current_price=current,
+        current_price=current if current is not None else effective_ref,
         signal_at_open="NO TRADE",
         df_1m=df_1m if not df_1m.empty else None,
         slot_start=slot_s,
@@ -269,7 +309,7 @@ class PredictionLoop:
       monitor = self.exit_advisor.evaluate(
         now=now,
         reference_price=effective_ref,
-        current_price=current,
+        current_price=current if current is not None else effective_ref,
         signal_at_open=str(pred.get("signal", "NO TRADE")),
         df_1m=df_1m if not df_1m.empty else None,
         slot_start=slot_s,
@@ -279,6 +319,7 @@ class PredictionLoop:
     monitor.reference_price_api = api_ref if api_ref else None
     monitor.using_override = using_override
     monitor.reference_source = ref_source if not using_override else "user_override"
+    monitor.current_price_source = live_quote.source if live_quote else "unavailable"
     monitor.current_price_as_of = (
       live_quote.trade_time.isoformat() if live_quote and live_quote.trade_time else None
     )
@@ -286,9 +327,21 @@ class PredictionLoop:
     monitor.kalshi = self.kalshi.active_market_summary()
     return monitor
 
+  def poll_brti(self) -> None:
+    """Background refresh of live price (BRTI or exchange)."""
+    self.live_price_quote(fresh=True)
+
   def status(self) -> dict[str, Any]:
     df_15m = self.storage.load("15m")
     df_1m = self.storage.load("1m")
+    live = self.live_price_quote(fresh=True)
+    live_tick: dict[str, Any] | None = None
+    if live:
+      live_tick = {
+        "price": round(live.price, 2),
+        "source": live.source,
+        "age_sec": round(live.age_sec, 1) if live.age_sec is not None else None,
+      }
     return {
       "symbol": self.cfg["symbol"],
       "exchange": getattr(self.fetcher, "_exchange_id", None) or self.cfg.get("exchange"),
@@ -303,6 +356,7 @@ class PredictionLoop:
       "volume_spike_window": f"{self.cfg.get('features', {}).get('volume_spike_window', 16)}×15m",
       "price_feed": self.kalshi.price_feed_label(),
       "settlement_reference": self.kalshi.settlement_reference_label(),
+      "live_tick": live_tick,
       "kalshi": self.kalshi.status(),
       "latest_candle_15m": df_15m["timestamp"].iloc[-1].isoformat() if not df_15m.empty else None,
       "horizon_minutes": self.horizon,
@@ -327,6 +381,9 @@ class PredictionLoop:
     self._schedule_predictions(scheduler)
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")
+    poll_sec = float(self.cfg.get("kalshi", {}).get("brti_poll_sec", 1))
+    scheduler.add_job(self.poll_brti, "interval", seconds=poll_sec, id="brti_poll", max_instances=1)
+    scheduler.add_job(self.poll_brti, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=1), id="brti_now")
     scheduler.start()
     self._scheduler = scheduler
     log.info("Scheduler started: 15m slots at :00/:15/:30/:45 ET (%s)", self.tz)

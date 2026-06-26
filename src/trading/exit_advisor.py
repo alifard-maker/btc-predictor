@@ -37,6 +37,7 @@ class SlotMonitor:
   message: str
   reasons: list[str]
   unrealized_usd: float = 0.0
+  price_change_usd: float = 0.0
   reference_price_api: float | None = None
   using_override: bool = False
   reassessed_prob_up: float | None = None
@@ -44,6 +45,7 @@ class SlotMonitor:
   reassessed_close_side: str = ""
   reassess_summary: str = ""
   reference_source: str = ""
+  current_price_source: str = ""
   current_price_as_of: str | None = None
   live_price_age_sec: float | None = None
   kalshi: dict[str, Any] | None = None
@@ -64,12 +66,15 @@ class SlotMonitor:
       "current_price": round(self.current_price, 2),
       "unrealized_pct": round(self.unrealized_pct, 4),
       "unrealized_usd": round(self.unrealized_usd, 2),
+      "price_change_usd": round(self.price_change_usd, 2),
       "action": self.action.value,
       "urgency": self.urgency,
       "message": self.message,
       "reasons": self.reasons,
       "reference_source": self.reference_source,
     }
+    if self.current_price_source:
+      out["current_price_source"] = self.current_price_source
     if self.current_price_as_of:
       out["current_price_as_of"] = self.current_price_as_of
     if self.live_price_age_sec is not None:
@@ -98,6 +103,11 @@ class ExitAdvisor:
     self.lock_profit_min_pct = float(intra.get("lock_profit_min_pct", 0.10))
     self.late_window_minutes = float(intra.get("late_window_minutes", 3))
     self.fee_buffer_pct = float(intra.get("fee_buffer_pct", round_trip / 2))
+
+  @staticmethod
+  def _price_change_usd(reference_price: float, current_price: float) -> float:
+    """Raw $ move from t=0 reference to live tick."""
+    return current_price - reference_price
 
   def _slot_momentum(self, df_1m: pd.DataFrame | None, slot_start: pd.Timestamp) -> float:
     """1m return over the active slot (positive = price rising)."""
@@ -219,6 +229,7 @@ class ExitAdvisor:
     label = slot_label(slot_s, self.tz)
 
     total_sec = 15 * 60
+    price_delta = self._price_change_usd(reference_price, current_price)
     if now < slot_s:
       return SlotMonitor(
         active=False,
@@ -232,6 +243,8 @@ class ExitAdvisor:
         reference_price=reference_price,
         current_price=current_price,
         unrealized_pct=0.0,
+        unrealized_usd=price_delta,
+        price_change_usd=price_delta,
         action=ExitAction.WAIT,
         urgency="low",
         message="Slot has not started yet.",
@@ -251,6 +264,8 @@ class ExitAdvisor:
         reference_price=reference_price,
         current_price=current_price,
         unrealized_pct=0.0,
+        unrealized_usd=price_delta,
+        price_change_usd=price_delta,
         action=ExitAction.WAIT,
         urgency="low",
         message="Slot ended — wait for the next :00/:15/:30/:45 prediction.",
@@ -289,6 +304,8 @@ class ExitAdvisor:
         reference_price=reference_price,
         current_price=current_price,
         unrealized_pct=0.0,
+        unrealized_usd=price_delta,
+        price_change_usd=price_delta,
         action=ExitAction.NO_BET,
         urgency="low",
         message="No trade was recommended at slot open — nothing to manage.",
@@ -421,7 +438,8 @@ class ExitAdvisor:
       reference_price=reference_price,
       current_price=current_price,
       unrealized_pct=pnl_pct,
-      unrealized_usd=reference_price * (pnl_pct / 100),
+      unrealized_usd=price_delta,
+      price_change_usd=price_delta,
       action=action,
       urgency=urgency,
       message=message,

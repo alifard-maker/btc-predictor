@@ -20,8 +20,12 @@ kalshi:
   series_ticker: KXBTC15M
   base_url: https://api.elections.kalshi.com/trade-api/v2
   cache_sec: 15
-  brti_cache_sec: 2
+  brti_cache_sec: 0
+  brti_poll_sec: 1
   brti_index_id: BRTI
+  brti_max_stale_sec: 5
+  exchange_tick_cache_sec: 1
+  live_fallback_exchange: true
 
 # 15-minute slot predictions — Eastern Time (:00, :15, :30, :45 ET)
 prediction_horizon_minutes: 15

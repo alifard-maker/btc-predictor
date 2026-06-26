@@ -86,7 +86,8 @@ class KalshiClient:
     self._cache: tuple[KalshiSlotMarket | None, float] | None = None
     self._cache_sec = float(kcfg.get("cache_sec", 15))
     self._brtI_cache: tuple[KalshiPriceQuote | None, float] | None = None
-    self._brtI_cache_sec = float(kcfg.get("brti_cache_sec", 2))
+    self._brtI_cache_sec = float(kcfg.get("brti_cache_sec", 0))
+    self._brtI_last_good: KalshiPriceQuote | None = None
     self._slot_targets: dict[str, float] = {}
     self._brtI_index = kcfg.get("brti_index_id", BRTI_INDEX_ID)
 
@@ -244,22 +245,38 @@ class KalshiClient:
 
   @staticmethod
   def _parse_brti_value(data: dict[str, Any]) -> float | None:
-    payload = data.get("data", data)
-    if isinstance(payload, list) and payload:
-      payload = payload[0]
-    if not isinstance(payload, dict):
+    """Parse CF Benchmarks BRTI from Kalshi passthrough envelope or raw payload."""
+
+    def _as_float(raw: Any) -> float | None:
+      if raw is None or raw == "":
+        return None
+      try:
+        return float(raw)
+      except (TypeError, ValueError):
+        return None
+
+    def _from_obj(obj: Any) -> float | None:
+      if isinstance(obj, list):
+        for item in reversed(obj):
+          v = _from_obj(item)
+          if v is not None:
+            return v
+        return None
+      if not isinstance(obj, dict):
+        return _as_float(obj)
+      for key in ("value", "midPrice", "mid_price", "index_value", "price", "last"):
+        v = _as_float(obj.get(key))
+        if v is not None:
+          return v
+      for key in ("payload", "data", "index", "msg"):
+        nested = obj.get(key)
+        if nested is not None:
+          v = _from_obj(nested)
+          if v is not None:
+            return v
       return None
-    for key in ("value", "price", "index_value", "last", "mid", "mid_price"):
-      raw = payload.get(key)
-      if raw is not None and raw != "":
-        try:
-          return float(raw)
-        except (TypeError, ValueError):
-          continue
-    nested = payload.get("payload") or payload.get("index")
-    if isinstance(nested, dict):
-      return KalshiClient._parse_brti_value({"data": nested})
-    return None
+
+    return _from_obj(data)
 
   def fetch_brti_live(self, *, fresh: bool = False) -> KalshiPriceQuote | None:
     """Live CF Benchmarks BRTI via Kalshi passthrough (requires API auth)."""
@@ -278,10 +295,17 @@ class KalshiClient:
       price = self._parse_brti_value(data)
       if price is not None:
         quote = KalshiPriceQuote(price=price, source="brti_live", trade_time=datetime.now(timezone.utc))
+        self._brtI_last_good = quote
+      elif log.isEnabledFor(logging.DEBUG):
+        log.debug("Kalshi BRTI response had no parseable value: %s", data)
     except Exception as e:
       log.warning("Kalshi BRTI fetch failed: %s", e)
     self._brtI_cache = (quote, now_mono)
     return quote
+
+  def last_brti_quote(self) -> KalshiPriceQuote | None:
+    """Most recent successful BRTI tick (may be stale if fetch is failing)."""
+    return self._brtI_last_good
 
   def _slot_key(self, slot_start: pd.Timestamp) -> str:
     slot = pd.Timestamp(slot_start)
@@ -315,18 +339,21 @@ class KalshiClient:
 
     return None, ""
 
-  def live_quote(self, *, fresh: bool = False) -> KalshiPriceQuote | None:
-    """Current BRTI for P&L; falls back to locked slot target if BRTI unavailable."""
+  def live_quote(self, *, fresh: bool = False, allow_target_fallback: bool = False) -> KalshiPriceQuote | None:
+    """Current BRTI for P&L. Never uses static t=0 unless allow_target_fallback=True."""
     brti = self.fetch_brti_live(fresh=fresh)
     if brti is not None:
       return brti
-    market = self.active_btc15m_market(fresh=fresh)
-    if market:
-      return KalshiPriceQuote(
-        price=market.target_price,
-        source="kalshi_brti_target",
-        trade_time=market.open_time,
-      )
+    if not fresh and self._brtI_last_good is not None:
+      return self._brtI_last_good
+    if allow_target_fallback:
+      market = self.active_btc15m_market(fresh=fresh)
+      if market:
+        return KalshiPriceQuote(
+          price=market.target_price,
+          source="kalshi_brti_target",
+          trade_time=market.open_time,
+        )
     return None
 
   def lock_current_slot_reference(self, slot_start: pd.Timestamp) -> float | None:

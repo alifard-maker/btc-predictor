@@ -57,9 +57,10 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     "formatted": _loop.predictor.format_output(pred) if _loop else "",
   }
   if _loop is not None:
-    quote = _loop.kalshi.live_quote(fresh=True)
+    quote = _loop.live_price_quote(fresh=True)
     if quote is not None:
       out["current_price"] = round(quote.price, 2)
+      out["current_price_source"] = quote.source
       out["price_feed"] = _loop.kalshi.price_feed_label()
       out["settlement_reference"] = _loop.kalshi.settlement_reference_label()
       if quote.trade_time is not None:
@@ -240,7 +241,25 @@ def slot_monitor(reference_override: float | None = Query(default=None, gt=0)):
   monitor = _loop.slot_monitor(reference_override).to_dict()
   monitor["price_feed"] = _loop.kalshi.price_feed_label()
   monitor["settlement_reference"] = _loop.kalshi.settlement_reference_label()
+  monitor["kalshi_authenticated"] = _loop.kalshi.authenticated
   return monitor
+
+
+@app.get("/api/price/live")
+def live_price():
+  """Lightweight live price tick for fast dashboard polling."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  quote = _loop.live_price_quote(fresh=True)
+  if quote is None:
+    raise HTTPException(503, "Live price unavailable")
+  return {
+    "price": round(quote.price, 2),
+    "source": quote.source,
+    "as_of": quote.trade_time.isoformat() if quote.trade_time else None,
+    "age_sec": round(quote.age_sec, 1) if quote.age_sec is not None else None,
+    "kalshi_authenticated": _loop.kalshi.authenticated,
+  }
 
 
 @app.get("/api/prediction/latest")

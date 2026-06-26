@@ -129,7 +129,7 @@
         <p>This page helps you decide whether BTC finishes <strong>above or below</strong> its price at the start of each <strong>15-minute Eastern Time slot</strong> (:00, :15, :30, :45). It does <strong>not</strong> place trades. Refresh is automatic every 5 seconds.</p>
 
         <h3>Your price at t=0 (top box)</h3>
-        <p><strong>t=0</strong> is the Kalshi KXBTC15M <strong>Target price</strong> — the BRTI 60-second average in the minute before slot open. <strong>Now</strong> is live CF Benchmarks BRTI via Kalshi (requires your API private key). P&amp;L is always vs Kalshi t=0.</p>
+        <p><strong>t=0</strong> is the Kalshi KXBTC15M <strong>Target price</strong> — the BRTI 60-second average in the minute before slot open. <strong>Now</strong> updates every second from live CF Benchmarks BRTI (requires <code>KALSHI_PRIVATE_KEY</code> on Railway). Without it, Coinbase is used as an approximate live feed; P&amp;L is always vs Kalshi t=0.</p>
 
         <h3>Current 15-minute slot</h3>
         <ul>
@@ -171,7 +171,7 @@
         <ul>
           <li><strong>Ref (t=0)</strong> — Kalshi BRTI target at slot open.</li>
           <li><strong>Now</strong> — Live BRTI index.</li>
-          <li><strong>P&amp;L vs t=0</strong> — <strong>% and $ per 1 BTC</strong> relative to t=0 (positive = in your favor for your bet side).</li>
+          <li><strong>Move vs t=0</strong> — Dollar difference between live price and t=0 (e.g. <strong>+$50</strong> if BTC is $50 above the slot open).</li>
           <li><strong>Time left</strong> — Countdown to slot close.</li>
         </ul>
 
@@ -244,6 +244,9 @@
     const REF_SOURCE_LABEL = {
       kalshi_brti_target: 'Kalshi BRTI target at slot open',
       brti_live: 'CF Benchmarks BRTI (live)',
+      exchange_live: 'Exchange last trade (live)',
+      exchange_fallback: 'Exchange (BRTI unavailable)',
+      coinbase_fallback: 'Coinbase (approx — set KALSHI_PRIVATE_KEY for BRTI)',
       user_override: 'Your manual t=0 price',
       fallback: '15m candle fallback',
       unavailable: 'Kalshi market unavailable',
@@ -251,6 +254,17 @@
 
     function refSourceLabel(src) {
       return REF_SOURCE_LABEL[src] || src || 'API reference';
+    }
+
+    function liveNowLabel(m) {
+      const src = m.current_price_source;
+      if (src === 'brti_live') return 'Now · BRTI live';
+      if (src === 'exchange_live' || src === 'exchange_fallback' || src === 'coinbase_fallback') {
+        return 'Now · exchange live';
+      }
+      if (src === 'kalshi_brti_target') return 'Now · stale (t=0 target)';
+      if (src === 'unavailable') return 'Now · unavailable';
+      return 'Now';
     }
 
     function liveAgeLabel(sec) {
@@ -352,10 +366,17 @@
     }
 
     function fmtPnl(m) {
-      const pct = Number(m.unrealized_pct);
-      const pctStr = (pct >= 0 ? '+' : '') + pct.toFixed(3) + '%';
-      const usd = m.unrealized_usd != null ? Number(m.unrealized_usd) : (Number(m.reference_price) * pct / 100);
-      return `${pctStr} · ${signedPrice(usd)}`;
+      const usd = m.price_change_usd != null
+        ? Number(m.price_change_usd)
+        : Number(m.current_price) - Number(m.reference_price);
+      return signedPrice(usd);
+    }
+
+    function pnlDirection(m) {
+      const usd = m.price_change_usd != null
+        ? Number(m.price_change_usd)
+        : Number(m.current_price) - Number(m.reference_price);
+      return usd > 0 ? 'up' : usd < 0 ? 'down' : 'muted';
     }
 
     function renderIndicators(items) {
@@ -415,7 +436,7 @@
       }
       card.className = 'card monitor-card' + (m.urgency === 'high' ? ' urgency-high' : m.urgency === 'medium' ? ' urgency-medium' : '');
       const actKey = (m.action || 'WAIT').replace(/\s+/g, '_');
-      const pnlCls = m.unrealized_pct > 0 ? 'up' : m.unrealized_pct < 0 ? 'down' : 'muted';
+      const pnlCls = pnlDirection(m);
       const bet = m.bet_side && m.bet_side !== 'NONE'
         ? `<span class="badge badge-${m.bet_side === 'UP' ? 'LONG' : 'SHORT'}">Bet ${m.bet_side}</span>`
         : '<span class="muted">No bet at open</span>';
@@ -431,12 +452,21 @@
       if (m.active && m.bet_side !== 'NONE') {
         const refHdr = m.using_override ? 'Ref (t=0) · override' : 'Ref (t=0) · Kalshi BRTI';
         const nowAge = m.live_price_age_sec != null ? ` · ${liveAgeLabel(m.live_price_age_sec)}` : '';
+        const staleWarn = m.current_price_source === 'unavailable'
+          ? '<div class="muted" style="font-size:.65rem;color:#ef4444">Live price unavailable</div>'
+          : m.current_price_source === 'exchange_live' || m.current_price_source === 'exchange_fallback' || m.current_price_source === 'coinbase_fallback'
+            ? '<div class="muted" style="font-size:.65rem;color:#f59e0b">Set KALSHI_PRIVATE_KEY for BRTI</div>'
+          : m.current_price_source === 'kalshi_brti_target'
+            ? '<div class="muted" style="font-size:.65rem;color:#ef4444">Stale — redeploy needed</div>'
+            : (m.live_price_age_sec != null && m.live_price_age_sec > 15)
+              ? '<div class="muted" style="font-size:.65rem;color:#f59e0b">Tick stale</div>'
+              : '';
         body += `
         <div class="slot-progress" title="Time elapsed in slot"><div style="width:${m.elapsed_pct || 0}%"></div></div>
         <div class="metrics" style="margin-top:0;padding-top:0;border-top:none;grid-template-columns:repeat(4,1fr)">
           <div><span>${refHdr}</span><strong>${price(m.reference_price)}</strong></div>
-          <div><span>Now · BRTI</span><strong>${price(m.current_price)}</strong><div class="muted" style="font-size:.68rem">${nowAge}</div></div>
-          <div><span>P&amp;L vs t=0</span><strong class="${pnlCls}">${fmtPnl(m)}</strong><div class="muted" style="font-size:.68rem">per 1 BTC</div></div>
+          <div><span>${liveNowLabel(m)}</span><strong>${price(m.current_price)}</strong><div class="muted" style="font-size:.68rem">${nowAge}</div>${staleWarn}</div>
+          <div><span>Move vs t=0</span><strong class="${pnlCls}">${fmtPnl(m)}</strong><div class="muted" style="font-size:.68rem">live − t=0</div></div>
           <div><span>Time left</span><strong>${fmtRemaining(m.seconds_remaining || 0)}</strong></div>
         </div>${renderReassessBlock(m)}${renderKalshiYesMid(m.kalshi)}`;
       } else if (m.active) {
@@ -468,8 +498,9 @@
         : `Reference (t=0) · ${refSourceLabel(p.reference_source)} — Kalshi BRTI target`;
       const slot = p.slot_label ? `<div class="sub" style="margin-bottom:.5rem">${p.slot_label}</div>` : '';
       const liveAge = p.live_price_age_sec != null ? ` <span class="muted">(${liveAgeLabel(p.live_price_age_sec)})</span>` : '';
+      const liveSrc = p.current_price_source ? ` · ${refSourceLabel(p.current_price_source)}` : '';
       const live = p.current_price
-        ? `<div class="live-price">Live BRTI: ${price(p.current_price)}${liveAge}</div>` : '';
+        ? `<div class="live-price">Live: ${price(p.current_price)}${liveAge}<span class="muted">${liveSrc}</span></div>` : '';
       $('pred-card').innerHTML = `
         <h2>Next 15-minute slot</h2>
         ${slot}
@@ -502,7 +533,8 @@
         ['Context', h.slot_context || '1h+4h+12h', true],
         ['Vol spike', h.volume_spike_window || '4h', true],
         ['Price feed', h.price_feed || 'Kalshi BRTI', true],
-        ['Kalshi', h.kalshi?.connected ? (h.kalshi.authenticated ? 'KXBTC15M · BRTI live' : 'KXBTC15M · target only') : 'No market', !!h.kalshi?.connected],
+        ['Kalshi', h.kalshi?.authenticated ? 'KXBTC15M · BRTI live' : (h.kalshi?.connected ? 'KXBTC15M · exchange ticks' : 'No market'), !!h.kalshi?.connected],
+        ['Live tick', h.live_tick?.source ? `${h.live_tick.source} · ${h.live_tick.age_sec != null ? h.live_tick.age_sec + 's' : '—'}` : '—', !!(h.live_tick && h.live_tick.age_sec != null && h.live_tick.age_sec < 10)],
         ['Settlement', h.settlement_reference || 'CF Benchmarks BRTI', true],
         ['Schedule', (h.timezone || 'ET') + ' :00/:15/:30/:45', true],
       ];
@@ -560,6 +592,22 @@
         </tr>`).join('')}</tbody></table>`;
     }
 
+    async function loadLiveMonitor() {
+      try {
+        let refQ = '';
+        const stored = loadRefOverride();
+        if (stored?.slot_start && stored.price > 0) {
+          refQ = `?reference_override=${encodeURIComponent(stored.price)}`;
+        }
+        const m = await get('/api/slot/monitor' + refQ);
+        if (stored?.slot_start && m?.slot_start && stored.slot_start !== m.slot_start) {
+          clearStoredRefOverride();
+          return get('/api/slot/monitor').then(renderSlotMonitor);
+        }
+        renderSlotMonitor(m);
+      } catch (_) {}
+    }
+
     async function loadAll() {
       $('error').style.display = 'none';
       $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { timeZone: TZ });
@@ -595,6 +643,7 @@
 
     loadAll();
     setInterval(loadAll, 5000);
+    setInterval(loadLiveMonitor, 1000);
   </script>
 </body>
 </html>
