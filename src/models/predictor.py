@@ -98,7 +98,8 @@ class Predictor:
     confidence = abs(prob_up - 0.5) * 2
     horizon = self.cfg.get("prediction_horizon_minutes", 15)
 
-    vol = features["return_1"].rolling(16).std().iloc[-1]
+    lookback = self.cfg.get("features", {}).get("slot_lookback_candles", 48)
+    vol = features["return_1"].rolling(lookback).std().iloc[-1]
     if pd.isna(vol):
       vol = 0.002
     direction = 1 if prob_up >= 0.5 else -1

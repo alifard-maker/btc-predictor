@@ -11,10 +11,10 @@ prediction_interval_minutes: 15
 primary_timeframe: 15m
 timezone: America/New_York
 
-# Context: prior 4h in 15m slots (16 bars) + min 30 fifteen-min candles for indicators
-lookback_hours: 4
-min_candles_15m: 30
-fetch_candles_15m: 64   # ~16h buffer for 30-period rolling features
+# Context: prior 12h in 15m slots (48 bars) + min candles for rolling indicators
+lookback_hours: 12
+min_candles_15m: 48
+fetch_candles_15m: 96   # ~24h buffer for 48-period rolling features
 
 # Candle intervals to collect
 intervals:

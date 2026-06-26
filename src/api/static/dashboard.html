@@ -143,7 +143,8 @@
         ['Scheduler', h.scheduler_running ? 'Running' : 'Stopped', h.scheduler_running],
         ['Exchange', h.exchange || '—', h.exchange_connected],
         ['Model', h.model || '—', true],
-        ['15m candles', String(h.candles_15m || 0), (h.candles_15m || 0) >= (h.min_candles_15m || 30)],
+        ['15m candles', String(h.candles_15m || 0), (h.candles_15m || 0) >= (h.min_candles_15m || 48)],
+        ['Lookback', (h.lookback_hours || 12) + 'h', true],
         ['Schedule', (h.timezone || 'ET') + ' :00/:15/:30/:45', true],
       ];
       $('status-list').innerHTML = items.map(([l,v,ok]) =>

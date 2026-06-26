@@ -145,24 +145,23 @@ def compute_market_structure_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_slot_context_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
-  """Summarize prior 4h of 15m slots (16 candles) for slot-based prediction."""
+  """Summarize prior 12h of 15m slots (48 candles by default) for slot-based prediction."""
   out = df.copy()
-  lookback = cfg.get("features", {}).get("slot_lookback_candles", 16)
+  lookback = cfg.get("features", {}).get("slot_lookback_candles", 48)
 
   if "return_1" not in out:
     out["return_1"] = out["close"].pct_change()
 
-  # 4h window stats on 15m bars
   out["slot_up_ratio"] = (out["return_1"] > 0).rolling(lookback).mean()
-  out["slot_return_4h"] = out["close"].pct_change(lookback)
-  out["slot_range_4h"] = (
+  out["slot_return_lb"] = out["close"].pct_change(lookback)
+  out["slot_range_lb"] = (
     (out["high"].rolling(lookback).max() - out["low"].rolling(lookback).min())
     / out["close"].replace(0, np.nan)
   )
-  out["slot_volume_4h"] = out["volume"].rolling(lookback).sum()
-  out["slot_volatility_4h"] = out["return_1"].rolling(lookback).std()
-  out["slot_higher_highs_4h"] = (out["high"] > out["high"].shift(1)).rolling(lookback).sum()
-  out["slot_lower_lows_4h"] = (out["low"] < out["low"].shift(1)).rolling(lookback).sum()
+  out["slot_volume_lb"] = out["volume"].rolling(lookback).sum()
+  out["slot_volatility_lb"] = out["return_1"].rolling(lookback).std()
+  out["slot_higher_highs_lb"] = (out["high"] > out["high"].shift(1)).rolling(lookback).sum()
+  out["slot_lower_lows_lb"] = (out["low"] < out["low"].shift(1)).rolling(lookback).sum()
 
   return out
 

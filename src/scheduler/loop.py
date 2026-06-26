@@ -35,7 +35,7 @@ class PredictionLoop:
     self.calibration = CalibrationTracker(self.cfg)
     self.tz = self.cfg.get("timezone", "America/New_York")
     self.horizon = self.cfg.get("prediction_horizon_minutes", 15)
-    self.min_candles = self.cfg.get("min_candles_15m", 30)
+    self.min_candles = self.cfg.get("min_candles_15m", 48)
     self.fetch_15m_count = self.cfg.get("fetch_candles_15m", 64)
     self.latest_prediction: Prediction | None = None
     self.last_error: str | None = None
@@ -131,7 +131,7 @@ class PredictionLoop:
       "candles_15m": len(df_15m),
       "candles_1m": len(df_1m),
       "min_candles_15m": self.min_candles,
-      "lookback_hours": self.cfg.get("lookback_hours", 4),
+      "lookback_hours": self.cfg.get("lookback_hours", 12),
       "latest_candle_15m": df_15m["timestamp"].iloc[-1].isoformat() if not df_15m.empty else None,
       "horizon_minutes": self.horizon,
       "timezone": self.tz,
