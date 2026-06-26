@@ -27,6 +27,10 @@ kalshi:
   exchange_tick_cache_sec: 1
   live_fallback_exchange: true
 
+# Calibration — only count predictions resolved with Kalshi BRTI open + close
+calibration:
+  kalshi_only: true
+
 # 15-minute slot predictions — Eastern Time (:00, :15, :30, :45 ET)
 prediction_horizon_minutes: 15
 prediction_interval_minutes: 15

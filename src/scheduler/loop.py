@@ -11,11 +11,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from src.calibration.sources import KALSHI_EXIT_SOURCE, KALSHI_REF_SOURCE
 from src.calibration.tracker import CalibrationTracker
 from src.config import ensure_dirs, load_config
 from src.data.fetcher import DataFetcher
 from src.data.kalshi import KalshiClient, KalshiPriceQuote
 from src.data.storage import CandleStorage
+from src.db.store import PredictionResolution
 from src.features.slots import current_slot_start, floor_to_15m, slot_end
 from src.logging.prediction_log import PredictionLogger
 from src.models.predictor import Prediction, Predictor
@@ -70,29 +72,35 @@ class PredictionLoop:
       self.last_error = str(e)
 
   def resolve_outcomes(self) -> None:
-    df_15m = self.storage.load("15m")
-    if df_15m.empty:
+    pending = self.calibration.get_pending()
+    if not pending:
       return
 
-    df_15m = df_15m.copy()
-    df_15m["timestamp"] = pd.to_datetime(df_15m["timestamp"], utc=True)
-
-    pending = self.calibration.get_pending()
-    price_lookup = {}
+    price_lookup: dict[str, PredictionResolution] = {}
     for _row_id, ts_str, entry_price in pending:
       slot_s = floor_to_15m(pd.Timestamp(ts_str), self.tz)
-      slot_e = slot_end(slot_s)
-      # Exit price = close of the 15m candle ending at slot_e
-      match = df_15m[df_15m["timestamp"] >= slot_e]
-      if match.empty:
+      settlement = self.kalshi.slot_settlement(slot_s)
+      if settlement is None or not settlement.settled:
         continue
-      exit_price = float(match.iloc[0]["close"])
-      actual_return = (exit_price - entry_price) / entry_price
-      price_lookup[ts_str] = (exit_price, actual_return)
+
+      resolution = self.kalshi.resolution_for_entry(float(entry_price), settlement)
+      if resolution is None:
+        continue
+
+      exit_price, actual_return, outcome = resolution
+      price_lookup[ts_str] = PredictionResolution(
+        exit_price=exit_price,
+        actual_return=actual_return,
+        exit_source=KALSHI_EXIT_SOURCE,
+        outcome=outcome,
+        reference_price=settlement.open_brti,
+        reference_source=KALSHI_REF_SOURCE,
+        kalshi_market_ticker=settlement.market_ticker,
+      )
 
     if price_lookup:
       resolved = self.calibration.resolve_with_prices(price_lookup)
-      log.info("Resolved %d predictions", resolved)
+      log.info("Resolved %d predictions via Kalshi BRTI", resolved)
 
   def run_prediction(self) -> Prediction | None:
     try:
@@ -132,7 +140,9 @@ class PredictionLoop:
         kalshi_reference=kalshi_ref,
       )
       self._remember_slot_reference(pred, open_quote, kalshi_ref)
-      self.logger.log(pred)
+      active = self.kalshi.active_btc15m_market()
+      kalshi_ticker = active.market_ticker if active else ""
+      self.logger.log(pred, kalshi_market_ticker=kalshi_ticker)
       self.latest_prediction = pred
       self.last_error = None
       log.info(

@@ -563,15 +563,20 @@
     function renderCalibration(data) {
       const s = data.summary;
       if (!s.n_resolved) {
-        $('calibration').innerHTML = '<p class="muted">Not enough resolved predictions yet. Check back in a few hours.</p>';
+        const excluded = s.n_excluded_non_kalshi ? ` (${s.n_excluded_non_kalshi} older rows excluded — run Kalshi backfill)` : '';
+        $('calibration').innerHTML = `<p class="muted">Not enough Kalshi-resolved predictions yet${excluded}. Check back after slots settle.</p>`;
         return;
       }
+      const kalshiNote = s.kalshi_only
+        ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Stats use Kalshi BRTI only (t=0 floor_strike → close expiration_value).${s.n_excluded_non_kalshi ? ` Excluded ${s.n_excluded_non_kalshi} pre-Kalshi rows.` : ''}</p>`
+        : '';
       $('calibration').innerHTML = `
-        <p class="muted" style="margin-bottom:.75rem">When model says X% UP, does price actually go up ~X% of the time?</p>
+        ${kalshiNote}
+        <p class="muted" style="margin-bottom:.75rem">When model says X% UP, does BRTI finish above t=0 ~X% of the time?</p>
         <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Rolling hit rate — one count per 15m slot (max 4/hour):</p>
         ${renderRollingAccuracy(s.rolling_accuracy)}
         <div class="cal-stats">
-          <div><span>Resolved</span><strong>${s.n_resolved}</strong></div>
+          <div><span>Resolved (Kalshi)</span><strong>${s.n_resolved}</strong></div>
           ${s.brier_score!=null?`<div><span>Brier</span><strong>${s.brier_score.toFixed(4)}</strong></div>`:''}
           ${s.overall_accuracy!=null?`<div><span>All-time accuracy</span><strong>${pct(s.overall_accuracy)}</strong></div>`:''}
         </div>`;
@@ -583,10 +588,11 @@
         return;
       }
       $('history').innerHTML = `<table>
-        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>UP</th><th>Signal</th><th>Outcome</th></tr></thead>
+        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>Close BRTI</th><th>UP</th><th>Signal</th><th>Outcome</th></tr></thead>
         <tbody>${rows.map(p => `<tr>
           <td>${p.slot_label || time(p.timestamp)}</td>
-          <td>${price(p.reference_price ?? p.price)}</td>
+          <td title="${p.reference_source || ''}">${price(p.reference_price ?? p.price)}</td>
+          <td title="${p.exit_source || ''}">${p.exit_price != null ? price(p.exit_price) : '—'}</td>
           <td class="up">${pct(p.prob_up)}</td><td>${badge(p.signal)}</td>
           <td>${p.outcome==null?'—':(p.outcome?'<span class="up">UP</span>':'<span class="down">DOWN</span>')}</td>
         </tr>`).join('')}</tbody></table>`;

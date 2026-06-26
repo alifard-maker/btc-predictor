@@ -17,11 +17,34 @@ import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
+from src.calibration.sources import KALSHI_EXIT_SOURCE, KALSHI_REF_SOURCE
+
 log = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 DEFAULT_SERIES = "KXBTC15M"
 BRTI_INDEX_ID = "BRTI"
+
+
+@dataclass(frozen=True)
+class KalshiSlotSettlement:
+  """Kalshi KXBTC15M BRTI open/close for a 15m ET slot."""
+  market_ticker: str
+  slot_open: datetime
+  slot_close: datetime
+  open_brti: float
+  close_brti: float | None
+  status: str
+
+  @property
+  def settled(self) -> bool:
+    return self.close_brti is not None and self.status in ("finalized", "settled", "closed")
+
+  @property
+  def outcome_up(self) -> bool | None:
+    if not self.settled:
+      return None
+    return self.close_brti >= self.open_brti
 
 
 @dataclass(frozen=True)
@@ -359,6 +382,102 @@ class KalshiClient:
   def lock_current_slot_reference(self, slot_start: pd.Timestamp) -> float | None:
     price, _ = self.slot_t0_reference(slot_start, fresh=True)
     return price
+
+  def market_for_slot(self, slot_start: pd.Timestamp) -> dict[str, Any] | None:
+    """KXBTC15M market row whose open_time matches this ET slot (public API)."""
+    if not self.enabled:
+      return None
+    slot_s = pd.Timestamp(slot_start)
+    if slot_s.tzinfo is None:
+      slot_s = slot_s.tz_localize("UTC")
+    else:
+      slot_s = slot_s.tz_convert("UTC")
+    from src.features.slots import slot_end
+
+    slot_e = slot_end(slot_s)
+    close_ts = int(slot_e.timestamp())
+    try:
+      data = self.get(
+        "/markets",
+        params={
+          "series_ticker": self.series_ticker,
+          "min_close_ts": close_ts - 2,
+          "max_close_ts": close_ts + 2,
+          "limit": 10,
+        },
+      )
+      for row in data.get("markets", []):
+        open_time = row.get("open_time")
+        if not open_time:
+          continue
+        ot = self._parse_ts(open_time)
+        if abs((ot - slot_s.to_pydatetime()).total_seconds()) <= 60:
+          return row
+    except Exception as e:
+      log.warning("Kalshi market_for_slot failed: %s", e)
+    return None
+
+  def slot_settlement(self, slot_start: pd.Timestamp) -> KalshiSlotSettlement | None:
+    """BRTI t=0 (floor_strike) and close (expiration_value) for a slot."""
+    row = self.market_for_slot(slot_start)
+    if not row:
+      return None
+    floor = row.get("floor_strike")
+    if floor is None:
+      return None
+    exp_raw = row.get("expiration_value")
+    close_brti = float(exp_raw) if exp_raw not in (None, "") else None
+    return KalshiSlotSettlement(
+      market_ticker=str(row.get("ticker", "")),
+      slot_open=self._parse_ts(row["open_time"]),
+      slot_close=self._parse_ts(row["close_time"]),
+      open_brti=float(floor),
+      close_brti=close_brti,
+      status=str(row.get("status", "")),
+    )
+
+  def iter_settled_markets(self, *, limit: int = 200, max_pages: int = 50):
+    """Yield settled KXBTC15M markets (newest first)."""
+    cursor: str | None = None
+    pages = 0
+    while pages < max_pages:
+      params: dict[str, Any] = {
+        "series_ticker": self.series_ticker,
+        "status": "settled",
+        "limit": min(limit, 200),
+      }
+      if cursor:
+        params["cursor"] = cursor
+      try:
+        data = self.get("/markets", params=params)
+      except Exception as e:
+        log.warning("Kalshi settled markets fetch failed: %s", e)
+        break
+      markets = data.get("markets", [])
+      if not markets:
+        break
+      for row in markets:
+        yield row
+      cursor = data.get("cursor")
+      pages += 1
+      if not cursor:
+        break
+
+  def resolution_for_entry(
+    self,
+    entry_price: float,
+    settlement: KalshiSlotSettlement,
+  ) -> tuple[float, float, int] | None:
+    """Return (exit_brti, actual_return, outcome_up_int) when slot is settled."""
+    if not settlement.settled or settlement.close_brti is None:
+      return None
+    open_brti = settlement.open_brti
+    close_brti = settlement.close_brti
+    if open_brti <= 0:
+      return None
+    actual_return = (close_brti - open_brti) / open_brti
+    outcome = 1 if close_brti >= open_brti else 0
+    return close_brti, actual_return, outcome
 
   def active_market_summary(self) -> dict[str, Any] | None:
     """Compact Kalshi market info for dashboard (YES mid, ticker)."""

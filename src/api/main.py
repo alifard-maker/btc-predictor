@@ -332,3 +332,12 @@ def collect_historical(
 
   threading.Thread(target=_run, daemon=True).start()
   return {"status": "started", "years": years, "message": "Collection running in background. Check /api/status for candle count."}
+
+
+@app.post("/api/admin/backfill-kalshi")
+def backfill_kalshi(_: None = Depends(_verify_admin)):
+  """Re-resolve prediction history using Kalshi KXBTC15M BRTI settlement."""
+  from src.calibration.backfill import backfill_kalshi_predictions
+
+  stats = backfill_kalshi_predictions(_cfg, dry_run=False)
+  return {"status": "ok", **stats}

@@ -5,7 +5,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from src.db.store import PredictionStore, create_prediction_store
+from src.calibration.sources import is_kalshi_consistent
+from src.db.store import PredictionResolution, PredictionStore, create_prediction_store
 from src.features.slots import floor_to_15m
 
 
@@ -14,37 +15,77 @@ class CalibrationTracker:
 
   def __init__(self, cfg: dict[str, Any] | str):
     if isinstance(cfg, dict):
+      self.cfg = cfg
       self.store: PredictionStore = create_prediction_store(cfg)
       self.tz = cfg.get("timezone", "America/New_York")
+      self.kalshi_only = bool(cfg.get("calibration", {}).get("kalshi_only", True))
     else:
-      # Backward compat: sqlite path string
       from src.db.store import SqlitePredictionStore
+      self.cfg = {}
       self.store = SqlitePredictionStore(cfg)
       self.store.init()
       self.tz = "America/New_York"
+      self.kalshi_only = True
 
   def log_prediction(
-    self, timestamp: str, price: float, prob_up: float, prob_down: float,
-    confidence: float, signal: str, expected_move: float,
+    self,
+    timestamp: str,
+    price: float,
+    prob_up: float,
+    prob_down: float,
+    confidence: float,
+    signal: str,
+    expected_move: float,
+    *,
+    reference_source: str = "",
+    kalshi_market_ticker: str = "",
   ) -> int:
     return self.store.log_prediction(
-      timestamp, price, prob_up, prob_down, confidence, signal, expected_move
+      timestamp,
+      price,
+      prob_up,
+      prob_down,
+      confidence,
+      signal,
+      expected_move,
+      reference_source=reference_source,
+      kalshi_market_ticker=kalshi_market_ticker,
     )
 
   def get_pending(self) -> list[tuple[int, str, float]]:
     return self.store.get_pending()
 
-  def resolve_with_prices(self, price_lookup: dict[str, tuple[float, float]]) -> int:
-    return self.store.resolve_with_prices(price_lookup)
+  def resolve_with_prices(
+    self,
+    price_lookup: dict[str, PredictionResolution],
+    *,
+    force: bool = False,
+  ) -> int:
+    return self.store.resolve_with_prices(price_lookup, force=force)
+
+  def load_all(self) -> pd.DataFrame:
+    return self.store.load_all()
 
   def load_resolved(self) -> pd.DataFrame:
-    return self.store.load_resolved()
+    df = self.store.load_resolved()
+    return self._filter_calibration_df(df)
 
   def load_recent(self, limit: int = 50) -> pd.DataFrame:
     return self.store.load_recent(limit)
 
   def latest(self) -> dict[str, Any] | None:
     return self.store.latest()
+
+  def _filter_calibration_df(self, df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or not self.kalshi_only:
+      return df
+    if "reference_source" not in df.columns or "exit_source" not in df.columns:
+      return df.iloc[0:0]
+    mask = df.apply(
+      lambda r: is_kalshi_consistent(r.get("reference_source"), r.get("exit_source")),
+      axis=1,
+    )
+    return df[mask].copy()
 
   def _dedupe_by_slot(self, df: pd.DataFrame) -> pd.DataFrame:
     """One row per 15m slot — keep earliest log (closest to slot open)."""
@@ -116,8 +157,15 @@ class CalibrationTracker:
 
   def summary(self) -> dict[str, Any]:
     df = self._dedupe_by_slot(self.load_resolved())
+    all_resolved = self._dedupe_by_slot(self.store.load_resolved())
+    kalshi_n = len(df)
+    total_n = len(all_resolved)
     if df.empty:
-      return {"n_resolved": 0, "rolling_accuracy": self.rolling_accuracy()}
+      out = {"n_resolved": 0, "rolling_accuracy": self.rolling_accuracy()}
+      if self.kalshi_only and total_n > kalshi_n:
+        out["n_resolved_total"] = total_n
+        out["n_excluded_non_kalshi"] = total_n - kalshi_n
+      return out
 
     brier = ((df["prob_up"] - df["outcome"]) ** 2).mean()
     longs = df[df["signal"] == "LONG"]
@@ -126,6 +174,9 @@ class CalibrationTracker:
 
     return {
       "n_resolved": len(df),
+      "n_resolved_total": total_n if self.kalshi_only else len(df),
+      "n_excluded_non_kalshi": (total_n - kalshi_n) if self.kalshi_only else 0,
+      "kalshi_only": self.kalshi_only,
       "brier_score": float(brier),
       "overall_accuracy": float(self._prediction_correct(df).mean()),
       "rolling_accuracy": self.rolling_accuracy(),

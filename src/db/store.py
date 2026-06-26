@@ -3,11 +3,41 @@ from __future__ import annotations
 import logging
 import os
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PredictionResolution:
+  """Outcome update for a logged prediction."""
+  exit_price: float
+  actual_return: float
+  exit_source: str
+  outcome: int
+  reference_price: float | None = None
+  reference_source: str | None = None
+  kalshi_market_ticker: str | None = None
+
+
+_EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
+  ("reference_source", "TEXT"),
+  ("exit_price", "REAL"),
+  ("exit_source", "TEXT"),
+  ("kalshi_market_ticker", "TEXT"),
+)
+
+_EXTRA_COLUMNS_PG: tuple[tuple[str, str], ...] = (
+  ("reference_source", "TEXT"),
+  ("exit_price", "DOUBLE PRECISION"),
+  ("exit_source", "TEXT"),
+  ("kalshi_market_ticker", "TEXT"),
+)
 
 
 def normalize_database_url(url: str) -> str:
@@ -41,15 +71,32 @@ class PredictionStore(ABC):
 
   @abstractmethod
   def log_prediction(
-    self, timestamp: str, price: float, prob_up: float, prob_down: float,
-    confidence: float, signal: str, expected_move: float,
+    self,
+    timestamp: str,
+    price: float,
+    prob_up: float,
+    prob_down: float,
+    confidence: float,
+    signal: str,
+    expected_move: float,
+    *,
+    reference_source: str = "",
+    kalshi_market_ticker: str = "",
   ) -> int: ...
 
   @abstractmethod
   def get_pending(self) -> list[tuple[int, str, float]]: ...
 
   @abstractmethod
-  def resolve_with_prices(self, price_lookup: dict[str, tuple[float, float]]) -> int: ...
+  def resolve_with_prices(
+    self,
+    price_lookup: dict[str, PredictionResolution],
+    *,
+    force: bool = False,
+  ) -> int: ...
+
+  @abstractmethod
+  def load_all(self) -> pd.DataFrame: ...
 
   @abstractmethod
   def load_resolved(self) -> pd.DataFrame: ...
@@ -85,13 +132,37 @@ class SqlitePredictionStore(PredictionStore):
           outcome INTEGER,
           actual_return REAL,
           resolved_at TEXT,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          reference_source TEXT,
+          exit_price REAL,
+          exit_source TEXT,
+          kalshi_market_ticker TEXT
         )
       """)
+      self._migrate_sqlite(conn)
       conn.execute("CREATE INDEX IF NOT EXISTS idx_pred_ts ON predictions(timestamp)")
       conn.execute("CREATE INDEX IF NOT EXISTS idx_pred_outcome ON predictions(outcome)")
 
-  def log_prediction(self, timestamp, price, prob_up, prob_down, confidence, signal, expected_move) -> int:
+  @staticmethod
+  def _migrate_sqlite(conn) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(predictions)")}
+    for col, typ in _EXTRA_COLUMNS:
+      if col not in existing:
+        conn.execute(f"ALTER TABLE predictions ADD COLUMN {col} {typ}")
+
+  def log_prediction(
+    self,
+    timestamp,
+    price,
+    prob_up,
+    prob_down,
+    confidence,
+    signal,
+    expected_move,
+    *,
+    reference_source: str = "",
+    kalshi_market_ticker: str = "",
+  ) -> int:
     price, prob_up, prob_down, confidence, expected_move = map(
       _py, (price, prob_up, prob_down, confidence, expected_move)
     )
@@ -105,9 +176,13 @@ class SqlitePredictionStore(PredictionStore):
         return existing[0]
       cur = conn.execute(
         """INSERT INTO predictions
-           (timestamp, price, prob_up, prob_down, confidence, signal, expected_move)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (ts, price, prob_up, prob_down, confidence, signal, expected_move),
+           (timestamp, price, prob_up, prob_down, confidence, signal, expected_move,
+            reference_source, kalshi_market_ticker)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+          ts, price, prob_up, prob_down, confidence, signal, expected_move,
+          reference_source or None, kalshi_market_ticker or None,
+        ),
       )
       return cur.lastrowid
 
@@ -117,18 +192,51 @@ class SqlitePredictionStore(PredictionStore):
         "SELECT id, timestamp, price FROM predictions WHERE outcome IS NULL ORDER BY timestamp"
       ).fetchall()
 
-  def resolve_with_prices(self, price_lookup: dict[str, tuple[float, float]]) -> int:
+  def resolve_with_prices(
+    self,
+    price_lookup: dict[str, PredictionResolution],
+    *,
+    force: bool = False,
+  ) -> int:
     count = 0
     with self._conn() as conn:
-      for ts, (_, actual_return) in price_lookup.items():
-        outcome = 1 if actual_return > 0 else 0
-        conn.execute(
-          """UPDATE predictions SET outcome=?, actual_return=?, resolved_at=datetime('now')
-             WHERE timestamp=? AND outcome IS NULL""",
-          (outcome, actual_return, ts),
-        )
+      for ts, res in price_lookup.items():
+        if force:
+          conn.execute(
+            """UPDATE predictions SET
+                 outcome=?, actual_return=?, exit_price=?, exit_source=?,
+                 resolved_at=datetime('now'),
+                 price=COALESCE(?, price),
+                 reference_source=COALESCE(?, reference_source),
+                 kalshi_market_ticker=COALESCE(?, kalshi_market_ticker)
+               WHERE timestamp=?""",
+            (
+              res.outcome, res.actual_return, res.exit_price, res.exit_source,
+              res.reference_price, res.reference_source, res.kalshi_market_ticker,
+              ts,
+            ),
+          )
+        else:
+          conn.execute(
+            """UPDATE predictions SET
+                 outcome=?, actual_return=?, exit_price=?, exit_source=?,
+                 price=COALESCE(?, price),
+                 reference_source=COALESCE(?, reference_source),
+                 kalshi_market_ticker=COALESCE(?, kalshi_market_ticker),
+                 resolved_at=datetime('now')
+               WHERE timestamp=? AND outcome IS NULL""",
+            (
+              res.outcome, res.actual_return, res.exit_price, res.exit_source,
+              res.reference_price, res.reference_source, res.kalshi_market_ticker,
+              ts,
+            ),
+          )
         count += conn.total_changes
     return count
+
+  def load_all(self) -> pd.DataFrame:
+    with self._conn() as conn:
+      return pd.read_sql("SELECT * FROM predictions ORDER BY timestamp", conn)
 
   def load_resolved(self) -> pd.DataFrame:
     with self._conn() as conn:
@@ -174,14 +282,41 @@ class PostgresPredictionStore(PredictionStore):
             outcome INTEGER,
             actual_return DOUBLE PRECISION,
             resolved_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            reference_source TEXT,
+            exit_price DOUBLE PRECISION,
+            exit_source TEXT,
+            kalshi_market_ticker TEXT
           )
         """)
+        self._migrate_postgres(cur)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pred_ts ON predictions(timestamp)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pred_outcome ON predictions(outcome)")
       conn.commit()
 
-  def log_prediction(self, timestamp, price, prob_up, prob_down, confidence, signal, expected_move) -> int:
+  def _migrate_postgres(self, cur) -> None:
+    cur.execute("""
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'predictions'
+    """)
+    existing = {row[0] for row in cur.fetchall()}
+    for col, typ in _EXTRA_COLUMNS_PG:
+      if col not in existing:
+        cur.execute(f"ALTER TABLE predictions ADD COLUMN {col} {typ}")
+
+  def log_prediction(
+    self,
+    timestamp,
+    price,
+    prob_up,
+    prob_down,
+    confidence,
+    signal,
+    expected_move,
+    *,
+    reference_source: str = "",
+    kalshi_market_ticker: str = "",
+  ) -> int:
     price, prob_up, prob_down, confidence, expected_move = map(
       _py, (price, prob_up, prob_down, confidence, expected_move)
     )
@@ -197,9 +332,13 @@ class PostgresPredictionStore(PredictionStore):
           return row[0]
         cur.execute(
           """INSERT INTO predictions
-             (timestamp, price, prob_up, prob_down, confidence, signal, expected_move)
-             VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-          (ts, price, prob_up, prob_down, confidence, signal, expected_move),
+             (timestamp, price, prob_up, prob_down, confidence, signal, expected_move,
+              reference_source, kalshi_market_ticker)
+             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+          (
+            ts, price, prob_up, prob_down, confidence, signal, expected_move,
+            reference_source or None, kalshi_market_ticker or None,
+          ),
         )
         row_id = cur.fetchone()[0]
       conn.commit()
@@ -214,20 +353,53 @@ class PostgresPredictionStore(PredictionStore):
         rows = cur.fetchall()
     return [(r[0], r[1].isoformat(), r[2]) for r in rows]
 
-  def resolve_with_prices(self, price_lookup: dict[str, tuple[float, float]]) -> int:
+  def resolve_with_prices(
+    self,
+    price_lookup: dict[str, PredictionResolution],
+    *,
+    force: bool = False,
+  ) -> int:
     count = 0
     with self._conn() as conn:
       with conn.cursor() as cur:
-        for ts, (_, actual_return) in price_lookup.items():
-          outcome = 1 if actual_return > 0 else 0
-          cur.execute(
-            """UPDATE predictions SET outcome=%s, actual_return=%s, resolved_at=NOW()
-               WHERE timestamp=%s AND outcome IS NULL""",
-            (outcome, actual_return, ts),
-          )
+        for ts, res in price_lookup.items():
+          if force:
+            cur.execute(
+              """UPDATE predictions SET
+                   outcome=%s, actual_return=%s, exit_price=%s, exit_source=%s,
+                   resolved_at=NOW(),
+                   price=COALESCE(%s, price),
+                   reference_source=COALESCE(%s, reference_source),
+                   kalshi_market_ticker=COALESCE(%s, kalshi_market_ticker)
+                 WHERE timestamp=%s::timestamptz""",
+              (
+                res.outcome, res.actual_return, res.exit_price, res.exit_source,
+                res.reference_price, res.reference_source, res.kalshi_market_ticker,
+                ts,
+              ),
+            )
+          else:
+            cur.execute(
+              """UPDATE predictions SET
+                   outcome=%s, actual_return=%s, exit_price=%s, exit_source=%s,
+                   price=COALESCE(%s, price),
+                   reference_source=COALESCE(%s, reference_source),
+                   kalshi_market_ticker=COALESCE(%s, kalshi_market_ticker),
+                   resolved_at=NOW()
+                 WHERE timestamp=%s::timestamptz AND outcome IS NULL""",
+              (
+                res.outcome, res.actual_return, res.exit_price, res.exit_source,
+                res.reference_price, res.reference_source, res.kalshi_market_ticker,
+                ts,
+              ),
+            )
           count += cur.rowcount
       conn.commit()
     return count
+
+  def load_all(self) -> pd.DataFrame:
+    with self._conn() as conn:
+      return pd.read_sql("SELECT * FROM predictions ORDER BY timestamp", conn)
 
   def load_resolved(self) -> pd.DataFrame:
     with self._conn() as conn:
