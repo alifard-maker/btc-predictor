@@ -85,6 +85,19 @@ intra_slot:
   late_window_minutes: 3      # last N minutes — favor taking profit / cutting loss
   fee_buffer_pct: 0.13        # ~half round-trip cost — minimum "safe" net gain
 
+# Late entry — reassess NO-TRADE slots mid-window (conservative)
+late_entry:
+  enabled: true
+  outlook_after_minutes: 2      # show outlook bars after this much slot history
+  min_elapsed_minutes: 4        # earliest minute to recommend entering
+  min_remaining_minutes: 5      # need enough time left to justify fees
+  min_confidence: 0.62          # stricter than open (0.57)
+  min_move_pct: 0.04            # min |move| vs t=0
+  min_side_time_pct: 0.58       # share of slot minutes on favorable side of ref
+  max_ref_crossings: 1          # whipsaw guard
+  momentum_bars: 4
+  min_momentum_pct: 0.02
+
 model:
   type: lightgbm
   train_test_split: 0.2

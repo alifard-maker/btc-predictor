@@ -69,6 +69,9 @@
     .action-TAKE_PROFIT { background: rgba(34,197,94,.18); color: var(--up); border: 1px solid rgba(34,197,94,.4); }
     .action-CUT_LOSS { background: rgba(239,68,68,.18); color: var(--down); border: 1px solid rgba(239,68,68,.4); }
     .action-NO_BET, .action-WAIT { background: rgba(136,136,160,.12); color: var(--muted); border: 1px solid var(--border); }
+    .action-WATCH { background: rgba(99,102,241,.1); color: #a5b4fc; border: 1px solid rgba(99,102,241,.25); }
+    .action-LATE_LONG { background: rgba(34,197,94,.15); color: var(--up); border: 1px solid rgba(34,197,94,.35); }
+    .action-LATE_SHORT { background: rgba(239,68,68,.15); color: var(--down); border: 1px solid rgba(239,68,68,.35); }
     .slot-progress { height: 8px; background: var(--bg); border-radius: 99px; overflow: hidden; margin: 0.65rem 0; }
     .slot-progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), #818cf8); border-radius: 99px; transition: width .5s; }
     .monitor-reasons { margin: 0.65rem 0 0; padding-left: 1.1rem; font-size: 0.78rem; color: var(--muted); }
@@ -159,8 +162,12 @@
         <p>Health of the API, scheduler, and Kalshi BRTI feed. Green dots = OK.</p>
 
         <h3>Live position · intra-slot exit</h3>
-        <p>For when you <strong>already bet</strong> at slot open on the opening LONG/SHORT signal.</p>
+        <p>If you bet at open, use HOLD / TAKE PROFIT / CUT LOSS. If the open was <strong>NO TRADE</strong>, the monitor <strong>watches</strong> the slot and may suggest a <strong>LATE LONG/SHORT</strong> only after several minutes of consistent price action (not instant flips).</p>
         <dl>
+          <dt>WATCH</dt>
+          <dd>No bet at open — collecting slot history; shows outlook after ~2 min.</dd>
+          <dt>LATE LONG / LATE SHORT</dt>
+          <dd>Conservative mid-slot entry when move vs t=0, time on side of ref, and momentum align (needs ~4+ min elapsed, 5+ min left).</dd>
           <dt>HOLD</dt>
           <dd>Position still on track; no urgent action.</dd>
           <dt>TAKE PROFIT</dt>
@@ -421,15 +428,18 @@
     }
 
     function renderReassessBlock(m) {
-      if (m.reassessed_prob_up == null || !m.active || m.bet_side === 'NONE') return '';
+      if (m.reassessed_prob_up == null || !m.active || !m.outlook_ready) return '';
       const up = m.reassessed_prob_up * 100, down = (m.reassessed_prob_down ?? (1 - m.reassessed_prob_up)) * 100;
       const side = m.reassessed_close_side || '';
       const sideCls = side === 'UP' ? 'up' : side === 'DOWN' ? 'down' : 'muted';
+      const title = m.bet_side === 'NONE'
+        ? `Slot outlook · ${fmtRemaining(m.seconds_remaining || 0)} left`
+        : `Reassessed for slot close · ${fmtRemaining(m.seconds_remaining || 0)} left`;
       return `<div class="reassess-block">
-        <h4>Reassessed for slot close · ${fmtRemaining(m.seconds_remaining || 0)} left</h4>
+        <h4>${title}</h4>
         <div class="bar-row"><span class="up">UP @ close</span><div class="track"><div class="fill-up" style="width:${up}%"></div></div><span>${up.toFixed(0)}%</span></div>
         <div class="bar-row"><span class="down">DOWN @ close</span><div class="track"><div class="fill-down" style="width:${down}%"></div></div><span>${down.toFixed(0)}%</span></div>
-        <p style="font-size:.8rem;margin-top:.55rem" class="${sideCls}">${m.reassess_summary || ''}</p>
+        <p style="font-size:.8rem;margin-top:.55rem" class="${sideCls}">${m.reassess_summary || m.late_entry_summary || ''}</p>
       </div>`;
     }
 
@@ -444,7 +454,7 @@
       const actKey = (m.action || 'WAIT').replace(/\s+/g, '_');
       const pnlCls = pnlDirection(m);
       const bet = m.bet_side && m.bet_side !== 'NONE'
-        ? `<span class="badge badge-${m.bet_side === 'UP' ? 'LONG' : 'SHORT'}">Bet ${m.bet_side}</span>`
+        ? `<span class="badge badge-${m.bet_side === 'UP' ? 'LONG' : 'SHORT'}">${m.late_entry_action && m.late_entry_action.startsWith('LATE') ? 'Late ' : 'Bet '}${m.bet_side}</span>`
         : '<span class="muted">No bet at open</span>';
 
       let body = `
@@ -476,8 +486,16 @@
           <div><span>Time left</span><strong>${fmtRemaining(m.seconds_remaining || 0)}</strong></div>
         </div>${renderReassessBlock(m)}${renderKalshiYesMid(m.kalshi)}`;
       } else if (m.active) {
-        body += `<div class="slot-progress"><div style="width:${m.elapsed_pct || 0}%"></div></div>
-          <p class="muted" style="font-size:.8rem">${fmtRemaining(m.seconds_remaining || 0)} left in slot</p>`;
+        const refHdr = m.using_override ? 'Ref (t=0) · override' : 'Ref (t=0) · Kalshi BRTI';
+        const nowAge = m.live_price_age_sec != null ? ` · ${liveAgeLabel(m.live_price_age_sec)}` : '';
+        body += `
+        <div class="slot-progress"><div style="width:${m.elapsed_pct || 0}%"></div></div>
+        <div class="metrics" style="margin-top:0.65rem;padding-top:0;border-top:none;grid-template-columns:repeat(4,1fr)">
+          <div><span>${refHdr}</span><strong>${price(m.reference_price)}</strong></div>
+          <div><span>${liveNowLabel(m)}</span><strong>${price(m.current_price)}</strong><div class="muted" style="font-size:.68rem">${nowAge}</div></div>
+          <div><span>Move vs t=0</span><strong class="${pnlCls}">${fmtPnl(m)}</strong></div>
+          <div><span>Time left</span><strong>${fmtRemaining(m.seconds_remaining || 0)}</strong></div>
+        </div>${renderReassessBlock(m)}${renderKalshiYesMid(m.kalshi)}`;
       }
 
       if (m.reasons && m.reasons.length) {

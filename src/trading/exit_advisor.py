@@ -9,11 +9,15 @@ import pandas as pd
 
 from src.features.slots import current_slot_start, slot_end, slot_label
 from src.trading.edge import Signal
+from src.trading.late_entry import LateEntryAdvisor
 
 
 class ExitAction(str, Enum):
   WAIT = "WAIT"
   NO_BET = "NO BET"
+  WATCH = "WATCH"
+  LATE_LONG = "LATE LONG"
+  LATE_SHORT = "LATE SHORT"
   HOLD = "HOLD"
   TAKE_PROFIT = "TAKE PROFIT"
   CUT_LOSS = "CUT LOSS"
@@ -44,6 +48,9 @@ class SlotMonitor:
   reassessed_prob_down: float | None = None
   reassessed_close_side: str = ""
   reassess_summary: str = ""
+  late_entry_action: str = ""
+  late_entry_summary: str = ""
+  outlook_ready: bool = False
   reference_source: str = ""
   current_price_source: str = ""
   current_price_as_of: str | None = None
@@ -86,6 +93,11 @@ class SlotMonitor:
       out["reassessed_prob_down"] = round(self.reassessed_prob_down or (1 - self.reassessed_prob_up), 4)
       out["reassessed_close_side"] = self.reassessed_close_side
       out["reassess_summary"] = self.reassess_summary
+    if self.late_entry_action:
+      out["late_entry_action"] = self.late_entry_action
+    if self.late_entry_summary:
+      out["late_entry_summary"] = self.late_entry_summary
+    out["outlook_ready"] = self.outlook_ready
     return out
 
 
@@ -103,6 +115,7 @@ class ExitAdvisor:
     self.lock_profit_min_pct = float(intra.get("lock_profit_min_pct", 0.10))
     self.late_window_minutes = float(intra.get("late_window_minutes", 3))
     self.fee_buffer_pct = float(intra.get("fee_buffer_pct", round_trip / 2))
+    self.late_entry = LateEntryAdvisor(cfg)
 
   @staticmethod
   def _price_change_usd(reference_price: float, current_price: float) -> float:
@@ -292,6 +305,50 @@ class ExitAdvisor:
       fav_mom = slot_mom < 0
       against_mom = slot_mom > 0.03 or recent > 0.04
     else:
+      elapsed_min = elapsed / 60.0
+      stats = self.late_entry.slot_path_stats(
+        df_1m, slot_s, reference_price, momentum_bars=self.late_entry.momentum_bars,
+      )
+      late = self.late_entry.evaluate(
+        elapsed_minutes=elapsed_min,
+        seconds_remaining=remaining,
+        reference_price=reference_price,
+        stats=stats,
+        original_prob_up=original_prob_up,
+        current_price=current_price,
+      )
+      reassessed_prob_up = late.prob_up
+      reassessed_prob_down = 1.0 - late.prob_up
+      reassessed_close_side = late.close_side
+      reassess_summary = late.summary
+      late_entry_action = late.action
+      late_entry_summary = late.summary
+
+      if late.action == "LATE LONG":
+        action = ExitAction.LATE_LONG
+        urgency = "medium"
+        message = late.summary
+        bet_side = "UP"
+      elif late.action == "LATE SHORT":
+        action = ExitAction.LATE_SHORT
+        urgency = "medium"
+        message = late.summary
+        bet_side = "DOWN"
+      elif late.action == "WATCH":
+        action = ExitAction.WATCH
+        urgency = "low"
+        message = late.summary
+        bet_side = "NONE"
+      else:
+        action = ExitAction.NO_BET
+        urgency = "low"
+        message = "No trade was recommended at slot open — nothing to manage."
+        bet_side = "NONE"
+
+      reasons = list(late.reasons)
+      if signal_at_open == Signal.NO_TRADE.value:
+        reasons.insert(0, "Opening signal was NO TRADE.")
+
       return SlotMonitor(
         active=True,
         slot_label=label,
@@ -299,17 +356,24 @@ class ExitAdvisor:
         slot_end=slot_e.isoformat(),
         seconds_remaining=remaining,
         elapsed_pct=elapsed_pct,
-        bet_side="NONE",
+        bet_side=bet_side,
         signal_at_open=signal_at_open,
         reference_price=reference_price,
         current_price=current_price,
-        unrealized_pct=0.0,
+        unrealized_pct=raw_move_pct,
         unrealized_usd=price_delta,
         price_change_usd=price_delta,
-        action=ExitAction.NO_BET,
-        urgency="low",
-        message="No trade was recommended at slot open — nothing to manage.",
-        reasons=["Opening signal was NO TRADE."],
+        action=action,
+        urgency=urgency,
+        message=message,
+        reasons=reasons,
+        reassessed_prob_up=reassessed_prob_up if late.outlook_ready else None,
+        reassessed_prob_down=reassessed_prob_down if late.outlook_ready else None,
+        reassessed_close_side=reassessed_close_side if late.outlook_ready else "",
+        reassess_summary=reassess_summary if late.outlook_ready else "",
+        late_entry_action=late_entry_action,
+        late_entry_summary=late_entry_summary,
+        outlook_ready=late.outlook_ready,
       )
 
     reasons: list[str] = []
