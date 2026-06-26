@@ -10,7 +10,6 @@ import pandas as pd
 from src.features.engineering import build_feature_matrix, feature_columns
 from src.features.slots import (
   floor_to_15m,
-  reference_price_at_slot,
   slot_end,
   slot_label,
 )
@@ -234,6 +233,7 @@ class Predictor:
     locked_reference: float | None = None,
     live_trade_time: datetime | None = None,
     current_trade_time: datetime | None = None,
+    kalshi_reference: float | None = None,
   ) -> Prediction:
     min_candles = self.cfg.get("min_candles_15m", 30)
     if len(df_15m) < min_candles:
@@ -249,19 +249,15 @@ class Predictor:
     slot_s = floor_to_15m(now_utc, self.tz)
     slot_e = slot_end(slot_s, self.tz)
 
-    pf = self.cfg.get("price_feed", {})
-    tick_window = float(pf.get("live_tick_window_sec", 120))
-
-    ref = reference_price_at_slot(
-      df_1m,
-      slot_s,
-      fallback=candle_price,
-      live_price=live_price,
-      now_utc=now_utc,
-      locked_tick=locked_reference,
-      live_tick_window_sec=tick_window,
-    )
-    ref_price = ref.price
+    if kalshi_reference is not None and kalshi_reference > 0:
+      ref_price = float(kalshi_reference)
+      ref_source = "kalshi_brti_target"
+    elif locked_reference is not None and locked_reference > 0:
+      ref_price = float(locked_reference)
+      ref_source = "kalshi_brti_target"
+    else:
+      ref_price = candle_price
+      ref_source = "fallback"
 
     if self.model is not None:
       cols = self.feature_names or feature_columns(features)
@@ -292,7 +288,7 @@ class Predictor:
       timestamp=slot_s,
       price=ref_price,
       reference_price=ref_price,
-      reference_source=ref.source,
+      reference_source=ref_source,
       reference_trade_time=(
         live_trade_time.isoformat() if live_trade_time is not None else None
       ),

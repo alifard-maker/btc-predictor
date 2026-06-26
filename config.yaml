@@ -8,21 +8,20 @@ exchange_fallbacks:
   - kraken
   - bitstamp
 
-# Live display price — Coinbase matches the app; Kalshi settles on CF Benchmarks BRTI
+# Price feed — Kalshi BRTI (KXBTC15M settlement index)
 price_feed:
-  live: coinbase              # coinbase | exchange (connected ccxt exchange)
-  label: Coinbase BTC-USD
-  settlement_reference: CF Benchmarks BRTI (Kalshi settlement index)
-  live_tick_window_sec: 120   # use live last trade for t=0 within this many seconds of slot open
-  live_cache_sec: 2            # refresh live "Now" price at least this often
+  live: kalshi
+  label: Kalshi CF Benchmarks BRTI
+  settlement_reference: CF Benchmarks BRTI (Kalshi KXBTC15M)
 
-# Kalshi — KXBTC15M BRTI settlement target (public market data; auth optional)
+# Kalshi — KXBTC15M BRTI target at t=0 + live BRTI via API passthrough
 kalshi:
   enabled: true
   series_ticker: KXBTC15M
   base_url: https://api.elections.kalshi.com/trade-api/v2
   cache_sec: 15
-  # Set KALSHI_KEY_ID + KALSHI_PRIVATE_KEY in env (see .env.example)
+  brti_cache_sec: 2
+  brti_index_id: BRTI
 
 # 15-minute slot predictions — Eastern Time (:00, :15, :30, :45 ET)
 prediction_horizon_minutes: 15

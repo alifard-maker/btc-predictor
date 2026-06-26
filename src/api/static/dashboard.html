@@ -129,7 +129,7 @@
         <p>This page helps you decide whether BTC finishes <strong>above or below</strong> its price at the start of each <strong>15-minute Eastern Time slot</strong> (:00, :15, :30, :45). It does <strong>not</strong> place trades. Refresh is automatic every 5 seconds.</p>
 
         <h3>Your price at t=0 (top box)</h3>
-        <p>The app sets <strong>t=0</strong> from Coinbase’s last trade at slot open (or the last trade just before the boundary). If that doesn’t match your Kalshi fill, enter <strong>your exact entry price</strong> and click <em>Use my price</em>. P&amp;L and exit advice then use your number for this slot only (saved in your browser).</p>
+        <p><strong>t=0</strong> is the Kalshi KXBTC15M <strong>Target price</strong> — the BRTI 60-second average in the minute before slot open. <strong>Now</strong> is live CF Benchmarks BRTI via Kalshi (requires your API private key). P&amp;L is always vs Kalshi t=0.</p>
 
         <h3>Current 15-minute slot</h3>
         <ul>
@@ -138,7 +138,8 @@
           <li><strong>LONG / SHORT / NO TRADE</strong> — LONG if UP ≥ ~57%; SHORT if UP ≤ ~43%; otherwise sit out.</li>
           <li><strong>Expected move</strong> — Rough $ move implied by recent volatility (not a target).</li>
           <li><strong>Confidence</strong> — How far the model is from 50/50 (higher = more decisive).</li>
-          <li><strong>Live now</strong> — Latest Coinbase last trade (updates every few seconds).</li>
+          <li><strong>Live now</strong> — Live CF Benchmarks BRTI (Kalshi passthrough).</li>
+          <li><strong>Kalshi YES mid</strong> — Market-implied UP probability on KXBTC15M (cents).</li>
         </ul>
 
         <h3>Signal breakdown</h3>
@@ -155,7 +156,7 @@
         </dl>
 
         <h3>System status</h3>
-        <p>Health of the API, scheduler, data feeds, and model. Green dots = OK. <strong>Kalshi settles</strong> on CF Benchmarks BRTI — not identical to Coinbase.</p>
+        <p>Health of the API, scheduler, and Kalshi BRTI feed. Green dots = OK.</p>
 
         <h3>Live position · intra-slot exit</h3>
         <p>For when you <strong>already bet</strong> at slot open on the opening LONG/SHORT signal.</p>
@@ -168,8 +169,8 @@
           <dd>Losing with momentum against you — consider exiting; includes <strong>reassessed UP/DOWN</strong> for time left in the slot.</dd>
         </dl>
         <ul>
-          <li><strong>Ref (t=0)</strong> — Your reference (API or manual override).</li>
-          <li><strong>Now</strong> — Live Coinbase tick.</li>
+          <li><strong>Ref (t=0)</strong> — Kalshi BRTI target at slot open.</li>
+          <li><strong>Now</strong> — Live BRTI index.</li>
           <li><strong>P&amp;L vs t=0</strong> — <strong>% and $ per 1 BTC</strong> relative to t=0 (positive = in your favor for your bet side).</li>
           <li><strong>Time left</strong> — Countdown to slot close.</li>
         </ul>
@@ -181,20 +182,20 @@
         <p>Recent slots: reference at t=0, UP probability, signal, and actual outcome once the slot resolves.</p>
 
         <h3>Kalshi (KXBTC15M)</h3>
-        <p>Kalshi’s <strong>Target price</strong> is the official BRTI reference for the active 15m contract — average of 60 CF Benchmarks ticks in the minute <em>before</em> slot open. Use it to compare against Coinbase or enter it as your t=0 override. <strong>YES mid</strong> is Kalshi’s market-implied UP probability (cents on the dollar).</p>
+        <p>All prices align with Kalshi settlement: BRTI 60s average before slot open for t=0, live BRTI for P&amp;L. Add <code>KALSHI_PRIVATE_KEY</code> on Railway for live BRTI streaming.</p>
 
-        <div class="guide-note">Guidance only — not financial advice. Prices are from Coinbase BTC-USD; Kalshi contracts may differ. Past calibration does not guarantee future results.</div>
+        <div class="guide-note">Guidance only — not financial advice. Prices use CF Benchmarks BRTI via Kalshi. Past calibration does not guarantee future results.</div>
       </div>
     </details>
 
     <div class="card ref-override" id="ref-override-panel">
-      <label for="ref-override-input">Your exact price at t=0 (if the app is off)</label>
+      <label for="ref-override-input">Override Kalshi t=0 (optional)</label>
       <div class="ref-override-row">
         <input type="number" id="ref-override-input" step="0.01" min="0" placeholder="e.g. 59504.44" />
         <button type="button" class="primary" onclick="applyRefOverride()">Use my price</button>
         <button type="button" onclick="clearRefOverride()">Reset to API</button>
       </div>
-      <div class="ref-override-hint" id="ref-override-hint">Enter the price you actually got at slot open — P&amp;L and exit guidance use this instead of the API reference for the current slot.</div>
+      <div class="ref-override-hint" id="ref-override-hint">Kalshi sets t=0 from BRTI automatically — only override if your contract shows a different target.</div>
     </div>
 
     <div class="grid">
@@ -241,13 +242,11 @@
     const REF_KEY = 'btc_ref_override_v1';
 
     const REF_SOURCE_LABEL = {
-      locked_tick: 'Coinbase tick at slot open (locked)',
-      live_tick: 'Coinbase last trade at slot open',
-      prior_minute_close: 'Last trade before t=0 (prior 1m close)',
-      slot_minute_open: '1m candle open at t=0',
+      kalshi_brti_target: 'Kalshi BRTI target at slot open',
+      brti_live: 'CF Benchmarks BRTI (live)',
       user_override: 'Your manual t=0 price',
       fallback: '15m candle fallback',
-      '1m_close': '1m candle close',
+      unavailable: 'Kalshi market unavailable',
     };
 
     function refSourceLabel(src) {
@@ -303,7 +302,7 @@
         $('ref-override-input').value = ovr;
       } else if (monitor.reference_price_api != null) {
         const src = refSourceLabel(monitor.reference_source);
-        hint.innerHTML = `API reference: ${price(monitor.reference_price_api)} <span class="muted">(${src})</span> — enter your fill if different.`;
+        hint.innerHTML = `API reference: ${price(monitor.reference_price_api)} <span class="muted">(${src})</span>`;
         if (!$('ref-override-input').value) $('ref-override-input').placeholder = Number(monitor.reference_price_api).toFixed(2);
       }
     }
@@ -347,34 +346,9 @@
       el.textContent = msg;
     }
 
-    function renderKalshiBlock(k, onApply) {
-      if (!k || !k.connected) {
-        return `<div class="kalshi-block"><h4>Kalshi KXBTC15M</h4><p class="muted">No active Kalshi 15m market found.</p></div>`;
-      }
-      const auth = k.authenticated ? '<span class="up">API connected</span>' : '<span class="muted">Public data only — add API key for portfolio</span>';
-      const refDiff = k.ref_vs_kalshi != null
-        ? `<div><span>Coinbase ref − Kalshi</span><strong class="${k.ref_vs_kalshi > 0 ? 'up' : k.ref_vs_kalshi < 0 ? 'down' : 'muted'}">${k.ref_vs_kalshi >= 0 ? '+' : ''}${price(k.ref_vs_kalshi).replace('$', '$')}</strong></div>`
-        : '';
-      const yesMid = k.yes_mid != null ? `${(k.yes_mid * 100).toFixed(1)}¢ implied UP` : '—';
-      const applyBtn = onApply && k.target_price
-        ? `<button type="button" class="primary" style="margin-top:0.5rem" onclick="applyKalshiTarget(${k.target_price})">Use Kalshi target as t=0</button>`
-        : '';
-      return `<div class="kalshi-block">
-        <h4>Kalshi KXBTC15M · ${auth}</h4>
-        <div class="kalshi-grid">
-          <div><span>Kalshi target (BRTI t=0)</span><strong>${price(k.target_price)}</strong></div>
-          <div><span>YES mid (market)</span><strong>${yesMid}</strong></div>
-          <div><span>Now − Kalshi target</span><strong class="${(k.now_vs_kalshi||0) >= 0 ? 'up' : 'down'}">${k.now_vs_kalshi != null ? signedPrice(k.now_vs_kalshi) : '—'}</strong></div>
-          ${refDiff}
-        </div>
-        ${applyBtn}
-        <p class="muted" style="font-size:.68rem;margin-top:.5rem">${k.market_ticker || ''}</p>
-      </div>`;
-    }
-
-    async function applyKalshiTarget(p) {
-      $('ref-override-input').value = Number(p).toFixed(2);
-      await applyRefOverride();
+    function renderKalshiYesMid(k) {
+      if (!k || k.yes_mid == null) return '';
+      return `<p class="muted" style="font-size:.8rem;margin-top:.65rem">Kalshi YES mid: <strong>${(k.yes_mid * 100).toFixed(1)}¢</strong> implied UP · ${k.market_ticker || ''}</p>`;
     }
 
     function fmtPnl(m) {
@@ -455,16 +429,16 @@
         <p style="font-size:.9rem;margin-bottom:.5rem">${m.message || ''}</p>`;
 
       if (m.active && m.bet_side !== 'NONE') {
-        const refHdr = m.using_override ? 'Ref (t=0) · your price' : 'Ref (t=0)';
+        const refHdr = m.using_override ? 'Ref (t=0) · override' : 'Ref (t=0) · Kalshi BRTI';
         const nowAge = m.live_price_age_sec != null ? ` · ${liveAgeLabel(m.live_price_age_sec)}` : '';
         body += `
         <div class="slot-progress" title="Time elapsed in slot"><div style="width:${m.elapsed_pct || 0}%"></div></div>
         <div class="metrics" style="margin-top:0;padding-top:0;border-top:none;grid-template-columns:repeat(4,1fr)">
           <div><span>${refHdr}</span><strong>${price(m.reference_price)}</strong></div>
-          <div><span>Now · live tick</span><strong>${price(m.current_price)}</strong><div class="muted" style="font-size:.68rem">${nowAge}</div></div>
+          <div><span>Now · BRTI</span><strong>${price(m.current_price)}</strong><div class="muted" style="font-size:.68rem">${nowAge}</div></div>
           <div><span>P&amp;L vs t=0</span><strong class="${pnlCls}">${fmtPnl(m)}</strong><div class="muted" style="font-size:.68rem">per 1 BTC</div></div>
           <div><span>Time left</span><strong>${fmtRemaining(m.seconds_remaining || 0)}</strong></div>
-        </div>${renderReassessBlock(m)}${renderKalshiBlock(m.kalshi, true)}`;
+        </div>${renderReassessBlock(m)}${renderKalshiYesMid(m.kalshi)}`;
       } else if (m.active) {
         body += `<div class="slot-progress"><div style="width:${m.elapsed_pct || 0}%"></div></div>
           <p class="muted" style="font-size:.8rem">${fmtRemaining(m.seconds_remaining || 0)} left in slot</p>`;
@@ -476,7 +450,7 @@
           body += '<ul class="monitor-reasons">' + bullets.map(r => `<li>${r}</li>`).join('') + '</ul>';
         }
       }
-      body += '<p class="muted" style="font-size:.68rem;margin-top:.75rem">Guidance only — not financial advice. t=0 uses Coinbase last trade at open (or last trade before the boundary); live Now refreshes every few seconds. Kalshi settles on CF Benchmarks BRTI (may differ).</p>';
+      body += '<p class="muted" style="font-size:.68rem;margin-top:.75rem">Guidance only — not financial advice. t=0 and P&amp;L use Kalshi CF Benchmarks BRTI.</p>';
       $('slot-monitor').innerHTML = body;
       updateRefOverrideHint(m);
     }
@@ -491,11 +465,11 @@
       const refApi = p.reference_price_api;
       const refLabel = p.using_override
         ? `Your t=0 entry (API was ${refApi != null ? price(refApi) : '—'})`
-        : `Reference (t=0) · ${refSourceLabel(p.reference_source)} — edit above if your fill differed`;
+        : `Reference (t=0) · ${refSourceLabel(p.reference_source)} — Kalshi BRTI target`;
       const slot = p.slot_label ? `<div class="sub" style="margin-bottom:.5rem">${p.slot_label}</div>` : '';
       const liveAge = p.live_price_age_sec != null ? ` <span class="muted">(${liveAgeLabel(p.live_price_age_sec)})</span>` : '';
       const live = p.current_price
-        ? `<div class="live-price">Live now: ${price(p.current_price)}${liveAge}</div>` : '';
+        ? `<div class="live-price">Live BRTI: ${price(p.current_price)}${liveAge}</div>` : '';
       $('pred-card').innerHTML = `
         <h2>Next 15-minute slot</h2>
         ${slot}
@@ -513,7 +487,7 @@
           <div><span>Updated</span><strong style="font-size:.8rem">${time(p.timestamp)}</strong></div>
         </div>
         ${renderIndicators(p.indicators)}
-        ${renderKalshiBlock(p.slot_monitor?.kalshi || p.kalshi, true)}`;
+        ${renderKalshiYesMid(p.slot_monitor?.kalshi || p.kalshi)}`;
       if (p.slot_monitor) renderSlotMonitor(p.slot_monitor);
     }
 
@@ -527,9 +501,9 @@
         ['15m candles', String(h.candles_15m || 0), (h.candles_15m || 0) >= (h.min_candles_15m || 48)],
         ['Context', h.slot_context || '1h+4h+12h', true],
         ['Vol spike', h.volume_spike_window || '4h', true],
-        ['Live price', h.price_feed || 'Coinbase BTC-USD', true],
-        ['Kalshi', h.kalshi?.connected ? (h.kalshi.authenticated ? 'KXBTC15M · authed' : 'KXBTC15M · public') : 'No market', !!h.kalshi?.connected],
-        ['Kalshi settles', h.settlement_reference || 'CF Benchmarks BRTI', true],
+        ['Price feed', h.price_feed || 'Kalshi BRTI', true],
+        ['Kalshi', h.kalshi?.connected ? (h.kalshi.authenticated ? 'KXBTC15M · BRTI live' : 'KXBTC15M · target only') : 'No market', !!h.kalshi?.connected],
+        ['Settlement', h.settlement_reference || 'CF Benchmarks BRTI', true],
         ['Schedule', (h.timezone || 'ET') + ' :00/:15/:30/:45', true],
       ];
       $('status-list').innerHTML = items.map(([l,v,ok]) =>

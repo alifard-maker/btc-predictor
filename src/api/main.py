@@ -57,11 +57,11 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     "formatted": _loop.predictor.format_output(pred) if _loop else "",
   }
   if _loop is not None:
-    quote = _loop._live_quote(fresh=True)
+    quote = _loop.kalshi.live_quote(fresh=True)
     if quote is not None:
       out["current_price"] = round(quote.price, 2)
-      out["price_feed"] = _loop.fetcher.price_feed_label()
-      out["settlement_reference"] = _loop.fetcher.settlement_reference_label()
+      out["price_feed"] = _loop.kalshi.price_feed_label()
+      out["settlement_reference"] = _loop.kalshi.settlement_reference_label()
       if quote.trade_time is not None:
         out["current_price_as_of"] = quote.trade_time.isoformat()
       if quote.age_sec is not None:
@@ -238,8 +238,8 @@ def slot_monitor(reference_override: float | None = Query(default=None, gt=0)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   monitor = _loop.slot_monitor(reference_override).to_dict()
-  monitor["price_feed"] = _loop.fetcher.price_feed_label()
-  monitor["settlement_reference"] = _loop.fetcher.settlement_reference_label()
+  monitor["price_feed"] = _loop.kalshi.price_feed_label()
+  monitor["settlement_reference"] = _loop.kalshi.settlement_reference_label()
   return monitor
 
 

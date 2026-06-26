@@ -1,4 +1,4 @@
-"""Kalshi Trade API — KXBTC15M market context and optional RSA auth."""
+"""Kalshi Trade API — KXBTC15M slot reference, BRTI live price, optional RSA auth."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import pandas as pd
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -20,6 +21,24 @@ log = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 DEFAULT_SERIES = "KXBTC15M"
+BRTI_INDEX_ID = "BRTI"
+
+
+@dataclass(frozen=True)
+class KalshiPriceQuote:
+  """Live BRTI or locked Kalshi slot target."""
+  price: float
+  source: str
+  trade_time: datetime | None = None
+
+  @property
+  def age_sec(self) -> float | None:
+    if self.trade_time is None:
+      return None
+    t = self.trade_time
+    if t.tzinfo is None:
+      t = t.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - t).total_seconds())
 
 
 @dataclass(frozen=True)
@@ -66,6 +85,16 @@ class KalshiClient:
     self._load_private_key(kcfg)
     self._cache: tuple[KalshiSlotMarket | None, float] | None = None
     self._cache_sec = float(kcfg.get("cache_sec", 15))
+    self._brtI_cache: tuple[KalshiPriceQuote | None, float] | None = None
+    self._brtI_cache_sec = float(kcfg.get("brti_cache_sec", 2))
+    self._slot_targets: dict[str, float] = {}
+    self._brtI_index = kcfg.get("brti_index_id", BRTI_INDEX_ID)
+
+  def price_feed_label(self) -> str:
+    return "Kalshi CF Benchmarks BRTI"
+
+  def settlement_reference_label(self) -> str:
+    return "CF Benchmarks BRTI (Kalshi KXBTC15M settlement)"
 
   def _load_private_key(self, kcfg: dict[str, Any]) -> None:
     pem = kcfg.get("private_key", "")
@@ -119,9 +148,8 @@ class KalshiClient:
       if not self.authenticated:
         raise RuntimeError("Kalshi API key ID and private key required for this endpoint")
       parsed = urlparse(url)
+      # Kalshi signs API root path without query string
       sign_path = parsed.path
-      if parsed.query:
-        sign_path = f"{parsed.path}?{parsed.query}"
       ts = str(int(time.time() * 1000))
       headers.update({
         "KALSHI-ACCESS-KEY": self.key_id,
@@ -214,15 +242,124 @@ class KalshiClient:
     self._cache = (market, now_mono)
     return market
 
+  @staticmethod
+  def _parse_brti_value(data: dict[str, Any]) -> float | None:
+    payload = data.get("data", data)
+    if isinstance(payload, list) and payload:
+      payload = payload[0]
+    if not isinstance(payload, dict):
+      return None
+    for key in ("value", "price", "index_value", "last", "mid", "mid_price"):
+      raw = payload.get(key)
+      if raw is not None and raw != "":
+        try:
+          return float(raw)
+        except (TypeError, ValueError):
+          continue
+    nested = payload.get("payload") or payload.get("index")
+    if isinstance(nested, dict):
+      return KalshiClient._parse_brti_value({"data": nested})
+    return None
+
+  def fetch_brti_live(self, *, fresh: bool = False) -> KalshiPriceQuote | None:
+    """Live CF Benchmarks BRTI via Kalshi passthrough (requires API auth)."""
+    if not self.authenticated:
+      return None
+    now_mono = time.monotonic()
+    if not fresh and self._brtI_cache and (now_mono - self._brtI_cache[1]) < self._brtI_cache_sec:
+      return self._brtI_cache[0]
+    quote: KalshiPriceQuote | None = None
+    try:
+      data = self.get(
+        "/cfbenchmarks/values",
+        params={"id": self._brtI_index},
+        auth=True,
+      )
+      price = self._parse_brti_value(data)
+      if price is not None:
+        quote = KalshiPriceQuote(price=price, source="brti_live", trade_time=datetime.now(timezone.utc))
+    except Exception as e:
+      log.warning("Kalshi BRTI fetch failed: %s", e)
+    self._brtI_cache = (quote, now_mono)
+    return quote
+
+  def _slot_key(self, slot_start: pd.Timestamp) -> str:
+    slot = pd.Timestamp(slot_start)
+    if slot.tzinfo is None:
+      slot = slot.tz_localize("UTC")
+    else:
+      slot = slot.tz_convert("UTC")
+    return slot.isoformat()
+
+  def slot_t0_reference(
+    self,
+    slot_start: pd.Timestamp | datetime | None = None,
+    *,
+    fresh: bool = False,
+  ) -> tuple[float | None, str]:
+    """Kalshi KXBTC15M floor_strike — BRTI 60s avg before slot open."""
+    market = self.active_btc15m_market(fresh=fresh)
+    if market is None:
+      return None, ""
+
+    now = datetime.now(timezone.utc)
+    if market.open_time <= now < market.close_time:
+      key = self._slot_key(market.open_time)
+      self._slot_targets[key] = market.target_price
+      return market.target_price, "kalshi_brti_target"
+
+    if slot_start is not None:
+      key = self._slot_key(slot_start)
+      if key in self._slot_targets:
+        return self._slot_targets[key], "kalshi_brti_target"
+
+    return None, ""
+
+  def live_quote(self, *, fresh: bool = False) -> KalshiPriceQuote | None:
+    """Current BRTI for P&L; falls back to locked slot target if BRTI unavailable."""
+    brti = self.fetch_brti_live(fresh=fresh)
+    if brti is not None:
+      return brti
+    market = self.active_btc15m_market(fresh=fresh)
+    if market:
+      return KalshiPriceQuote(
+        price=market.target_price,
+        source="kalshi_brti_target",
+        trade_time=market.open_time,
+      )
+    return None
+
+  def lock_current_slot_reference(self, slot_start: pd.Timestamp) -> float | None:
+    price, _ = self.slot_t0_reference(slot_start, fresh=True)
+    return price
+
+  def active_market_summary(self) -> dict[str, Any] | None:
+    """Compact Kalshi market info for dashboard (YES mid, ticker)."""
+    active = self.active_btc15m_market()
+    if not active:
+      return None
+    yes_mid = None
+    if active.yes_bid is not None and active.yes_ask is not None:
+      yes_mid = (active.yes_bid + active.yes_ask) / 2
+    elif active.last_price is not None:
+      yes_mid = active.last_price
+    return {
+      "market_ticker": active.market_ticker,
+      "yes_mid": round(yes_mid, 4) if yes_mid is not None else None,
+      "title": active.title,
+    }
+
   def status(self) -> dict[str, Any]:
     bal = self.portfolio_balance() if self.authenticated else None
     active = self.active_btc15m_market()
+    brti = self.fetch_brti_live()
     out: dict[str, Any] = {
       "enabled": self.enabled,
       "authenticated": self.authenticated,
       "series_ticker": self.series_ticker,
       "base_url": self.base_url,
       "connected": active is not None,
+      "brti_live": brti.price if brti else None,
       "balance_cents": bal.get("balance") if bal else None,
     }
     if active:

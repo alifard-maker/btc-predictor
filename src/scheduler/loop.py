@@ -13,10 +13,10 @@ from apscheduler.triggers.cron import CronTrigger
 
 from src.calibration.tracker import CalibrationTracker
 from src.config import ensure_dirs, load_config
-from src.data.fetcher import DataFetcher, TickerQuote
-from src.data.kalshi import KalshiClient
+from src.data.fetcher import DataFetcher
+from src.data.kalshi import KalshiClient, KalshiPriceQuote
 from src.data.storage import CandleStorage
-from src.features.slots import current_slot_start, floor_to_15m, reference_price_at_slot, slot_end
+from src.features.slots import current_slot_start, floor_to_15m, slot_end
 from src.logging.prediction_log import PredictionLogger
 from src.models.predictor import Prediction, Predictor
 from src.trading.exit_advisor import ExitAdvisor, SlotMonitor
@@ -45,7 +45,7 @@ class PredictionLoop:
     self.exit_advisor = ExitAdvisor(self.cfg)
     self.last_error: str | None = None
     self._scheduler: BackgroundScheduler | BlockingScheduler | None = None
-    self._ticker_cache: tuple[TickerQuote, float] | None = None  # (quote, monotonic time)
+    self._ticker_cache: tuple[KalshiPriceQuote | None, float] | None = None
     self._slot_tick_cache: dict[str, dict[str, Any]] = {}
 
   def _default_model_path(self) -> str | None:
@@ -112,22 +112,26 @@ class PredictionLoop:
         log.error(self.last_error)
         return None
 
-      open_quote = self._live_quote(fresh=True)
-      live_price = open_quote.price if open_quote else None
-      current_quote = self._live_quote(fresh=True)
-      locked = self._locked_slot_reference(floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz))
-      locked_ref = float(locked["price"]) if locked else None
+      slot_s = floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz)
+      kalshi_ref = self.kalshi.lock_current_slot_reference(slot_s)
+      open_quote = self.kalshi.live_quote(fresh=True)
+      current_quote = self.kalshi.live_quote(fresh=True)
+      locked = self._locked_slot_reference(slot_s)
+      locked_ref = kalshi_ref
+      if locked_ref is None and locked:
+        locked_ref = float(locked["price"])
 
       pred = self.predictor.predict(
         df_15m,
         df_1m if not df_1m.empty else None,
-        live_price=live_price,
+        live_price=kalshi_ref,
         current_price=current_quote.price if current_quote else None,
         locked_reference=locked_ref,
         live_trade_time=open_quote.trade_time if open_quote else None,
         current_trade_time=current_quote.trade_time if current_quote else None,
+        kalshi_reference=kalshi_ref,
       )
-      self._remember_slot_reference(pred, open_quote)
+      self._remember_slot_reference(pred, open_quote, kalshi_ref)
       self.logger.log(pred)
       self.latest_prediction = pred
       self.last_error = None
@@ -142,31 +146,11 @@ class PredictionLoop:
       return None
 
   def _live_cache_sec(self) -> float:
-    return float(self.cfg.get("price_feed", {}).get("live_cache_sec", 2))
+    return float(self.cfg.get("kalshi", {}).get("brti_cache_sec", 2))
 
-  def _live_quote(self, *, fresh: bool = False) -> TickerQuote | None:
-    """Real-time last trade; cached briefly unless fresh=True."""
-    now = time.monotonic()
-    cache_sec = self._live_cache_sec()
-    if not fresh and self._ticker_cache and (now - self._ticker_cache[1]) < cache_sec:
-      return self._ticker_cache[0]
-    try:
-      quote = self.fetcher.fetch_ticker_quote()
-      self._ticker_cache = (quote, now)
-      return quote
-    except Exception as e:
-      log.debug("Ticker fetch failed, using candle fallback: %s", e)
-
-    df_1m = self.storage.load("1m")
-    if not df_1m.empty:
-      return TickerQuote(price=float(df_1m.iloc[-1]["close"]), source="1m_close")
-    try:
-      batch = self.fetcher.fetch_latest_candles("1m", count=1)
-      if not batch.empty:
-        return TickerQuote(price=float(batch.iloc[-1]["close"]), source="1m_close")
-    except Exception:
-      pass
-    return None
+  def _live_quote(self, *, fresh: bool = False) -> KalshiPriceQuote | None:
+    """Kalshi BRTI live price for P&L and display."""
+    return self.kalshi.live_quote(fresh=fresh)
 
   def _live_price(self, max_age_sec: float | None = None) -> float | None:
     fresh = max_age_sec is not None and max_age_sec <= 0
@@ -176,7 +160,12 @@ class PredictionLoop:
   def _slot_cache_key(self, slot_s: pd.Timestamp) -> str:
     return floor_to_15m(slot_s, self.tz).isoformat()
 
-  def _remember_slot_reference(self, pred: Prediction, quote: TickerQuote | None) -> None:
+  def _remember_slot_reference(
+    self,
+    pred: Prediction,
+    quote: KalshiPriceQuote | None,
+    kalshi_ref: float | None,
+  ) -> None:
     if pred.slot_start is None:
       return
     key = self._slot_cache_key(pred.slot_start)
@@ -185,6 +174,8 @@ class PredictionLoop:
       "source": pred.reference_source,
       "trade_time": pred.reference_trade_time or (quote.trade_time.isoformat() if quote and quote.trade_time else None),
     }
+    if kalshi_ref:
+      self.kalshi._slot_targets[key] = float(kalshi_ref)
 
   def _locked_slot_reference(self, slot_s: pd.Timestamp) -> dict[str, Any] | None:
     return self._slot_tick_cache.get(self._slot_cache_key(slot_s))
@@ -236,28 +227,22 @@ class PredictionLoop:
     df_1m = self.storage.load("1m")
 
     pred = self._prediction_for_current_slot()
-    live_quote = self._live_quote(fresh=True)
+    live_quote = self.kalshi.live_quote(fresh=True)
     current = live_quote.price if live_quote else None
 
-    locked = self._locked_slot_reference(slot_s)
-    if pred is not None:
+    api_ref, ref_source = self.kalshi.slot_t0_reference(slot_s, fresh=True)
+    if api_ref is None and pred is not None:
       api_ref = float(pred.get("reference_price") or pred.get("price") or 0)
-      ref_source = str(pred.get("reference_source") or (locked.get("source") if locked else "") or "")
-    elif locked:
-      api_ref = float(locked["price"])
-      ref_source = str(locked.get("source") or "locked_tick")
-    else:
-      pf = self.cfg.get("price_feed", {})
-      tick_window = float(pf.get("live_tick_window_sec", 120))
-      ref = reference_price_at_slot(
-        df_1m if not df_1m.empty else None,
-        slot_s,
-        live_price=current,
-        now_utc=now,
-        live_tick_window_sec=tick_window,
-      )
-      api_ref = ref.price
-      ref_source = ref.source
+      ref_source = str(pred.get("reference_source") or "kalshi_brti_target")
+    elif api_ref is None:
+      locked = self._locked_slot_reference(slot_s)
+      if locked:
+        api_ref = float(locked["price"])
+        ref_source = str(locked.get("source") or "kalshi_brti_target")
+
+    if api_ref is None:
+      api_ref = 0.0
+      ref_source = ref_source or "unavailable"
 
     effective_ref = api_ref
     using_override = False
@@ -298,43 +283,8 @@ class PredictionLoop:
       live_quote.trade_time.isoformat() if live_quote and live_quote.trade_time else None
     )
     monitor.live_price_age_sec = round(live_quote.age_sec, 1) if live_quote and live_quote.age_sec is not None else None
-    monitor.kalshi = self._kalshi_context(api_ref, current)
+    monitor.kalshi = self.kalshi.active_market_summary()
     return monitor
-
-  def _kalshi_context(self, coinbase_ref: float, current: float | None) -> dict[str, Any]:
-    """Kalshi KXBTC15M BRTI target vs Coinbase reference."""
-    active = self.kalshi.active_btc15m_market()
-    if not active:
-      return {
-        "enabled": self.kalshi.enabled,
-        "authenticated": self.kalshi.authenticated,
-        "connected": False,
-      }
-    target = active.target_price
-    diff = coinbase_ref - target if coinbase_ref else None
-    cur_diff = (current - target) if current is not None else None
-    yes_mid = None
-    if active.yes_bid is not None and active.yes_ask is not None:
-      yes_mid = (active.yes_bid + active.yes_ask) / 2
-    elif active.last_price is not None:
-      yes_mid = active.last_price
-    return {
-      "enabled": True,
-      "authenticated": self.kalshi.authenticated,
-      "connected": True,
-      "market_ticker": active.market_ticker,
-      "title": active.title,
-      "target_price": target,
-      "target_label": "BRTI 60s avg before slot open",
-      "open_time": active.open_time.isoformat(),
-      "close_time": active.close_time.isoformat(),
-      "yes_bid": active.yes_bid,
-      "yes_ask": active.yes_ask,
-      "yes_mid": round(yes_mid, 4) if yes_mid is not None else None,
-      "coinbase_ref": round(coinbase_ref, 2) if coinbase_ref else None,
-      "ref_vs_kalshi": round(diff, 2) if diff is not None else None,
-      "now_vs_kalshi": round(cur_diff, 2) if cur_diff is not None else None,
-    }
 
   def status(self) -> dict[str, Any]:
     df_15m = self.storage.load("15m")
@@ -351,8 +301,8 @@ class PredictionLoop:
       "lookback_hours": self.cfg.get("lookback_hours", 12),
       "slot_context": "1h + 4h (primary) + 12h",
       "volume_spike_window": f"{self.cfg.get('features', {}).get('volume_spike_window', 16)}×15m",
-      "price_feed": self.fetcher.price_feed_label(),
-      "settlement_reference": self.fetcher.settlement_reference_label(),
+      "price_feed": self.kalshi.price_feed_label(),
+      "settlement_reference": self.kalshi.settlement_reference_label(),
       "kalshi": self.kalshi.status(),
       "latest_candle_15m": df_15m["timestamp"].iloc[-1].isoformat() if not df_15m.empty else None,
       "horizon_minutes": self.horizon,
