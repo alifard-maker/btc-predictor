@@ -58,6 +58,8 @@ class StatsArchive:
   version: int = 1
   epochs_archived: int = 0
   last_archived_at: str | None = None
+  snapshot_through: str | None = None
+  snapshot_note: str | None = None
   open: CategoryAgg = field(default_factory=CategoryAgg)
   late: CategoryAgg = field(default_factory=CategoryAgg)
   flip: CategoryAgg = field(default_factory=CategoryAgg)
@@ -72,6 +74,8 @@ class StatsArchive:
       version=int(raw.get("version") or 1),
       epochs_archived=int(raw.get("epochs_archived") or 0),
       last_archived_at=raw.get("last_archived_at"),
+      snapshot_through=raw.get("snapshot_through"),
+      snapshot_note=raw.get("snapshot_note"),
       open=CategoryAgg.from_dict(raw.get("open")),
       late=CategoryAgg.from_dict(raw.get("late")),
       flip=CategoryAgg.from_dict(raw.get("flip")),
@@ -84,6 +88,8 @@ class StatsArchive:
       "version": self.version,
       "epochs_archived": self.epochs_archived,
       "last_archived_at": self.last_archived_at,
+      "snapshot_through": self.snapshot_through,
+      "snapshot_note": self.snapshot_note,
       "open": asdict(self.open),
       "late": asdict(self.late),
       "flip": asdict(self.flip),
@@ -102,8 +108,58 @@ def read_archive(cfg: dict[str, Any]) -> StatsArchive:
     return StatsArchive()
   try:
     return StatsArchive.from_dict(json.loads(path.read_text()))
-  except (json.JSONDecodeError, OSError, TypeError):
+  except Exception:
     return StatsArchive()
+
+
+def df_after_snapshot(df: pd.DataFrame, snapshot_through: str | None) -> pd.DataFrame:
+  """Rows not yet folded into the persistent archive snapshot."""
+  if df.empty or not snapshot_through:
+    return df
+  cutoff = pd.Timestamp(snapshot_through, tz="UTC")
+  ts = pd.to_datetime(df["timestamp"], utc=True)
+  return df[ts > cutoff].copy()
+
+
+def latest_slot_iso(df: pd.DataFrame) -> str | None:
+  if df.empty:
+    return None
+  return pd.to_datetime(df["timestamp"], utc=True).max().isoformat()
+
+
+def merge_epoch_into_archive(
+  cfg: dict[str, Any],
+  epoch_aggs: tuple[CategoryAgg, CategoryAgg, CategoryAgg, list, list],
+  *,
+  epoch_df: pd.DataFrame,
+  increment_epochs: bool = False,
+  note: str = "",
+) -> StatsArchive:
+  """Merge slot aggregates into the archive file (snapshot or pre-reset)."""
+  open_agg, late_agg, flip_agg, late_events, flip_events = epoch_aggs
+  archive = read_archive(cfg)
+  archive.open = merge_category(archive.open, open_agg)
+  archive.late = merge_category(archive.late, late_agg)
+  archive.flip = merge_category(archive.flip, flip_agg)
+  archive.late_events.extend(late_events)
+  archive.flip_events.extend(flip_events)
+  if increment_epochs:
+    archive.epochs_archived += 1
+  archive.last_archived_at = datetime.now(timezone.utc).isoformat()
+  slot_end = latest_slot_iso(epoch_df)
+  if slot_end:
+    prev = pd.Timestamp(archive.snapshot_through, tz="UTC") if archive.snapshot_through else None
+    nxt = pd.Timestamp(slot_end, tz="UTC")
+    archive.snapshot_through = (max(prev, nxt) if prev is not None else nxt).isoformat()
+  if note:
+    archive.snapshot_note = note
+  write_archive(cfg, archive)
+  return archive
+
+
+def archive_epoch(cfg: dict[str, Any], epoch_aggs: tuple[CategoryAgg, CategoryAgg, CategoryAgg, list, list], *, epoch_df: pd.DataFrame) -> StatsArchive:
+  """Merge current epoch aggregates into archive before a reset."""
+  return merge_epoch_into_archive(cfg, epoch_aggs, epoch_df=epoch_df, increment_epochs=True)
 
 
 def write_archive(cfg: dict[str, Any], archive: StatsArchive) -> None:
@@ -231,19 +287,20 @@ def epoch_aggs_from_df(
   return open_agg, late_agg, flip_agg, late_events, flip_events
 
 
-def archive_epoch(cfg: dict[str, Any], epoch_aggs: tuple[CategoryAgg, CategoryAgg, CategoryAgg, list, list]) -> StatsArchive:
-  """Merge current epoch aggregates into the persistent archive."""
-  open_agg, late_agg, flip_agg, late_events, flip_events = epoch_aggs
-  archive = read_archive(cfg)
-  archive.open = merge_category(archive.open, open_agg)
-  archive.late = merge_category(archive.late, late_agg)
-  archive.flip = merge_category(archive.flip, flip_agg)
-  archive.late_events.extend(late_events)
-  archive.flip_events.extend(flip_events)
-  archive.epochs_archived += 1
-  archive.last_archived_at = datetime.now(timezone.utc).isoformat()
-  write_archive(cfg, archive)
-  return archive
+def snapshot_epoch(
+  cfg: dict[str, Any],
+  epoch_aggs: tuple[CategoryAgg, CategoryAgg, CategoryAgg, list, list],
+  *,
+  epoch_df: pd.DataFrame,
+  note: str = "",
+) -> StatsArchive:
+  """Fold current DB epoch into archive without clearing predictions."""
+  return merge_epoch_into_archive(cfg, epoch_aggs, epoch_df=epoch_df, increment_epochs=False, note=note)
+
+
+def archive_epoch(cfg: dict[str, Any], epoch_aggs: tuple[CategoryAgg, CategoryAgg, CategoryAgg, list, list], *, epoch_df: pd.DataFrame) -> StatsArchive:
+  """Merge current epoch aggregates into archive before a reset."""
+  return merge_epoch_into_archive(cfg, epoch_aggs, epoch_df=epoch_df, increment_epochs=True)
 
 
 def combined_public(

@@ -688,9 +688,13 @@
       const o = at.open || {};
       const le = at.late_entry || {};
       const fx = at.flip || {};
-      const archived = at.epochs_archived ? ` · ${at.epochs_archived} prior epoch${at.epochs_archived > 1 ? 's' : ''} archived` : '';
+      const archived = at.epochs_archived ? ` · ${at.epochs_archived} reset${at.epochs_archived > 1 ? 's' : ''} archived` : '';
+      const snap = at.snapshot_through
+        ? `<p class="muted" style="font-size:.68rem;margin-bottom:.5rem">Snapshotted through <strong>${time(at.snapshot_through)}</strong>${at.snapshot_note ? ` · ${at.snapshot_note}` : ''}</p>`
+        : '';
       return `<div class="stats-block all-time">
         <h3>All-time (survives reset)${archived}</h3>
+        ${snap}
         <div class="cal-stats">
           <div><span>Slots resolved</span><strong>${o.n_resolved || 0}</strong></div>
           ${o.brier_score != null ? `<div><span>Brier @ open</span><strong>${o.brier_score.toFixed(4)}</strong></div>` : ''}
@@ -945,8 +949,8 @@
           renderSlotMonitor(m);
         }).catch(() => {}),
         get('/api/predictions?limit=20').then(renderHistory).catch(() => renderHistory([])),
-        get('/api/calibration').then(renderCalibration).catch(() =>
-          $('calibration').innerHTML = '<p class="muted">Calibration unavailable yet.</p>'),
+        get('/api/calibration').then(renderCalibration).catch((e) =>
+          $('calibration').innerHTML = `<p class="muted">Calibration unavailable: ${e.message || 'API error'}</p>`),
         get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])),
         );
       } else {

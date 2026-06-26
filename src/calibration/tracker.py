@@ -12,9 +12,11 @@ from src.calibration.stats_archive import (
   archive_epoch,
   category_from_signal_df,
   combined_public,
+  df_after_snapshot,
   epoch_aggs_from_df,
   read_archive,
   rolling_from_events,
+  snapshot_epoch,
 )
 from src.db.store import PredictionResolution, PredictionStore, create_prediction_store
 from src.features.slots import floor_to_15m
@@ -87,17 +89,19 @@ class CalibrationTracker:
     return self.store.latest()
 
   def reset_stats(self, *, note: str = "") -> dict[str, Any]:
-    """Archive current epoch aggregates, then clear predictions for a fresh epoch."""
+    """Archive unsnapshotted epoch aggregates, then clear predictions for a fresh epoch."""
     archived: dict[str, Any] = {}
     if self.cfg:
       df = self._dedupe_by_slot(self.load_resolved())
+      archive = read_archive(self.cfg)
+      epoch_df = df_after_snapshot(df, archive.snapshot_through)
       aggs = epoch_aggs_from_df(
-        df,
+        epoch_df,
         open_correct_fn=self._prediction_correct,
         late_correct_fn=self._late_entry_correct,
         flip_correct_fn=self._flip_correct,
       )
-      archive = archive_epoch(self.cfg, aggs)
+      archive = archive_epoch(self.cfg, aggs, epoch_df=epoch_df)
       archived = {
         "epochs_archived": archive.epochs_archived,
         "archived_open_n": aggs[0].n_resolved,
@@ -106,6 +110,35 @@ class CalibrationTracker:
     deleted = self.store.clear_all()
     epoch = write_stats_epoch(self.cfg, note=note) if self.cfg else {}
     return {"deleted_predictions": deleted, **archived, **epoch}
+
+  def snapshot_stats(self, *, note: str = "epoch snapshot") -> dict[str, Any]:
+    """Fold current DB epoch into the persistent archive without clearing predictions."""
+    if not self.cfg:
+      return {"status": "noop", "reason": "no config"}
+    df = self._dedupe_by_slot(self.load_resolved())
+    archive = read_archive(self.cfg)
+    epoch_df = df_after_snapshot(df, archive.snapshot_through)
+    if epoch_df.empty:
+      return {
+        "status": "noop",
+        "reason": "already_snapshotted",
+        "snapshot_through": archive.snapshot_through,
+        "open_n_resolved": archive.open.n_resolved,
+      }
+    aggs = epoch_aggs_from_df(
+      epoch_df,
+      open_correct_fn=self._prediction_correct,
+      late_correct_fn=self._late_entry_correct,
+      flip_correct_fn=self._flip_correct,
+    )
+    archive = snapshot_epoch(self.cfg, aggs, epoch_df=epoch_df, note=note)
+    return {
+      "status": "ok",
+      "snapshotted_open_n": aggs[0].n_resolved,
+      "snapshotted_late_n": aggs[1].n_resolved,
+      "snapshot_through": archive.snapshot_through,
+      "all_time_open_n": archive.open.n_resolved,
+    }
 
   def record_late_entry(
     self,
@@ -259,6 +292,7 @@ class CalibrationTracker:
       "n_resolved": 0,
       "accuracy": None,
       "brier_score": None,
+      "rolling_accuracy": self._late_rolling_accuracy(df),
       "late_long_signals": 0,
       "late_long_accuracy": None,
       "late_short_signals": 0,
@@ -374,13 +408,16 @@ class CalibrationTracker:
     if not self.cfg:
       return {}
     archive = read_archive(self.cfg)
-    epoch_open, epoch_late, epoch_flip = self._epoch_aggs(df)
+    epoch_df = df_after_snapshot(df, archive.snapshot_through)
+    epoch_open, epoch_late, epoch_flip = self._epoch_aggs(epoch_df)
     combined = combined_public(archive, epoch_open, epoch_late, epoch_flip)
+    combined["snapshot_through"] = archive.snapshot_through
+    combined["snapshot_note"] = archive.snapshot_note
     combined["late_entry"]["rolling_accuracy"] = self._late_rolling_accuracy(
-      df,
+      epoch_df,
       archive_events=archive.late_events,
     )
-    combined["open"]["rolling_accuracy"] = self._rolling_open_accuracy(df)
+    combined["open"]["rolling_accuracy"] = self._rolling_open_accuracy(epoch_df)
     return combined
 
   def calibration_report(self, n_bins: int = 10) -> pd.DataFrame:

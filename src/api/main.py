@@ -94,6 +94,12 @@ async def lifespan(app: FastAPI):
         log.info("Late-entry backfill on startup: %s", bf)
     except Exception as e:
       log.warning("Late-entry backfill skipped: %s", e)
+    try:
+      snap = _loop.calibration.snapshot_stats(note="auto bootstrap")
+      if snap.get("status") == "ok":
+        log.info("Stats snapshot on startup: %s", snap)
+    except Exception as e:
+      log.warning("Stats snapshot skipped: %s", e)
   except Exception as e:
     log.exception("PredictionLoop init failed: %s", e)
     _loop = None
@@ -153,22 +159,31 @@ def _session_user(request: Request) -> None:
   require_session(request, _cfg)
 
 
-def _serialize_value(v: Any) -> Any:
-  """Make DB/pandas values JSON-safe."""
-  if v is None:
+def _sanitize_json(obj: Any) -> Any:
+  """Recursively make nested summary/bin payloads JSON-safe."""
+  if obj is None:
     return None
+  if isinstance(obj, dict):
+    return {k: _sanitize_json(v) for k, v in obj.items()}
+  if isinstance(obj, (list, tuple)):
+    return [_sanitize_json(v) for v in obj]
   try:
-    if pd.isna(v):
+    if pd.isna(obj):
       return None
   except (TypeError, ValueError):
     pass
-  if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+  if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
     return None
-  if hasattr(v, "isoformat"):
-    return v.isoformat()
-  if isinstance(v, (np.integer, np.floating, np.bool_)):
-    return v.item()
-  return v
+  if hasattr(obj, "isoformat"):
+    return obj.isoformat()
+  if isinstance(obj, (np.integer, np.floating, np.bool_)):
+    return obj.item()
+  return obj
+
+
+def _serialize_value(v: Any) -> Any:
+  """Make DB/pandas values JSON-safe."""
+  return _sanitize_json(v)
 
 
 def _serialize_records(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -308,11 +323,15 @@ def list_predictions(limit: int = Query(default=50, le=500)):
 def calibration():
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  tracker = _loop.calibration
-  summary = tracker.summary()
-  report = tracker.calibration_report()
-  bins = report.to_dict(orient="records") if not report.empty else []
-  return {"summary": summary, "bins": bins}
+  try:
+    tracker = _loop.calibration
+    summary = tracker.summary()
+    report = tracker.calibration_report()
+    bins = report.to_dict(orient="records") if not report.empty else []
+    return _sanitize_json({"summary": summary, "bins": bins})
+  except Exception as e:
+    log.exception("Calibration summary failed: %s", e)
+    raise HTTPException(500, f"Calibration failed: {e}") from e
 
 
 @app.get("/api/daily/prediction")
@@ -388,6 +407,17 @@ def admin_train_status(_: None = Depends(_verify_admin)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return _loop.train_status
+
+
+@app.post("/api/admin/snapshot-stats")
+def admin_snapshot_stats(
+  note: str = Query(default="epoch snapshot"),
+  _: None = Depends(_verify_admin),
+):
+  """Fold current DB epoch into persistent all-time archive without clearing predictions."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return {"status": "ok", **_loop.calibration.snapshot_stats(note=note)}
 
 
 @app.post("/api/admin/reset-stats")
