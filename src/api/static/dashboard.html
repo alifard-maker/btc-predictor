@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BTC Predictor</title>
+  <style>
+    :root {
+      --bg: #0c0c10; --surface: #14141c; --border: #2a2a38;
+      --text: #f0f0f5; --muted: #8888a0; --up: #22c55e; --down: #ef4444; --accent: #6366f1;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+    .wrap { max-width: 1000px; margin: 0 auto; padding: 1.25rem; }
+    header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); margin-bottom: 1.25rem; }
+    h1 { font-size: 1.6rem; }
+    .sub { color: var(--muted); font-size: 0.85rem; }
+    .meta { font-size: 0.75rem; color: var(--muted); text-align: right; }
+    button { background: var(--accent); color: #fff; border: none; padding: 0.45rem 0.9rem; border-radius: 8px; cursor: pointer; margin-top: 0.5rem; }
+    .grid { display: grid; grid-template-columns: 1fr 260px; gap: 1rem; }
+    @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.9rem; }
+    .price { font-size: 2rem; font-weight: 700; }
+    .badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 0.25rem 0.55rem; border-radius: 6px; margin-left: 0.5rem; vertical-align: middle; }
+    .badge-LONG { background: rgba(34,197,94,.15); color: var(--up); border: 1px solid rgba(34,197,94,.35); }
+    .badge-SHORT { background: rgba(239,68,68,.15); color: var(--down); border: 1px solid rgba(239,68,68,.35); }
+    .badge-NO_TRADE { background: rgba(136,136,160,.15); color: var(--muted); border: 1px solid var(--border); }
+    .bar-row { display: grid; grid-template-columns: 48px 1fr 48px; gap: 0.6rem; align-items: center; margin: 0.5rem 0; }
+    .track { height: 10px; background: var(--bg); border-radius: 99px; overflow: hidden; }
+    .fill-up { height: 100%; background: var(--up); border-radius: 99px; transition: width .4s; }
+    .fill-down { height: 100%; background: var(--down); border-radius: 99px; transition: width .4s; }
+    .up { color: var(--up); } .down { color: var(--down); }
+    .metrics { display: grid; grid-template-columns: repeat(3,1fr); gap: 0.75rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    .metrics span { display: block; font-size: 0.7rem; color: var(--muted); }
+    .status li { list-style: none; display: grid; grid-template-columns: 8px 1fr auto; gap: 0.5rem; font-size: 0.82rem; margin: 0.4rem 0; align-items: center; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--up); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; }
+    .err { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; padding: 0.7rem; border-radius: 8px; margin-bottom: 1rem; display: none; }
+    .muted { color: var(--muted); }
+    .cal-stats { display: flex; flex-wrap: wrap; gap: 1.2rem; margin-bottom: 0.75rem; }
+    .cal-stats div span { display: block; font-size: 0.7rem; color: var(--muted); }
+    .cal-stats div strong { font-size: 1.1rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>BTC Predictor</h1>
+        <p class="sub">Live probabilities · Stage 1 · No trading</p>
+      </div>
+      <div class="meta">
+        <div id="updated">—</div>
+        <button onclick="loadAll()">Refresh</button>
+      </div>
+    </header>
+
+    <div id="error" class="err"></div>
+
+    <div class="grid">
+      <div class="card" id="pred-card">
+        <h2>Next 5 minutes</h2>
+        <p class="muted">Loading…</p>
+      </div>
+      <div class="card">
+        <h2>System status</h2>
+        <ul class="status" id="status-list"></ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Calibration</h2>
+      <div id="calibration"><p class="muted">Loading…</p></div>
+    </div>
+
+    <div class="card">
+      <h2>Prediction history</h2>
+      <div style="overflow-x:auto" id="history"><p class="muted">Loading…</p></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const pct = (n) => (n * 100).toFixed(1) + '%';
+    const price = (n) => '$' + Math.round(n).toLocaleString();
+    const time = (s) => new Date(s).toLocaleString();
+    const badge = (s) => {
+      const c = s.replace(/\s+/g, '_');
+      return `<span class="badge badge-${c}">${s}</span>`;
+    };
+
+    async function get(path) {
+      const r = await fetch(path);
+      if (!r.ok) throw new Error(r.status + ' ' + path);
+      return r.json();
+    }
+
+    function showError(msg) {
+      const el = $('error');
+      el.style.display = 'block';
+      el.textContent = msg;
+    }
+
+    function renderPrediction(p) {
+      if (!p) {
+        $('pred-card').innerHTML = '<h2>Next 5 minutes</h2><p class="muted">No prediction yet</p>';
+        return;
+      }
+      const up = p.prob_up * 100, down = p.prob_down * 100;
+      $('pred-card').innerHTML = `
+        <h2>Next 5 minutes</h2>
+        <div><span class="price">${price(p.price)}</span>${badge(p.signal)}</div>
+        <div class="bar-row"><span class="up">UP</span><div class="track"><div class="fill-up" style="width:${up}%"></div></div><span>${up.toFixed(1)}%</span></div>
+        <div class="bar-row"><span class="down">DOWN</span><div class="track"><div class="fill-down" style="width:${down}%"></div></div><span>${down.toFixed(1)}%</span></div>
+        <div class="metrics">
+          <div><span>Expected move</span><strong class="${p.expected_move>=0?'up':'down'}">${p.expected_move>=0?'+':''}${price(p.expected_move)}</strong></div>
+          <div><span>Confidence</span><strong>${pct(p.confidence)}</strong></div>
+          <div><span>Updated</span><strong style="font-size:.8rem">${time(p.timestamp)}</strong></div>
+        </div>`;
+    }
+
+    function renderStatus(h) {
+      const items = [
+        ['API', h.status, h.status === 'ok'],
+        ['Scheduler', h.scheduler_running ? 'Running' : 'Stopped', h.scheduler_running],
+        ['Exchange', h.exchange || '—', h.exchange_connected],
+        ['Model', h.model || '—', true],
+        ['1m candles', String(h.candles_1m || 0), (h.candles_1m || 0) > 0],
+      ];
+      $('status-list').innerHTML = items.map(([l,v,ok]) =>
+        `<li><span class="dot" style="background:${ok?'var(--up)':'#f59e0b'}"></span><span class="muted">${l}</span><span>${v}</span></li>`
+      ).join('');
+    }
+
+    function renderCalibration(data) {
+      const s = data.summary;
+      if (!s.n_resolved) {
+        $('calibration').innerHTML = '<p class="muted">Not enough resolved predictions yet. Check back in a few hours.</p>';
+        return;
+      }
+      $('calibration').innerHTML = `
+        <p class="muted" style="margin-bottom:.75rem">When model says X% UP, does price actually go up ~X% of the time?</p>
+        <div class="cal-stats">
+          <div><span>Resolved</span><strong>${s.n_resolved}</strong></div>
+          ${s.brier_score!=null?`<div><span>Brier</span><strong>${s.brier_score.toFixed(4)}</strong></div>`:''}
+          ${s.overall_accuracy!=null?`<div><span>Accuracy</span><strong>${pct(s.overall_accuracy)}</strong></div>`:''}
+        </div>`;
+    }
+
+    function renderHistory(rows) {
+      if (!rows.length) {
+        $('history').innerHTML = '<p class="muted">No predictions logged yet.</p>';
+        return;
+      }
+      $('history').innerHTML = `<table>
+        <thead><tr><th>Time</th><th>Price</th><th>UP</th><th>Signal</th><th>Outcome</th></tr></thead>
+        <tbody>${rows.map(p => `<tr>
+          <td>${time(p.timestamp)}</td><td>${price(p.price)}</td>
+          <td class="up">${pct(p.prob_up)}</td><td>${badge(p.signal)}</td>
+          <td>${p.outcome==null?'—':(p.outcome?'<span class="up">UP</span>':'<span class="down">DOWN</span>')}</td>
+        </tr>`).join('')}</tbody></table>`;
+    }
+
+    async function loadAll() {
+      $('error').style.display = 'none';
+      try {
+        const [health, pred, history, cal] = await Promise.all([
+          get('/health'),
+          get('/api/prediction/latest').catch(() => null),
+          get('/api/predictions?limit=20'),
+          get('/api/calibration'),
+        ]);
+        renderStatus(health);
+        renderPrediction(pred);
+        renderHistory(history);
+        renderCalibration(cal);
+        $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        showError(e.message);
+      }
+    }
+
+    loadAll();
+    setInterval(loadAll, 30000);
+  </script>
+</body>
+</html>

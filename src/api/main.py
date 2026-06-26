@@ -4,10 +4,12 @@ import logging
 import os
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
 
 from src.calibration.tracker import CalibrationTracker
 from src.config import load_config
@@ -90,14 +92,17 @@ app.add_middleware(
 )
 
 
+_DASHBOARD_HTML = Path(__file__).parent / "static" / "dashboard.html"
+
+
 @app.get("/")
 def root():
-  return {
-    "service": "btc-predictor",
-    "docs": "/docs",
-    "health": "/health",
-    "latest": "/api/prediction/latest",
-  }
+  return RedirectResponse(url="/dashboard")
+
+
+@app.get("/dashboard")
+def dashboard():
+  return FileResponse(_DASHBOARD_HTML, media_type="text/html")
 
 
 @app.get("/health")
