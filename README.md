@@ -1,4 +1,4 @@
-# BTC Predictor
+# BTC Predictor — Beta 1.0
 
 Probabilistic BTC direction assistant with calibration tracking, backtesting, and paper trading. **No real trading in Stage 1.**
 
