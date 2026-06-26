@@ -49,6 +49,11 @@ async def auth_middleware(request: Request, call_next, cfg: dict[str, Any]):
   if path in PUBLIC_PATHS:
     return await call_next(request)
 
+  admin_key = str(cfg.get("admin_api_key") or os.getenv("ADMIN_API_KEY") or "")
+  if path.startswith("/api/admin/") and admin_key:
+    if request.headers.get("x-api-key") == admin_key:
+      return await call_next(request)
+
   if is_authed(request):
     return await call_next(request)
 
