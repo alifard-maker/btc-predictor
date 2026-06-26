@@ -46,6 +46,7 @@ fetch_candles_15m: 96   # ~24h buffer for 48-period rolling features
 intervals:
   - 1m
   - 15m
+  - 1h
 
 historical_years: 3
 
@@ -107,11 +108,34 @@ daily:
   enabled: true
   threshold_series: [BTCD, KXBTCD]   # try daily first, then hourly
   range_series: [BTC, KXBTC]
-  nearby_strikes: 7                  # threshold rows around spot
-  top_bands: 8                       # hottest range bands to show
-  min_edge: 0.05                     # model vs Kalshi YES mid
+  nearby_strikes: 7
+  top_bands: 8
+  min_edge: 0.05
   vol_lookback_1h: 24
   drift_lookback_1h: 6
+
+# Hourly ML + stats (Phases 1–4)
+hourly:
+  enabled: true
+  log_minute: 5                    # log active event at :05 ET each hour
+  min_train_samples: 500
+  train_test_split: 0.2
+  model_type: lightgbm
+  calibrate: true
+  calibration_min_resolved: 30
+  use_15m_aggregate: true
+  fetch_candles_1h: 720            # ~30 days native 1h bars for training
+  blend:
+    ml_weight: 0.6
+    structure_weight: 0.4
+  regime:
+    enabled: true
+    min_expected_move_pct: 0.12
+    min_edge: 0.05
+    min_hours_to_settle: 0.25
+    max_sigma_pct: 2.5
+    min_reasons_to_block: 2
+  sigma_calibration: true
 
 # Flip-to-opposite — after open LONG/SHORT is losing, one reverse bet per slot
 flip:

@@ -25,6 +25,8 @@ ADMIN_KEY_PATHS = frozenset({
   "/api/postmortems",
   "/api/slot/monitor",
   "/api/daily/prediction",
+  "/api/hourly/calibration",
+  "/api/hourly/predictions",
 })
 
 

@@ -12,6 +12,10 @@ def epoch_path(cfg: dict[str, Any]) -> Path:
   return Path(cfg["paths"]["logs"]) / "stats_epoch.json"
 
 
+def hourly_epoch_path(cfg: dict[str, Any]) -> Path:
+  return Path(cfg["paths"]["logs"]) / "hourly_stats_epoch.json"
+
+
 def read_stats_epoch(cfg: dict[str, Any]) -> dict[str, Any] | None:
   path = epoch_path(cfg)
   if not path.exists():
@@ -24,6 +28,27 @@ def read_stats_epoch(cfg: dict[str, Any]) -> dict[str, Any] | None:
 
 def write_stats_epoch(cfg: dict[str, Any], *, note: str = "") -> dict[str, Any]:
   path = epoch_path(cfg)
+  path.parent.mkdir(parents=True, exist_ok=True)
+  record = {
+    "stats_since": datetime.now(timezone.utc).isoformat(),
+    "note": note,
+  }
+  path.write_text(json.dumps(record, indent=2) + "\n")
+  return record
+
+
+def read_hourly_stats_epoch(cfg: dict[str, Any]) -> dict[str, Any] | None:
+  path = hourly_epoch_path(cfg)
+  if not path.exists():
+    return None
+  try:
+    return json.loads(path.read_text())
+  except (json.JSONDecodeError, OSError):
+    return None
+
+
+def write_hourly_stats_epoch(cfg: dict[str, Any], *, note: str = "") -> dict[str, Any]:
+  path = hourly_epoch_path(cfg)
   path.parent.mkdir(parents=True, exist_ok=True)
   record = {
     "stats_since": datetime.now(timezone.utc).isoformat(),

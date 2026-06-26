@@ -8,12 +8,14 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from src.calibration.sources import KALSHI_EXIT_SOURCE, KALSHI_REF_SOURCE
+from src.calibration.hourly_tracker import HourlyCalibrationTracker
 from src.calibration.tracker import CalibrationTracker
 from src.config import ensure_dirs, load_config
 from src.data.fetcher import DataFetcher
@@ -43,6 +45,7 @@ class PredictionLoop:
     self.logger = PredictionLogger(self.cfg)
     self.postmortems = PostmortemLogger(self.cfg)
     self.calibration = CalibrationTracker(self.cfg)
+    self.hourly_calibration = HourlyCalibrationTracker(self.cfg)
     self.tz = self.cfg.get("timezone", "America/New_York")
     self.horizon = self.cfg.get("prediction_horizon_minutes", 15)
     self.min_candles = self.cfg.get("min_candles_15m", 48)
@@ -56,16 +59,21 @@ class PredictionLoop:
     self._late_entry_logged: set[str] = set()
     self._flip_logged: set[str] = set()
     self.train_status: dict[str, Any] = {"state": "idle"}
-    self._daily_predictor = None
+    self.hourly_train_status: dict[str, Any] = {"state": "idle"}
+    self._hourly_predictor = None
+    self.latest_hourly_prediction: dict[str, Any] | None = None
 
-  def daily_predictor(self):
-    if self._daily_predictor is None:
-      from src.models.daily_predictor import DailyPredictor
-      self._daily_predictor = DailyPredictor(self.cfg)
-    return self._daily_predictor
+  def hourly_predictor(self):
+    if self._hourly_predictor is None:
+      from src.models.hourly_predictor import HourlyPredictor
+      self._hourly_predictor = HourlyPredictor(self.cfg)
+    return self._hourly_predictor
 
   def _ohlc_1h(self) -> pd.DataFrame:
-    """Resample stored 15m candles to 1h for daily structure analysis."""
+    """Native 1h candles, falling back to resampled 15m."""
+    df_1h = self.storage.load("1h")
+    if not df_1h.empty and len(df_1h) >= 24:
+      return df_1h
     df_15m = self.storage.load("15m")
     if df_15m.empty:
       return pd.DataFrame()
@@ -93,12 +101,130 @@ class PredictionLoop:
         price = float(df_1m["close"].iloc[-1])
     if price is None or price <= 0:
       return {"ok": False, "error": "Live BRTI unavailable"}
-    out = self.daily_predictor().predict(current_price=float(price), df_1h=self._ohlc_1h())
+    df_1h = self._ohlc_1h()
+    df_15m = self.storage.load("15m")
+    out = self.hourly_predictor().predict(
+      current_price=float(price),
+      df_1h=df_1h,
+      df_15m=df_15m if not df_15m.empty else None,
+      calibration_tracker=self.calibration,
+    )
     if quote:
       out["brti_live"] = round(quote.price, 2)
       out["brti_source"] = quote.source
     out["timezone"] = self.tz
+    self.latest_hourly_prediction = out if out.get("ok") else None
     return out
+
+  def run_hourly_prediction(self) -> dict[str, Any] | None:
+    if not self.cfg.get("hourly", {}).get("enabled", True):
+      return None
+    try:
+      self.resolve_hourly_outcomes()
+      out = self.daily_prediction()
+      if not out.get("ok"):
+        return out
+      row = self.hourly_predictor().to_log_row(out)
+      if row.get("event_ticker"):
+        self.hourly_calibration.log_prediction(row)
+        log.info(
+          "Hourly prediction logged: %s %s %s",
+          row["event_ticker"],
+          row.get("primary_signal"),
+          row.get("primary_label"),
+        )
+      return out
+    except Exception as e:
+      log.exception("Hourly prediction failed: %s", e)
+      self.last_error = str(e)
+      return None
+
+  def resolve_hourly_outcomes(self) -> None:
+    from src.data.kalshi_hourly import try_resolve_pending
+
+    pending = self.hourly_calibration.get_pending()
+    if not pending:
+      return
+    resolved = 0
+    for row in pending:
+      res = try_resolve_pending(self.kalshi, row)
+      if res is None:
+        continue
+      if self.hourly_calibration.resolve(str(row["event_ticker"]), res):
+        resolved += 1
+    if resolved:
+      log.info("Resolved %d hourly predictions via Kalshi", resolved)
+      self.refit_hourly_calibrator()
+      self.calibrate_hourly_sigma()
+
+  def refit_hourly_calibrator(self) -> bool:
+    hp = self.hourly_predictor()
+    if hp.calibrator is None:
+      return False
+    if self.hourly_calibration.fit_calibrator(hp.calibrator):
+      from src.models.hourly_trainer import HourlyModelTrainer
+      trainer = HourlyModelTrainer(self.cfg)
+      trainer.model = hp.model
+      trainer.feature_names = hp.feature_names
+      trainer.calibrator = hp.calibrator
+      path = Path(self.cfg["paths"]["models"]) / "model_hourly.joblib"
+      if path.exists() and hp.model is not None:
+        trainer.save(path)
+      log.info("Hourly calibrator refit from resolved events")
+      return True
+    return False
+
+  def calibrate_hourly_sigma(self) -> None:
+    if not self.cfg.get("hourly", {}).get("sigma_calibration", True):
+      return
+    df = self.hourly_calibration.load_resolved()
+    if len(df) < 10:
+      return
+    err = (pd.to_numeric(df["settle_brti"], errors="coerce") - pd.to_numeric(df["blended_mu"], errors="coerce")).abs()
+    sigma = pd.to_numeric(df["terminal_sigma"], errors="coerce").replace(0, np.nan)
+    ratio = float((err / sigma).median())
+    if ratio > 0 and not np.isnan(ratio):
+      hp = self.hourly_predictor()
+      new_scale = max(0.5, min(2.0, hp._sigma_scale * ratio))
+      hp.save_sigma_scale(new_scale)
+      log.info("Hourly sigma scale updated to %.3f", new_scale)
+
+  def train_hourly_model(self, min_samples: int | None = None) -> None:
+    from src.models.hourly_trainer import HourlyModelTrainer
+
+    self.hourly_train_status = {
+      "state": "running",
+      "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+      cfg = self.cfg
+      if min_samples is not None:
+        cfg = {**self.cfg, "hourly": {**self.cfg.get("hourly", {}), "min_train_samples": min_samples}}
+      df_1h = self._ohlc_1h()
+      df_15m = self.storage.load("15m")
+      if df_1h.empty:
+        raise ValueError("No 1h candle data — enable 1h fetch in config")
+      trainer = HourlyModelTrainer(cfg)
+      metrics = trainer.train(df_1h, df_15m if not df_15m.empty else None)
+      model_path = Path(self.cfg["paths"]["models"]) / "model_hourly.joblib"
+      trainer.save(model_path)
+      self._hourly_predictor = None
+      self.hourly_train_status = {
+        "state": "done",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "model_path": str(model_path),
+        "metrics": metrics,
+        "candles_1h": len(df_1h),
+      }
+      log.info("Hourly model training complete: %s", metrics)
+    except Exception as e:
+      log.exception("Hourly model training failed")
+      self.hourly_train_status = {
+        "state": "error",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "error": str(e),
+      }
+
 
   def _default_model_path(self) -> str | None:
     p = Path(self.cfg["paths"]["models"]) / "model.joblib"
@@ -121,7 +247,16 @@ class PredictionLoop:
       log.warning("Failed to fetch 15m: %s", e)
       self.last_error = str(e)
 
+    try:
+      count_1h = int(self.cfg.get("hourly", {}).get("fetch_candles_1h", 168))
+      df_1h = self.fetcher.fetch_latest_candles("1h", count=count_1h)
+      if not df_1h.empty:
+        self.storage.save("1h", df_1h)
+    except Exception as e:
+      log.warning("Failed to fetch 1h: %s", e)
+
   def resolve_outcomes(self) -> None:
+    self.resolve_hourly_outcomes()
     pending = self.calibration.get_pending()
     if not pending:
       return
@@ -226,6 +361,26 @@ class PredictionLoop:
       return
     log.info("Daily auto-retrain starting")
     threading.Thread(target=self.train_model, daemon=True).start()
+    if self.cfg.get("hourly", {}).get("enabled", True):
+      threading.Thread(target=self.train_hourly_model, daemon=True).start()
+
+  def _schedule_hourly(self, scheduler) -> None:
+    if not self.cfg.get("hourly", {}).get("enabled", True):
+      return
+    minute = int(self.cfg.get("hourly", {}).get("log_minute", 5))
+    scheduler.add_job(
+      self.run_hourly_prediction,
+      CronTrigger(minute=str(minute), timezone=self.tz),
+      id="hourly_predict",
+      max_instances=1,
+    )
+    scheduler.add_job(
+      self.refit_hourly_calibrator,
+      "interval",
+      hours=6,
+      id="refit_hourly_calibrator",
+      max_instances=1,
+    )
 
   def _auto_train_first_run(self) -> datetime:
     """Next calendar day at configured hour (default 2:00 AM ET)."""
@@ -596,8 +751,10 @@ class PredictionLoop:
     scheduler.add_job(self.fetch_and_store, "interval", minutes=1, id="fetch", max_instances=1)
     scheduler.add_job(self.resolve_outcomes, "interval", minutes=1, id="resolve", max_instances=1)
     self._schedule_predictions(scheduler)
+    self._schedule_hourly(scheduler)
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")
+    scheduler.add_job(self.run_hourly_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=15), id="hourly_now")
     scheduler.add_job(self.collect_auxiliary, "interval", hours=6, id="auxiliary", max_instances=1)
     scheduler.add_job(self.collect_auxiliary, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=12), id="auxiliary_now")
     scheduler.add_job(self.refit_calibrator, "interval", hours=6, id="refit_calibrator", max_instances=1)

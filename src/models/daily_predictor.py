@@ -157,6 +157,8 @@ class DailyPredictor:
     current_price: float,
     df_1h: pd.DataFrame | None,
     book: DailyEventBook | None = None,
+    override_mu: float | None = None,
+    override_sigma: float | None = None,
   ) -> dict[str, Any]:
     book = book or self.markets.active_book()
     now = datetime.now(timezone.utc)
@@ -166,6 +168,10 @@ class DailyPredictor:
 
     hours_left = max(0.1, (book.close_time - now).total_seconds() / 3600.0)
     mu, sigma = self._terminal_params(current_price, df_1h, hours_left)
+    if override_mu is not None:
+      mu = float(override_mu)
+    if override_sigma is not None:
+      sigma = float(override_sigma)
     levels = detect_levels(df_1h, current_price) if df_1h is not None else []
     box = consolidation_box(df_1h) if df_1h is not None else None
 

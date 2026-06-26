@@ -127,6 +127,9 @@
     .stats-block h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.55rem; }
     .stats-block.all-time h3 { color: var(--up); }
     .snap-line { font-size: 0.78rem; color: #9ae6b0; margin: 0.15rem 0 0.65rem; line-height: 1.4; }
+    .freq-badge { display:inline-block;font-size:.7rem;font-weight:800;letter-spacing:.06em;padding:.2rem .5rem;border-radius:6px;margin-left:.5rem;vertical-align:middle }
+    .freq-hourly { background:rgba(99,102,241,.2);color:#a5b4fc }
+    .freq-daily { background:rgba(34,197,94,.15);color:#86efac }
   </style>
 </head>
 <body>
@@ -148,7 +151,7 @@
 
     <nav class="tab-bar" role="tablist">
       <button type="button" class="tab active" id="tab-15m" data-panel="panel-15m" onclick="switchTab('15m')">15m slot</button>
-      <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">Daily / threshold</button>
+      <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">Hourly / Kalshi</button>
     </nav>
 
     <div id="panel-15m">
@@ -268,9 +271,18 @@
 
     <div id="panel-daily" style="display:none">
       <div class="card" id="daily-summary-card">
-        <h2>Kalshi daily / hourly · structure model</h2>
+        <h2>Kalshi hourly / daily <span id="daily-freq-badge"></span></h2>
         <p class="muted" id="daily-meta">Loading…</p>
+        <div id="daily-primary-signal"></div>
         <div id="daily-summary"></div>
+      </div>
+      <div class="card">
+        <h2>Hourly calibration</h2>
+        <div id="hourly-calibration"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Hourly prediction history</h2>
+        <div style="overflow-x:auto" id="hourly-history"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
@@ -872,9 +884,56 @@
       return `<div><span class="muted">${label}</span><strong>${row.label}</strong><div class="muted">${pct(row.model_prob)} model${row.kalshi_mid != null ? ` · Kalshi ${pct(row.kalshi_mid)}` : ''}</div></div>`;
     }
 
+    function renderHourlyCalibration(data) {
+      const s = data?.summary || {};
+      const at = s.all_time?.open || {};
+      if (!s.n_resolved && !at.n_resolved) {
+        $('hourly-calibration').innerHTML = '<p class="muted">No resolved hourly events yet — logged each hour at :05 ET when a Kalshi book is open.</p>';
+        return;
+      }
+      $('hourly-calibration').innerHTML = `
+        <p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Primary pick = best threshold edge (LEAN YES/NO). Resolved when Kalshi settles the contract.</p>
+        ${renderAllTimeStats({ open: at, epochs_archived: s.all_time?.epochs_archived, snapshot_through: s.all_time?.snapshot_through, snapshot_note: s.all_time?.snapshot_note, late_entry: {}, flip: {} })}
+        <div class="stats-block epoch" style="margin-top:.75rem">
+          <h3>Current epoch</h3>
+          ${renderRollingAccuracy(s.rolling_accuracy)}
+          <div class="cal-stats">
+            <div><span>Resolved</span><strong>${s.n_resolved || 0}</strong></div>
+            ${s.brier_score != null ? `<div><span>Brier (primary)</span><strong>${s.brier_score.toFixed(4)}</strong></div>` : ''}
+            ${s.accuracy != null ? `<div><span>Accuracy</span><strong>${pct(s.accuracy)}</strong></div>` : ''}
+            ${s.lean_yes_signals ? `<div><span>LEAN YES</span><strong>${s.lean_yes_accuracy != null ? pct(s.lean_yes_accuracy) : '—'} (${s.lean_yes_signals})</strong></div>` : ''}
+            ${s.lean_no_signals ? `<div><span>LEAN NO</span><strong>${s.lean_no_accuracy != null ? pct(s.lean_no_accuracy) : '—'} (${s.lean_no_signals})</strong></div>` : ''}
+          </div>
+        </div>`;
+    }
+
+    function renderHourlyHistory(rows) {
+      if (!rows || !rows.length) {
+        $('hourly-history').innerHTML = '<p class="muted">No hourly predictions logged yet.</p>';
+        return;
+      }
+      $('hourly-history').innerHTML = `<table>
+        <thead><tr><th>Logged</th><th>Freq</th><th>Primary pick</th><th>Signal</th><th>Conf</th><th>Method</th><th>Outcome</th></tr></thead>
+        <tbody>${rows.map(r => {
+          const out = r.outcome == null ? '<span class="muted">pending</span>' : (r.outcome ? '<span class="up">YES ✓</span>' : '<span class="down">NO ✗</span>');
+          const sigCls = r.primary_signal === 'LEAN YES' ? 'edge-yes' : r.primary_signal === 'LEAN NO' ? 'edge-no' : 'muted';
+          return `<tr>
+            <td style="font-size:.78rem">${time(r.logged_at)}</td>
+            <td>${r.frequency || '—'}</td>
+            <td style="font-size:.78rem">${r.primary_label || '—'} <span class="muted">${r.primary_model_prob != null ? pct(r.primary_model_prob) : ''}</span></td>
+            <td class="${sigCls}">${r.primary_signal || '—'}</td>
+            <td>${r.confidence != null ? pct(r.confidence) : '—'}</td>
+            <td>${r.method || '—'}</td>
+            <td>${out}</td>
+          </tr>`;
+        }).join('')}</tbody></table>`;
+    }
+
     function renderDaily(data) {
       if (!data || !data.ok) {
-        $('daily-meta').textContent = data?.error || 'Daily prediction unavailable';
+        $('daily-meta').textContent = data?.error || 'Hourly prediction unavailable';
+        $('daily-freq-badge').innerHTML = '';
+        $('daily-primary-signal').innerHTML = '';
         $('daily-summary').innerHTML = '';
         $('daily-threshold').innerHTML = '<p class="muted">—</p>';
         $('daily-range').innerHTML = '<p class="muted">—</p>';
@@ -882,11 +941,32 @@
         return;
       }
       const ev = data.event || {};
+      const freq = (ev.frequency || 'hourly').toLowerCase();
+      const freqCls = freq === 'daily' ? 'freq-daily' : 'freq-hourly';
+      $('daily-freq-badge').innerHTML = `<span class="freq-badge ${freqCls}">${freq.toUpperCase()}</span>`;
       const settle = ev.close_time ? time(ev.close_time) : '—';
       const ml = data.most_likely || {};
       const beT = data.strategy_threshold?.best_edge;
       const beR = data.strategy_range?.best_edge;
-      $('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · ${ev.frequency || ''} · settles ${settle} · BRTI ${price(data.brti_live || data.current_price)}`;
+      const pick = data.primary_pick || beT;
+      const regime = data.regime || {};
+      $('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · settles ${settle} · BRTI ${price(data.brti_live || data.current_price)} · ${data.hours_to_settle}h left`;
+      const pickSig = pick?.signal || 'NEUTRAL';
+      const pickCls = pickSig === 'LEAN YES' ? 'edge-yes' : pickSig === 'LEAN NO' ? 'edge-no' : 'muted';
+      $('daily-primary-signal').innerHTML = `
+        <div class="likely-card" style="border-color:rgba(99,102,241,.45)">
+          <h3>Primary signal · ${data.method || 'structure'} model</h3>
+          <div class="headline ${pickCls}">${pickSig}${pick?.label ? ` · ${pick.label}` : ''}</div>
+          <div class="likely-grid" style="margin-top:.65rem">
+            <div><span class="muted">Model prob</span><strong>${pick?.model_prob != null ? pct(pick.model_prob) : '—'}</strong></div>
+            <div><span class="muted">Confidence</span><strong>${data.confidence != null ? pct(data.confidence) : '—'}</strong></div>
+            <div><span class="muted">Direction</span><strong>${data.direction || '—'}</strong></div>
+            <div><span class="muted">Edge vs Kalshi</span><strong>${pick?.edge != null ? (pick.edge >= 0 ? '+' : '') + (pick.edge * 100).toFixed(1) + '¢' : '—'}</strong></div>
+            ${data.ml_prob_up != null ? `<div><span class="muted">1h ML prob UP</span><strong>${pct(data.ml_prob_up)}</strong></div>` : ''}
+            ${data.prob_15m_avg != null ? `<div><span class="muted">15m avg prob</span><strong>${pct(data.prob_15m_avg)}</strong></div>` : ''}
+          </div>
+          ${regime.reasons?.length ? `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${regime.allow_trade ? 'Regime note:' : 'Regime blocked:'} ${regime.reasons.join(' · ')}</p>` : ''}
+        </div>`;
       $('daily-summary').innerHTML = `
         <div class="likely-card">
           <h3>Most likely outcome</h3>
@@ -905,7 +985,7 @@
           </div>
           ${beT?.signal ? `<p class="muted" style="font-size:.75rem;margin-top:.5rem">Threshold signal: <strong class="${beT.signal === 'LEAN YES' ? 'edge-yes' : beT.signal === 'LEAN NO' ? 'edge-no' : ''}">${beT.signal}</strong>${beT.edge != null ? ` (${beT.edge >= 0 ? '+' : ''}${(beT.edge * 100).toFixed(1)}¢)` : ''}</p>` : ''}
         </div>
-        <p class="muted" style="font-size:.75rem;margin-top:.5rem">Terminal μ ${price(data.terminal_mu)} · σ ${price(data.terminal_sigma)} · ${data.hours_to_settle}h to settle</p>`;
+        <p class="muted" style="font-size:.75rem;margin-top:.5rem">Blended μ ${price(data.terminal_mu)} · σ ${price(data.terminal_sigma)}${data.structure_mu != null ? ` · structure μ ${price(data.structure_mu)}` : ''}${data.ml_mu != null ? ` · ML μ ${price(data.ml_mu)}` : ''}</p>`;
       renderDailyContracts(data.strategy_threshold?.contracts || [], 'daily-threshold');
       renderDailyContracts(data.strategy_range?.contracts || [], 'daily-range');
       renderDailyStructure(data.structure);
@@ -913,10 +993,18 @@
 
     async function loadDaily() {
       try {
-        const d = await get('/api/daily/prediction');
+        const [d, cal, hist] = await Promise.all([
+          get('/api/daily/prediction'),
+          get('/api/hourly/calibration').catch(() => ({ summary: {} })),
+          get('/api/hourly/predictions?limit=20').catch(() => []),
+        ]);
         renderDaily(d);
+        renderHourlyCalibration(cal);
+        renderHourlyHistory(hist);
       } catch (e) {
         renderDaily({ ok: false, error: e.message });
+        renderHourlyCalibration({});
+        renderHourlyHistory([]);
       }
     }
 

@@ -341,6 +341,81 @@ def daily_prediction():
   return _loop.daily_prediction()
 
 
+@app.get("/api/hourly/calibration")
+def hourly_calibration():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  try:
+    return _sanitize_json({"summary": _loop.hourly_calibration.summary()})
+  except Exception as e:
+    log.exception("Hourly calibration failed: %s", e)
+    raise HTTPException(500, f"Hourly calibration failed: {e}") from e
+
+
+@app.get("/api/hourly/predictions")
+def hourly_predictions(limit: int = Query(default=30, le=200)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  df = _loop.hourly_calibration.load_recent(limit)
+  if df.empty:
+    return []
+  return _serialize_records(df)
+
+
+@app.post("/api/admin/hourly/predict-now")
+def hourly_predict_now(_: None = Depends(_verify_admin)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  out = _loop.run_hourly_prediction()
+  if not out or not out.get("ok"):
+    raise HTTPException(500, out.get("error") if out else "Hourly prediction failed")
+  return out
+
+
+@app.post("/api/admin/train-hourly")
+def admin_train_hourly(
+  min_samples: int = Query(default=500, ge=100),
+  _: None = Depends(_verify_admin),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.hourly_train_status.get("state") == "running":
+    return {"status": "running", **_loop.hourly_train_status}
+
+  def _run():
+    _loop.train_hourly_model(min_samples=min_samples)
+
+  threading.Thread(target=_run, daemon=True).start()
+  return {"status": "started", "message": "Hourly training in background. Poll /api/admin/train-hourly/status."}
+
+
+@app.get("/api/admin/train-hourly/status")
+def admin_train_hourly_status(_: None = Depends(_verify_admin)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.hourly_train_status
+
+
+@app.post("/api/admin/reset-hourly-stats")
+def admin_reset_hourly_stats(
+  note: str = Query(default="hourly epoch reset"),
+  _: None = Depends(_verify_admin),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return {"status": "ok", **_loop.hourly_calibration.reset_stats(note=note)}
+
+
+@app.post("/api/admin/snapshot-hourly-stats")
+def admin_snapshot_hourly_stats(
+  note: str = Query(default="hourly snapshot"),
+  _: None = Depends(_verify_admin),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return {"status": "ok", **_loop.hourly_calibration.snapshot_stats(note=note)}
+
+
 @app.post("/api/predict/now")
 def predict_now(_: None = Depends(_verify_admin)):
   if _loop is None:
