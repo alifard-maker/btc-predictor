@@ -32,6 +32,7 @@ class SlotMonitor:
   reference_price: float
   current_price: float
   unrealized_pct: float
+  unrealized_usd: float = 0.0
   action: ExitAction
   urgency: str  # low, medium, high
   message: str
@@ -61,6 +62,7 @@ class SlotMonitor:
       "using_override": self.using_override,
       "current_price": round(self.current_price, 2),
       "unrealized_pct": round(self.unrealized_pct, 4),
+      "unrealized_usd": round(self.unrealized_usd, 2),
       "action": self.action.value,
       "urgency": self.urgency,
       "message": self.message,
@@ -416,6 +418,7 @@ class ExitAdvisor:
       reference_price=reference_price,
       current_price=current_price,
       unrealized_pct=pnl_pct,
+      unrealized_usd=reference_price * (pnl_pct / 100),
       action=action,
       urgency=urgency,
       message=message,

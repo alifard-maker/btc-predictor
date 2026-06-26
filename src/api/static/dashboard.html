@@ -82,7 +82,7 @@
     .ref-override-hint { font-size: 0.72rem; color: var(--muted); margin-top: 0.45rem; }
     .ref-override-active { color: var(--up); font-size: 0.72rem; margin-left: 0.35rem; }
     .reassess-block { margin: 0.85rem 0 0.5rem; padding: 0.75rem; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); }
-    .reassess-block h4 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.55rem; font-weight: 600; }
+    .meta .version { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
   </style>
 </head>
 <body>
@@ -91,6 +91,7 @@
       <div>
         <h1>BTC Predictor</h1>
         <p class="sub">15-minute slots · Eastern Time (ET) · No trading</p>
+        <div class="version" id="app-version">—</div>
       </div>
       <div class="meta">
         <div id="updated">—</div>
@@ -143,6 +144,7 @@
     const TZ = 'America/New_York';
     const pct = (n) => (n * 100).toFixed(1) + '%';
     const price = (n) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const signedPrice = (n) => (Number(n) >= 0 ? '+' : '−') + price(Math.abs(Number(n)));
     const time = (s) => new Date(s).toLocaleString('en-US', {
       timeZone: TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
     });
@@ -260,6 +262,13 @@
       el.textContent = msg;
     }
 
+    function fmtPnl(m) {
+      const pct = Number(m.unrealized_pct);
+      const pctStr = (pct >= 0 ? '+' : '') + pct.toFixed(3) + '%';
+      const usd = m.unrealized_usd != null ? Number(m.unrealized_usd) : (Number(m.reference_price) * pct / 100);
+      return `${pctStr} · ${signedPrice(usd)}`;
+    }
+
     function renderIndicators(items) {
       if (!items || !items.length) return '';
       const groups = { short: 'Short-term (1h)', medium: 'Medium (4h)', regime: 'Regime (12h)', context: 'Context' };
@@ -338,7 +347,7 @@
         <div class="metrics" style="margin-top:0;padding-top:0;border-top:none;grid-template-columns:repeat(4,1fr)">
           <div><span>${refHdr}</span><strong>${price(m.reference_price)}</strong></div>
           <div><span>Now · live tick</span><strong>${price(m.current_price)}</strong><div class="muted" style="font-size:.68rem">${nowAge}</div></div>
-          <div><span>P&amp;L vs t=0</span><strong class="${pnlCls}">${m.unrealized_pct >= 0 ? '+' : ''}${Number(m.unrealized_pct).toFixed(3)}%</strong></div>
+          <div><span>P&amp;L vs t=0</span><strong class="${pnlCls}">${fmtPnl(m)}</strong><div class="muted" style="font-size:.68rem">per 1 BTC</div></div>
           <div><span>Time left</span><strong>${fmtRemaining(m.seconds_remaining || 0)}</strong></div>
         </div>${renderReassessBlock(m)}`;
       } else if (m.active) {
@@ -393,6 +402,7 @@
     }
 
     function renderStatus(h) {
+      if (h.version) $('app-version').textContent = h.version;
       const items = [
         ['API', h.status, h.status === 'ok'],
         ['Scheduler', h.scheduler_running ? 'Running' : 'Stopped', h.scheduler_running],

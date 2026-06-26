@@ -21,7 +21,7 @@ from src.api.auth import (
   require_session,
 )
 
-from src.calibration.tracker import CalibrationTracker
+from src import __version__ as APP_VERSION
 from src.config import load_config
 from src.data.storage import HistoricalCollector
 from src.models.predictor import Prediction
@@ -116,7 +116,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
   title="BTC Predictor",
   description="Probabilistic BTC direction assistant — Railway backend",
-  version="0.1.0",
+  version=APP_VERSION,
   lifespan=lifespan,
 )
 
@@ -205,10 +205,11 @@ def dashboard(request: Request, _: None = Depends(_session_user)):
 @app.get("/health")
 def health():
   """Always return 200 so Railway healthchecks pass."""
+  base = {"status": "starting", "service": "btc-predictor", "version": APP_VERSION}
   if _loop is None:
-    return {"status": "starting", "service": "btc-predictor"}
+    return base
   status = _loop.status()
-  return {"status": "ok", "service": "btc-predictor", **status}
+  return {"status": "ok", "service": "btc-predictor", "version": APP_VERSION, **status}
 
 
 @app.get("/api/status")
