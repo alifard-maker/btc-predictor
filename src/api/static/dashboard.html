@@ -228,7 +228,7 @@
       const up = p.prob_up * 100, down = p.prob_down * 100;
       const ref = p.reference_price ?? p.price;
       const slot = p.slot_label ? `<div class="sub" style="margin-bottom:.5rem">${p.slot_label}</div>` : '';
-      const live = p.current_price && Math.abs(p.current_price - ref) > 1
+      const live = p.current_price
         ? `<div class="live-price">Live now: ${price(p.current_price)}</div>` : '';
       $('pred-card').innerHTML = `
         <h2>Next 15-minute slot</h2>

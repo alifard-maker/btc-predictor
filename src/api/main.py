@@ -29,7 +29,7 @@ _scheduler = None
 
 
 def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
-  return {
+  out = {
     "timestamp": pred.timestamp.isoformat() if hasattr(pred.timestamp, "isoformat") else str(pred.timestamp),
     "slot_start": pred.slot_start.isoformat() if pred.slot_start is not None else None,
     "slot_end": pred.slot_end.isoformat() if pred.slot_end is not None else None,
@@ -47,6 +47,11 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     "indicators": pred.indicators,
     "formatted": _loop.predictor.format_output(pred) if _loop else "",
   }
+  if _loop is not None:
+    live = _loop._live_price()
+    if live is not None:
+      out["current_price"] = round(live, 2)
+  return out
 
 
 def _verify_admin(x_api_key: str | None = Header(default=None)) -> None:

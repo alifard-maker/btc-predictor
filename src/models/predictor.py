@@ -227,6 +227,7 @@ class Predictor:
     df_15m: pd.DataFrame,
     df_1m: pd.DataFrame | None = None,
     live_price: float | None = None,
+    current_price: float | None = None,
   ) -> Prediction:
     min_candles = self.cfg.get("min_candles_15m", 30)
     if len(df_15m) < min_candles:
@@ -234,7 +235,8 @@ class Predictor:
 
     features = build_feature_matrix(df_15m, df_1m, self.cfg, include_phase2=True, primary_timeframe="15m")
     latest = features.iloc[-1]
-    current_price = float(latest["close"])
+    candle_price = float(latest["close"])
+    current_price = float(current_price) if current_price is not None else candle_price
 
     # Slot for the upcoming/current 15m interval in ET
     now_utc = pd.Timestamp(datetime.now(timezone.utc))
@@ -242,7 +244,7 @@ class Predictor:
     slot_e = slot_end(slot_s, self.tz)
 
     ref_price = reference_price_at_slot(
-      df_1m, slot_s, fallback=current_price, live_price=live_price, now_utc=now_utc,
+      df_1m, slot_s, fallback=candle_price, live_price=live_price, now_utc=now_utc,
     )
 
     if self.model is not None:

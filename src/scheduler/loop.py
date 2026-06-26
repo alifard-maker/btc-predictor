@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ class PredictionLoop:
     self.exit_advisor = ExitAdvisor(self.cfg)
     self.last_error: str | None = None
     self._scheduler: BackgroundScheduler | BlockingScheduler | None = None
+    self._ticker_cache: tuple[float, float] | None = None  # (price, monotonic time)
 
   def _default_model_path(self) -> str | None:
     p = Path(self.cfg["paths"]["models"]) / "model.joblib"
@@ -112,7 +114,7 @@ class PredictionLoop:
         slot_s = floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz)
         age = (pd.Timestamp(datetime.now(timezone.utc)) - slot_s).total_seconds()
         if 0 <= age <= 90:
-          live_price = self.fetcher.fetch_last_price()
+          live_price = self._live_price(max_age_sec=0)
       except Exception:
         pass
 
@@ -120,6 +122,7 @@ class PredictionLoop:
         df_15m,
         df_1m if not df_1m.empty else None,
         live_price=live_price,
+        current_price=self._live_price(max_age_sec=0),
       )
       self.logger.log(pred)
       self.latest_prediction = pred
@@ -134,7 +137,18 @@ class PredictionLoop:
       log.exception("Prediction failed: %s", e)
       return None
 
-  def _live_price(self) -> float | None:
+  def _live_price(self, max_age_sec: float = 5.0) -> float | None:
+    """Real-time last trade price; cached briefly to limit exchange polling."""
+    now = time.monotonic()
+    if self._ticker_cache and (now - self._ticker_cache[1]) < max_age_sec:
+      return self._ticker_cache[0]
+    try:
+      price = self.fetcher.fetch_last_price()
+      self._ticker_cache = (price, now)
+      return price
+    except Exception as e:
+      log.debug("Ticker fetch failed, using candle fallback: %s", e)
+
     df_1m = self.storage.load("1m")
     if not df_1m.empty:
       return float(df_1m.iloc[-1]["close"])
