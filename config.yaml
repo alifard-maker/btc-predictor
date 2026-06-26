@@ -1,9 +1,15 @@
-symbol: BTC/USDT
-exchange: binance
+symbol: BTC/USD
+exchange: coinbaseexchange
 exchange_fallbacks:
-  - kraken
   - coinbase
+  - kraken
   - bitstamp
+
+# Live display price — Coinbase matches the app; Kalshi settles on CF Benchmarks BRTI
+price_feed:
+  live: coinbase              # coinbase | exchange (connected ccxt exchange)
+  label: Coinbase BTC-USD
+  settlement_reference: CF Benchmarks BRTI (Kalshi settlement index)
 
 # 15-minute slot predictions — Eastern Time (:00, :15, :30, :45 ET)
 prediction_horizon_minutes: 15

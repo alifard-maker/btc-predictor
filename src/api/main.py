@@ -51,6 +51,8 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     live = _loop._live_price()
     if live is not None:
       out["current_price"] = round(live, 2)
+      out["price_feed"] = _loop.fetcher.price_feed_label()
+      out["settlement_reference"] = _loop.fetcher.settlement_reference_label()
   return out
 
 
@@ -167,7 +169,10 @@ def api_status():
 def slot_monitor():
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  return _loop.slot_monitor().to_dict()
+  out = _loop.slot_monitor().to_dict()
+  out["price_feed"] = _loop.fetcher.price_feed_label()
+  out["settlement_reference"] = _loop.fetcher.settlement_reference_label()
+  return out
 
 
 @app.get("/api/prediction/latest")

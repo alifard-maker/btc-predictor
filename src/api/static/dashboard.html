@@ -216,7 +216,7 @@
       if (m.reasons && m.reasons.length) {
         body += '<ul class="monitor-reasons">' + m.reasons.map(r => `<li>${r}</li>`).join('') + '</ul>';
       }
-      body += '<p class="muted" style="font-size:.68rem;margin-top:.75rem">Guidance only — not financial advice. Assumes you entered at t=0 on the opening LONG/SHORT signal.</p>';
+      body += '<p class="muted" style="font-size:.68rem;margin-top:.75rem">Guidance only — not financial advice. Assumes you entered at t=0 on the opening LONG/SHORT signal. Live price: Coinbase BTC-USD. Kalshi contracts settle on CF Benchmarks BRTI (may differ slightly).</p>';
       $('slot-monitor').innerHTML = body;
     }
 
@@ -234,7 +234,7 @@
         <h2>Next 15-minute slot</h2>
         ${slot}
         <div class="ref-block">
-          <div class="ref-label">Reference price (t=0)</div>
+          <div class="ref-label">Reference price (t=0) · Coinbase 1m open</div>
           <div class="price">${price(ref)}</div>
           ${live}
         </div>
@@ -259,6 +259,8 @@
         ['15m candles', String(h.candles_15m || 0), (h.candles_15m || 0) >= (h.min_candles_15m || 48)],
         ['Context', h.slot_context || '1h+4h+12h', true],
         ['Vol spike', h.volume_spike_window || '4h', true],
+        ['Live price', h.price_feed || 'Coinbase BTC-USD', true],
+        ['Kalshi settles', h.settlement_reference || 'CF Benchmarks BRTI', true],
         ['Schedule', (h.timezone || 'ET') + ' :00/:15/:30/:45', true],
       ];
       $('status-list').innerHTML = items.map(([l,v,ok]) =>

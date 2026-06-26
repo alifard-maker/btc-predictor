@@ -23,6 +23,9 @@ EXCHANGE_SYMBOLS = {
   "bitstamp": "BTC/USD",
 }
 
+COINBASE_EXCHANGE_TICKER_URL = "https://api.exchange.coinbase.com/products/BTC-USD/ticker"
+COINBASE_SPOT_URL = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+
 
 class DataFetcher:
   """Fetch live and historical market data with multi-exchange fallback."""
@@ -111,14 +114,60 @@ class DataFetcher:
   def fetch_latest_candles(self, interval: str, count: int = 500) -> pd.DataFrame:
     return self.fetch_ohlcv(interval, limit=count)
 
-  def fetch_last_price(self) -> float:
-    """Latest trade price from the connected exchange."""
+  def fetch_coinbase_last_price(self) -> float:
+    """Last trade on Coinbase Exchange — closest to the Coinbase app."""
+    resp = requests.get(
+      COINBASE_EXCHANGE_TICKER_URL,
+      headers={"User-Agent": "btc-predictor/1.0"},
+      timeout=10,
+    )
+    resp.raise_for_status()
+    price = resp.json().get("price")
+    if price is None:
+      raise RuntimeError("Coinbase ticker returned no price")
+    return float(price)
+
+  def fetch_coinbase_spot(self) -> float:
+    """Coinbase retail spot quote."""
+    resp = requests.get(COINBASE_SPOT_URL, timeout=10)
+    resp.raise_for_status()
+    amount = resp.json().get("data", {}).get("amount")
+    if amount is None:
+      raise RuntimeError("Coinbase spot returned no price")
+    return float(amount)
+
+  def _exchange_ticker_price(self) -> float:
     ex = self._ensure_exchange()
     ticker = ex.fetch_ticker(self.symbol)
     last = ticker.get("last") or ticker.get("close")
     if last is None:
       raise RuntimeError("Exchange ticker returned no price")
     return float(last)
+
+  def fetch_last_price(self) -> float:
+    """Latest price for live dashboard / intra-slot P&L."""
+    source = self.cfg.get("price_feed", {}).get("live", "exchange")
+    if source == "coinbase":
+      try:
+        return self.fetch_coinbase_last_price()
+      except Exception as e:
+        log.warning("Coinbase live price failed, using exchange ticker: %s", e)
+    return self._exchange_ticker_price()
+
+  def price_feed_label(self) -> str:
+    pf = self.cfg.get("price_feed", {})
+    if pf.get("live") == "coinbase":
+      return str(pf.get("label", "Coinbase BTC-USD"))
+    ex = self._exchange_id or self.cfg.get("exchange", "exchange")
+    return f"{ex} {self.symbol}"
+
+  def settlement_reference_label(self) -> str:
+    return str(
+      self.cfg.get("price_feed", {}).get(
+        "settlement_reference",
+        "Exchange last trade",
+      )
+    )
 
   def fetch_funding_rate(self, limit: int = 100) -> pd.DataFrame:
     """Binance perpetual funding rate (skipped if geo-blocked)."""

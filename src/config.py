@@ -44,6 +44,10 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
   if os.getenv("TIMEZONE"):
     cfg["timezone"] = os.getenv("TIMEZONE")
 
+  if live_feed := os.getenv("PRICE_FEED_LIVE"):
+    cfg.setdefault("price_feed", {})
+    cfg["price_feed"]["live"] = live_feed
+
   return cfg
 
 
