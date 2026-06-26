@@ -186,6 +186,11 @@ def _merge_asof_feature(
   if right.empty:
     base[out_col] = np.nan
     return base
+  left["timestamp"] = pd.to_datetime(left["timestamp"], utc=True)
+  right["timestamp"] = pd.to_datetime(right["timestamp"], utc=True)
+  # Parquet may store ms vs us — normalize for merge_asof
+  for frame in (left, right):
+    frame["timestamp"] = frame["timestamp"].dt.as_unit("ns")
   merged = pd.merge_asof(left, right, on="timestamp", direction="backward")
   base[out_col] = merged[value_col].values
   return base
@@ -227,6 +232,11 @@ def merge_auxiliary_features(
     dxy = dxy.copy()
     dxy["dxy_ret_1"] = dxy["close"].pct_change()
     out = _merge_asof_feature(out, dxy, "dxy_ret_1", "dxy_momentum")
+
+  # Macro/funding may be sparse — neutral fill so training isn't blocked
+  for col in ("funding_rate", "funding_rate_chg", "open_interest", "open_interest_chg", "nq_momentum", "dxy_momentum"):
+    if col in out.columns:
+      out[col] = out[col].fillna(0)
 
   return out
 
@@ -391,6 +401,13 @@ def feature_columns(df: pd.DataFrame) -> list[str]:
     "future_return", "future_close",
   }
   return [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
+
+
+def training_feature_columns(df: pd.DataFrame, min_coverage: float = 0.85) -> list[str]:
+  """Features with enough non-null rows for training (drops sparse 1m / live-only cols)."""
+  cols = feature_columns(df)
+  n = max(len(df), 1)
+  return [c for c in cols if df[c].notna().sum() / n >= min_coverage]
 
 
 def add_label(df: pd.DataFrame, horizon_minutes: int = 15, timeframe_minutes: int = 15) -> pd.DataFrame:

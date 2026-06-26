@@ -11,7 +11,7 @@ from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_
 from sklearn.model_selection import TimeSeriesSplit
 
 from src.data.auxiliary import AuxiliaryStore
-from src.features.engineering import add_label, build_feature_matrix, feature_columns
+from src.features.engineering import add_label, build_feature_matrix, feature_columns, training_feature_columns
 from src.features.labels import add_slot_label
 from src.models.prob_calibration import ProbabilityCalibrator
 
@@ -62,6 +62,24 @@ class ModelTrainer:
   def _auxiliary(self) -> dict[str, pd.DataFrame]:
     return AuxiliaryStore(self.cfg).load_all()
 
+  def _context_1m(
+    self,
+    df_15m: pd.DataFrame,
+    df_1m: pd.DataFrame | None,
+  ) -> pd.DataFrame | None:
+    """Use 1m context only when it spans enough of the 15m history."""
+    if df_1m is None or df_1m.empty or df_15m.empty:
+      return None
+    if len(df_1m) < 500:
+      return None
+    t15 = pd.to_datetime(df_15m["timestamp"], utc=True)
+    t1 = pd.to_datetime(df_1m["timestamp"], utc=True)
+    span_15 = (t15.max() - t15.min()).total_seconds()
+    span_1 = (t1.max() - t1.min()).total_seconds()
+    if span_15 <= 0 or span_1 / span_15 < 0.3:
+      return None
+    return df_1m
+
   def prepare_training_data(
     self,
     df_15m: pd.DataFrame,
@@ -71,7 +89,7 @@ class ModelTrainer:
     mcfg = self.cfg.get("model", {})
     features = build_feature_matrix(
       df_15m,
-      df_1m,
+      self._context_1m(df_15m, df_1m),
       self.cfg,
       include_phase2=True,
       primary_timeframe="15m",
@@ -85,7 +103,7 @@ class ModelTrainer:
       )
     else:
       features = add_label(features, horizon_minutes=horizon, timeframe_minutes=15)
-    cols = feature_columns(features)
+    cols = training_feature_columns(features)
     self.feature_names = cols
 
     clean = features.dropna(subset=cols + ["label"])
