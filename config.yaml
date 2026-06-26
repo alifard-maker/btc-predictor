@@ -39,12 +39,12 @@ paper:
 
 # Feature windows — counts are 15m candles
 features:
-  momentum_windows: [4, 8, 16]   # 1h, 2h, 4h on 15m chart
-  volatility_window: 16            # 4h
+  momentum_windows: [4, 8, 16, 32, 48]   # 1h, 2h, 4h, 8h, 12h on 15m chart
+  volatility_window: 48                    # 12h
   rsi_period: 14
-  volume_spike_window: 16
-  vwap_window: 16                  # 4h VWAP
-  slot_lookback_candles: 16        # 4h of 15m slots
+  volume_spike_window: 48
+  vwap_window: 48                          # 12h VWAP
+  slot_lookback_candles: 48                # 12h of 15m slots
 
 model:
   type: lightgbm
