@@ -307,7 +307,11 @@ class ExitAdvisor:
     else:
       elapsed_min = elapsed / 60.0
       stats = self.late_entry.slot_path_stats(
-        df_1m, slot_s, reference_price, momentum_bars=self.late_entry.momentum_bars,
+        df_1m,
+        slot_s,
+        reference_price,
+        momentum_bars=self.late_entry.momentum_bars,
+        recovery_bars=self.late_entry.recovery_recent_bars,
       )
       late = self.late_entry.evaluate(
         elapsed_minutes=elapsed_min,

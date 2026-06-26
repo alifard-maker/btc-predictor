@@ -94,7 +94,11 @@ late_entry:
   min_confidence: 0.62          # stricter than open (0.57)
   min_move_pct: 0.04            # min |move| vs t=0
   min_side_time_pct: 0.58       # share of slot minutes on favorable side of ref
-  max_ref_crossings: 1          # whipsaw guard
+  max_ref_crossings: 1          # whipsaw guard (strict default)
+  recovery_crossings: 2        # allow 2nd cross only under recovery rules below
+  recovery_min_gap_pct: 0.20    # |move| vs t=0 required for dip-and-recover path
+  recovery_recent_bars: 4       # last N 1m closes checked for persistence
+  recovery_recent_above_pct: 0.75  # share of those bars on favorable side of ref
   momentum_bars: 4
   min_momentum_pct: 0.02
 

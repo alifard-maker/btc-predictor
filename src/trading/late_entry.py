@@ -19,6 +19,7 @@ class SlotPathStats:
   slot_mom_pct: float
   recent_mom_pct: float
   gap_pct: float
+  recent_above_ref_pct: float  # share of last N 1m closes >= ref
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,10 @@ class LateEntryAdvisor:
     self.min_move_pct = float(lcfg.get("min_move_pct", 0.04))
     self.min_side_time_pct = float(lcfg.get("min_side_time_pct", 0.58))
     self.max_ref_crossings = int(lcfg.get("max_ref_crossings", 1))
+    self.recovery_crossings = int(lcfg.get("recovery_crossings", 2))
+    self.recovery_min_gap_pct = float(lcfg.get("recovery_min_gap_pct", 0.20))
+    self.recovery_recent_bars = int(lcfg.get("recovery_recent_bars", 4))
+    self.recovery_recent_above_pct = float(lcfg.get("recovery_recent_above_pct", 0.75))
     self.momentum_bars = int(lcfg.get("momentum_bars", 4))
     self.min_momentum_pct = float(lcfg.get("min_momentum_pct", 0.02))
     self.fee_buffer_pct = float(
@@ -57,18 +62,19 @@ class LateEntryAdvisor:
     reference_price: float,
     *,
     momentum_bars: int = 4,
+    recovery_bars: int = 4,
   ) -> SlotPathStats:
     if reference_price <= 0:
-      return SlotPathStats(0, 0.5, 0, 0.0, 0.0, 0.0)
+      return SlotPathStats(0, 0.5, 0, 0.0, 0.0, 0.0, 0.5)
 
     if df_1m is None or df_1m.empty:
-      return SlotPathStats(0, 0.5, 0, 0.0, 0.0, 0.0)
+      return SlotPathStats(0, 0.5, 0, 0.0, 0.0, 0.0, 0.5)
 
     df = df_1m.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     in_slot = df[df["timestamp"] >= slot_start].sort_values("timestamp")
     if in_slot.empty:
-      return SlotPathStats(0, 0.5, 0, 0.0, 0.0, 0.0)
+      return SlotPathStats(0, 0.5, 0, 0.0, 0.0, 0.0, 0.5)
 
     closes = in_slot["close"].astype(float)
     above = (closes >= reference_price).astype(int)
@@ -88,6 +94,10 @@ class LateEntryAdvisor:
 
     gap = (last - reference_price) / reference_price * 100
 
+    recent_tail = in_slot.tail(max(1, recovery_bars))
+    recent_above = (recent_tail["close"].astype(float) >= reference_price).astype(int)
+    recent_above_pct = float(recent_above.mean()) if len(recent_above) else pct_above
+
     return SlotPathStats(
       bars=len(in_slot),
       pct_time_above_ref=pct_above,
@@ -95,6 +105,43 @@ class LateEntryAdvisor:
       slot_mom_pct=slot_mom,
       recent_mom_pct=recent,
       gap_pct=gap,
+      recent_above_ref_pct=recent_above_pct,
+    )
+
+  def _chop_recovery_ok(self, stats: SlotPathStats) -> tuple[bool, str]:
+    """Allow exactly one extra t=0 cross when price has recovered with persistence."""
+    if stats.ref_crossings <= self.max_ref_crossings:
+      return True, ""
+
+    if stats.ref_crossings > self.recovery_crossings:
+      return False, (
+        f"Price crossed t=0 {stats.ref_crossings}× — chop; not entering late."
+      )
+
+    if abs(stats.gap_pct) < self.recovery_min_gap_pct:
+      return False, (
+        f"Price crossed t=0 {stats.ref_crossings}× — move too small for recovery entry "
+        f"(need {self.recovery_min_gap_pct:.2f}%+ vs t=0)."
+      )
+
+    recent_pct = stats.recent_above_ref_pct * 100
+    if stats.gap_pct > 0:
+      if stats.recent_above_ref_pct >= self.recovery_recent_above_pct:
+        return True, (
+          f"Recovered above t=0 after {stats.ref_crossings}× cross "
+          f"({stats.gap_pct:+.2f}% gap; last {self.recovery_recent_bars}m "
+          f"{recent_pct:.0f}% above ref)."
+        )
+    elif stats.gap_pct < 0:
+      if stats.recent_above_ref_pct <= (1.0 - self.recovery_recent_above_pct):
+        return True, (
+          f"Recovered below t=0 after {stats.ref_crossings}× cross "
+          f"({stats.gap_pct:+.2f}% gap; last {self.recovery_recent_bars}m "
+          f"{100 - recent_pct:.0f}% below ref)."
+        )
+
+    return False, (
+      f"Price crossed t=0 {stats.ref_crossings}× — chop; not entering late."
     )
 
   def reassess_prob_up_at_close(
@@ -227,17 +274,17 @@ class LateEntryAdvisor:
         outlook_ready=True,
       )
 
-    if stats.ref_crossings > self.max_ref_crossings:
+    chop_ok, chop_note = self._chop_recovery_ok(stats)
+    if not chop_ok:
       return LateEntryDecision(
         action="WATCH",
         prob_up=prob_up,
         close_side=close_side,
         summary=outlook_line,
-        reasons=[
-          f"Price crossed t=0 {stats.ref_crossings}× — chop; not entering late.",
-        ],
+        reasons=[chop_note],
         outlook_ready=True,
       )
+    recovery_note = chop_note if stats.ref_crossings > self.max_ref_crossings else ""
 
     if abs(stats.gap_pct) < self.min_move_pct:
       return LateEntryDecision(
@@ -266,18 +313,29 @@ class LateEntryAdvisor:
       and stats.slot_mom_pct <= 0
     )
 
+    long_reasons = [
+      f"Held above t=0 ~{stats.pct_time_above_ref * 100:.0f}% of slot; drift {stats.slot_mom_pct:+.2f}%.",
+      f"Recent 1m flow {stats.recent_mom_pct:+.2f}% supports continuation.",
+    ]
+    if recovery_note:
+      long_reasons.insert(0, recovery_note)
+
     if long_ok and abs(stats.gap_pct) >= self.fee_buffer_pct:
       return LateEntryDecision(
         action="LATE LONG",
         prob_up=prob_up,
         close_side=close_side,
         summary=f"LATE LONG — {outlook_line}",
-        reasons=[
-          f"Held above t=0 ~{stats.pct_time_above_ref * 100:.0f}% of slot; drift {stats.slot_mom_pct:+.2f}%.",
-          f"Recent 1m flow {stats.recent_mom_pct:+.2f}% supports continuation.",
-        ],
+        reasons=long_reasons,
         outlook_ready=True,
       )
+
+    short_reasons = [
+      f"Held below t=0 ~{(1 - stats.pct_time_above_ref) * 100:.0f}% of slot; drift {stats.slot_mom_pct:+.2f}%.",
+      f"Recent 1m flow {stats.recent_mom_pct:+.2f}% supports continuation.",
+    ]
+    if recovery_note:
+      short_reasons.insert(0, recovery_note)
 
     if short_ok and abs(stats.gap_pct) >= self.fee_buffer_pct:
       return LateEntryDecision(
@@ -285,10 +343,7 @@ class LateEntryAdvisor:
         prob_up=prob_up,
         close_side=close_side,
         summary=f"LATE SHORT — {outlook_line}",
-        reasons=[
-          f"Held below t=0 ~{(1 - stats.pct_time_above_ref) * 100:.0f}% of slot; drift {stats.slot_mom_pct:+.2f}%.",
-          f"Recent 1m flow {stats.recent_mom_pct:+.2f}% supports continuation.",
-        ],
+        reasons=short_reasons,
         outlook_ready=True,
       )
 

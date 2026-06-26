@@ -1,31 +1,26 @@
-# BTC Predictor — Beta 1.0
+# Beta 1.0 — stable baseline (revert here)
 
-**Tagged:** `beta-1.0`  
-**Branch backup:** `backup/beta-1.0`
+**Tag:** `release/beta-1.0`  
+**Commit:** `04a658e`  
+**Live:** https://btc-predictor-production-f460.up.railway.app/dashboard
 
-## Snapshot includes
-
-- 15-minute ET slot predictions (:00, :15, :30, :45)
-- Multi-scale features (1h / 4h / 12h context)
-- Signal breakdown indicators on dashboard
-- Rolling hit rate (deduplicated per slot): 1h, 2h, 4h, 12h
-- Intra-slot exit guidance (HOLD / TAKE PROFIT / CUT LOSS)
-- Coinbase BTC-USD live price feed
-- Kalshi settlement note (CF Benchmarks BRTI)
-- Reference price at t=0 from 1m slot open
-- Embedded dashboard at `/dashboard`
-- Railway + PostgreSQL deployment
-
-## Live deployment
-
-- https://btc-predictor-production-f460.up.railway.app/dashboard
-
-## Restore from tag
+## Restore Beta 1.0
 
 ```bash
-git checkout beta-1.0
+git fetch origin
+git checkout release/beta-1.0
+# redeploy on Railway from this ref
 ```
 
-## Archive backup
+## What Beta 1.0 includes
 
-A tarball `btc-predictor-beta-1.0-backup.tar.gz` is saved alongside this repo in `Documents/`.
+- Trained LightGBM + daily 2am ET auto-retrain
+- Kalshi `floor_strike` for t=0; BRTI live for P&amp;L
+- Regime filter: **2+ flags** to veto open trades
+- Late entry: **strict** whipsaw guard (`max_ref_crossings: 1`)
+- Late-entry logging + separate calibration stats
+- `min_remaining_minutes: 3` for late entry
+
+## Does NOT include
+
+- Dip-and-recover late entry (2× t=0 cross) — see **Beta 1.1**
