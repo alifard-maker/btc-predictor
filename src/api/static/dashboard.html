@@ -516,8 +516,8 @@
           ${live}
         </div>
         <div style="margin-bottom:.75rem">${badge(p.signal)}</div>
-        ${p.model_signal && p.model_signal !== p.signal ? `<p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Model edge: ${badge(p.model_signal)} → blocked by regime</p>` : ''}
-        ${p.regime_notes && p.regime_notes.length ? `<ul class="monitor-reasons" style="margin-bottom:.75rem">${p.regime_notes.map(n => `<li>${n}</li>`).join('')}</ul>` : ''}
+        ${p.model_signal && p.model_signal !== p.signal ? `<p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Model edge: ${badge(p.model_signal)} → vetoed (${(p.regime_notes||[]).length} regime flags)</p>` : ''}
+        ${p.regime_notes && p.regime_notes.length ? `<ul class="monitor-reasons" style="margin-bottom:.75rem" title="${p.model_signal && p.model_signal === p.signal ? 'Advisory — need 2+ flags to block' : ''}">${p.regime_notes.map(n => `<li>${n}${p.model_signal && p.model_signal === p.signal ? ' <span class="muted">(advisory)</span>' : ''}</li>`).join('')}</ul>` : ''}
         ${p.raw_prob_up != null && Math.abs(p.raw_prob_up - p.prob_up) > 0.02 ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Raw model: ${pct(p.raw_prob_up)} UP (calibrated to headline %)</p>` : ''}
         <div class="bar-row"><span class="up">UP</span><div class="track"><div class="fill-up" style="width:${up}%"></div></div><span>${up.toFixed(1)}%</span></div>
         <div class="bar-row"><span class="down">DOWN</span><div class="track"><div class="fill-down" style="width:${down}%"></div></div><span>${down.toFixed(1)}%</span></div>
