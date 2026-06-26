@@ -345,20 +345,41 @@ class KalshiClient:
     fresh: bool = False,
   ) -> tuple[float | None, str]:
     """Kalshi KXBTC15M floor_strike — BRTI 60s avg before slot open."""
-    market = self.active_btc15m_market(fresh=fresh)
-    if market is None:
-      return None, ""
-
-    now = datetime.now(timezone.utc)
-    if market.open_time <= now < market.close_time:
-      key = self._slot_key(market.open_time)
-      self._slot_targets[key] = market.target_price
-      return market.target_price, "kalshi_brti_target"
-
     if slot_start is not None:
-      key = self._slot_key(slot_start)
+      slot_s = pd.Timestamp(slot_start)
+      if slot_s.tzinfo is None:
+        slot_s = slot_s.tz_localize("UTC")
+      else:
+        slot_s = slot_s.tz_convert("UTC")
+      key = self._slot_key(slot_s)
       if key in self._slot_targets:
         return self._slot_targets[key], "kalshi_brti_target"
+
+      row = self.market_for_slot(slot_s)
+      if row is not None:
+        floor = row.get("floor_strike")
+        if floor is not None:
+          price = float(floor)
+          self._slot_targets[key] = price
+          return price, "kalshi_brti_target"
+
+    market = self.active_btc15m_market(fresh=fresh)
+    if market is not None:
+      now = datetime.now(timezone.utc)
+      if market.open_time <= now < market.close_time:
+        key = self._slot_key(market.open_time)
+        self._slot_targets[key] = market.target_price
+        return market.target_price, "kalshi_brti_target"
+      if slot_start is not None:
+        slot_s = pd.Timestamp(slot_start)
+        if slot_s.tzinfo is None:
+          slot_s = slot_s.tz_localize("UTC")
+        else:
+          slot_s = slot_s.tz_convert("UTC")
+        if self._slot_key(market.open_time) == self._slot_key(slot_s):
+          key = self._slot_key(slot_s)
+          self._slot_targets[key] = market.target_price
+          return market.target_price, "kalshi_brti_target"
 
     return None, ""
 

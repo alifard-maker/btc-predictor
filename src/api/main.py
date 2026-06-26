@@ -55,6 +55,7 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     "signal": pred.signal.value,
     "raw_prob_up": round(pred.raw_prob_up, 4) if pred.raw_prob_up is not None else None,
     "regime_notes": pred.regime_notes or [],
+    "model_signal": pred.model_signal,
     "indicators": pred.indicators,
     "formatted": _loop.predictor.format_output(pred) if _loop else "",
   }

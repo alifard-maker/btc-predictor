@@ -29,6 +29,7 @@ class RegimeFilter:
     self.max_compression = float(rcfg.get("max_compression_ratio", 1.12))
     self.min_vol_expansion = float(rcfg.get("min_vol_expansion", 0.82))
     self.block_low_entropy_trend = bool(rcfg.get("block_low_entropy_trend", False))
+    self.min_reasons_to_block = int(rcfg.get("min_reasons_to_block", 2))
 
   def evaluate(self, row: pd.Series, *, expected_move_pct: float) -> RegimeDecision:
     if not self.enabled:
@@ -62,7 +63,8 @@ class RegimeFilter:
     ):
       reasons.append("Low directional entropy — no clear trend")
 
-    return RegimeDecision(allow_trade=len(reasons) == 0, reasons=reasons)
+    block = len(reasons) >= self.min_reasons_to_block
+    return RegimeDecision(allow_trade=not block, reasons=reasons)
 
   def gate_signal(self, signal: Signal, decision: RegimeDecision) -> Signal:
     if signal == Signal.NO_TRADE or decision.allow_trade:

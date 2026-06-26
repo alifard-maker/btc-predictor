@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -21,6 +22,8 @@ from src.features.slots import (
 from src.models.prob_calibration import ProbabilityCalibrator
 from src.trading.edge import EdgeCalculator, Signal
 from src.trading.regime import RegimeFilter
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,6 +47,7 @@ class Prediction:
   current_price_as_of: str | None = None
   raw_prob_up: float | None = None
   regime_notes: list[str] | None = None
+  model_signal: str | None = None  # edge recommendation before regime gate
 
 
 class Predictor:
@@ -302,6 +306,8 @@ class Predictor:
     else:
       ref_price = candle_price
       ref_source = "fallback"
+      if self.cfg.get("kalshi", {}).get("enabled"):
+        log.warning("Kalshi t=0 unavailable — using 15m candle fallback (%.2f)", ref_price)
 
     if self.model is not None:
       cols = self.feature_names or feature_columns(features)
@@ -330,6 +336,7 @@ class Predictor:
     expected_move_pct = (expected_move / ref_price * 100) if ref_price else 0.0
 
     signal = self.edge.recommend(prob_up)
+    model_signal = signal.value
     regime_decision = self.regime.evaluate(latest, expected_move_pct=expected_move_pct)
     signal = self.regime.gate_signal(signal, regime_decision)
     snap = {c: float(latest[c]) for c in feature_columns(features) if c in latest and not pd.isna(latest[c])}
@@ -349,6 +356,7 @@ class Predictor:
       ),
       raw_prob_up=raw_prob_up,
       regime_notes=regime_decision.reasons or None,
+      model_signal=model_signal,
       prob_up=prob_up,
       prob_down=prob_down,
       confidence=confidence,

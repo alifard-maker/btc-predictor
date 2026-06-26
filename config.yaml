@@ -92,9 +92,10 @@ model:
   slot_labels: true
   calibrate: true
 
-# Regime gates — skip chop / fee-dominated setups
+# Regime gates — skip chop / fee-dominated setups (not learned from model; rule-based)
 regime:
   enabled: true
+  min_reasons_to_block: 2       # single flag = note only; 2+ flags veto trade
   min_expected_move_pct: 0.08
   max_compression_ratio: 1.12
   min_vol_expansion: 0.82

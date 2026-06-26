@@ -204,7 +204,7 @@ class PredictionLoop:
         return None
 
       slot_s = floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz)
-      kalshi_ref = self.kalshi.lock_current_slot_reference(slot_s)
+      kalshi_ref = self._resolve_kalshi_t0(slot_s)
       open_quote = self.live_price_quote(fresh=True)
       current_quote = self.live_price_quote(fresh=True)
       locked = self._locked_slot_reference(slot_s)
@@ -237,6 +237,17 @@ class PredictionLoop:
       self.last_error = str(e)
       log.exception("Prediction failed: %s", e)
       return None
+
+  def _resolve_kalshi_t0(self, slot_s: pd.Timestamp, *, retries: int = 6, delay_sec: float = 0.5) -> float | None:
+    """Kalshi floor_strike at slot open — retry briefly while market row populates."""
+    for attempt in range(retries):
+      ref, _ = self.kalshi.slot_t0_reference(slot_s, fresh=True)
+      if ref is not None and ref > 0:
+        return float(ref)
+      if attempt < retries - 1:
+        time.sleep(delay_sec)
+    log.warning("Kalshi floor_strike unavailable for slot %s after %d tries", slot_s, retries)
+    return None
 
   def _live_cache_sec(self) -> float:
     return float(self.cfg.get("kalshi", {}).get("brti_cache_sec", 0))
