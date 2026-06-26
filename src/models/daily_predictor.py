@@ -238,7 +238,20 @@ class DailyPredictor:
       )
 
     best_threshold = max(threshold_rows, key=lambda r: abs(r.edge or 0), default=None)
-    best_range = max(range_rows, key=lambda r: r.model_prob, default=None)
+    most_likely_threshold = max(threshold_rows, key=lambda r: r.model_prob, default=None)
+    most_likely_range = max(range_rows, key=lambda r: r.model_prob, default=None)
+
+    zone_lo = mu - sigma * 0.45
+    zone_hi = mu + sigma * 0.45
+    ml_parts: list[str] = []
+    if most_likely_threshold:
+      ml_parts.append(
+        f"{most_likely_threshold.label} ({most_likely_threshold.model_prob * 100:.0f}% model)"
+      )
+    if most_likely_range:
+      ml_parts.append(
+        f"band {most_likely_range.label} ({most_likely_range.model_prob * 100:.0f}% model)"
+      )
 
     supports = [l for l in levels if l.level_type == "support"][:3]
     resists = [l for l in levels if l.level_type == "resistance"][:3]
@@ -269,23 +282,37 @@ class DailyPredictor:
         if box
         else None,
       },
+      "most_likely": {
+        "settlement_zone_low": round(zone_lo, 2),
+        "settlement_zone_high": round(zone_hi, 2),
+        "summary": (
+          f"BRTI likely ${zone_lo:,.0f}–${zone_hi:,.0f} at settle"
+          + (f"; best threshold: {ml_parts[0]}" if ml_parts else "")
+          + (f"; best band: {ml_parts[1]}" if len(ml_parts) > 1 else "")
+        ),
+        "threshold": most_likely_threshold.to_dict() if most_likely_threshold else None,
+        "range": most_likely_range.to_dict() if most_likely_range else None,
+      },
       "strategy_threshold": {
         "summary": (
-          f"Trend + S/R → terminal distribution; best edge: "
-          f"{best_threshold.label} ({best_threshold.signal})"
+          f"Best edge (mispricing): {best_threshold.label} ({best_threshold.signal})"
           if best_threshold and best_threshold.edge is not None
           else "Threshold odds vs Kalshi YES mid"
         ),
         "contracts": [c.to_dict() for c in threshold_rows],
-        "pick": best_threshold.to_dict() if best_threshold else None,
+        "best_edge": best_threshold.to_dict() if best_threshold else None,
+        "most_likely": most_likely_threshold.to_dict() if most_likely_threshold else None,
       },
       "strategy_range": {
         "summary": (
-          f"Stall zone: {best_range.label} ({best_range.model_prob * 100:.0f}% model)"
-          if best_range
+          f"Most likely stall band: {most_likely_range.label} ({most_likely_range.model_prob * 100:.0f}% model)"
+          if most_likely_range
           else "Range band odds"
         ),
         "contracts": [c.to_dict() for c in range_rows],
-        "pick": best_range.to_dict() if best_range else None,
+        "best_edge": max(range_rows, key=lambda r: abs(r.edge or 0), default=None).to_dict()
+        if range_rows
+        else None,
+        "most_likely": most_likely_range.to_dict() if most_likely_range else None,
       },
     }

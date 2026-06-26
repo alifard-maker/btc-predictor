@@ -116,6 +116,11 @@
     @media (max-width: 640px) { .daily-levels { grid-template-columns: 1fr; } }
     .edge-yes { color: var(--up); font-weight: 700; }
     .edge-no { color: var(--down); font-weight: 700; }
+    .likely-card { margin: 0.85rem 0; padding: 0.85rem 1rem; background: var(--bg); border: 1px solid rgba(99,102,241,.35); border-radius: 10px; }
+    .likely-card h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: #a5b4fc; margin-bottom: 0.5rem; }
+    .likely-card .headline { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.35rem; }
+    .likely-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; margin-top: 0.65rem; font-size: 0.8rem; }
+    @media (max-width: 640px) { .likely-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -806,6 +811,11 @@
       el.innerHTML = `<div class="daily-levels"><ul class="monitor-reasons" style="list-style:none;padding:0">${sup}</ul><ul class="monitor-reasons" style="list-style:none;padding:0">${res}</ul></div>${box}`;
     }
 
+    function renderLikelyPick(label, row) {
+      if (!row) return `<div><span class="muted">${label}</span><strong class="muted">—</strong></div>`;
+      return `<div><span class="muted">${label}</span><strong>${row.label}</strong><div class="muted">${pct(row.model_prob)} model${row.kalshi_mid != null ? ` · Kalshi ${pct(row.kalshi_mid)}` : ''}</div></div>`;
+    }
+
     function renderDaily(data) {
       if (!data || !data.ok) {
         $('daily-meta').textContent = data?.error || 'Daily prediction unavailable';
@@ -817,11 +827,29 @@
       }
       const ev = data.event || {};
       const settle = ev.close_time ? time(ev.close_time) : '—';
+      const ml = data.most_likely || {};
+      const beT = data.strategy_threshold?.best_edge;
+      const beR = data.strategy_range?.best_edge;
       $('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · ${ev.frequency || ''} · settles ${settle} · BRTI ${price(data.brti_live || data.current_price)}`;
       $('daily-summary').innerHTML = `
-        <p style="font-size:.9rem;margin:.5rem 0">${data.strategy_threshold?.summary || ''}</p>
-        <p style="font-size:.9rem;margin:.5rem 0">${data.strategy_range?.summary || ''}</p>
-        <p class="muted" style="font-size:.75rem">Terminal μ ${price(data.terminal_mu)} · σ ${price(data.terminal_sigma)} · ${data.hours_to_settle}h to settle</p>`;
+        <div class="likely-card">
+          <h3>Most likely outcome</h3>
+          <div class="headline">BRTI ${price(ml.settlement_zone_low)} – ${price(ml.settlement_zone_high)} at settle</div>
+          <p class="muted" style="font-size:.8rem">${ml.summary || ''}</p>
+          <div class="likely-grid">
+            ${renderLikelyPick('Threshold (highest model %)', ml.threshold)}
+            ${renderLikelyPick('Range band (highest model %)', ml.range)}
+          </div>
+        </div>
+        <div class="likely-card" style="border-color:var(--border)">
+          <h3 style="color:var(--muted)">Best edge (model vs Kalshi)</h3>
+          <div class="likely-grid">
+            ${renderLikelyPick('Threshold mispricing', beT)}
+            ${renderLikelyPick('Range mispricing', beR)}
+          </div>
+          ${beT?.signal ? `<p class="muted" style="font-size:.75rem;margin-top:.5rem">Threshold signal: <strong class="${beT.signal === 'LEAN YES' ? 'edge-yes' : beT.signal === 'LEAN NO' ? 'edge-no' : ''}">${beT.signal}</strong>${beT.edge != null ? ` (${beT.edge >= 0 ? '+' : ''}${(beT.edge * 100).toFixed(1)}¢)` : ''}</p>` : ''}
+        </div>
+        <p class="muted" style="font-size:.75rem;margin-top:.5rem">Terminal μ ${price(data.terminal_mu)} · σ ${price(data.terminal_sigma)} · ${data.hours_to_settle}h to settle</p>`;
       renderDailyContracts(data.strategy_threshold?.contracts || [], 'daily-threshold');
       renderDailyContracts(data.strategy_range?.contracts || [], 'daily-range');
       renderDailyStructure(data.structure);
