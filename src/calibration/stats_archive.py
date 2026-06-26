@@ -11,6 +11,13 @@ from typing import Any, Callable
 import pandas as pd
 
 
+def to_utc_timestamp(val: Any) -> pd.Timestamp:
+  ts = pd.Timestamp(val)
+  if ts.tzinfo is None:
+    return ts.tz_localize("UTC")
+  return ts.tz_convert("UTC")
+
+
 @dataclass
 class CategoryAgg:
   n_resolved: int = 0
@@ -116,7 +123,7 @@ def df_after_snapshot(df: pd.DataFrame, snapshot_through: str | None) -> pd.Data
   """Rows not yet folded into the persistent archive snapshot."""
   if df.empty or not snapshot_through:
     return df
-  cutoff = pd.Timestamp(snapshot_through, tz="UTC")
+  cutoff = to_utc_timestamp(snapshot_through)
   ts = pd.to_datetime(df["timestamp"], utc=True)
   return df[ts > cutoff].copy()
 
@@ -148,8 +155,8 @@ def merge_epoch_into_archive(
   archive.last_archived_at = datetime.now(timezone.utc).isoformat()
   slot_end = latest_slot_iso(epoch_df)
   if slot_end:
-    prev = pd.Timestamp(archive.snapshot_through, tz="UTC") if archive.snapshot_through else None
-    nxt = pd.Timestamp(slot_end, tz="UTC")
+    prev = to_utc_timestamp(archive.snapshot_through) if archive.snapshot_through else None
+    nxt = to_utc_timestamp(slot_end)
     archive.snapshot_through = (max(prev, nxt) if prev is not None else nxt).isoformat()
   if note:
     archive.snapshot_note = note
@@ -232,7 +239,7 @@ def category_from_signal_df(
       "late_entry_seconds_remaining" if signal_col == "late_entry_signal" else "flip_seconds_remaining"
     )
     events.append({
-      "slot": pd.Timestamp(r["timestamp"], tz="UTC").isoformat(),
+      "slot": to_utc_timestamp(r["timestamp"]).isoformat(),
       "signal": sig,
       "prob_up": prob_f,
       "outcome": outcome,
