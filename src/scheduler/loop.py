@@ -107,7 +107,20 @@ class PredictionLoop:
         log.error(self.last_error)
         return None
 
-      pred = self.predictor.predict(df_15m, df_1m if not df_1m.empty else None)
+      live_price = None
+      try:
+        slot_s = floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz)
+        age = (pd.Timestamp(datetime.now(timezone.utc)) - slot_s).total_seconds()
+        if 0 <= age <= 90:
+          live_price = self.fetcher.fetch_last_price()
+      except Exception:
+        pass
+
+      pred = self.predictor.predict(
+        df_15m,
+        df_1m if not df_1m.empty else None,
+        live_price=live_price,
+      )
       self.logger.log(pred)
       self.latest_prediction = pred
       self.last_error = None

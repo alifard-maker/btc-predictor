@@ -111,6 +111,15 @@ class DataFetcher:
   def fetch_latest_candles(self, interval: str, count: int = 500) -> pd.DataFrame:
     return self.fetch_ohlcv(interval, limit=count)
 
+  def fetch_last_price(self) -> float:
+    """Latest trade price from the connected exchange."""
+    ex = self._ensure_exchange()
+    ticker = ex.fetch_ticker(self.symbol)
+    last = ticker.get("last") or ticker.get("close")
+    if last is None:
+      raise RuntimeError("Exchange ticker returned no price")
+    return float(last)
+
   def fetch_funding_rate(self, limit: int = 100) -> pd.DataFrame:
     """Binance perpetual funding rate (skipped if geo-blocked)."""
     symbol = "BTCUSDT"

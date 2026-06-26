@@ -226,6 +226,7 @@ class Predictor:
     self,
     df_15m: pd.DataFrame,
     df_1m: pd.DataFrame | None = None,
+    live_price: float | None = None,
   ) -> Prediction:
     min_candles = self.cfg.get("min_candles_15m", 30)
     if len(df_15m) < min_candles:
@@ -240,7 +241,9 @@ class Predictor:
     slot_s = floor_to_15m(now_utc, self.tz)
     slot_e = slot_end(slot_s, self.tz)
 
-    ref_price = reference_price_at_slot(df_1m, slot_s, fallback=current_price)
+    ref_price = reference_price_at_slot(
+      df_1m, slot_s, fallback=current_price, live_price=live_price, now_utc=now_utc,
+    )
 
     if self.model is not None:
       cols = self.feature_names or feature_columns(features)
