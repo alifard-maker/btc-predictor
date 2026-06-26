@@ -83,6 +83,24 @@
     .ref-override-active { color: var(--up); font-size: 0.72rem; margin-left: 0.35rem; }
     .reassess-block { margin: 0.85rem 0 0.5rem; padding: 0.75rem; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); }
     .meta .version { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
+    .guide-card { padding: 0; overflow: hidden; }
+    .guide-card summary {
+      cursor: pointer; list-style: none; padding: 1rem 1.1rem; font-size: 0.75rem;
+      text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600;
+      user-select: none;
+    }
+    .guide-card summary::-webkit-details-marker { display: none; }
+    .guide-card summary::after { content: ' ▾'; font-size: 0.85rem; }
+    .guide-card[open] summary::after { content: ' ▴'; }
+    .guide-body { padding: 0 1.1rem 1.1rem; border-top: 1px solid var(--border); font-size: 0.82rem; color: var(--text); }
+    .guide-body h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 1rem 0 0.4rem; }
+    .guide-body h3:first-child { margin-top: 0.85rem; }
+    .guide-body p, .guide-body li { color: #c8c8d8; margin: 0.35rem 0; }
+    .guide-body ul { margin: 0.25rem 0 0.5rem 1.1rem; padding: 0; }
+    .guide-body dl { margin: 0.35rem 0; }
+    .guide-body dt { font-weight: 600; color: var(--text); margin-top: 0.45rem; }
+    .guide-body dd { margin: 0.15rem 0 0 0; color: #c8c8d8; }
+    .guide-note { margin-top: 0.85rem; padding: 0.65rem 0.75rem; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); font-size: 0.75rem; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -102,6 +120,67 @@
 
     <div id="error" class="err"></div>
 
+    <details class="card guide-card" id="dashboard-guide">
+      <summary>How to read this dashboard</summary>
+      <div class="guide-body">
+        <p>This page helps you decide whether BTC finishes <strong>above or below</strong> its price at the start of each <strong>15-minute Eastern Time slot</strong> (:00, :15, :30, :45). It does <strong>not</strong> place trades. Refresh is automatic every 5 seconds.</p>
+
+        <h3>Your price at t=0 (top box)</h3>
+        <p>The app sets <strong>t=0</strong> from Coinbase’s last trade at slot open (or the last trade just before the boundary). If that doesn’t match your Kalshi fill, enter <strong>your exact entry price</strong> and click <em>Use my price</em>. P&amp;L and exit advice then use your number for this slot only (saved in your browser).</p>
+
+        <h3>Current 15-minute slot</h3>
+        <ul>
+          <li><strong>Reference (t=0)</strong> — Starting price for this slot. UP means close above this; DOWN means close below.</li>
+          <li><strong>UP / DOWN %</strong> — Model estimate for where price lands at slot close vs t=0.</li>
+          <li><strong>LONG / SHORT / NO TRADE</strong> — LONG if UP ≥ ~57%; SHORT if UP ≤ ~43%; otherwise sit out.</li>
+          <li><strong>Expected move</strong> — Rough $ move implied by recent volatility (not a target).</li>
+          <li><strong>Confidence</strong> — How far the model is from 50/50 (higher = more decisive).</li>
+          <li><strong>Live now</strong> — Latest Coinbase last trade (updates every few seconds).</li>
+        </ul>
+
+        <h3>Signal breakdown</h3>
+        <p>Ingredients behind the UP/DOWN bars — <strong>not</strong> separate trade signals. Green bar = leans UP for the next slot; red = leans DOWN; length = strength.</p>
+        <dl>
+          <dt>Short-term (1h)</dt>
+          <dd>1h momentum, slot return, and how many of the last four 15m bars closed up.</dd>
+          <dt>Medium (4h)</dt>
+          <dd>Four-hour trend on 15m candles.</dd>
+          <dt>Regime (12h)</dt>
+          <dd>Twelve-hour move; extended moves may be faded (mean-reversion nudge).</dd>
+          <dt>Context</dt>
+          <dd>Volume vs 4h average, RSI (14), and distance from 12h VWAP.</dd>
+        </dl>
+
+        <h3>System status</h3>
+        <p>Health of the API, scheduler, data feeds, and model. Green dots = OK. <strong>Kalshi settles</strong> on CF Benchmarks BRTI — not identical to Coinbase.</p>
+
+        <h3>Live position · intra-slot exit</h3>
+        <p>For when you <strong>already bet</strong> at slot open on the opening LONG/SHORT signal.</p>
+        <dl>
+          <dt>HOLD</dt>
+          <dd>Position still on track; no urgent action.</dd>
+          <dt>TAKE PROFIT</dt>
+          <dd>In profit and move may be exhausted — consider locking gains.</dd>
+          <dt>CUT LOSS</dt>
+          <dd>Losing with momentum against you — consider exiting; includes <strong>reassessed UP/DOWN</strong> for time left in the slot.</dd>
+        </dl>
+        <ul>
+          <li><strong>Ref (t=0)</strong> — Your reference (API or manual override).</li>
+          <li><strong>Now</strong> — Live Coinbase tick.</li>
+          <li><strong>P&amp;L vs t=0</strong> — <strong>% and $ per 1 BTC</strong> relative to t=0 (positive = in your favor for your bet side).</li>
+          <li><strong>Time left</strong> — Countdown to slot close.</li>
+        </ul>
+
+        <h3>Calibration</h3>
+        <p>How often past predictions were right. <strong>Rolling hit rate</strong> (1h / 2h / 4h / 12h) counts one result per 15m slot. Brier score measures probability calibration (lower is better).</p>
+
+        <h3>Prediction history</h3>
+        <p>Recent slots: reference at t=0, UP probability, signal, and actual outcome once the slot resolves.</p>
+
+        <div class="guide-note">Guidance only — not financial advice. Prices are from Coinbase BTC-USD; Kalshi contracts may differ. Past calibration does not guarantee future results.</div>
+      </div>
+    </details>
+
     <div class="card ref-override" id="ref-override-panel">
       <label for="ref-override-input">Your exact price at t=0 (if the app is off)</label>
       <div class="ref-override-row">
@@ -114,7 +193,7 @@
 
     <div class="grid">
       <div class="card" id="pred-card">
-        <h2>Next 5 minutes</h2>
+        <h2>Next 15-minute slot</h2>
         <p class="muted">Loading…</p>
       </div>
       <div class="card">
