@@ -30,5 +30,5 @@ USER nextjs
 
 EXPOSE 3000
 
-# Railway injects PORT at runtime; must bind 0.0.0.0
-CMD ["sh", "-c", "HOSTNAME=0.0.0.0 PORT=${PORT:-3000} node server.js"]
+# Railway injects PORT at runtime; default 8080 matches Railway networking UI
+CMD ["sh", "-c", "HOSTNAME=0.0.0.0 PORT=${PORT:-8080} node server.js"]
