@@ -126,6 +126,7 @@
     .stats-block.epoch { border-color: rgba(99,102,241,.25); }
     .stats-block h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.55rem; }
     .stats-block.all-time h3 { color: var(--up); }
+    .snap-line { font-size: 0.78rem; color: #9ae6b0; margin: 0.15rem 0 0.65rem; line-height: 1.4; }
   </style>
 </head>
 <body>
@@ -690,7 +691,7 @@
       const fx = at.flip || {};
       const archived = at.epochs_archived ? ` · ${at.epochs_archived} reset${at.epochs_archived > 1 ? 's' : ''} archived` : '';
       const snap = at.snapshot_through
-        ? `<p class="muted" style="font-size:.68rem;margin-bottom:.5rem">Snapshotted through <strong>${time(at.snapshot_through)}</strong>${at.snapshot_note ? ` · ${at.snapshot_note}` : ''}</p>`
+        ? `<p class="snap-line">Archived through <strong>${time(at.snapshot_through)}</strong>${at.snapshot_note ? ` · ${at.snapshot_note}` : ''}</p>`
         : '';
       return `<div class="stats-block all-time">
         <h3>All-time (survives reset)${archived}</h3>
