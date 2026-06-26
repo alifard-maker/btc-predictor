@@ -10,9 +10,16 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
+
+from src.api.auth import (
+  add_session_middleware,
+  auth_enabled,
+  auth_middleware,
+  require_session,
+)
 
 from src.calibration.tracker import CalibrationTracker
 from src.config import load_config
@@ -87,6 +94,12 @@ async def lifespan(app: FastAPI):
 
   threading.Thread(target=_boot_scheduler, daemon=True).start()
   log.info("BTC Predictor API ready on port %s", os.getenv("PORT", "8080"))
+  if auth_enabled(_cfg):
+    log.info("Dashboard password protection enabled")
+  elif os.getenv("APP_PASSWORD"):
+    log.warning("APP_PASSWORD set but empty after load — check config")
+  else:
+    log.warning("APP_PASSWORD not set — dashboard is open without login")
   yield
 
   if _scheduler:
@@ -108,6 +121,19 @@ app.add_middleware(
   allow_methods=["*"],
   allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+  return await auth_middleware(request, call_next, _cfg)
+
+
+# Added last so it runs first and populates request.session before auth middleware.
+add_session_middleware(app, _cfg)
+
+
+def _session_user(request: Request) -> None:
+  require_session(request, _cfg)
 
 
 def _serialize_value(v: Any) -> Any:
@@ -137,6 +163,7 @@ def _serialize_records(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 _DASHBOARD_HTML = Path(__file__).parent / "static" / "dashboard.html"
+_LOGIN_HTML = Path(__file__).parent / "static" / "login.html"
 
 
 @app.get("/")
@@ -144,8 +171,28 @@ def root():
   return RedirectResponse(url="/dashboard")
 
 
+@app.get("/login")
+def login_page():
+  return FileResponse(_LOGIN_HTML, media_type="text/html")
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request, password: str = Form(...)):
+  expected = _cfg.get("app_password", "")
+  if expected and password != expected:
+    return RedirectResponse(url="/login?error=1", status_code=303)
+  request.session["authed"] = True
+  return RedirectResponse(url="/dashboard", status_code=303)
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+  request.session.clear()
+  return RedirectResponse(url="/login", status_code=303)
+
+
 @app.get("/dashboard")
-def dashboard():
+def dashboard(request: Request, _: None = Depends(_session_user)):
   return FileResponse(_DASHBOARD_HTML, media_type="text/html")
 
 
@@ -165,28 +212,37 @@ def api_status():
   return _loop.status()
 
 
+def _apply_ref_override_fields(out: dict[str, Any], monitor: dict[str, Any]) -> None:
+  if monitor.get("using_override"):
+    out["reference_price"] = monitor["reference_price"]
+    out["reference_price_api"] = monitor.get("reference_price_api")
+    out["using_override"] = True
+
+
 @app.get("/api/slot/monitor")
-def slot_monitor():
+def slot_monitor(reference_override: float | None = Query(default=None, gt=0)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  out = _loop.slot_monitor().to_dict()
-  out["price_feed"] = _loop.fetcher.price_feed_label()
-  out["settlement_reference"] = _loop.fetcher.settlement_reference_label()
-  return out
+  monitor = _loop.slot_monitor(reference_override).to_dict()
+  monitor["price_feed"] = _loop.fetcher.price_feed_label()
+  monitor["settlement_reference"] = _loop.fetcher.settlement_reference_label()
+  return monitor
 
 
 @app.get("/api/prediction/latest")
-def latest_prediction():
+def latest_prediction(reference_override: float | None = Query(default=None, gt=0)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  monitor = _loop.slot_monitor().to_dict()
+  monitor = _loop.slot_monitor(reference_override).to_dict()
   if _loop.latest_prediction:
     out = _prediction_to_dict(_loop.latest_prediction)
     out["slot_monitor"] = monitor
+    _apply_ref_override_fields(out, monitor)
     return out
   row = _loop.calibration.latest()
   if row:
     row["slot_monitor"] = monitor
+    _apply_ref_override_fields(row, monitor)
     return row
   raise HTTPException(404, "No predictions yet")
 

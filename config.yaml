@@ -1,3 +1,6 @@
+# Dashboard login — set APP_PASSWORD on Railway (required for production)
+app_password: ""
+
 symbol: BTC/USD
 exchange: coinbaseexchange
 exchange_fallbacks:

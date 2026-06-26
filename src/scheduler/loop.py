@@ -199,7 +199,7 @@ class PredictionLoop:
       log.warning("Could not load slot prediction: %s", e)
       return None
 
-  def slot_monitor(self) -> SlotMonitor:
+  def slot_monitor(self, reference_override: float | None = None) -> SlotMonitor:
     """Live hold / take-profit / cut-loss guidance for the active 15m window."""
     now = pd.Timestamp(datetime.now(timezone.utc))
     slot_s = current_slot_start(now, self.tz)
@@ -209,28 +209,45 @@ class PredictionLoop:
     current = self._live_price()
 
     if pred is None:
-      ref = current or 0.0
-      return self.exit_advisor.evaluate(
+      api_ref = current or 0.0
+    else:
+      api_ref = float(pred.get("reference_price") or pred.get("price") or 0)
+
+    effective_ref = api_ref
+    using_override = False
+    if reference_override is not None and reference_override > 0:
+      effective_ref = float(reference_override)
+      using_override = True
+
+    if current is None:
+      current = effective_ref
+
+    original_prob = float(pred.get("prob_up", 0.5)) if pred else 0.5
+
+    if pred is None:
+      monitor = self.exit_advisor.evaluate(
         now=now,
-        reference_price=ref,
-        current_price=current or ref,
+        reference_price=effective_ref,
+        current_price=current,
         signal_at_open="NO TRADE",
         df_1m=df_1m if not df_1m.empty else None,
         slot_start=slot_s,
+        original_prob_up=original_prob,
+      )
+    else:
+      monitor = self.exit_advisor.evaluate(
+        now=now,
+        reference_price=effective_ref,
+        current_price=current,
+        signal_at_open=str(pred.get("signal", "NO TRADE")),
+        df_1m=df_1m if not df_1m.empty else None,
+        slot_start=slot_s,
+        original_prob_up=original_prob,
       )
 
-    ref = float(pred.get("reference_price") or pred.get("price") or 0)
-    if current is None:
-      current = ref
-
-    return self.exit_advisor.evaluate(
-      now=now,
-      reference_price=ref,
-      current_price=current,
-      signal_at_open=str(pred.get("signal", "NO TRADE")),
-      df_1m=df_1m if not df_1m.empty else None,
-      slot_start=slot_s,
-    )
+    monitor.reference_price_api = api_ref if api_ref else None
+    monitor.using_override = using_override
+    return monitor
 
   def status(self) -> dict[str, Any]:
     df_15m = self.storage.load("15m")

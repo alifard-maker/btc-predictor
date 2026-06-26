@@ -48,6 +48,8 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     cfg.setdefault("price_feed", {})
     cfg["price_feed"]["live"] = live_feed
 
+  cfg["app_password"] = os.getenv("APP_PASSWORD", cfg.get("app_password") or "")
+
   return cfg
 
 

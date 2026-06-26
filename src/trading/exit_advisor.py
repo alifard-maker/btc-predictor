@@ -36,9 +36,15 @@ class SlotMonitor:
   urgency: str  # low, medium, high
   message: str
   reasons: list[str]
+  reference_price_api: float | None = None
+  using_override: bool = False
+  reassessed_prob_up: float | None = None
+  reassessed_prob_down: float | None = None
+  reassessed_close_side: str = ""
+  reassess_summary: str = ""
 
   def to_dict(self) -> dict[str, Any]:
-    return {
+    out = {
       "active": self.active,
       "slot_label": self.slot_label,
       "slot_start": self.slot_start,
@@ -48,6 +54,8 @@ class SlotMonitor:
       "bet_side": self.bet_side,
       "signal_at_open": self.signal_at_open,
       "reference_price": round(self.reference_price, 2),
+      "reference_price_api": round(self.reference_price_api, 2) if self.reference_price_api is not None else None,
+      "using_override": self.using_override,
       "current_price": round(self.current_price, 2),
       "unrealized_pct": round(self.unrealized_pct, 4),
       "action": self.action.value,
@@ -55,6 +63,12 @@ class SlotMonitor:
       "message": self.message,
       "reasons": self.reasons,
     }
+    if self.reassessed_prob_up is not None:
+      out["reassessed_prob_up"] = round(self.reassessed_prob_up, 4)
+      out["reassessed_prob_down"] = round(self.reassessed_prob_down or (1 - self.reassessed_prob_up), 4)
+      out["reassessed_close_side"] = self.reassessed_close_side
+      out["reassess_summary"] = self.reassess_summary
+    return out
 
 
 class ExitAdvisor:
@@ -100,6 +114,78 @@ class ExitAdvisor:
     rets = tail["close"].pct_change().dropna() * 100
     return float(rets.sum()) if len(rets) else 0.0
 
+  def _reassess_prob_up_at_close(
+    self,
+    *,
+    reference_price: float,
+    current_price: float,
+    seconds_remaining: int,
+    recent_1m_pct: float,
+    slot_mom_pct: float,
+    original_prob_up: float,
+  ) -> float:
+    """Probability slot close finishes ABOVE t=0 reference, given now and time left."""
+    if reference_price <= 0:
+      return 0.5
+
+    gap_pct = (current_price - reference_price) / reference_price * 100
+    minutes_left = max(0.1, seconds_remaining / 60)
+    time_pressure = 1.0 - min(1.0, minutes_left / 15.0)
+
+    score = 0.5
+    # Current level vs ref — matters more as the slot runs out
+    score += np.clip(gap_pct * 0.12 * (0.2 + 0.8 * time_pressure), -0.38, 0.38)
+    # Recent 1m flow shapes the remaining window
+    score += np.clip(recent_1m_pct * 0.14, -0.14, 0.14)
+    # Broader intra-slot drift
+    score += np.clip(slot_mom_pct * 0.05 * (1 - time_pressure * 0.4), -0.1, 0.1)
+    # Fade extreme moves when plenty of time remains
+    if abs(gap_pct) > 0.12 and minutes_left > 5:
+      score -= np.sign(gap_pct) * min(0.07, abs(gap_pct) * 0.04)
+
+    open_weight = max(0.0, 0.22 * (1.0 - time_pressure))
+    score = score * (1.0 - open_weight) + float(original_prob_up) * open_weight
+    return float(np.clip(score, 0.05, 0.95))
+
+  def _reassess_summary(
+    self,
+    prob_up: float,
+    bet_side: str,
+    seconds_remaining: int,
+    reference_price: float,
+  ) -> tuple[str, str]:
+    """Return (close_side label, human summary) for slot end vs ref."""
+    up_pct = prob_up * 100
+    down_pct = (1 - prob_up) * 100
+    mins, secs = divmod(max(0, seconds_remaining), 60)
+    time_left = f"{mins}m {secs:02d}s"
+
+    if prob_up >= 0.57:
+      close_side = "UP"
+    elif prob_up <= 0.43:
+      close_side = "DOWN"
+    else:
+      close_side = "TOSS-UP"
+
+    if bet_side == "UP":
+      if close_side == "UP":
+        line = f"Reassessed ({time_left} left): {up_pct:.0f}% UP at close — LONG still favored"
+      elif close_side == "DOWN":
+        line = f"Reassessed ({time_left} left): {down_pct:.0f}% DOWN at close — LONG at risk"
+      else:
+        line = f"Reassessed ({time_left} left): {up_pct:.0f}% UP / {down_pct:.0f}% DOWN at close"
+    elif bet_side == "DOWN":
+      if close_side == "UP":
+        line = f"Reassessed ({time_left} left): {up_pct:.0f}% UP at close — DOWN unlikely to recover"
+      elif close_side == "DOWN":
+        line = f"Reassessed ({time_left} left): {down_pct:.0f}% DOWN at close — SHORT still viable"
+      else:
+        line = f"Reassessed ({time_left} left): {up_pct:.0f}% UP / {down_pct:.0f}% DOWN at close"
+    else:
+      line = f"Reassessed ({time_left} left): {up_pct:.0f}% UP at close vs ${reference_price:,.2f} ref"
+
+    return close_side, line
+
   def evaluate(
     self,
     *,
@@ -109,6 +195,7 @@ class ExitAdvisor:
     signal_at_open: str,
     df_1m: pd.DataFrame | None = None,
     slot_start: pd.Timestamp | None = None,
+    original_prob_up: float = 0.5,
   ) -> SlotMonitor:
     now = pd.Timestamp(now or pd.Timestamp.now(tz="UTC"))
     if now.tzinfo is None:
@@ -266,6 +353,49 @@ class ExitAdvisor:
       if late and action == ExitAction.HOLD:
         reasons.append(f"{remaining // 60}m {remaining % 60}s until slot close.")
 
+    reassessed_prob_up: float | None = None
+    reassessed_prob_down: float | None = None
+    reassessed_close_side = ""
+    reassess_summary = ""
+
+    if bet_side in ("UP", "DOWN"):
+      reassessed_prob_up = self._reassess_prob_up_at_close(
+        reference_price=reference_price,
+        current_price=current_price,
+        seconds_remaining=remaining,
+        recent_1m_pct=recent,
+        slot_mom_pct=slot_mom,
+        original_prob_up=original_prob_up,
+      )
+      reassessed_prob_down = 1.0 - reassessed_prob_up
+      reassessed_close_side, reassess_summary = self._reassess_summary(
+        reassessed_prob_up, bet_side, remaining, reference_price,
+      )
+      reasons.append(reassess_summary)
+
+      # Strong reassessment against the open bet → reinforce exit signals
+      bet_losing = pnl_pct < 0
+      reassess_against = (
+        (bet_side == "DOWN" and reassessed_prob_up >= 0.55)
+        or (bet_side == "UP" and reassessed_prob_up <= 0.45)
+      )
+      reassess_supports = (
+        (bet_side == "UP" and reassessed_prob_up >= 0.55)
+        or (bet_side == "DOWN" and reassessed_prob_up <= 0.45)
+      )
+
+      if action == ExitAction.CUT_LOSS:
+        message = f"CUT LOSS — {reassess_summary}"
+      elif action == ExitAction.TAKE_PROFIT:
+        message = f"TAKE PROFIT — {reassess_summary}"
+      elif bet_losing and reassess_against and action == ExitAction.HOLD:
+        action = ExitAction.CUT_LOSS
+        urgency = "high"
+        message = f"CUT LOSS — {reassess_summary}"
+        reasons.append("Live reassessment turned against your position.")
+      elif action == ExitAction.HOLD and reassess_supports and pnl_pct > 0:
+        reasons.append("Reassessment supports holding to slot close.")
+
     return SlotMonitor(
       active=True,
       slot_label=label,
@@ -282,4 +412,8 @@ class ExitAdvisor:
       urgency=urgency,
       message=message,
       reasons=reasons,
+      reassessed_prob_up=reassessed_prob_up,
+      reassessed_prob_down=reassessed_prob_down,
+      reassessed_close_side=reassessed_close_side,
+      reassess_summary=reassess_summary,
     )
