@@ -426,6 +426,40 @@ def predict_now(_: None = Depends(_verify_admin)):
   return _prediction_to_dict(pred)
 
 
+@app.post("/api/admin/second-chance-now")
+def second_chance_now(_: None = Depends(_verify_admin)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  out = _loop.run_second_chance()
+  if out is None:
+    raise HTTPException(500, _loop.last_error or "2nd Chance not logged (no open prediction or already logged)")
+  return {"status": "ok", **out}
+
+
+@app.post("/api/admin/train-second-chance")
+def admin_train_second_chance(
+  min_samples: int | None = Query(default=None, ge=50),
+  _: None = Depends(_verify_admin),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.second_chance_train_status.get("state") == "running":
+    return {"status": "running", **_loop.second_chance_train_status}
+
+  def _run():
+    _loop.train_second_chance_model(min_samples=min_samples)
+
+  threading.Thread(target=_run, daemon=True).start()
+  return {"status": "started", "message": "2nd Chance training in background. Poll /api/admin/train-second-chance/status."}
+
+
+@app.get("/api/admin/train-second-chance/status")
+def admin_train_second_chance_status(_: None = Depends(_verify_admin)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.second_chance_train_status
+
+
 @app.post("/api/admin/collect")
 def collect_historical(
   years: int = Query(default=3, le=5),

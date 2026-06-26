@@ -55,6 +55,9 @@ class SlotMonitor:
   late_entry_summary: str = ""
   flip_action: str = ""
   flip_summary: str = ""
+  second_chance_signal: str = ""
+  second_chance_prob_up: float | None = None
+  second_chance_summary: str = ""
   position_mode: str = "open"  # open | flip
   outlook_ready: bool = False
   reference_source: str = ""
@@ -107,6 +110,12 @@ class SlotMonitor:
       out["flip_action"] = self.flip_action
     if self.flip_summary:
       out["flip_summary"] = self.flip_summary
+    if self.second_chance_signal:
+      out["second_chance_signal"] = self.second_chance_signal
+    if self.second_chance_prob_up is not None:
+      out["second_chance_prob_up"] = round(self.second_chance_prob_up, 4)
+    if self.second_chance_summary:
+      out["second_chance_summary"] = self.second_chance_summary
     out["position_mode"] = self.position_mode
     out["outlook_ready"] = self.outlook_ready
     return out

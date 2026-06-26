@@ -38,6 +38,12 @@ _EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
   ("flip_prob_up", "REAL"),
   ("flip_at", "TEXT"),
   ("flip_seconds_remaining", "INTEGER"),
+  ("second_chance_signal", "TEXT"),
+  ("second_chance_prob_up", "REAL"),
+  ("second_chance_at", "TEXT"),
+  ("second_chance_seconds_remaining", "INTEGER"),
+  ("second_chance_confidence", "REAL"),
+  ("second_chance_expected_move", "REAL"),
 )
 
 _EXTRA_COLUMNS_PG: tuple[tuple[str, str], ...] = (
@@ -53,6 +59,12 @@ _EXTRA_COLUMNS_PG: tuple[tuple[str, str], ...] = (
   ("flip_prob_up", "DOUBLE PRECISION"),
   ("flip_at", "TIMESTAMPTZ"),
   ("flip_seconds_remaining", "INTEGER"),
+  ("second_chance_signal", "TEXT"),
+  ("second_chance_prob_up", "DOUBLE PRECISION"),
+  ("second_chance_at", "TIMESTAMPTZ"),
+  ("second_chance_seconds_remaining", "INTEGER"),
+  ("second_chance_confidence", "DOUBLE PRECISION"),
+  ("second_chance_expected_move", "DOUBLE PRECISION"),
 )
 
 
@@ -153,6 +165,18 @@ class PredictionStore(ABC):
     seconds_remaining: int,
     *,
     force: bool = False,
+  ) -> bool: ...
+
+  @abstractmethod
+  def record_second_chance(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+    *,
+    confidence: float | None = None,
+    expected_move: float | None = None,
   ) -> bool: ...
 
 
@@ -391,6 +415,35 @@ class SqlitePredictionStore(PredictionStore):
              AND (flip_signal IS NULL OR flip_signal = '')
              AND signal IN ('LONG', 'SHORT')""",
         (signal, prob_up, int(seconds_remaining), ts),
+      )
+      return cur.rowcount > 0
+
+  def record_second_chance(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+    *,
+    confidence: float | None = None,
+    expected_move: float | None = None,
+  ) -> bool:
+    ts = pd.Timestamp(slot_timestamp).isoformat()
+    prob_up = float(_py(prob_up))
+    conf = float(_py(confidence)) if confidence is not None else None
+    exp = float(_py(expected_move)) if expected_move is not None else None
+    with self._conn() as conn:
+      cur = conn.execute(
+        """UPDATE predictions SET
+             second_chance_signal = ?,
+             second_chance_prob_up = ?,
+             second_chance_at = datetime('now'),
+             second_chance_seconds_remaining = ?,
+             second_chance_confidence = ?,
+             second_chance_expected_move = ?
+           WHERE timestamp = ?
+             AND (second_chance_signal IS NULL OR second_chance_signal = '')""",
+        (signal, prob_up, int(seconds_remaining), conf, exp, ts),
       )
       return cur.rowcount > 0
 
@@ -657,6 +710,38 @@ class PostgresPredictionStore(PredictionStore):
                AND (flip_signal IS NULL OR flip_signal = '')
                AND signal IN ('LONG', 'SHORT')""",
           (signal, prob_up, int(seconds_remaining), ts),
+        )
+        updated = cur.rowcount > 0
+      conn.commit()
+    return updated
+
+  def record_second_chance(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+    *,
+    confidence: float | None = None,
+    expected_move: float | None = None,
+  ) -> bool:
+    ts = pd.Timestamp(slot_timestamp).isoformat()
+    prob_up = float(_py(prob_up))
+    conf = float(_py(confidence)) if confidence is not None else None
+    exp = float(_py(expected_move)) if expected_move is not None else None
+    with self._conn() as conn:
+      with conn.cursor() as cur:
+        cur.execute(
+          """UPDATE predictions SET
+               second_chance_signal = %s,
+               second_chance_prob_up = %s,
+               second_chance_at = NOW(),
+               second_chance_seconds_remaining = %s,
+               second_chance_confidence = %s,
+               second_chance_expected_move = %s
+             WHERE timestamp = %s::timestamptz
+               AND (second_chance_signal IS NULL OR second_chance_signal = '')""",
+          (signal, prob_up, int(seconds_remaining), conf, exp, ts),
         )
         updated = cur.rowcount > 0
       conn.commit()

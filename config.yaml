@@ -103,6 +103,21 @@ late_entry:
   momentum_bars: 4
   min_momentum_pct: 0.02
 
+# 2nd Chance — reassess ALL slots at t+4min (11 min left)
+second_chance:
+  enabled: true
+  elapsed_minutes: 4
+  min_confidence: 0.57
+  min_train_samples: 300
+  train_test_split: 0.2
+  model_type: lightgbm
+  calibrate: true
+  calibration_min_resolved: 30
+  blend:
+    ml_weight: 0.55
+    open_weight: 0.25
+    path_weight: 0.20
+
 # Kalshi daily / hourly threshold + range contracts (separate tab on dashboard)
 daily:
   enabled: true

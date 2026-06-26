@@ -100,12 +100,14 @@ class CalibrationTracker:
         open_correct_fn=self._prediction_correct,
         late_correct_fn=self._late_entry_correct,
         flip_correct_fn=self._flip_correct,
+        second_chance_correct_fn=self._second_chance_correct,
       )
       archive = archive_epoch(self.cfg, aggs, epoch_df=epoch_df)
       archived = {
         "epochs_archived": archive.epochs_archived,
         "archived_open_n": aggs[0].n_resolved,
         "archived_late_n": aggs[1].n_resolved,
+        "archived_sc_n": aggs[3].n_resolved,
       }
     deleted = self.store.clear_all()
     epoch = write_stats_epoch(self.cfg, note=note) if self.cfg else {}
@@ -130,12 +132,14 @@ class CalibrationTracker:
       open_correct_fn=self._prediction_correct,
       late_correct_fn=self._late_entry_correct,
       flip_correct_fn=self._flip_correct,
+      second_chance_correct_fn=self._second_chance_correct,
     )
     archive = snapshot_epoch(self.cfg, aggs, epoch_df=epoch_df, note=note)
     return {
       "status": "ok",
       "snapshotted_open_n": aggs[0].n_resolved,
       "snapshotted_late_n": aggs[1].n_resolved,
+      "snapshotted_sc_n": aggs[3].n_resolved,
       "snapshot_through": archive.snapshot_through,
       "all_time_open_n": archive.open.n_resolved,
     }
@@ -157,6 +161,36 @@ class CalibrationTracker:
     seconds_remaining: int,
   ) -> bool:
     return self.store.record_flip(slot_timestamp, signal, prob_up, seconds_remaining)
+
+  def record_second_chance(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+    *,
+    confidence: float | None = None,
+    expected_move: float | None = None,
+  ) -> bool:
+    return self.store.record_second_chance(
+      slot_timestamp,
+      signal,
+      prob_up,
+      seconds_remaining,
+      confidence=confidence,
+      expected_move=expected_move,
+    )
+
+  def fit_second_chance_calibrator(self, calibrator) -> bool:
+    df = self.load_resolved()
+    if df.empty or "second_chance_prob_up" not in df.columns:
+      return False
+    mask = df["second_chance_signal"].notna() & (df["second_chance_signal"].astype(str).str.len() > 0)
+    rows = df[mask & df["outcome"].notna()]
+    min_n = int(self.cfg.get("second_chance", {}).get("calibration_min_resolved", 30))
+    if len(rows) < min_n:
+      return False
+    return calibrator.fit(rows["second_chance_prob_up"], rows["outcome"])
 
   def stats_epoch(self) -> dict[str, Any] | None:
     if not self.cfg:
@@ -231,6 +265,23 @@ class CalibrationTracker:
     if "flip_signal" not in df.columns:
       return pd.Series(False, index=df.index)
     return df["flip_signal"].notna() & (df["flip_signal"].astype(str).str.len() > 0)
+
+  def _second_chance_correct(self, df: pd.DataFrame) -> pd.Series:
+    def _row(r: pd.Series) -> bool:
+      sig = str(r.get("second_chance_signal") or "")
+      if sig == "2ND LONG":
+        return bool(r["outcome"])
+      if sig == "2ND SHORT":
+        return not bool(r["outcome"])
+      prob = float(r.get("second_chance_prob_up") or 0.5)
+      return (prob >= 0.5) == bool(r["outcome"])
+
+    return df.apply(_row, axis=1)
+
+  def _second_chance_mask(self, df: pd.DataFrame) -> pd.Series:
+    if "second_chance_signal" not in df.columns:
+      return pd.Series(False, index=df.index)
+    return df["second_chance_signal"].notna() & (df["second_chance_signal"].astype(str).str.len() > 0)
 
   def _flip_summary(self, df: pd.DataFrame) -> dict[str, Any]:
     empty = {
@@ -344,6 +395,80 @@ class CalibrationTracker:
     out["rolling_accuracy"] = self._late_rolling_accuracy(df)
     return out
 
+  def _second_chance_summary(self, df: pd.DataFrame) -> dict[str, Any]:
+    empty = {
+      "n_logged": 0,
+      "n_resolved": 0,
+      "accuracy": None,
+      "brier_score": None,
+      "directional_accuracy": None,
+      "rolling_accuracy": self._second_chance_rolling_accuracy(df),
+      "sc_long_signals": 0,
+      "sc_long_accuracy": None,
+      "sc_short_signals": 0,
+      "sc_short_accuracy": None,
+      "sc_no_trade_signals": 0,
+      "avg_seconds_remaining": None,
+      "open_vs_sc_delta": None,
+    }
+    if df.empty or "second_chance_signal" not in df.columns:
+      return empty
+
+    sc = df[self._second_chance_mask(df)]
+    if sc.empty:
+      return empty
+
+    resolved = sc[sc["outcome"].notna()]
+    directional = resolved[resolved["second_chance_signal"].isin(["2ND LONG", "2ND SHORT"])]
+    out = {
+      "n_logged": int(len(sc)),
+      "n_resolved": int(len(resolved)),
+      "accuracy": None,
+      "brier_score": None,
+      "directional_accuracy": None,
+      "rolling_accuracy": None,
+      "sc_long_signals": int((sc["second_chance_signal"] == "2ND LONG").sum()),
+      "sc_long_accuracy": None,
+      "sc_short_signals": int((sc["second_chance_signal"] == "2ND SHORT").sum()),
+      "sc_short_accuracy": None,
+      "sc_no_trade_signals": int((sc["second_chance_signal"] == "2ND NO TRADE").sum()),
+      "avg_seconds_remaining": None,
+      "open_vs_sc_delta": None,
+    }
+    if "second_chance_seconds_remaining" in sc.columns:
+      rem = pd.to_numeric(sc["second_chance_seconds_remaining"], errors="coerce").dropna()
+      if len(rem):
+        out["avg_seconds_remaining"] = float(rem.mean())
+
+    if resolved.empty:
+      return out
+
+    correct = self._second_chance_correct(resolved)
+    out["accuracy"] = float(correct.mean())
+    if "second_chance_prob_up" in resolved.columns:
+      probs = pd.to_numeric(resolved["second_chance_prob_up"], errors="coerce")
+      valid = probs.notna()
+      if valid.any():
+        out["brier_score"] = float(((probs[valid] - resolved.loc[valid, "outcome"]) ** 2).mean())
+
+    if len(directional):
+      out["directional_accuracy"] = float(self._second_chance_correct(directional).mean())
+
+    longs = resolved[resolved["second_chance_signal"] == "2ND LONG"]
+    shorts = resolved[resolved["second_chance_signal"] == "2ND SHORT"]
+    if len(longs):
+      out["sc_long_accuracy"] = float(self._second_chance_correct(longs).mean())
+    if len(shorts):
+      out["sc_short_accuracy"] = float(self._second_chance_correct(shorts).mean())
+    out["rolling_accuracy"] = self._second_chance_rolling_accuracy(df)
+
+    if "prob_up" in resolved.columns and "second_chance_prob_up" in resolved.columns:
+      open_c = self._prediction_correct(resolved)
+      sc_c = self._second_chance_correct(resolved)
+      out["open_vs_sc_delta"] = float(sc_c.mean() - open_c.mean())
+
+    return out
+
   def _rolling_open_accuracy(
     self,
     df: pd.DataFrame,
@@ -395,27 +520,51 @@ class CalibrationTracker:
     events = list(archive_events or []) + late_events
     return rolling_from_events(events, windows_hours=windows_hours)
 
-  def _epoch_aggs(self, df: pd.DataFrame) -> tuple[CategoryAgg, CategoryAgg, CategoryAgg]:
-    open_agg, late_agg, flip_agg, _, _ = epoch_aggs_from_df(
+  def _second_chance_rolling_accuracy(
+    self,
+    df: pd.DataFrame,
+    *,
+    archive_events: list[dict[str, Any]] | None = None,
+    windows_hours: list[int] | None = None,
+  ) -> dict[str, dict[str, Any]]:
+    windows_hours = windows_hours or [1, 2, 4, 12]
+    _, sc_events = category_from_signal_df(
+      df,
+      signal_col="second_chance_signal",
+      prob_col="second_chance_prob_up",
+      correct_fn=self._second_chance_correct,
+      long_label="2ND LONG",
+      short_label="2ND SHORT",
+    )
+    events = list(archive_events or []) + sc_events
+    return rolling_from_events(events, windows_hours=windows_hours)
+
+  def _epoch_aggs(self, df: pd.DataFrame) -> tuple[CategoryAgg, CategoryAgg, CategoryAgg, CategoryAgg]:
+    open_agg, late_agg, flip_agg, sc_agg, _, _, _ = epoch_aggs_from_df(
       df,
       open_correct_fn=self._prediction_correct,
       late_correct_fn=self._late_entry_correct,
       flip_correct_fn=self._flip_correct,
+      second_chance_correct_fn=self._second_chance_correct,
     )
-    return open_agg, late_agg, flip_agg
+    return open_agg, late_agg, flip_agg, sc_agg
 
   def _all_time_summary(self, df: pd.DataFrame) -> dict[str, Any]:
     if not self.cfg:
       return {}
     archive = read_archive(self.cfg)
     epoch_df = df_after_snapshot(df, archive.snapshot_through)
-    epoch_open, epoch_late, epoch_flip = self._epoch_aggs(epoch_df)
-    combined = combined_public(archive, epoch_open, epoch_late, epoch_flip)
+    epoch_open, epoch_late, epoch_flip, epoch_sc = self._epoch_aggs(epoch_df)
+    combined = combined_public(archive, epoch_open, epoch_late, epoch_flip, epoch_sc)
     combined["snapshot_through"] = archive.snapshot_through
     combined["snapshot_note"] = archive.snapshot_note
     combined["late_entry"]["rolling_accuracy"] = self._late_rolling_accuracy(
       epoch_df,
       archive_events=archive.late_events,
+    )
+    combined["second_chance"]["rolling_accuracy"] = self._second_chance_rolling_accuracy(
+      epoch_df,
+      archive_events=archive.second_chance_events,
     )
     combined["open"]["rolling_accuracy"] = self._rolling_open_accuracy(epoch_df)
     return combined
@@ -448,6 +597,7 @@ class CalibrationTracker:
         "stats_epoch": self.stats_epoch(),
         "late_entry": self._late_entry_summary(df),
         "flip": self._flip_summary(df),
+        "second_chance": self._second_chance_summary(df),
         "open_at_slot": {"n_resolved": 0, "long_signals": 0, "short_signals": 0},
         "all_time": self._all_time_summary(df),
       }
@@ -481,6 +631,7 @@ class CalibrationTracker:
       },
       "late_entry": self._late_entry_summary(df),
       "flip": self._flip_summary(df),
+      "second_chance": self._second_chance_summary(df),
       "long_signals": len(longs),
       "long_accuracy": float(longs["outcome"].mean()) if len(longs) else None,
       "short_signals": len(shorts),

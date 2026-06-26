@@ -27,6 +27,7 @@ from src.logging.prediction_log import PredictionLogger
 from src.logging.postmortem_log import PostmortemLogger
 from src.models.predictor import Prediction, Predictor
 from src.trading.exit_advisor import ExitAdvisor, SlotMonitor
+from src.trading.second_chance import SecondChanceAdvisor
 
 log = logging.getLogger(__name__)
 
@@ -58,10 +59,18 @@ class PredictionLoop:
     self._slot_tick_cache: dict[str, dict[str, Any]] = {}
     self._late_entry_logged: set[str] = set()
     self._flip_logged: set[str] = set()
+    self._second_chance_logged: set[str] = set()
+    self._second_chance_advisor: SecondChanceAdvisor | None = None
     self.train_status: dict[str, Any] = {"state": "idle"}
     self.hourly_train_status: dict[str, Any] = {"state": "idle"}
+    self.second_chance_train_status: dict[str, Any] = {"state": "idle"}
     self._hourly_predictor = None
     self.latest_hourly_prediction: dict[str, Any] | None = None
+
+  def second_chance_advisor(self) -> SecondChanceAdvisor:
+    if self._second_chance_advisor is None:
+      self._second_chance_advisor = SecondChanceAdvisor(self.cfg)
+    return self._second_chance_advisor
 
   def hourly_predictor(self):
     if self._hourly_predictor is None:
@@ -299,8 +308,147 @@ class PredictionLoop:
         if ts_key in ts_set:
           self.postmortems.log_row(row.to_dict())
       self.refit_calibrator()
+      self.refit_second_chance_calibrator()
     except Exception as e:
       log.warning("Postmortem logging failed: %s", e)
+
+  def refit_second_chance_calibrator(self) -> bool:
+    scfg = self.cfg.get("second_chance", {})
+    if not scfg.get("enabled", True) or not scfg.get("calibrate", True):
+      return False
+    advisor = self.second_chance_advisor()
+    if advisor.model is None:
+      return False
+    if self.calibration.fit_second_chance_calibrator(advisor.calibrator):
+      from src.models.second_chance_trainer import SecondChanceTrainer
+      trainer = SecondChanceTrainer(self.cfg)
+      trainer.model = advisor.model
+      trainer.feature_names = advisor.feature_names
+      trainer.calibrator = advisor.calibrator
+      path = Path(self.cfg["paths"]["models"]) / "model_second_chance.joblib"
+      if path.exists():
+        trainer.save(path)
+      log.info("2nd Chance calibrator refit from resolved slots")
+      return True
+    return False
+
+  def train_second_chance_model(self, min_samples: int | None = None) -> None:
+    from src.models.second_chance_trainer import SecondChanceTrainer
+
+    self.second_chance_train_status = {
+      "state": "running",
+      "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+      cfg = self.cfg
+      if min_samples is not None:
+        cfg = {**self.cfg, "second_chance": {**self.cfg.get("second_chance", {}), "min_train_samples": min_samples}}
+      df_1m = self.storage.load("1m")
+      df_15m = self.storage.load("15m")
+      if df_1m.empty:
+        raise ValueError("No 1m candle data for 2nd Chance training")
+      trainer = SecondChanceTrainer(cfg)
+      metrics = trainer.train(
+        df_1m,
+        df_15m if not df_15m.empty else None,
+        main_model=self.predictor.model,
+        main_feature_names=self.predictor.feature_names,
+        main_calibrator=self.predictor.calibrator,
+      )
+      model_path = Path(self.cfg["paths"]["models"]) / "model_second_chance.joblib"
+      trainer.save(model_path)
+      self._second_chance_advisor = None
+      self.second_chance_train_status = {
+        "state": "done",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "model_path": str(model_path),
+        "metrics": metrics,
+        "candles_1m": len(df_1m),
+      }
+      log.info("2nd Chance model trained: %s", metrics)
+    except Exception as e:
+      log.exception("2nd Chance model training failed")
+      self.second_chance_train_status = {
+        "state": "error",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "error": str(e),
+      }
+
+  def run_second_chance(self) -> dict[str, Any] | None:
+    """Log 2nd Chance reassessment at t+4min for the active slot."""
+    scfg = self.cfg.get("second_chance", {})
+    if not scfg.get("enabled", True):
+      return None
+    try:
+      self.fetch_and_store()
+      now = pd.Timestamp(datetime.now(timezone.utc))
+      slot_s = current_slot_start(now, self.tz)
+      key = self._slot_cache_key(slot_s)
+      if key in self._second_chance_logged:
+        return None
+
+      pred = self._prediction_for_current_slot()
+      if pred is None:
+        log.warning("2nd Chance skipped — no opening prediction for slot %s", slot_s)
+        return None
+
+      slot_e = slot_end(slot_s, self.tz)
+      seconds_remaining = max(0, int((slot_e - now).total_seconds()))
+      api_ref, _ = self.kalshi.slot_t0_reference(slot_s, fresh=True)
+      ref = float(api_ref) if api_ref else float(pred.get("reference_price") or pred.get("price") or 0)
+      if ref <= 0:
+        locked = self._locked_slot_reference(slot_s)
+        if locked:
+          ref = float(locked["price"])
+      if ref <= 0:
+        log.warning("2nd Chance skipped — no reference for slot %s", slot_s)
+        return None
+
+      live_quote = self.live_price_quote(fresh=True)
+      current = live_quote.price if live_quote else ref
+      df_1m = self.storage.load("1m")
+
+      decision = self.second_chance_advisor().evaluate(
+        open_prob_up=float(pred.get("prob_up", 0.5)),
+        open_signal=str(pred.get("signal", "NO TRADE")),
+        reference_price=ref,
+        current_price=current,
+        df_1m=df_1m if not df_1m.empty else None,
+        slot_start=slot_s,
+        seconds_remaining=seconds_remaining,
+      )
+
+      ts = floor_to_15m(slot_s, self.tz).isoformat()
+      if self.calibration.record_second_chance(
+        ts,
+        decision.signal,
+        decision.prob_up,
+        seconds_remaining,
+        confidence=decision.confidence,
+        expected_move=decision.expected_move_pct,
+      ):
+        self._second_chance_logged.add(key)
+        log.info(
+          "2nd Chance logged: %s %s %.0f%% UP (%ds left, method=%s)",
+          ts,
+          decision.signal,
+          decision.prob_up * 100,
+          seconds_remaining,
+          decision.method,
+        )
+        return {
+          "slot": ts,
+          "signal": decision.signal,
+          "prob_up": decision.prob_up,
+          "confidence": decision.confidence,
+          "summary": decision.summary,
+          "method": decision.method,
+        }
+      return None
+    except Exception as e:
+      log.exception("2nd Chance failed: %s", e)
+      self.last_error = str(e)
+      return None
 
   def collect_auxiliary(self) -> None:
     try:
@@ -363,6 +511,8 @@ class PredictionLoop:
     threading.Thread(target=self.train_model, daemon=True).start()
     if self.cfg.get("hourly", {}).get("enabled", True):
       threading.Thread(target=self.train_hourly_model, daemon=True).start()
+    if self.cfg.get("second_chance", {}).get("enabled", True):
+      threading.Thread(target=self.train_second_chance_model, daemon=True).start()
 
   def _schedule_hourly(self, scheduler) -> None:
     if not self.cfg.get("hourly", {}).get("enabled", True):
@@ -397,6 +547,7 @@ class PredictionLoop:
     self.latest_prediction = None
     self._late_entry_logged.clear()
     self._flip_logged.clear()
+    self._second_chance_logged.clear()
     log.info("Calibration stats reset (epoch archived): %s", stats)
     return stats
 
@@ -665,6 +816,7 @@ class PredictionLoop:
     )
     monitor.live_price_age_sec = round(live_quote.age_sec, 1) if live_quote and live_quote.age_sec is not None else None
     monitor.kalshi = self.kalshi.active_market_summary()
+    self._attach_second_chance_preview(slot_s, pred, monitor)
     self._maybe_log_late_entry(slot_s, monitor)
     self._maybe_log_flip(slot_s, monitor)
     return monitor
@@ -698,6 +850,41 @@ class PredictionLoop:
     if self.calibration.record_late_entry(ts, action, float(prob), int(monitor.seconds_remaining)):
       self._late_entry_logged.add(key)
       log.info("Late entry logged: %s %.0f%% UP (%ds left)", action, prob * 100, monitor.seconds_remaining)
+
+  def _attach_second_chance_preview(
+    self,
+    slot_s: pd.Timestamp,
+    pred: dict[str, Any] | None,
+    monitor: SlotMonitor,
+  ) -> None:
+    """Show logged 2nd Chance on slot monitor when available."""
+    if pred is None:
+      return
+    try:
+      df = self.calibration.load_recent(8)
+      if df.empty or "second_chance_signal" not in df.columns:
+        return
+      slot_key = floor_to_15m(slot_s, self.tz)
+      df = df.copy()
+      df["_slot"] = pd.to_datetime(df["timestamp"], utc=True).apply(
+        lambda t: floor_to_15m(t, self.tz)
+      )
+      match = df[df["_slot"] == slot_key]
+      if match.empty:
+        return
+      row = match.iloc[0]
+      sig = str(row.get("second_chance_signal") or "")
+      if not sig:
+        return
+      monitor.second_chance_signal = sig
+      prob = row.get("second_chance_prob_up")
+      if prob is not None and prob == prob:
+        monitor.second_chance_prob_up = float(prob)
+      monitor.second_chance_summary = (
+        f"{sig} @ t+4 — {float(prob) * 100:.0f}% UP" if prob is not None and prob == prob else sig
+      )
+    except Exception as e:
+      log.debug("2nd Chance preview failed: %s", e)
 
   def poll_brti(self) -> None:
     """Background refresh of live price (BRTI or exchange)."""
@@ -738,6 +925,23 @@ class PredictionLoop:
       "scheduler_running": self._scheduler is not None and getattr(self._scheduler, "running", False),
     }
 
+  def _schedule_second_chance(self, scheduler) -> None:
+    if not self.cfg.get("second_chance", {}).get("enabled", True):
+      return
+    scheduler.add_job(
+      self.run_second_chance,
+      CronTrigger(minute="4,19,34,49", timezone=self.tz),
+      id="second_chance",
+      max_instances=1,
+    )
+    scheduler.add_job(
+      self.refit_second_chance_calibrator,
+      "interval",
+      hours=6,
+      id="refit_second_chance_calibrator",
+      max_instances=1,
+    )
+
   def _schedule_predictions(self, scheduler) -> None:
     scheduler.add_job(
       self.run_prediction,
@@ -751,6 +955,7 @@ class PredictionLoop:
     scheduler.add_job(self.fetch_and_store, "interval", minutes=1, id="fetch", max_instances=1)
     scheduler.add_job(self.resolve_outcomes, "interval", minutes=1, id="resolve", max_instances=1)
     self._schedule_predictions(scheduler)
+    self._schedule_second_chance(scheduler)
     self._schedule_hourly(scheduler)
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")

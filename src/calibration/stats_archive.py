@@ -70,8 +70,10 @@ class StatsArchive:
   open: CategoryAgg = field(default_factory=CategoryAgg)
   late: CategoryAgg = field(default_factory=CategoryAgg)
   flip: CategoryAgg = field(default_factory=CategoryAgg)
+  second_chance: CategoryAgg = field(default_factory=CategoryAgg)
   late_events: list[dict[str, Any]] = field(default_factory=list)
   flip_events: list[dict[str, Any]] = field(default_factory=list)
+  second_chance_events: list[dict[str, Any]] = field(default_factory=list)
 
   @classmethod
   def from_dict(cls, raw: dict[str, Any] | None) -> StatsArchive:
@@ -86,8 +88,10 @@ class StatsArchive:
       open=CategoryAgg.from_dict(raw.get("open")),
       late=CategoryAgg.from_dict(raw.get("late")),
       flip=CategoryAgg.from_dict(raw.get("flip")),
+      second_chance=CategoryAgg.from_dict(raw.get("second_chance")),
       late_events=list(raw.get("late_events") or []),
       flip_events=list(raw.get("flip_events") or []),
+      second_chance_events=list(raw.get("second_chance_events") or []),
     )
 
   def to_dict(self) -> dict[str, Any]:
@@ -100,8 +104,10 @@ class StatsArchive:
       "open": asdict(self.open),
       "late": asdict(self.late),
       "flip": asdict(self.flip),
+      "second_chance": asdict(self.second_chance),
       "late_events": self.late_events,
       "flip_events": self.flip_events,
+      "second_chance_events": self.second_chance_events,
     }
 
 
@@ -136,20 +142,22 @@ def latest_slot_iso(df: pd.DataFrame) -> str | None:
 
 def merge_epoch_into_archive(
   cfg: dict[str, Any],
-  epoch_aggs: tuple[CategoryAgg, CategoryAgg, CategoryAgg, list, list],
+  epoch_aggs: tuple,
   *,
   epoch_df: pd.DataFrame,
   increment_epochs: bool = False,
   note: str = "",
 ) -> StatsArchive:
   """Merge slot aggregates into the archive file (snapshot or pre-reset)."""
-  open_agg, late_agg, flip_agg, late_events, flip_events = epoch_aggs
+  open_agg, late_agg, flip_agg, sc_agg, late_events, flip_events, sc_events = epoch_aggs
   archive = read_archive(cfg)
   archive.open = merge_category(archive.open, open_agg)
   archive.late = merge_category(archive.late, late_agg)
   archive.flip = merge_category(archive.flip, flip_agg)
+  archive.second_chance = merge_category(archive.second_chance, sc_agg)
   archive.late_events.extend(late_events)
   archive.flip_events.extend(flip_events)
+  archive.second_chance_events.extend(sc_events)
   if increment_epochs:
     archive.epochs_archived += 1
   archive.last_archived_at = datetime.now(timezone.utc).isoformat()
@@ -164,7 +172,7 @@ def merge_epoch_into_archive(
   return archive
 
 
-def archive_epoch(cfg: dict[str, Any], epoch_aggs: tuple[CategoryAgg, CategoryAgg, CategoryAgg, list, list], *, epoch_df: pd.DataFrame) -> StatsArchive:
+def archive_epoch(cfg: dict[str, Any], epoch_aggs: tuple, *, epoch_df: pd.DataFrame) -> StatsArchive:
   """Merge current epoch aggregates into archive before a reset."""
   return merge_epoch_into_archive(cfg, epoch_aggs, epoch_df=epoch_df, increment_epochs=True)
 
@@ -235,8 +243,12 @@ def category_from_signal_df(
     prob_f = float(prob) if prob is not None and prob == prob else None
     outcome = int(r["outcome"])
     ok = bool(correct_fn(pd.DataFrame([r])).iloc[0])
-    sec = r.get(f"{signal_col.split('_')[0]}_seconds_remaining") if False else r.get(
-      "late_entry_seconds_remaining" if signal_col == "late_entry_signal" else "flip_seconds_remaining"
+    sec = r.get(
+      {
+        "late_entry_signal": "late_entry_seconds_remaining",
+        "flip_signal": "flip_seconds_remaining",
+        "second_chance_signal": "second_chance_seconds_remaining",
+      }.get(signal_col)
     )
     events.append({
       "slot": to_utc_timestamp(r["timestamp"]).isoformat(),
@@ -273,7 +285,8 @@ def epoch_aggs_from_df(
   open_correct_fn: Callable[[pd.DataFrame], pd.Series],
   late_correct_fn: Callable[[pd.DataFrame], pd.Series],
   flip_correct_fn: Callable[[pd.DataFrame], pd.Series],
-) -> tuple[CategoryAgg, CategoryAgg, CategoryAgg, list[dict[str, Any]], list[dict[str, Any]]]:
+  second_chance_correct_fn: Callable[[pd.DataFrame], pd.Series] | None = None,
+) -> tuple[CategoryAgg, CategoryAgg, CategoryAgg, CategoryAgg, list, list, list]:
   open_agg = category_from_open_df(df, correct_fn=open_correct_fn)
   late_agg, late_events = category_from_signal_df(
     df,
@@ -291,12 +304,21 @@ def epoch_aggs_from_df(
     long_label="FLIP LONG",
     short_label="FLIP SHORT",
   )
-  return open_agg, late_agg, flip_agg, late_events, flip_events
+  sc_fn = second_chance_correct_fn or (lambda d: pd.Series(dtype=bool))
+  sc_agg, sc_events = category_from_signal_df(
+    df,
+    signal_col="second_chance_signal",
+    prob_col="second_chance_prob_up",
+    correct_fn=sc_fn,
+    long_label="2ND LONG",
+    short_label="2ND SHORT",
+  )
+  return open_agg, late_agg, flip_agg, sc_agg, late_events, flip_events, sc_events
 
 
 def snapshot_epoch(
   cfg: dict[str, Any],
-  epoch_aggs: tuple[CategoryAgg, CategoryAgg, CategoryAgg, list, list],
+  epoch_aggs: tuple,
   *,
   epoch_df: pd.DataFrame,
   note: str = "",
@@ -305,7 +327,7 @@ def snapshot_epoch(
   return merge_epoch_into_archive(cfg, epoch_aggs, epoch_df=epoch_df, increment_epochs=False, note=note)
 
 
-def archive_epoch(cfg: dict[str, Any], epoch_aggs: tuple[CategoryAgg, CategoryAgg, CategoryAgg, list, list], *, epoch_df: pd.DataFrame) -> StatsArchive:
+def archive_epoch(cfg: dict[str, Any], epoch_aggs: tuple, *, epoch_df: pd.DataFrame) -> StatsArchive:
   """Merge current epoch aggregates into archive before a reset."""
   return merge_epoch_into_archive(cfg, epoch_aggs, epoch_df=epoch_df, increment_epochs=True)
 
@@ -315,10 +337,12 @@ def combined_public(
   epoch_open: CategoryAgg,
   epoch_late: CategoryAgg,
   epoch_flip: CategoryAgg,
+  epoch_second_chance: CategoryAgg | None = None,
 ) -> dict[str, Any]:
   open_all = merge_category(archive.open, epoch_open)
   late_all = merge_category(archive.late, epoch_late)
   flip_all = merge_category(archive.flip, epoch_flip)
+  sc_all = merge_category(archive.second_chance, epoch_second_chance or CategoryAgg())
 
   def _signal_public(agg: CategoryAgg, *, long_key: str, short_key: str) -> dict[str, Any]:
     base = agg.to_public()
@@ -340,6 +364,7 @@ def combined_public(
     "open": open_all.to_public(),
     "late_entry": _signal_public(late_all, long_key="late_long_signals", short_key="late_short_signals"),
     "flip": _signal_public(flip_all, long_key="flip_long_signals", short_key="flip_short_signals"),
+    "second_chance": _signal_public(sc_all, long_key="sc_long_signals", short_key="sc_short_signals"),
   }
 
 

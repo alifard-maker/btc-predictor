@@ -214,7 +214,7 @@
         </ul>
 
         <h3>Calibration</h3>
-        <p>Three Brier scores: <strong>slot-open</strong> (prob at t=0), <strong>late entry</strong> (first LATE signal), and <strong>flip</strong> (after losing open). Lower is better. <strong>All-time</strong> stats persist across epoch resets.</p>
+        <p>Three Brier scores: <strong>slot-open</strong> (prob at t=0), <strong>2nd Chance</strong> (reassessment at t+4min), <strong>late entry</strong> (first LATE signal), and <strong>flip</strong> (after losing open). Lower is better. <strong>All-time</strong> stats persist across epoch resets.</p>
 
         <h3>Prediction history</h3>
         <p>Recent slots: reference at t=0, UP probability, signal, and actual outcome once the slot resolves.</p>
@@ -528,6 +528,14 @@
         </div>
         <p style="font-size:.9rem;margin-bottom:.5rem">${m.message || ''}</p>`;
 
+      if (m.second_chance_signal) {
+        body += `<div class="reassess-block" style="margin-bottom:.65rem;border-color:rgba(99,102,241,.35)">
+          <h4>2nd Chance @ t+4</h4>
+          <p style="font-size:.85rem">${badge(m.second_chance_signal)}${m.second_chance_prob_up != null ? ` · <span class="up">${pct(m.second_chance_prob_up)}</span> UP` : ''}</p>
+          <p class="muted" style="font-size:.75rem;margin-top:.35rem">${m.second_chance_summary || ''}</p>
+        </div>`;
+      }
+
       if (m.active && m.bet_side !== 'NONE') {
         const refHdr = m.using_override ? 'Ref (t=0) · override' : 'Ref (t=0) · Kalshi BRTI';
         const nowAge = m.live_price_age_sec != null ? ` · ${liveAgeLabel(m.live_price_age_sec)}` : '';
@@ -650,6 +658,38 @@
       return `<div class="rolling-acc">${cards}</div>`;
     }
 
+    function renderSecondChanceStats(sc, opts = {}) {
+      const title = opts.title || '2nd Chance (t+4min)';
+      if (!sc || (!sc.n_logged && !sc.n_resolved)) return '';
+      const acc = sc.accuracy != null ? pct(sc.accuracy) : '—';
+      const dirAcc = sc.directional_accuracy != null ? pct(sc.directional_accuracy) : '—';
+      const brier = sc.brier_score != null ? sc.brier_score.toFixed(4) : '—';
+      const avgRem = sc.avg_seconds_remaining != null ? Math.round(sc.avg_seconds_remaining) + 's' : '—';
+      const delta = sc.open_vs_sc_delta != null
+        ? (sc.open_vs_sc_delta >= 0 ? '+' : '') + (sc.open_vs_sc_delta * 100).toFixed(1) + 'pp vs open'
+        : '';
+      const rolling = sc.rolling_accuracy ? `
+        <p class="muted" style="font-size:.75rem;margin:.65rem 0 .35rem">Rolling 2nd Chance hit rate:</p>
+        ${renderRollingAccuracy(sc.rolling_accuracy)}` : '';
+      return `<div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--border)">
+        <p class="muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">${title}</p>
+        <div class="cal-stats">
+          <div><span>Logged</span><strong>${sc.n_logged || 0}</strong></div>
+          <div><span>Resolved</span><strong>${sc.n_resolved || 0}</strong></div>
+          <div><span>All accuracy</span><strong>${acc}</strong></div>
+          <div><span>Directional</span><strong>${dirAcc}</strong></div>
+          <div><span>2nd Brier</span><strong>${brier}</strong></div>
+          <div><span>Avg time left</span><strong>${avgRem}</strong></div>
+          ${sc.sc_long_signals ? `<div><span>2ND LONG</span><strong>${sc.sc_long_accuracy != null ? pct(sc.sc_long_accuracy) : '—'} (${sc.sc_long_signals})</strong></div>` : ''}
+          ${sc.sc_short_signals ? `<div><span>2ND SHORT</span><strong>${sc.sc_short_accuracy != null ? pct(sc.sc_short_accuracy) : '—'} (${sc.sc_short_signals})</strong></div>` : ''}
+          ${sc.sc_no_trade_signals ? `<div><span>2ND NO TRADE</span><strong>${sc.sc_no_trade_signals}</strong></div>` : ''}
+        </div>
+        ${delta ? `<p class="muted" style="font-size:.68rem;margin-top:.5rem">${delta} on resolved slots.</p>` : ''}
+        ${rolling}
+        <p class="muted" style="font-size:.68rem;margin-top:.5rem">Runs at :04/:19/:34/:49 ET for every slot with an open prediction — 11 min left to settle.</p>
+      </div>`;
+    }
+
     function renderFlipStats(fx) {
       if (!fx || (!fx.n_logged && !fx.n_resolved)) return '';
       const acc = fx.accuracy != null ? pct(fx.accuracy) : '—';
@@ -697,10 +737,11 @@
     }
 
     function renderAllTimeStats(at) {
-      if (!at || (!at.open?.n_resolved && !at.late_entry?.n_resolved && !at.flip?.n_resolved)) return '';
+      if (!at || (!at.open?.n_resolved && !at.late_entry?.n_resolved && !at.flip?.n_resolved && !at.second_chance?.n_resolved)) return '';
       const o = at.open || {};
       const le = at.late_entry || {};
       const fx = at.flip || {};
+      const sc = at.second_chance || {};
       const archived = at.epochs_archived ? ` · ${at.epochs_archived} reset${at.epochs_archived > 1 ? 's' : ''} archived` : '';
       const snap = at.snapshot_through
         ? `<p class="snap-line">Archived through <strong>${time(at.snapshot_through)}</strong>${at.snapshot_note ? ` · ${at.snapshot_note}` : ''}</p>`
@@ -724,6 +765,15 @@
           ${le.late_short_signals ? `<div><span>LATE SHORT</span><strong>${le.late_short_accuracy != null ? pct(le.late_short_accuracy) : '—'} (${le.late_short_signals})</strong></div>` : ''}
         </div>
         ${le.rolling_accuracy ? `<p class="muted" style="font-size:.75rem;margin:.65rem 0 .35rem">Rolling late-entry (all-time window):</p>${renderRollingAccuracy(le.rolling_accuracy)}` : ''}` : ''}
+        ${sc.n_resolved || sc.n_logged ? `
+        <div class="cal-stats" style="margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border)">
+          <div><span>2nd Chance resolved</span><strong>${sc.n_resolved || 0}</strong></div>
+          ${sc.brier_score != null ? `<div><span>2nd Brier</span><strong>${sc.brier_score.toFixed(4)}</strong></div>` : ''}
+          ${sc.accuracy != null ? `<div><span>2nd accuracy</span><strong>${pct(sc.accuracy)}</strong></div>` : ''}
+          ${sc.sc_long_signals ? `<div><span>2ND LONG</span><strong>${sc.sc_long_accuracy != null ? pct(sc.sc_long_accuracy) : '—'} (${sc.sc_long_signals})</strong></div>` : ''}
+          ${sc.sc_short_signals ? `<div><span>2ND SHORT</span><strong>${sc.sc_short_accuracy != null ? pct(sc.sc_short_accuracy) : '—'} (${sc.sc_short_signals})</strong></div>` : ''}
+        </div>
+        ${sc.rolling_accuracy ? `<p class="muted" style="font-size:.75rem;margin:.65rem 0 .35rem">Rolling 2nd Chance (all-time window):</p>${renderRollingAccuracy(sc.rolling_accuracy)}` : ''}` : ''}
         ${fx.n_resolved || fx.n_logged ? `
         <div class="cal-stats" style="margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border)">
           <div><span>Flip resolved</span><strong>${fx.n_resolved || 0}</strong></div>
@@ -737,9 +787,10 @@
       const s = data.summary;
       const le = s.late_entry || {};
       const fx = s.flip || {};
+      const sc = s.second_chance || {};
       const at = s.all_time || {};
-      const hasEpoch = s.n_resolved || le.n_logged || fx.n_logged;
-      const hasAllTime = at.open?.n_resolved || at.late_entry?.n_resolved || at.flip?.n_resolved;
+      const hasEpoch = s.n_resolved || le.n_logged || fx.n_logged || sc.n_logged;
+      const hasAllTime = at.open?.n_resolved || at.late_entry?.n_resolved || at.flip?.n_resolved || at.second_chance?.n_resolved;
       if (!hasEpoch && !hasAllTime) {
         const excluded = s.n_excluded_non_kalshi ? ` (${s.n_excluded_non_kalshi} older rows excluded — run Kalshi backfill)` : '';
         $('calibration').innerHTML = `<p class="muted">Not enough Kalshi-resolved predictions yet${excluded}. Check back after slots settle.</p>`;
@@ -764,6 +815,7 @@
           ${open.long_signals ? `<div><span>LONG @ open</span><strong>${open.long_accuracy != null ? pct(open.long_accuracy) : '—'} (${open.long_signals})</strong></div>`:''}
           ${open.short_signals ? `<div><span>SHORT @ open</span><strong>${open.short_accuracy != null ? pct(open.short_accuracy) : '—'} (${open.short_signals})</strong></div>`:''}
         </div>
+        ${renderSecondChanceStats(sc, { title: '2nd Chance — this epoch' })}
         ${renderLateEntryStats(le, { title: 'Late entry — this epoch', showRolling: true })}
         ${renderFlipStats(fx)}
       </div>` : `<p class="muted" style="margin-bottom:.75rem">Current epoch is empty after reset — all-time stats below still include prior epochs.</p>`;
@@ -782,8 +834,8 @@
         <thead><tr><th>Slot</th><th>Signal</th><th>Move</th><th>Result</th><th>Lesson</th></tr></thead>
         <tbody>${rows.map(r => {
           const move = r.move_pct != null ? `${r.move_pct >= 0 ? '+' : ''}${r.move_pct.toFixed(2)}%` : '—';
-          const sig = [r.signal, r.late_entry_signal, r.flip_signal].filter(Boolean).join(' → ') || (r.signal || 'NO TRADE');
-          const evalSig = r.flip_signal || r.late_entry_signal;
+          const sig = [r.signal, r.second_chance_signal, r.late_entry_signal, r.flip_signal].filter(Boolean).join(' → ') || (r.signal || 'NO TRADE');
+          const evalSig = r.flip_signal || r.late_entry_signal || r.second_chance_signal;
           const dir = evalSig
             ? (r.actual_up != null ? (((evalSig.includes('LONG') || evalSig === 'FLIP LONG') ? r.actual_up : !r.actual_up) ? '<span class="up">✓</span>' : '<span class="down">✗</span>') : '—')
             : (r.direction_correct == null ? '—' : r.direction_correct ? '<span class="up">✓</span>' : '<span class="down">✗</span>');
@@ -803,13 +855,14 @@
         return;
       }
       $('history').innerHTML = `<table>
-        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>Close BRTI</th><th>UP</th><th>Open</th><th>Mid-slot</th><th>Outcome</th></tr></thead>
+        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>Close BRTI</th><th>UP</th><th>Open</th><th>2nd Chance</th><th>Mid-slot</th><th>Outcome</th></tr></thead>
         <tbody>${rows.map(p => `<tr>
           <td>${p.slot_label || time(p.timestamp)}</td>
           <td title="${p.reference_source || ''}">${price(p.reference_price ?? p.price)}</td>
           <td title="${p.exit_source || ''}">${p.exit_price != null ? price(p.exit_price) : '—'}</td>
           <td class="up">${pct(p.prob_up)}</td>
           <td>${badge(p.signal)}</td>
+          <td>${p.second_chance_signal ? badge(p.second_chance_signal) + (p.second_chance_prob_up != null ? ` <span class="muted">${pct(p.second_chance_prob_up)}</span>` : '') : '—'}</td>
           <td>${p.flip_signal ? badge(p.flip_signal) + (p.flip_prob_up != null ? ` <span class="muted">${pct(p.flip_prob_up)}</span>` : '') : p.late_entry_signal ? badge(p.late_entry_signal) + (p.late_entry_prob_up != null ? ` <span class="muted">${pct(p.late_entry_prob_up)}</span>` : '') : '—'}</td>
           <td>${p.outcome==null?'—':(p.outcome?'<span class="up">UP</span>':'<span class="down">DOWN</span>')}</td>
         </tr>`).join('')}</tbody></table>`;

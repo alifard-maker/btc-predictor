@@ -51,7 +51,7 @@ def archive_hourly_epoch(
   increment_epochs: bool = False,
   note: str = "",
 ):
-  open_agg, _, _, late_events, _ = aggs
+  open_agg, _, _, _, late_events, _, _ = aggs
   archive = read_hourly_archive(cfg)
   archive.open = merge_category(archive.open, open_agg)
   archive.late_events.extend(late_events)
@@ -162,7 +162,7 @@ class HourlyCalibrationTracker:
     yes_rows = leans[leans["primary_signal"] == "LEAN YES"]
     no_rows = leans[leans["primary_signal"] == "LEAN NO"]
 
-    open_agg, _, _, _, _ = epoch_aggs_from_df(
+    open_agg, _, _, _, _, _, _ = epoch_aggs_from_df(
       epoch_df,
       open_correct_fn=self._correct,
       late_correct_fn=lambda d: pd.Series(dtype=bool),
