@@ -7,7 +7,9 @@ RUN npm install
 
 COPY . .
 
-# Set at build time so Next.js embeds the API URL in client bundle
+# Next.js expects public/ to exist for standalone Docker copy
+RUN mkdir -p public
+
 ARG NEXT_PUBLIC_API_URL=https://btc-predictor-production-f460.up.railway.app
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
@@ -28,7 +30,6 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
 
-EXPOSE 3000
+EXPOSE 8080
 
-# Railway injects PORT at runtime; default 8080 matches Railway networking UI
 CMD ["sh", "-c", "HOSTNAME=0.0.0.0 PORT=${PORT:-8080} node server.js"]
