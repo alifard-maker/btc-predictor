@@ -19,14 +19,23 @@ console = Console()
 @click.command()
 @click.option("--model-type", default=None, type=click.Choice(["lightgbm", "xgboost", "random_forest"]))
 @click.option("--cv", is_flag=True, help="Run time-series cross-validation")
-def main(model_type: str | None, cv: bool) -> None:
+@click.option("--collect-aux", is_flag=True, help="Refresh funding/OI/macro before training")
+@click.option("--min-samples", default=None, type=int, help="Override min_train_samples")
+def main(model_type: str | None, cv: bool, collect_aux: bool, min_samples: int | None) -> None:
   cfg = load_config()
   ensure_dirs(cfg)
 
   if model_type:
     cfg["model"]["type"] = model_type
+  if min_samples:
+    cfg["model"]["min_train_samples"] = min_samples
 
   storage = CandleStorage(cfg)
+  if collect_aux:
+    from src.data.storage import HistoricalCollector
+    console.print("Collecting auxiliary data (funding, OI, macro)...")
+    HistoricalCollector(cfg).collect_auxiliary()
+
   df_1m = storage.load("1m")
   df_15m = storage.load("15m")
 

@@ -220,6 +220,12 @@
     </div>
 
     <div class="card">
+      <h2>Slot post-mortems</h2>
+      <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">After each Kalshi-settled slot — what moved vs what we predicted.</p>
+      <div id="postmortems"><p class="muted">Loading…</p></div>
+    </div>
+
+    <div class="card">
       <h2>Prediction history</h2>
       <div style="overflow-x:auto" id="history"><p class="muted">Loading…</p></div>
     </div>
@@ -510,6 +516,8 @@
           ${live}
         </div>
         <div style="margin-bottom:.75rem">${badge(p.signal)}</div>
+        ${p.regime_notes && p.regime_notes.length ? `<ul class="monitor-reasons" style="margin-bottom:.75rem">${p.regime_notes.map(n => `<li>${n}</li>`).join('')}</ul>` : ''}
+        ${p.raw_prob_up != null && Math.abs(p.raw_prob_up - p.prob_up) > 0.02 ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Raw model: ${pct(p.raw_prob_up)} UP (calibrated to headline %)</p>` : ''}
         <div class="bar-row"><span class="up">UP</span><div class="track"><div class="fill-up" style="width:${up}%"></div></div><span>${up.toFixed(1)}%</span></div>
         <div class="bar-row"><span class="down">DOWN</span><div class="track"><div class="fill-down" style="width:${down}%"></div></div><span>${down.toFixed(1)}%</span></div>
         <div class="metrics">
@@ -582,6 +590,27 @@
         </div>`;
     }
 
+    function renderPostmortems(rows) {
+      if (!rows || !rows.length) {
+        $('postmortems').innerHTML = '<p class="muted">No settled slots reviewed yet.</p>';
+        return;
+      }
+      $('postmortems').innerHTML = `<table>
+        <thead><tr><th>Slot</th><th>Signal</th><th>Move</th><th>Result</th><th>Lesson</th></tr></thead>
+        <tbody>${rows.map(r => {
+          const move = r.move_pct != null ? `${r.move_pct >= 0 ? '+' : ''}${r.move_pct.toFixed(2)}%` : '—';
+          const dir = r.direction_correct == null ? '—' : r.direction_correct ? '<span class="up">✓</span>' : '<span class="down">✗</span>';
+          const trade = r.trade_correct == null ? '' : r.trade_correct ? ' · trade ✓' : ' · trade ✗';
+          return `<tr>
+            <td>${time(r.slot_start || r.timestamp)}</td>
+            <td>${badge(r.signal || 'NO TRADE')}</td>
+            <td class="${(r.move_pct||0)>=0?'up':'down'}">${move}</td>
+            <td>${dir}${trade}</td>
+            <td style="font-size:.78rem;max-width:280px">${r.summary || (r.lessons && r.lessons[0]) || '—'}</td>
+          </tr>`;
+        }).join('')}</tbody></table>`;
+    }
+
     function renderHistory(rows) {
       if (!rows.length) {
         $('history').innerHTML = '<p class="muted">No predictions logged yet.</p>';
@@ -643,6 +672,7 @@
         get('/api/predictions?limit=20').then(renderHistory).catch(() => renderHistory([])),
         get('/api/calibration').then(renderCalibration).catch(() =>
           $('calibration').innerHTML = '<p class="muted">Calibration unavailable yet.</p>'),
+        get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])),
       ];
       await Promise.all(tasks);
     }

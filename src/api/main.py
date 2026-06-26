@@ -23,7 +23,7 @@ from src.api.auth import (
 
 from src import __version__ as APP_VERSION
 from src.config import load_config
-from src.data.storage import HistoricalCollector
+from src.data.storage import CandleStorage, HistoricalCollector
 from src.models.predictor import Prediction
 from src.scheduler.loop import PredictionLoop
 
@@ -53,6 +53,8 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     "confidence": round(pred.confidence, 4),
     "expected_move": round(pred.expected_move, 2),
     "signal": pred.signal.value,
+    "raw_prob_up": round(pred.raw_prob_up, 4) if pred.raw_prob_up is not None else None,
+    "regime_notes": pred.regime_notes or [],
     "indicators": pred.indicators,
     "formatted": _loop.predictor.format_output(pred) if _loop else "",
   }
@@ -332,6 +334,36 @@ def collect_historical(
 
   threading.Thread(target=_run, daemon=True).start()
   return {"status": "started", "years": years, "message": "Collection running in background. Check /api/status for candle count."}
+
+
+@app.get("/api/postmortems")
+def list_postmortems(limit: int = Query(default=15, le=100)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.postmortems.load_recent(limit)
+
+
+@app.post("/api/admin/train")
+def admin_train(_: None = Depends(_verify_admin)):
+  """Train LightGBM on stored candles and save model + calibrator."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.models.trainer import ModelTrainer
+
+  storage = CandleStorage(_cfg)
+  df_15m = storage.load("15m")
+  df_1m = storage.load("1m")
+  if df_15m.empty:
+    raise HTTPException(400, "No 15m candle data — run collect first")
+  trainer = ModelTrainer(_cfg)
+  try:
+    metrics = trainer.train(df_15m, df_1m if not df_1m.empty else None)
+  except ValueError as e:
+    raise HTTPException(400, str(e)) from e
+  model_path = Path(_cfg["paths"]["models"]) / "model.joblib"
+  trainer.save(model_path)
+  _loop.predictor.load_model(str(model_path))
+  return {"status": "ok", "model_path": str(model_path), "metrics": metrics}
 
 
 @app.post("/api/admin/backfill-kalshi")

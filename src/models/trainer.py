@@ -10,7 +10,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
 
+from src.data.auxiliary import AuxiliaryStore
 from src.features.engineering import add_label, build_feature_matrix, feature_columns
+from src.features.labels import add_slot_label
+from src.models.prob_calibration import ProbabilityCalibrator
 
 
 def _make_model(model_type: str):
@@ -54,6 +57,10 @@ class ModelTrainer:
     self.cfg = cfg
     self.model = None
     self.feature_names: list[str] = []
+    self.calibrator = ProbabilityCalibrator()
+
+  def _auxiliary(self) -> dict[str, pd.DataFrame]:
+    return AuxiliaryStore(self.cfg).load_all()
 
   def prepare_training_data(
     self,
@@ -61,8 +68,23 @@ class ModelTrainer:
     df_1m: pd.DataFrame | None = None,
   ) -> tuple[pd.DataFrame, pd.Series]:
     horizon = self.cfg.get("prediction_horizon_minutes", 15)
-    features = build_feature_matrix(df_15m, df_1m, self.cfg, include_phase2=True, primary_timeframe="15m")
-    features = add_label(features, horizon_minutes=horizon, timeframe_minutes=15)
+    mcfg = self.cfg.get("model", {})
+    features = build_feature_matrix(
+      df_15m,
+      df_1m,
+      self.cfg,
+      include_phase2=True,
+      primary_timeframe="15m",
+      auxiliary=self._auxiliary(),
+    )
+    if mcfg.get("slot_labels", True):
+      features = add_slot_label(
+        features,
+        tz_name=self.cfg.get("timezone", "America/New_York"),
+        horizon_minutes=horizon,
+      )
+    else:
+      features = add_label(features, horizon_minutes=horizon, timeframe_minutes=15)
     cols = feature_columns(features)
     self.feature_names = cols
 
@@ -77,7 +99,7 @@ class ModelTrainer:
     df_1m: pd.DataFrame | None = None,
   ) -> dict[str, float]:
     X, y = self.prepare_training_data(df_15m, df_1m)
-    min_samples = self.cfg.get("model", {}).get("min_train_samples", 10000)
+    min_samples = self.cfg.get("model", {}).get("min_train_samples", 1500)
     if len(X) < min_samples:
       raise ValueError(f"Need at least {min_samples} samples, got {len(X)}")
 
@@ -100,8 +122,25 @@ class ModelTrainer:
       "log_loss": float(log_loss(y_test, proba)),
       "n_train": len(X_train),
       "n_test": len(X_test),
+      "n_features": len(self.feature_names),
     }
+
+    if self.cfg.get("model", {}).get("calibrate", True):
+      if self.calibrator.fit(proba, y_test):
+        cal = np.array([self.calibrator.transform(p) for p in proba])
+        metrics["brier_calibrated"] = float(brier_score_loss(y_test, cal))
+        metrics["calibrator_fitted"] = 1.0
+      else:
+        metrics["calibrator_fitted"] = 0.0
+
     return metrics
+
+  def fit_calibrator_from_tracker(self, tracker) -> bool:
+    """Refit isotonic calibrator from resolved DB predictions."""
+    df = tracker.load_resolved()
+    if df.empty or len(df) < 30:
+      return False
+    return self.calibrator.fit(df["prob_up"], df["outcome"])
 
   def cross_validate(self, df_15m: pd.DataFrame, df_1m: pd.DataFrame | None = None, n_splits: int = 5) -> dict:
     X, y = self.prepare_training_data(df_15m, df_1m)
@@ -120,9 +159,16 @@ class ModelTrainer:
   def save(self, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"model": self.model, "features": self.feature_names}, path)
+    joblib.dump({
+      "model": self.model,
+      "features": self.feature_names,
+      "calibrator": self.calibrator.to_dict(),
+      "feature_version": 2,
+    }, path)
 
   def load(self, path: str | Path) -> None:
     data = joblib.load(path)
     self.model = data["model"]
     self.feature_names = data["features"]
+    if "calibrator" in data:
+      self.calibrator = ProbabilityCalibrator.from_dict(data["calibrator"])

@@ -117,6 +117,7 @@ class DataFetcher:
       if last_ts <= since_ms:
         break
       since_ms = last_ts + 1
+      ex = self._ensure_exchange()
       time.sleep(ex.rateLimit / 1000)
 
     if not frames:
@@ -124,7 +125,12 @@ class DataFetcher:
 
     df = pd.concat(frames, ignore_index=True)
     df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
-    df = df[df["timestamp"] <= pd.Timestamp(end, tz="UTC")]
+    end_cut = pd.Timestamp(end)
+    if end_cut.tzinfo is None:
+      end_cut = end_cut.tz_localize("UTC")
+    else:
+      end_cut = end_cut.tz_convert("UTC")
+    df = df[df["timestamp"] <= end_cut]
     return df.reset_index(drop=True)
 
   def fetch_latest_candles(self, interval: str, count: int = 500) -> pd.DataFrame:

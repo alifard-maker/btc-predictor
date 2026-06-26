@@ -16,10 +16,11 @@ from src.calibration.tracker import CalibrationTracker
 from src.config import ensure_dirs, load_config
 from src.data.fetcher import DataFetcher
 from src.data.kalshi import KalshiClient, KalshiPriceQuote
-from src.data.storage import CandleStorage
+from src.data.storage import CandleStorage, HistoricalCollector
 from src.db.store import PredictionResolution
 from src.features.slots import current_slot_start, floor_to_15m, slot_end
 from src.logging.prediction_log import PredictionLogger
+from src.logging.postmortem_log import PostmortemLogger
 from src.models.predictor import Prediction, Predictor
 from src.trading.exit_advisor import ExitAdvisor, SlotMonitor
 
@@ -38,6 +39,7 @@ class PredictionLoop:
     self.storage = CandleStorage(self.cfg)
     self.predictor = Predictor(self.cfg, model_path=model_path or self._default_model_path())
     self.logger = PredictionLogger(self.cfg)
+    self.postmortems = PostmortemLogger(self.cfg)
     self.calibration = CalibrationTracker(self.cfg)
     self.tz = self.cfg.get("timezone", "America/New_York")
     self.horizon = self.cfg.get("prediction_horizon_minutes", 15)
@@ -101,6 +103,45 @@ class PredictionLoop:
     if price_lookup:
       resolved = self.calibration.resolve_with_prices(price_lookup)
       log.info("Resolved %d predictions via Kalshi BRTI", resolved)
+      self._log_postmortems(price_lookup.keys())
+
+  def _log_postmortems(self, timestamps: Any) -> None:
+    try:
+      df = self.calibration.store.load_resolved()
+      if df.empty:
+        return
+      ts_set = {pd.Timestamp(t, utc=True).isoformat() for t in timestamps}
+      for _, row in df.iterrows():
+        ts_key = pd.Timestamp(row["timestamp"], utc=True).isoformat()
+        if ts_key in ts_set:
+          self.postmortems.log_row(row.to_dict())
+      self.refit_calibrator()
+    except Exception as e:
+      log.warning("Postmortem logging failed: %s", e)
+
+  def collect_auxiliary(self) -> None:
+    try:
+      collector = HistoricalCollector(self.cfg)
+      counts = collector.collect_auxiliary()
+      log.info("Auxiliary data refreshed: %s", counts)
+    except Exception as e:
+      log.warning("Auxiliary collect failed: %s", e)
+
+  def refit_calibrator(self) -> bool:
+    if self.predictor.model is None:
+      return False
+    from src.models.trainer import ModelTrainer
+    trainer = ModelTrainer(self.cfg)
+    trainer.model = self.predictor.model
+    trainer.feature_names = self.predictor.feature_names
+    if trainer.fit_calibrator_from_tracker(self.calibration):
+      self.predictor.calibrator = trainer.calibrator
+      model_path = Path(self.cfg["paths"]["models"]) / "model.joblib"
+      if model_path.exists():
+        trainer.save(model_path)
+      log.info("Probability calibrator refit from %d resolved slots", len(self.calibration.load_resolved()))
+      return True
+    return False
 
   def run_prediction(self) -> Prediction | None:
     try:
@@ -391,6 +432,9 @@ class PredictionLoop:
     self._schedule_predictions(scheduler)
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")
+    scheduler.add_job(self.collect_auxiliary, "interval", hours=6, id="auxiliary", max_instances=1)
+    scheduler.add_job(self.collect_auxiliary, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=12), id="auxiliary_now")
+    scheduler.add_job(self.refit_calibrator, "interval", hours=6, id="refit_calibrator", max_instances=1)
     poll_sec = float(self.cfg.get("kalshi", {}).get("brti_poll_sec", 1))
     scheduler.add_job(self.poll_brti, "interval", seconds=poll_sec, id="brti_poll", max_instances=1)
     scheduler.add_job(self.poll_brti, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=1), id="brti_now")

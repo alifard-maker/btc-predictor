@@ -5,7 +5,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.data.auxiliary import AuxiliaryStore
 from src.features.engineering import add_label, build_feature_matrix, feature_columns
+from src.features.labels import add_slot_label
 from src.models.trainer import ModelTrainer, _make_model
 from src.trading.edge import EdgeCalculator, Signal
 
@@ -25,8 +27,14 @@ class Backtester:
     train_window: int = 2000,
     step: int = 200,
   ) -> pd.DataFrame:
-    features = build_feature_matrix(df_15m, df_1m, self.cfg, include_phase2=True, primary_timeframe="15m")
-    features = add_label(features, horizon_minutes=self.horizon, timeframe_minutes=15)
+    aux = AuxiliaryStore(self.cfg).load_all()
+    features = build_feature_matrix(
+      df_15m, df_1m, self.cfg, include_phase2=True, primary_timeframe="15m", auxiliary=aux,
+    )
+    if self.cfg.get("model", {}).get("slot_labels", True):
+      features = add_slot_label(features, tz_name=self.cfg.get("timezone", "America/New_York"), horizon_minutes=self.horizon)
+    else:
+      features = add_label(features, horizon_minutes=self.horizon, timeframe_minutes=15)
     cols = feature_columns(features)
     clean = features.dropna(subset=cols + ["label", "future_return"]).reset_index(drop=True)
 

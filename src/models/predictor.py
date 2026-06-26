@@ -7,13 +7,20 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from src.features.engineering import build_feature_matrix, feature_columns
+from src.data.auxiliary import AuxiliaryStore
+from src.features.engineering import (
+  build_feature_matrix,
+  feature_columns,
+  open_drive_features,
+)
 from src.features.slots import (
   floor_to_15m,
   slot_end,
   slot_label,
 )
+from src.models.prob_calibration import ProbabilityCalibrator
 from src.trading.edge import EdgeCalculator, Signal
+from src.trading.regime import RegimeFilter
 
 
 @dataclass
@@ -35,6 +42,8 @@ class Prediction:
   reference_trade_time: str | None = None
   current_price: float | None = None
   current_price_as_of: str | None = None
+  raw_prob_up: float | None = None
+  regime_notes: list[str] | None = None
 
 
 class Predictor:
@@ -42,17 +51,27 @@ class Predictor:
     self.cfg = cfg
     self.tz = cfg.get("timezone", "America/New_York")
     self.edge = EdgeCalculator(cfg)
+    self.regime = RegimeFilter(cfg)
     self.model = None
     self.feature_names: list[str] = []
+    self.calibrator = ProbabilityCalibrator()
+    self._auxiliary: dict | None = None
 
     if model_path:
       self.load_model(model_path)
+
+  def _get_auxiliary(self) -> dict:
+    if self._auxiliary is None:
+      self._auxiliary = AuxiliaryStore(self.cfg).load_all()
+    return self._auxiliary
 
   def load_model(self, path: str) -> None:
     import joblib
     data = joblib.load(path)
     self.model = data["model"]
     self.feature_names = data["features"]
+    if "calibrator" in data:
+      self.calibrator = ProbabilityCalibrator.from_dict(data["calibrator"])
 
   def _baseline_prob(self, features: pd.DataFrame) -> float:
     row = features.iloc[-1]
@@ -92,6 +111,12 @@ class Predictor:
         score += np.sign(mom) * 0.07
       elif row["volume_spike"] > 1.2 and abs(mom) > 0.001:
         score += np.sign(mom) * 0.03
+    if "open_drive_return" in row and not pd.isna(row["open_drive_return"]):
+      score += np.clip(float(row["open_drive_return"]) * 25, -0.12, 0.12)
+    if "funding_rate" in row and not pd.isna(row["funding_rate"]):
+      score -= np.clip(float(row["funding_rate"]) * 8, -0.06, 0.06)
+    if "nq_momentum" in row and not pd.isna(row["nq_momentum"]):
+      score += np.clip(float(row["nq_momentum"]) * 6, -0.05, 0.05)
     return float(np.clip(score, 0.05, 0.95))
 
   def _indicator(
@@ -222,6 +247,18 @@ class Predictor:
         "Price stretched above/below VWAP",
       ))
 
+    if "open_drive_return" in row and not pd.isna(row["open_drive_return"]):
+      val = float(row["open_drive_return"])
+      strength = min(1.0, abs(val) / 0.0015)
+      bias = "up" if val > 0 else "down" if val < 0 else "neutral"
+      out.append(self._indicator("Open drive (1m)", f"{val * 100:+.2f}%", bias, strength, "short"))
+
+    if "funding_rate" in row and not pd.isna(row["funding_rate"]):
+      fr = float(row["funding_rate"]) * 100
+      strength = min(1.0, abs(fr) / 0.03)
+      bias = "down" if fr > 0.01 else "up" if fr < -0.01 else "neutral"
+      out.append(self._indicator("Funding", f"{fr:+.3f}%", bias, strength, "context"))
+
     return out
 
   def predict(
@@ -239,15 +276,22 @@ class Predictor:
     if len(df_15m) < min_candles:
       raise ValueError(f"Need at least {min_candles} fifteen-minute candles, got {len(df_15m)}")
 
-    features = build_feature_matrix(df_15m, df_1m, self.cfg, include_phase2=True, primary_timeframe="15m")
-    latest = features.iloc[-1]
-    candle_price = float(latest["close"])
-    current_price = float(current_price) if current_price is not None else candle_price
-
-    # Slot for the upcoming/current 15m interval in ET
     now_utc = pd.Timestamp(datetime.now(timezone.utc))
     slot_s = floor_to_15m(now_utc, self.tz)
     slot_e = slot_end(slot_s, self.tz)
+
+    features = build_feature_matrix(
+      df_15m,
+      df_1m,
+      self.cfg,
+      include_phase2=True,
+      primary_timeframe="15m",
+      auxiliary=self._get_auxiliary(),
+      open_drive=open_drive_features(df_1m, slot_s, tz_name=self.tz),
+    )
+    latest = features.iloc[-1]
+    candle_price = float(latest["close"])
+    current_price = float(current_price) if current_price is not None else candle_price
 
     if kalshi_reference is not None and kalshi_reference > 0:
       ref_price = float(kalshi_reference)
@@ -261,11 +305,15 @@ class Predictor:
 
     if self.model is not None:
       cols = self.feature_names or feature_columns(features)
+      for c in cols:
+        if c not in latest.index:
+          latest[c] = 0.0
       X = features[cols].iloc[[-1]].fillna(0)
-      prob_up = float(self.model.predict_proba(X)[0, 1])
+      raw_prob_up = float(self.model.predict_proba(X)[0, 1])
     else:
-      prob_up = self._baseline_prob(features)
+      raw_prob_up = self._baseline_prob(features)
 
+    prob_up = self.calibrator.transform(raw_prob_up) if self.calibrator.fitted else raw_prob_up
     prob_down = 1.0 - prob_up
     confidence = abs(prob_up - 0.5) * 2
     horizon = self.cfg.get("prediction_horizon_minutes", 15)
@@ -279,8 +327,11 @@ class Predictor:
       vol = 0.002
     direction = 1 if prob_up >= 0.5 else -1
     expected_move = direction * vol * ref_price * np.sqrt(horizon)
+    expected_move_pct = (expected_move / ref_price * 100) if ref_price else 0.0
 
     signal = self.edge.recommend(prob_up)
+    regime_decision = self.regime.evaluate(latest, expected_move_pct=expected_move_pct)
+    signal = self.regime.gate_signal(signal, regime_decision)
     snap = {c: float(latest[c]) for c in feature_columns(features) if c in latest and not pd.isna(latest[c])}
     indicators = self._build_indicators(latest)
 
@@ -296,6 +347,8 @@ class Predictor:
       current_price_as_of=(
         current_trade_time.isoformat() if current_trade_time is not None else None
       ),
+      raw_prob_up=raw_prob_up,
+      regime_notes=regime_decision.reasons or None,
       prob_up=prob_up,
       prob_down=prob_down,
       confidence=confidence,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -144,6 +146,131 @@ def compute_market_structure_features(df: pd.DataFrame) -> pd.DataFrame:
   return out
 
 
+def compute_session_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+  """ET calendar + short-term slot autocorrelation."""
+  if not cfg.get("features", {}).get("session", True):
+    return df
+  out = df.copy()
+  tz = cfg.get("timezone", "America/New_York")
+  if "timestamp" not in out.columns:
+    return out
+  ts = pd.to_datetime(out["timestamp"], utc=True)
+  local = ts.dt.tz_convert(tz)
+  hour = local.dt.hour + local.dt.minute / 60.0
+  out["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+  out["hour_cos"] = np.cos(2 * np.pi * hour / 24)
+  out["dow_sin"] = np.sin(2 * np.pi * local.dt.dayofweek / 7)
+  out["dow_cos"] = np.cos(2 * np.pi * local.dt.dayofweek / 7)
+  out["is_us_session"] = ((hour >= 9.5) & (hour < 16)).astype(float)
+  if "return_1" in out.columns:
+    out["prev_slot_up"] = (out["return_1"].shift(1) > 0).astype(float)
+    out["prev_slot_return"] = out["return_1"].shift(1)
+    out["slot_streak"] = (
+      (out["return_1"] > 0).astype(int)
+      - (out["return_1"] < 0).astype(int)
+    ).rolling(4).sum()
+  return out
+
+
+def _merge_asof_feature(
+  base: pd.DataFrame,
+  aux: pd.DataFrame,
+  value_col: str,
+  out_col: str,
+) -> pd.DataFrame:
+  if aux.empty or value_col not in aux.columns:
+    base[out_col] = np.nan
+    return base
+  left = base[["timestamp"]].copy().sort_values("timestamp")
+  right = aux[["timestamp", value_col]].dropna().sort_values("timestamp")
+  if right.empty:
+    base[out_col] = np.nan
+    return base
+  merged = pd.merge_asof(left, right, on="timestamp", direction="backward")
+  base[out_col] = merged[value_col].values
+  return base
+
+
+def merge_auxiliary_features(
+  df: pd.DataFrame,
+  auxiliary: dict[str, pd.DataFrame] | None,
+  cfg: dict,
+) -> pd.DataFrame:
+  if not cfg.get("features", {}).get("auxiliary", True) or not auxiliary:
+    return df
+  out = df.copy()
+  if "timestamp" not in out.columns:
+    return out
+  out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True)
+  out = out.sort_values("timestamp")
+
+  funding = auxiliary.get("funding_rate")
+  if funding is not None and not funding.empty:
+    out = _merge_asof_feature(out, funding, "fundingRate", "funding_rate")
+    out["funding_rate_chg"] = out["funding_rate"].diff()
+
+  oi = auxiliary.get("open_interest")
+  if oi is not None and not oi.empty:
+    col = "sumOpenInterestValue" if "sumOpenInterestValue" in oi.columns else "sumOpenInterest"
+    if col in oi.columns:
+      out = _merge_asof_feature(out, oi, col, "open_interest")
+      out["open_interest_chg"] = out["open_interest"].pct_change()
+
+  nq = auxiliary.get("nasdaq_futures")
+  if nq is not None and not nq.empty and "close" in nq.columns:
+    nq = nq.copy()
+    nq["nq_ret_1"] = nq["close"].pct_change()
+    out = _merge_asof_feature(out, nq, "nq_ret_1", "nq_momentum")
+
+  dxy = auxiliary.get("dxy")
+  if dxy is not None and not dxy.empty and "close" in dxy.columns:
+    dxy = dxy.copy()
+    dxy["dxy_ret_1"] = dxy["close"].pct_change()
+    out = _merge_asof_feature(out, dxy, "dxy_ret_1", "dxy_momentum")
+
+  return out
+
+
+def open_drive_features(
+  df_1m: pd.DataFrame | None,
+  slot_start: pd.Timestamp,
+  *,
+  tz_name: str = "America/New_York",
+  bars: int = 3,
+) -> dict[str, float]:
+  """Live 1m microstructure at slot open (first N minutes)."""
+  if df_1m is None or df_1m.empty:
+    return {}
+  df = df_1m.copy()
+  df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+  slot = pd.Timestamp(slot_start)
+  if slot.tzinfo is None:
+    slot = slot.tz_localize("UTC")
+  in_slot = df[df["timestamp"] >= slot].head(bars)
+  if len(in_slot) < 1:
+    return {}
+  first = float(in_slot.iloc[0]["open"])
+  last = float(in_slot.iloc[-1]["close"])
+  ret = (last - first) / first if first else 0.0
+  vol = float(in_slot["volume"].sum())
+  clv = ((in_slot["close"] - in_slot["low"]) - (in_slot["high"] - in_slot["close"])) / (
+    (in_slot["high"] - in_slot["low"]).replace(0, np.nan)
+  )
+  imb = float((clv * in_slot["volume"]).sum() / max(vol, 1e-9))
+  return {
+    "open_drive_return": ret,
+    "open_drive_imbalance": imb,
+    "open_drive_bars": float(len(in_slot)),
+  }
+
+
+def inject_row_features(row: pd.Series, extras: dict[str, float]) -> pd.Series:
+  out = row.copy()
+  for k, v in extras.items():
+    out[k] = v
+  return out
+
+
 def _slot_window_label(candles: int) -> str:
   hours = candles * 15 // 60
   return f"{hours}h" if hours * 60 == candles * 15 else f"w{candles}"
@@ -207,6 +334,8 @@ def build_feature_matrix(
   cfg: dict | None = None,
   include_phase2: bool = True,
   primary_timeframe: str = "15m",
+  auxiliary: dict[str, pd.DataFrame] | None = None,
+  open_drive: dict[str, float] | None = None,
 ) -> pd.DataFrame:
   """
   Build features on primary timeframe (default 15m).
@@ -220,11 +349,14 @@ def build_feature_matrix(
     base = compute_market_structure_features(base)
 
   base = compute_slot_context_features(base, cfg)
+  base = compute_session_features(base, cfg)
+  base = merge_auxiliary_features(base, auxiliary, cfg)
 
   if df_context is not None and not df_context.empty and primary_timeframe == "15m":
     ctx = df_context.copy()
     ctx["timestamp"] = pd.to_datetime(ctx["timestamp"], utc=True)
-    ctx["slot_start"] = ctx["timestamp"].apply(floor_to_15m)
+    tz = cfg.get("timezone", "America/New_York")
+    ctx["slot_start"] = ctx["timestamp"].apply(lambda t: floor_to_15m(t, tz))
     agg = ctx.groupby("slot_start").agg(
       m1_return=("close", lambda s: (s.iloc[-1] - s.iloc[0]) / s.iloc[0] if len(s) > 1 else 0),
       m1_volatility=("close", lambda s: s.pct_change().std() if len(s) > 2 else 0),
@@ -232,6 +364,11 @@ def build_feature_matrix(
       m1_bars=("close", "count"),
     ).reset_index().rename(columns={"slot_start": "timestamp"})
     base = pd.merge(base, agg, on="timestamp", how="left")
+
+  if open_drive and len(base):
+    idx = base.index[-1]
+    for key, val in open_drive.items():
+      base.loc[idx, key] = val
 
   return base
 
@@ -249,7 +386,10 @@ def build_feature_matrix_1m_15m(
 
 def feature_columns(df: pd.DataFrame) -> list[str]:
   """Return model-ready numeric feature column names."""
-  exclude = {"timestamp", "open", "high", "low", "close", "volume", "vwap", "label", "future_return"}
+  exclude = {
+    "timestamp", "open", "high", "low", "close", "volume", "vwap", "label",
+    "future_return", "future_close",
+  }
   return [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
 
 

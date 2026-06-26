@@ -73,6 +73,9 @@ features:
   slot_lookback_candles: 16                # primary slot context = 4h
   slot_context_windows: [4, 16, 48]        # 1h, 4h, 12h multi-scale slot features
   expected_move_vol_candles: 4             # 1h vol for next-15m move estimate
+  auxiliary: true
+  session: true
+  open_drive: true
 
 # Intra-slot exit guidance (bet placed at t=0, manage during the 15m window)
 intra_slot:
@@ -85,7 +88,16 @@ intra_slot:
 model:
   type: lightgbm
   train_test_split: 0.2
-  min_train_samples: 5000
+  min_train_samples: 1500
+  slot_labels: true
+  calibrate: true
+
+# Regime gates — skip chop / fee-dominated setups
+regime:
+  enabled: true
+  min_expected_move_pct: 0.08
+  max_compression_ratio: 1.12
+  min_vol_expansion: 0.82
 
 paths:
   candles: data/candles
