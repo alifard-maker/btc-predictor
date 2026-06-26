@@ -41,6 +41,9 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
   cfg["admin_api_key"] = os.getenv("ADMIN_API_KEY", "")
   cfg["enable_scheduler"] = os.getenv("ENABLE_SCHEDULER", "true").lower() == "true"
 
+  if os.getenv("TIMEZONE"):
+    cfg["timezone"] = os.getenv("TIMEZONE")
+
   return cfg
 
 

@@ -42,7 +42,9 @@
     .muted { color: var(--muted); }
     .cal-stats { display: flex; flex-wrap: wrap; gap: 1.2rem; margin-bottom: 0.75rem; }
     .cal-stats div span { display: block; font-size: 0.7rem; color: var(--muted); }
-    .cal-stats div strong { font-size: 1.1rem; }
+    .ref-block { margin: 0.75rem 0 1rem; padding: 0.75rem; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); }
+    .ref-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .live-price { font-size: 0.85rem; color: var(--muted); margin-top: 0.35rem; }
   </style>
 </head>
 <body>
@@ -50,7 +52,7 @@
     <header>
       <div>
         <h1>BTC Predictor</h1>
-        <p class="sub">15-minute slots · :00 / :15 / :30 / :45 UTC · No trading</p>
+        <p class="sub">15-minute slots · Eastern Time (ET) · No trading</p>
       </div>
       <div class="meta">
         <div id="updated">—</div>
@@ -84,9 +86,12 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const TZ = 'America/New_York';
     const pct = (n) => (n * 100).toFixed(1) + '%';
     const price = (n) => '$' + Math.round(n).toLocaleString();
-    const time = (s) => new Date(s).toLocaleString();
+    const time = (s) => new Date(s).toLocaleString('en-US', {
+      timeZone: TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
+    });
     const badge = (s) => {
       const c = s.replace(/\s+/g, '_');
       return `<span class="badge badge-${c}">${s}</span>`;
@@ -110,11 +115,19 @@
         return;
       }
       const up = p.prob_up * 100, down = p.prob_down * 100;
-      const slot = p.slot_label ? `<div class="sub" style="margin-bottom:.75rem">Slot ${p.slot_label}</div>` : '';
+      const ref = p.reference_price ?? p.price;
+      const slot = p.slot_label ? `<div class="sub" style="margin-bottom:.5rem">${p.slot_label}</div>` : '';
+      const live = p.current_price && Math.abs(p.current_price - ref) > 1
+        ? `<div class="live-price">Live now: ${price(p.current_price)}</div>` : '';
       $('pred-card').innerHTML = `
         <h2>Next 15-minute slot</h2>
         ${slot}
-        <div><span class="price">${price(p.price)}</span>${badge(p.signal)}</div>
+        <div class="ref-block">
+          <div class="ref-label">Reference price (t=0)</div>
+          <div class="price">${price(ref)}</div>
+          ${live}
+        </div>
+        <div style="margin-bottom:.75rem">${badge(p.signal)}</div>
         <div class="bar-row"><span class="up">UP</span><div class="track"><div class="fill-up" style="width:${up}%"></div></div><span>${up.toFixed(1)}%</span></div>
         <div class="bar-row"><span class="down">DOWN</span><div class="track"><div class="fill-down" style="width:${down}%"></div></div><span>${down.toFixed(1)}%</span></div>
         <div class="metrics">
@@ -131,7 +144,7 @@
         ['Exchange', h.exchange || '—', h.exchange_connected],
         ['Model', h.model || '—', true],
         ['15m candles', String(h.candles_15m || 0), (h.candles_15m || 0) >= (h.min_candles_15m || 30)],
-        ['Schedule', ':00/:15/:30/:45 UTC', true],
+        ['Schedule', (h.timezone || 'ET') + ' :00/:15/:30/:45', true],
       ];
       $('status-list').innerHTML = items.map(([l,v,ok]) =>
         `<li><span class="dot" style="background:${ok?'var(--up)':'#f59e0b'}"></span><span class="muted">${l}</span><span>${v}</span></li>`
@@ -159,9 +172,10 @@
         return;
       }
       $('history').innerHTML = `<table>
-        <thead><tr><th>Time</th><th>Price</th><th>UP</th><th>Signal</th><th>Outcome</th></tr></thead>
+        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>UP</th><th>Signal</th><th>Outcome</th></tr></thead>
         <tbody>${rows.map(p => `<tr>
-          <td>${time(p.timestamp)}</td><td>${price(p.price)}</td>
+          <td>${p.slot_label || time(p.timestamp)}</td>
+          <td>${price(p.reference_price ?? p.price)}</td>
           <td class="up">${pct(p.prob_up)}</td><td>${badge(p.signal)}</td>
           <td>${p.outcome==null?'—':(p.outcome?'<span class="up">UP</span>':'<span class="down">DOWN</span>')}</td>
         </tr>`).join('')}</tbody></table>`;
@@ -169,7 +183,7 @@
 
     async function loadAll() {
       $('error').style.display = 'none';
-      $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { timeZone: TZ });
 
       const tasks = [
         get('/health').then(renderStatus).catch(e => showError('Health: ' + e.message)),

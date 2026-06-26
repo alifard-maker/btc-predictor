@@ -33,6 +33,7 @@ class PredictionLoop:
     self.predictor = Predictor(self.cfg, model_path=model_path or self._default_model_path())
     self.logger = PredictionLogger(self.cfg)
     self.calibration = CalibrationTracker(self.cfg)
+    self.tz = self.cfg.get("timezone", "America/New_York")
     self.horizon = self.cfg.get("prediction_horizon_minutes", 15)
     self.min_candles = self.cfg.get("min_candles_15m", 30)
     self.fetch_15m_count = self.cfg.get("fetch_candles_15m", 64)
@@ -72,7 +73,7 @@ class PredictionLoop:
     pending = self.calibration.get_pending()
     price_lookup = {}
     for _row_id, ts_str, entry_price in pending:
-      slot_s = floor_to_15m(pd.Timestamp(ts_str))
+      slot_s = floor_to_15m(pd.Timestamp(ts_str), self.tz)
       slot_e = slot_end(slot_s)
       # Exit price = close of the 15m candle ending at slot_e
       match = df_15m[df_15m["timestamp"] >= slot_e]
@@ -133,22 +134,22 @@ class PredictionLoop:
       "lookback_hours": self.cfg.get("lookback_hours", 4),
       "latest_candle_15m": df_15m["timestamp"].iloc[-1].isoformat() if not df_15m.empty else None,
       "horizon_minutes": self.horizon,
-      "prediction_schedule": "every :00, :15, :30, :45 UTC",
+      "timezone": self.tz,
+      "prediction_schedule": "every :00, :15, :30, :45 ET",
       "last_error": self.last_error,
       "scheduler_running": self._scheduler is not None and getattr(self._scheduler, "running", False),
     }
 
   def _schedule_predictions(self, scheduler) -> None:
-    """Fire at each 15-minute slot boundary."""
     scheduler.add_job(
       self.run_prediction,
-      CronTrigger(minute="0,15,30,45", timezone="UTC"),
+      CronTrigger(minute="0,15,30,45", timezone=self.tz),
       id="predict",
       max_instances=1,
     )
 
   def start_background(self) -> BackgroundScheduler:
-    scheduler = BackgroundScheduler(timezone="UTC")
+    scheduler = BackgroundScheduler(timezone=self.tz)
     scheduler.add_job(self.fetch_and_store, "interval", minutes=1, id="fetch", max_instances=1)
     scheduler.add_job(self.resolve_outcomes, "interval", minutes=1, id="resolve", max_instances=1)
     self._schedule_predictions(scheduler)
@@ -156,14 +157,14 @@ class PredictionLoop:
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")
     scheduler.start()
     self._scheduler = scheduler
-    log.info("Scheduler started: 15m slots at :00/:15/:30/:45 UTC")
+    log.info("Scheduler started: 15m slots at :00/:15/:30/:45 ET (%s)", self.tz)
     return scheduler
 
   def start_blocking(self) -> None:
     self.fetch_and_store()
     self.run_prediction()
 
-    scheduler = BlockingScheduler(timezone="UTC")
+    scheduler = BlockingScheduler(timezone=self.tz)
     scheduler.add_job(self.fetch_and_store, "interval", minutes=1, id="fetch")
     scheduler.add_job(self.resolve_outcomes, "interval", minutes=1, id="resolve")
     self._schedule_predictions(scheduler)

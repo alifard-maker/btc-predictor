@@ -18,9 +18,10 @@ class PredictionLogger:
 
   def log(self, pred: Prediction) -> int:
     ts = pred.timestamp.isoformat() if hasattr(pred.timestamp, "isoformat") else str(pred.timestamp)
+    ref = pred.reference_price or pred.price
     row_id = self.tracker.log_prediction(
       timestamp=ts,
-      price=pred.price,
+      price=ref,
       prob_up=pred.prob_up,
       prob_down=pred.prob_down,
       confidence=pred.confidence,
@@ -30,12 +31,14 @@ class PredictionLogger:
 
     record = {
       "timestamp": ts,
-      "price": pred.price,
+      "price": ref,
+      "reference_price": ref,
+      "current_price": pred.current_price,
+      "slot_label": pred.slot_label,
       "prob_up": pred.prob_up,
       "prob_down": pred.prob_down,
       "confidence": pred.confidence,
       "signal": pred.signal.value,
-      "slot_label": pred.slot_label,
       "expected_move": pred.expected_move,
       "features": pred.features_snapshot,
       "logged_at": datetime.now(timezone.utc).isoformat(),

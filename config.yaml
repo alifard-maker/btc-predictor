@@ -5,10 +5,11 @@ exchange_fallbacks:
   - coinbase
   - bitstamp
 
-# 15-minute slot predictions (:00, :15, :30, :45 each hour)
+# 15-minute slot predictions — Eastern Time (:00, :15, :30, :45 ET)
 prediction_horizon_minutes: 15
 prediction_interval_minutes: 15
 primary_timeframe: 15m
+timezone: America/New_York
 
 # Context: prior 4h in 15m slots (16 bars) + min 30 fifteen-min candles for indicators
 lookback_hours: 4
