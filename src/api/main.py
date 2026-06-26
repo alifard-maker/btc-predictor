@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import pandas as pd
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
@@ -92,6 +95,32 @@ app.add_middleware(
 )
 
 
+def _serialize_value(v: Any) -> Any:
+  """Make DB/pandas values JSON-safe."""
+  if v is None:
+    return None
+  try:
+    if pd.isna(v):
+      return None
+  except (TypeError, ValueError):
+    pass
+  if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+    return None
+  if hasattr(v, "isoformat"):
+    return v.isoformat()
+  if isinstance(v, (np.integer, np.floating, np.bool_)):
+    return v.item()
+  return v
+
+
+def _serialize_records(df: pd.DataFrame) -> list[dict[str, Any]]:
+  records = df.to_dict(orient="records")
+  for r in records:
+    for k in list(r.keys()):
+      r[k] = _serialize_value(r[k])
+  return records
+
+
 _DASHBOARD_HTML = Path(__file__).parent / "static" / "dashboard.html"
 
 
@@ -137,17 +166,14 @@ def latest_prediction():
 def list_predictions(limit: int = Query(default=50, le=500)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  df = _loop.calibration.load_recent(limit)
-  if df.empty:
-    return []
-  records = df.to_dict(orient="records")
-  for r in records:
-    for k, v in r.items():
-      if hasattr(v, "isoformat"):
-        r[k] = v.isoformat()
-      elif hasattr(v, "item"):  # numpy types
-        r[k] = v.item()
-  return records
+  try:
+    df = _loop.calibration.load_recent(limit)
+    if df.empty:
+      return []
+    return _serialize_records(df)
+  except Exception as e:
+    log.exception("Failed to load predictions: %s", e)
+    raise HTTPException(500, str(e)) from e
 
 
 @app.get("/api/calibration")

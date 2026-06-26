@@ -166,21 +166,16 @@
 
     async function loadAll() {
       $('error').style.display = 'none';
-      try {
-        const [health, pred, history, cal] = await Promise.all([
-          get('/health'),
-          get('/api/prediction/latest').catch(() => null),
-          get('/api/predictions?limit=20'),
-          get('/api/calibration'),
-        ]);
-        renderStatus(health);
-        renderPrediction(pred);
-        renderHistory(history);
-        renderCalibration(cal);
-        $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
-      } catch (e) {
-        showError(e.message);
-      }
+      $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+      const tasks = [
+        get('/health').then(renderStatus).catch(e => showError('Health: ' + e.message)),
+        get('/api/prediction/latest').then(renderPrediction).catch(() => renderPrediction(null)),
+        get('/api/predictions?limit=20').then(renderHistory).catch(() => renderHistory([])),
+        get('/api/calibration').then(renderCalibration).catch(() =>
+          $('calibration').innerHTML = '<p class="muted">Calibration unavailable yet.</p>'),
+      ];
+      await Promise.all(tasks);
     }
 
     loadAll();
