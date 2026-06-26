@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,6 +14,21 @@ import yfinance as yf
 log = logging.getLogger(__name__)
 
 CANDLE_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
+
+@dataclass(frozen=True)
+class TickerQuote:
+  price: float
+  trade_time: datetime | None = None
+  source: str = "coinbase"
+
+  @property
+  def age_sec(self) -> float | None:
+    if self.trade_time is None:
+      return None
+    t = self.trade_time
+    if t.tzinfo is None:
+      t = t.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - t).total_seconds())
 
 # Per-exchange symbol mapping when config symbol doesn't match
 EXCHANGE_SYMBOLS = {
@@ -114,18 +130,29 @@ class DataFetcher:
   def fetch_latest_candles(self, interval: str, count: int = 500) -> pd.DataFrame:
     return self.fetch_ohlcv(interval, limit=count)
 
-  def fetch_coinbase_last_price(self) -> float:
-    """Last trade on Coinbase Exchange — closest to the Coinbase app."""
+  def fetch_coinbase_ticker(self) -> TickerQuote:
+    """Last Coinbase Exchange trade with exchange timestamp."""
     resp = requests.get(
       COINBASE_EXCHANGE_TICKER_URL,
       headers={"User-Agent": "btc-predictor/1.0"},
       timeout=10,
     )
     resp.raise_for_status()
-    price = resp.json().get("price")
+    data = resp.json()
+    price = data.get("price")
     if price is None:
       raise RuntimeError("Coinbase ticker returned no price")
-    return float(price)
+    trade_time = None
+    raw_time = data.get("time")
+    if raw_time:
+      trade_time = pd.Timestamp(raw_time).to_pydatetime()
+      if trade_time.tzinfo is None:
+        trade_time = trade_time.replace(tzinfo=timezone.utc)
+    return TickerQuote(price=float(price), trade_time=trade_time, source="coinbase")
+
+  def fetch_coinbase_last_price(self) -> float:
+    """Last trade on Coinbase Exchange — closest to the Coinbase app."""
+    return self.fetch_coinbase_ticker().price
 
   def fetch_coinbase_spot(self) -> float:
     """Coinbase retail spot quote."""
@@ -136,23 +163,38 @@ class DataFetcher:
       raise RuntimeError("Coinbase spot returned no price")
     return float(amount)
 
-  def _exchange_ticker_price(self) -> float:
+  def _exchange_ticker_quote(self) -> TickerQuote:
     ex = self._ensure_exchange()
     ticker = ex.fetch_ticker(self.symbol)
     last = ticker.get("last") or ticker.get("close")
     if last is None:
       raise RuntimeError("Exchange ticker returned no price")
-    return float(last)
+    trade_time = None
+    ts = ticker.get("timestamp")
+    if ts:
+      trade_time = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+    return TickerQuote(
+      price=float(last),
+      trade_time=trade_time,
+      source=self._exchange_id or "exchange",
+    )
 
-  def fetch_last_price(self) -> float:
-    """Latest price for live dashboard / intra-slot P&L."""
+  def _exchange_ticker_price(self) -> float:
+    return self._exchange_ticker_quote().price
+
+  def fetch_ticker_quote(self) -> TickerQuote:
+    """Latest trade quote for live dashboard / intra-slot P&L."""
     source = self.cfg.get("price_feed", {}).get("live", "exchange")
     if source == "coinbase":
       try:
-        return self.fetch_coinbase_last_price()
+        return self.fetch_coinbase_ticker()
       except Exception as e:
         log.warning("Coinbase live price failed, using exchange ticker: %s", e)
-    return self._exchange_ticker_price()
+    return self._exchange_ticker_quote()
+
+  def fetch_last_price(self) -> float:
+    """Latest price for live dashboard / intra-slot P&L."""
+    return self.fetch_ticker_quote().price
 
   def price_feed_label(self) -> str:
     pf = self.cfg.get("price_feed", {})

@@ -13,9 +13,9 @@ from apscheduler.triggers.cron import CronTrigger
 
 from src.calibration.tracker import CalibrationTracker
 from src.config import ensure_dirs, load_config
-from src.data.fetcher import DataFetcher
+from src.data.fetcher import DataFetcher, TickerQuote
 from src.data.storage import CandleStorage
-from src.features.slots import current_slot_start, floor_to_15m, slot_end
+from src.features.slots import current_slot_start, floor_to_15m, reference_price_at_slot, slot_end
 from src.logging.prediction_log import PredictionLogger
 from src.models.predictor import Prediction, Predictor
 from src.trading.exit_advisor import ExitAdvisor, SlotMonitor
@@ -43,7 +43,8 @@ class PredictionLoop:
     self.exit_advisor = ExitAdvisor(self.cfg)
     self.last_error: str | None = None
     self._scheduler: BackgroundScheduler | BlockingScheduler | None = None
-    self._ticker_cache: tuple[float, float] | None = None  # (price, monotonic time)
+    self._ticker_cache: tuple[TickerQuote, float] | None = None  # (quote, monotonic time)
+    self._slot_tick_cache: dict[str, dict[str, Any]] = {}
 
   def _default_model_path(self) -> str | None:
     p = Path(self.cfg["paths"]["models"]) / "model.joblib"
@@ -109,21 +110,22 @@ class PredictionLoop:
         log.error(self.last_error)
         return None
 
-      live_price = None
-      try:
-        slot_s = floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz)
-        age = (pd.Timestamp(datetime.now(timezone.utc)) - slot_s).total_seconds()
-        if 0 <= age <= 90:
-          live_price = self._live_price(max_age_sec=0)
-      except Exception:
-        pass
+      open_quote = self._live_quote(fresh=True)
+      live_price = open_quote.price if open_quote else None
+      current_quote = self._live_quote(fresh=True)
+      locked = self._locked_slot_reference(floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz))
+      locked_ref = float(locked["price"]) if locked else None
 
       pred = self.predictor.predict(
         df_15m,
         df_1m if not df_1m.empty else None,
         live_price=live_price,
-        current_price=self._live_price(max_age_sec=0),
+        current_price=current_quote.price if current_quote else None,
+        locked_reference=locked_ref,
+        live_trade_time=open_quote.trade_time if open_quote else None,
+        current_trade_time=current_quote.trade_time if current_quote else None,
       )
+      self._remember_slot_reference(pred, open_quote)
       self.logger.log(pred)
       self.latest_prediction = pred
       self.last_error = None
@@ -137,28 +139,53 @@ class PredictionLoop:
       log.exception("Prediction failed: %s", e)
       return None
 
-  def _live_price(self, max_age_sec: float = 5.0) -> float | None:
-    """Real-time last trade price; cached briefly to limit exchange polling."""
+  def _live_cache_sec(self) -> float:
+    return float(self.cfg.get("price_feed", {}).get("live_cache_sec", 2))
+
+  def _live_quote(self, *, fresh: bool = False) -> TickerQuote | None:
+    """Real-time last trade; cached briefly unless fresh=True."""
     now = time.monotonic()
-    if self._ticker_cache and (now - self._ticker_cache[1]) < max_age_sec:
+    cache_sec = self._live_cache_sec()
+    if not fresh and self._ticker_cache and (now - self._ticker_cache[1]) < cache_sec:
       return self._ticker_cache[0]
     try:
-      price = self.fetcher.fetch_last_price()
-      self._ticker_cache = (price, now)
-      return price
+      quote = self.fetcher.fetch_ticker_quote()
+      self._ticker_cache = (quote, now)
+      return quote
     except Exception as e:
       log.debug("Ticker fetch failed, using candle fallback: %s", e)
 
     df_1m = self.storage.load("1m")
     if not df_1m.empty:
-      return float(df_1m.iloc[-1]["close"])
+      return TickerQuote(price=float(df_1m.iloc[-1]["close"]), source="1m_close")
     try:
       batch = self.fetcher.fetch_latest_candles("1m", count=1)
       if not batch.empty:
-        return float(batch.iloc[-1]["close"])
+        return TickerQuote(price=float(batch.iloc[-1]["close"]), source="1m_close")
     except Exception:
       pass
     return None
+
+  def _live_price(self, max_age_sec: float | None = None) -> float | None:
+    fresh = max_age_sec is not None and max_age_sec <= 0
+    quote = self._live_quote(fresh=fresh)
+    return quote.price if quote else None
+
+  def _slot_cache_key(self, slot_s: pd.Timestamp) -> str:
+    return floor_to_15m(slot_s, self.tz).isoformat()
+
+  def _remember_slot_reference(self, pred: Prediction, quote: TickerQuote | None) -> None:
+    if pred.slot_start is None:
+      return
+    key = self._slot_cache_key(pred.slot_start)
+    self._slot_tick_cache[key] = {
+      "price": pred.reference_price,
+      "source": pred.reference_source,
+      "trade_time": pred.reference_trade_time or (quote.trade_time.isoformat() if quote and quote.trade_time else None),
+    }
+
+  def _locked_slot_reference(self, slot_s: pd.Timestamp) -> dict[str, Any] | None:
+    return self._slot_tick_cache.get(self._slot_cache_key(slot_s))
 
   def _prediction_for_current_slot(self) -> dict[str, Any] | None:
     """DB/logged prediction for the slot that is active right now."""
@@ -172,6 +199,7 @@ class PredictionLoop:
           "timestamp": p.timestamp.isoformat(),
           "price": p.reference_price or p.price,
           "reference_price": p.reference_price or p.price,
+          "reference_source": p.reference_source,
           "signal": p.signal.value,
           "prob_up": p.prob_up,
         }
@@ -206,12 +234,28 @@ class PredictionLoop:
     df_1m = self.storage.load("1m")
 
     pred = self._prediction_for_current_slot()
-    current = self._live_price()
+    live_quote = self._live_quote(fresh=True)
+    current = live_quote.price if live_quote else None
 
-    if pred is None:
-      api_ref = current or 0.0
-    else:
+    locked = self._locked_slot_reference(slot_s)
+    if pred is not None:
       api_ref = float(pred.get("reference_price") or pred.get("price") or 0)
+      ref_source = str(pred.get("reference_source") or (locked.get("source") if locked else "") or "")
+    elif locked:
+      api_ref = float(locked["price"])
+      ref_source = str(locked.get("source") or "locked_tick")
+    else:
+      pf = self.cfg.get("price_feed", {})
+      tick_window = float(pf.get("live_tick_window_sec", 120))
+      ref = reference_price_at_slot(
+        df_1m if not df_1m.empty else None,
+        slot_s,
+        live_price=current,
+        now_utc=now,
+        live_tick_window_sec=tick_window,
+      )
+      api_ref = ref.price
+      ref_source = ref.source
 
     effective_ref = api_ref
     using_override = False
@@ -247,6 +291,11 @@ class PredictionLoop:
 
     monitor.reference_price_api = api_ref if api_ref else None
     monitor.using_override = using_override
+    monitor.reference_source = ref_source if not using_override else "user_override"
+    monitor.current_price_as_of = (
+      live_quote.trade_time.isoformat() if live_quote and live_quote.trade_time else None
+    )
+    monitor.live_price_age_sec = round(live_quote.age_sec, 1) if live_quote and live_quote.age_sec is not None else None
     return monitor
 
   def status(self) -> dict[str, Any]:

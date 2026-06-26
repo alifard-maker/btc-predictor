@@ -42,6 +42,9 @@ class SlotMonitor:
   reassessed_prob_down: float | None = None
   reassessed_close_side: str = ""
   reassess_summary: str = ""
+  reference_source: str = ""
+  current_price_as_of: str | None = None
+  live_price_age_sec: float | None = None
 
   def to_dict(self) -> dict[str, Any]:
     out = {
@@ -62,7 +65,12 @@ class SlotMonitor:
       "urgency": self.urgency,
       "message": self.message,
       "reasons": self.reasons,
+      "reference_source": self.reference_source,
     }
+    if self.current_price_as_of:
+      out["current_price_as_of"] = self.current_price_as_of
+    if self.live_price_age_sec is not None:
+      out["live_price_age_sec"] = self.live_price_age_sec
     if self.reassessed_prob_up is not None:
       out["reassessed_prob_up"] = round(self.reassessed_prob_up, 4)
       out["reassessed_prob_down"] = round(self.reassessed_prob_down or (1 - self.reassessed_prob_up), 4)

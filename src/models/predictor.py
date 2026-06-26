@@ -32,7 +32,10 @@ class Prediction:
   slot_end: pd.Timestamp | None = None
   slot_label: str = ""
   reference_price: float = 0.0
+  reference_source: str = ""
+  reference_trade_time: str | None = None
   current_price: float | None = None
+  current_price_as_of: str | None = None
 
 
 class Predictor:
@@ -228,6 +231,9 @@ class Predictor:
     df_1m: pd.DataFrame | None = None,
     live_price: float | None = None,
     current_price: float | None = None,
+    locked_reference: float | None = None,
+    live_trade_time: datetime | None = None,
+    current_trade_time: datetime | None = None,
   ) -> Prediction:
     min_candles = self.cfg.get("min_candles_15m", 30)
     if len(df_15m) < min_candles:
@@ -243,9 +249,19 @@ class Predictor:
     slot_s = floor_to_15m(now_utc, self.tz)
     slot_e = slot_end(slot_s, self.tz)
 
-    ref_price = reference_price_at_slot(
-      df_1m, slot_s, fallback=candle_price, live_price=live_price, now_utc=now_utc,
+    pf = self.cfg.get("price_feed", {})
+    tick_window = float(pf.get("live_tick_window_sec", 120))
+
+    ref = reference_price_at_slot(
+      df_1m,
+      slot_s,
+      fallback=candle_price,
+      live_price=live_price,
+      now_utc=now_utc,
+      locked_tick=locked_reference,
+      live_tick_window_sec=tick_window,
     )
+    ref_price = ref.price
 
     if self.model is not None:
       cols = self.feature_names or feature_columns(features)
@@ -276,7 +292,14 @@ class Predictor:
       timestamp=slot_s,
       price=ref_price,
       reference_price=ref_price,
+      reference_source=ref.source,
+      reference_trade_time=(
+        live_trade_time.isoformat() if live_trade_time is not None else None
+      ),
       current_price=current_price,
+      current_price_as_of=(
+        current_trade_time.isoformat() if current_trade_time is not None else None
+      ),
       prob_up=prob_up,
       prob_down=prob_down,
       confidence=confidence,

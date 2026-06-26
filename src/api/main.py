@@ -44,7 +44,9 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     "horizon_minutes": _cfg.get("prediction_horizon_minutes", 15),
     "timezone": _cfg.get("timezone", "America/New_York"),
     "reference_price": pred.reference_price or pred.price,
+    "reference_source": pred.reference_source,
     "current_price": pred.current_price,
+    "current_price_as_of": pred.current_price_as_of,
     "price": pred.reference_price or pred.price,
     "prob_up": round(pred.prob_up, 4),
     "prob_down": round(pred.prob_down, 4),
@@ -55,11 +57,15 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     "formatted": _loop.predictor.format_output(pred) if _loop else "",
   }
   if _loop is not None:
-    live = _loop._live_price()
-    if live is not None:
-      out["current_price"] = round(live, 2)
+    quote = _loop._live_quote(fresh=True)
+    if quote is not None:
+      out["current_price"] = round(quote.price, 2)
       out["price_feed"] = _loop.fetcher.price_feed_label()
       out["settlement_reference"] = _loop.fetcher.settlement_reference_label()
+      if quote.trade_time is not None:
+        out["current_price_as_of"] = quote.trade_time.isoformat()
+      if quote.age_sec is not None:
+        out["live_price_age_sec"] = round(quote.age_sec, 1)
   return out
 
 

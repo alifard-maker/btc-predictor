@@ -153,6 +153,26 @@
 
     const REF_KEY = 'btc_ref_override_v1';
 
+    const REF_SOURCE_LABEL = {
+      locked_tick: 'Coinbase tick at slot open (locked)',
+      live_tick: 'Coinbase last trade at slot open',
+      prior_minute_close: 'Last trade before t=0 (prior 1m close)',
+      slot_minute_open: '1m candle open at t=0',
+      user_override: 'Your manual t=0 price',
+      fallback: '15m candle fallback',
+      '1m_close': '1m candle close',
+    };
+
+    function refSourceLabel(src) {
+      return REF_SOURCE_LABEL[src] || src || 'API reference';
+    }
+
+    function liveAgeLabel(sec) {
+      if (sec == null) return '';
+      if (sec < 2) return 'just now';
+      return `${Math.round(sec)}s ago`;
+    }
+
     function loadRefOverride() {
       try { return JSON.parse(localStorage.getItem(REF_KEY) || 'null'); }
       catch { return null; }
@@ -195,7 +215,8 @@
         hint.innerHTML = `Using your price <strong>${price(ovr)}</strong> · API was ${price(monitor.reference_price_api ?? monitor.reference_price)} <span class="ref-override-active">(active)</span>`;
         $('ref-override-input').value = ovr;
       } else if (monitor.reference_price_api != null) {
-        hint.innerHTML = `API reference: ${price(monitor.reference_price_api)} — enter Coinbase/Kalshi fill if different.`;
+        const src = refSourceLabel(monitor.reference_source);
+        hint.innerHTML = `API reference: ${price(monitor.reference_price_api)} <span class="muted">(${src})</span> — enter your fill if different.`;
         if (!$('ref-override-input').value) $('ref-override-input').placeholder = Number(monitor.reference_price_api).toFixed(2);
       }
     }
@@ -311,11 +332,12 @@
 
       if (m.active && m.bet_side !== 'NONE') {
         const refHdr = m.using_override ? 'Ref (t=0) · your price' : 'Ref (t=0)';
+        const nowAge = m.live_price_age_sec != null ? ` · ${liveAgeLabel(m.live_price_age_sec)}` : '';
         body += `
         <div class="slot-progress" title="Time elapsed in slot"><div style="width:${m.elapsed_pct || 0}%"></div></div>
         <div class="metrics" style="margin-top:0;padding-top:0;border-top:none;grid-template-columns:repeat(4,1fr)">
           <div><span>${refHdr}</span><strong>${price(m.reference_price)}</strong></div>
-          <div><span>Now</span><strong>${price(m.current_price)}</strong></div>
+          <div><span>Now · live tick</span><strong>${price(m.current_price)}</strong><div class="muted" style="font-size:.68rem">${nowAge}</div></div>
           <div><span>P&amp;L vs t=0</span><strong class="${pnlCls}">${m.unrealized_pct >= 0 ? '+' : ''}${Number(m.unrealized_pct).toFixed(3)}%</strong></div>
           <div><span>Time left</span><strong>${fmtRemaining(m.seconds_remaining || 0)}</strong></div>
         </div>${renderReassessBlock(m)}`;
@@ -330,7 +352,7 @@
           body += '<ul class="monitor-reasons">' + bullets.map(r => `<li>${r}</li>`).join('') + '</ul>';
         }
       }
-      body += '<p class="muted" style="font-size:.68rem;margin-top:.75rem">Guidance only — not financial advice. Assumes you entered at t=0 on the opening LONG/SHORT signal. Live price: Coinbase BTC-USD. Kalshi contracts settle on CF Benchmarks BRTI (may differ slightly).</p>';
+      body += '<p class="muted" style="font-size:.68rem;margin-top:.75rem">Guidance only — not financial advice. t=0 uses Coinbase last trade at open (or last trade before the boundary); live Now refreshes every few seconds. Kalshi settles on CF Benchmarks BRTI (may differ).</p>';
       $('slot-monitor').innerHTML = body;
       updateRefOverrideHint(m);
     }
@@ -345,10 +367,11 @@
       const refApi = p.reference_price_api;
       const refLabel = p.using_override
         ? `Your t=0 entry (API was ${refApi != null ? price(refApi) : '—'})`
-        : 'Reference price (t=0) · Coinbase 1m open — edit above if your fill differed';
+        : `Reference (t=0) · ${refSourceLabel(p.reference_source)} — edit above if your fill differed`;
       const slot = p.slot_label ? `<div class="sub" style="margin-bottom:.5rem">${p.slot_label}</div>` : '';
+      const liveAge = p.live_price_age_sec != null ? ` <span class="muted">(${liveAgeLabel(p.live_price_age_sec)})</span>` : '';
       const live = p.current_price
-        ? `<div class="live-price">Live now: ${price(p.current_price)}</div>` : '';
+        ? `<div class="live-price">Live now: ${price(p.current_price)}${liveAge}</div>` : '';
       $('pred-card').innerHTML = `
         <h2>Next 15-minute slot</h2>
         ${slot}
