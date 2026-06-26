@@ -59,14 +59,24 @@ class HistoricalCollector:
     self.fetcher = DataFetcher(cfg)
     self.storage = CandleStorage(cfg)
 
-  def collect_candles(self, interval: str, years: int | None = None) -> int:
+  def collect_candles(
+    self,
+    interval: str,
+    years: int | None = None,
+    *,
+    force_full: bool = False,
+  ) -> int:
     years = years or self.cfg.get("historical_years", 3)
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=365 * years)
 
-    # Resume from last stored candle if available
+    existing = len(self.storage.load(interval))
+    min_rows = self.cfg.get("min_history_candles", {}).get(interval)
+    if min_rows is None and interval == "15m":
+      min_rows = int(self.cfg.get("model", {}).get("min_train_samples", 1500) * 1.5)
+
     last = self.storage.latest_timestamp(interval)
-    if last and last > start:
+    if not force_full and existing >= (min_rows or 0) and last and last > start:
       start = last - timedelta(minutes=5)
 
     df = self.fetcher.fetch_ohlcv_range(interval, start, end)
@@ -74,10 +84,12 @@ class HistoricalCollector:
       self.storage.save(interval, df)
     return len(df)
 
-  def collect_all(self) -> dict[str, int]:
+  def collect_all(self, *, force_full: bool = False) -> dict[str, int]:
     results = {}
-    for interval in self.cfg["intervals"]:
-      results[interval] = self.collect_candles(interval)
+    # 15m first — enough for training while 1m backfill continues
+    order = sorted(self.cfg["intervals"], key=lambda x: (0 if x == "15m" else 1, x))
+    for interval in order:
+      results[interval] = self.collect_candles(interval, force_full=force_full)
     return results
 
   def collect_auxiliary(self, out_dir: Path | None = None) -> dict[str, int]:

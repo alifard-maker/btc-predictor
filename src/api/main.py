@@ -320,6 +320,7 @@ def predict_now(_: None = Depends(_verify_admin)):
 @app.post("/api/admin/collect")
 def collect_historical(
   years: int = Query(default=3, le=5),
+  full: bool = Query(default=False, description="Ignore resume and backfill full history"),
   _: None = Depends(_verify_admin),
 ):
   """Kick off historical data collection in a background thread."""
@@ -328,12 +329,18 @@ def collect_historical(
 
   def _run():
     collector = HistoricalCollector(_cfg)
-    log.info("Starting historical collection (%d years)...", years)
-    results = collector.collect_all()
-    log.info("Collection done: %s", results)
+    log.info("Starting historical collection (%d years, full=%s)...", years, full)
+    results = collector.collect_all(force_full=full)
+    aux = collector.collect_auxiliary()
+    log.info("Collection done: candles=%s auxiliary=%s", results, aux)
 
   threading.Thread(target=_run, daemon=True).start()
-  return {"status": "started", "years": years, "message": "Collection running in background. Check /api/status for candle count."}
+  return {
+    "status": "started",
+    "years": years,
+    "full": full,
+    "message": "Collection running in background. Check /health for candle counts.",
+  }
 
 
 @app.get("/api/postmortems")
@@ -344,18 +351,25 @@ def list_postmortems(limit: int = Query(default=15, le=100)):
 
 
 @app.post("/api/admin/train")
-def admin_train(_: None = Depends(_verify_admin)):
+def admin_train(
+  min_samples: int | None = Query(default=None, ge=50, le=10000),
+  _: None = Depends(_verify_admin),
+):
   """Train LightGBM on stored candles and save model + calibrator."""
   if _loop is None:
     raise HTTPException(503, "Service starting")
   from src.models.trainer import ModelTrainer
+
+  cfg = dict(_cfg)
+  if min_samples is not None:
+    cfg = {**_cfg, "model": {**_cfg.get("model", {}), "min_train_samples": min_samples}}
 
   storage = CandleStorage(_cfg)
   df_15m = storage.load("15m")
   df_1m = storage.load("1m")
   if df_15m.empty:
     raise HTTPException(400, "No 15m candle data — run collect first")
-  trainer = ModelTrainer(_cfg)
+  trainer = ModelTrainer(cfg)
   try:
     metrics = trainer.train(df_15m, df_1m if not df_1m.empty else None)
   except ValueError as e:
