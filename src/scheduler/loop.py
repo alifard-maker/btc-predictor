@@ -51,6 +51,7 @@ class PredictionLoop:
     self._scheduler: BackgroundScheduler | BlockingScheduler | None = None
     self._ticker_cache: tuple[KalshiPriceQuote | None, float] | None = None
     self._slot_tick_cache: dict[str, dict[str, Any]] = {}
+    self.train_status: dict[str, Any] = {"state": "idle"}
 
   def _default_model_path(self) -> str | None:
     p = Path(self.cfg["paths"]["models"]) / "model.joblib"
@@ -126,6 +127,47 @@ class PredictionLoop:
       log.info("Auxiliary data refreshed: %s", counts)
     except Exception as e:
       log.warning("Auxiliary collect failed: %s", e)
+
+  def train_model(self, min_samples: int | None = None) -> None:
+    """Train LightGBM in-process (intended for background thread)."""
+    from src.models.trainer import ModelTrainer
+
+    self.train_status = {
+      "state": "running",
+      "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+      cfg = self.cfg
+      if min_samples is not None:
+        cfg = {**self.cfg, "model": {**self.cfg.get("model", {}), "min_train_samples": min_samples}}
+
+      storage = CandleStorage(self.cfg)
+      df_15m = storage.load("15m")
+      df_1m = storage.load("1m")
+      if df_15m.empty:
+        raise ValueError("No 15m candle data — run collect first")
+
+      trainer = ModelTrainer(cfg)
+      metrics = trainer.train(df_15m, df_1m if not df_1m.empty else None)
+      model_path = Path(self.cfg["paths"]["models"]) / "model.joblib"
+      trainer.save(model_path)
+      self.predictor.load_model(str(model_path))
+      self.train_status = {
+        "state": "done",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "model_path": str(model_path),
+        "metrics": metrics,
+        "candles_15m": len(df_15m),
+        "candles_1m": len(df_1m),
+      }
+      log.info("Model training complete: %s", metrics)
+    except Exception as e:
+      log.exception("Model training failed")
+      self.train_status = {
+        "state": "error",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "error": str(e),
+      }
 
   def refit_calibrator(self) -> bool:
     if self.predictor.model is None:

@@ -23,7 +23,14 @@ def add_slot_label(
 
   out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True)
   out["_slot"] = out["timestamp"].apply(lambda t: floor_to_15m(t, tz_name))
-  out = out[out["timestamp"] == out["_slot"]].copy()
+
+  # One row per ET slot — exchange candles may be open- or close-timestamped
+  out = (
+    out.sort_values("timestamp")
+    .groupby("_slot", as_index=False)
+    .last()
+  )
+  out["timestamp"] = out["_slot"]
 
   candles_ahead = max(1, horizon_minutes // 15)
   out["future_close"] = out["close"].shift(-candles_ahead)

@@ -355,29 +355,24 @@ def admin_train(
   min_samples: int | None = Query(default=None, ge=50, le=10000),
   _: None = Depends(_verify_admin),
 ):
-  """Train LightGBM on stored candles and save model + calibrator."""
+  """Train LightGBM on stored candles in a background thread."""
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  from src.models.trainer import ModelTrainer
+  if _loop.train_status.get("state") == "running":
+    return {"status": "running", **_loop.train_status}
 
-  cfg = dict(_cfg)
-  if min_samples is not None:
-    cfg = {**_cfg, "model": {**_cfg.get("model", {}), "min_train_samples": min_samples}}
+  def _run():
+    _loop.train_model(min_samples=min_samples)
 
-  storage = CandleStorage(_cfg)
-  df_15m = storage.load("15m")
-  df_1m = storage.load("1m")
-  if df_15m.empty:
-    raise HTTPException(400, "No 15m candle data — run collect first")
-  trainer = ModelTrainer(cfg)
-  try:
-    metrics = trainer.train(df_15m, df_1m if not df_1m.empty else None)
-  except ValueError as e:
-    raise HTTPException(400, str(e)) from e
-  model_path = Path(_cfg["paths"]["models"]) / "model.joblib"
-  trainer.save(model_path)
-  _loop.predictor.load_model(str(model_path))
-  return {"status": "ok", "model_path": str(model_path), "metrics": metrics}
+  threading.Thread(target=_run, daemon=True).start()
+  return {"status": "started", "message": "Training in background. Poll /api/admin/train/status."}
+
+
+@app.get("/api/admin/train/status")
+def admin_train_status(_: None = Depends(_verify_admin)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.train_status
 
 
 @app.post("/api/admin/backfill-kalshi")
