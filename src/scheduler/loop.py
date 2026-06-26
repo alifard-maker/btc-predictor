@@ -239,11 +239,10 @@ class PredictionLoop:
 
   def reset_calibration_stats(self, *, note: str = "") -> dict[str, Any]:
     stats = self.calibration.reset_stats(note=note)
-    self.postmortems.clear()
     self.latest_prediction = None
     self._late_entry_logged.clear()
     self._flip_logged.clear()
-    log.info("Calibration stats reset: %s", stats)
+    log.info("Calibration stats reset (epoch archived): %s", stats)
     return stats
 
   def refit_calibrator(self) -> bool:

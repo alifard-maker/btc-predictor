@@ -87,6 +87,13 @@ async def lifespan(app: FastAPI):
   try:
     _loop = PredictionLoop(_cfg)
     app.state.loop = _loop
+    try:
+      from src.calibration.backfill_late import backfill_late_entries
+      bf = backfill_late_entries(_cfg, dry_run=False, force=False, replay=True)
+      if bf.get("updated"):
+        log.info("Late-entry backfill on startup: %s", bf)
+    except Exception as e:
+      log.warning("Late-entry backfill skipped: %s", e)
   except Exception as e:
     log.exception("PredictionLoop init failed: %s", e)
     _loop = None
@@ -388,10 +395,19 @@ def admin_reset_stats(
   note: str = Query(default="release baseline"),
   _: None = Depends(_verify_admin),
 ):
-  """Clear prediction history and post-mortems; start a fresh calibration epoch."""
+  """Archive current epoch aggregates, clear prediction history, start fresh epoch."""
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return {"status": "ok", **_loop.reset_calibration_stats(note=note)}
+
+
+@app.post("/api/admin/backfill-late")
+def backfill_late(_: None = Depends(_verify_admin)):
+  """Backfill missed late-entry fields from post-mortems and 1m replay."""
+  from src.calibration.backfill_late import backfill_late_entries
+
+  stats = backfill_late_entries(_cfg, dry_run=False, force=False, replay=True)
+  return {"status": "ok", **stats}
 
 
 @app.post("/api/admin/backfill-kalshi")

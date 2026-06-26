@@ -144,6 +144,17 @@ class PredictionStore(ABC):
     seconds_remaining: int,
   ) -> bool: ...
 
+  @abstractmethod
+  def backfill_late_entry(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+    *,
+    force: bool = False,
+  ) -> bool: ...
+
 
 class SqlitePredictionStore(PredictionStore):
   def __init__(self, db_path: str):
@@ -321,6 +332,43 @@ class SqlitePredictionStore(PredictionStore):
              AND signal = 'NO TRADE'""",
         (signal, prob_up, int(seconds_remaining), ts),
       )
+      return cur.rowcount > 0
+
+  def backfill_late_entry(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+    *,
+    force: bool = False,
+  ) -> bool:
+    ts = pd.Timestamp(slot_timestamp).isoformat()
+    prob_up = float(_py(prob_up))
+    with self._conn() as conn:
+      if force:
+        cur = conn.execute(
+          """UPDATE predictions SET
+               late_entry_signal = ?,
+               late_entry_prob_up = ?,
+               late_entry_at = COALESCE(late_entry_at, datetime('now')),
+               late_entry_seconds_remaining = ?
+             WHERE timestamp = ?
+               AND signal = 'NO TRADE'""",
+          (signal, prob_up, int(seconds_remaining), ts),
+        )
+      else:
+        cur = conn.execute(
+          """UPDATE predictions SET
+               late_entry_signal = ?,
+               late_entry_prob_up = ?,
+               late_entry_at = datetime('now'),
+               late_entry_seconds_remaining = ?
+             WHERE timestamp = ?
+               AND (late_entry_signal IS NULL OR late_entry_signal = '')
+               AND signal = 'NO TRADE'""",
+          (signal, prob_up, int(seconds_remaining), ts),
+        )
       return cur.rowcount > 0
 
   def record_flip(
@@ -544,6 +592,46 @@ class PostgresPredictionStore(PredictionStore):
                AND signal = 'NO TRADE'""",
           (signal, prob_up, int(seconds_remaining), ts),
         )
+        updated = cur.rowcount > 0
+      conn.commit()
+    return updated
+
+  def backfill_late_entry(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+    *,
+    force: bool = False,
+  ) -> bool:
+    ts = pd.Timestamp(slot_timestamp).isoformat()
+    prob_up = float(_py(prob_up))
+    with self._conn() as conn:
+      with conn.cursor() as cur:
+        if force:
+          cur.execute(
+            """UPDATE predictions SET
+                 late_entry_signal = %s,
+                 late_entry_prob_up = %s,
+                 late_entry_at = COALESCE(late_entry_at, NOW()),
+                 late_entry_seconds_remaining = %s
+               WHERE timestamp = %s
+                 AND signal = 'NO TRADE'""",
+            (signal, prob_up, int(seconds_remaining), ts),
+          )
+        else:
+          cur.execute(
+            """UPDATE predictions SET
+                 late_entry_signal = %s,
+                 late_entry_prob_up = %s,
+                 late_entry_at = NOW(),
+                 late_entry_seconds_remaining = %s
+               WHERE timestamp = %s
+                 AND (late_entry_signal IS NULL OR late_entry_signal = '')
+                 AND signal = 'NO TRADE'""",
+            (signal, prob_up, int(seconds_remaining), ts),
+          )
         updated = cur.rowcount > 0
       conn.commit()
     return updated

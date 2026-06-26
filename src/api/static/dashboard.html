@@ -121,6 +121,11 @@
     .likely-card .headline { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.35rem; }
     .likely-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; margin-top: 0.65rem; font-size: 0.8rem; }
     @media (max-width: 640px) { .likely-grid { grid-template-columns: 1fr; } }
+    .stats-block { margin: 0.85rem 0; padding: 0.85rem 1rem; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
+    .stats-block.all-time { border-color: rgba(34,197,94,.35); }
+    .stats-block.epoch { border-color: rgba(99,102,241,.25); }
+    .stats-block h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.55rem; }
+    .stats-block.all-time h3 { color: var(--up); }
   </style>
 </head>
 <body>
@@ -205,7 +210,7 @@
         </ul>
 
         <h3>Calibration</h3>
-        <p>How often past predictions were right. <strong>Rolling hit rate</strong> (1h / 2h / 4h / 12h) counts one result per 15m slot. Brier score measures probability calibration (lower is better).</p>
+        <p>Three Brier scores: <strong>slot-open</strong> (prob at t=0), <strong>late entry</strong> (first LATE signal), and <strong>flip</strong> (after losing open). Lower is better. <strong>All-time</strong> stats persist across epoch resets.</p>
 
         <h3>Prediction history</h3>
         <p>Recent slots: reference at t=0, UP probability, signal, and actual outcome once the slot resolves.</p>
@@ -652,23 +657,62 @@
       </div>`;
     }
 
-    function renderLateEntryStats(le) {
+    function renderLateEntryStats(le, opts = {}) {
+      const title = opts.title || 'Late entry (mid-slot)';
+      const showRolling = opts.showRolling !== false;
       if (!le || (!le.n_logged && !le.n_resolved)) return '';
       const acc = le.accuracy != null ? pct(le.accuracy) : '—';
       const brier = le.brier_score != null ? le.brier_score.toFixed(4) : '—';
       const avgRem = le.avg_seconds_remaining != null ? Math.round(le.avg_seconds_remaining) + 's' : '—';
+      const rolling = showRolling && le.rolling_accuracy ? `
+        <p class="muted" style="font-size:.75rem;margin:.65rem 0 .35rem">Rolling late-entry hit rate:</p>
+        ${renderRollingAccuracy(le.rolling_accuracy)}` : '';
       return `<div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--border)">
-        <p class="muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">Late entry (mid-slot)</p>
+        <p class="muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">${title}</p>
         <div class="cal-stats">
-          <div><span>Logged</span><strong>${le.n_logged}</strong></div>
-          <div><span>Resolved</span><strong>${le.n_resolved}</strong></div>
+          <div><span>Logged</span><strong>${le.n_logged || le.n_resolved || 0}</strong></div>
+          <div><span>Resolved</span><strong>${le.n_resolved || 0}</strong></div>
           <div><span>Late accuracy</span><strong>${acc}</strong></div>
           <div><span>Late Brier</span><strong>${brier}</strong></div>
-          <div><span>Avg time left</span><strong>${avgRem}</strong></div>
+          ${le.avg_seconds_remaining != null ? `<div><span>Avg time left</span><strong>${avgRem}</strong></div>` : ''}
           ${le.late_long_signals ? `<div><span>LATE LONG</span><strong>${le.late_long_accuracy != null ? pct(le.late_long_accuracy) : '—'} (${le.late_long_signals})</strong></div>` : ''}
           ${le.late_short_signals ? `<div><span>LATE SHORT</span><strong>${le.late_short_accuracy != null ? pct(le.late_short_accuracy) : '—'} (${le.late_short_signals})</strong></div>` : ''}
         </div>
-        <p class="muted" style="font-size:.68rem;margin-top:.5rem">Uses outlook % at first LATE signal vs BRTI at close. Open LONG/SHORT stats exclude these rows.</p>
+        ${rolling}
+        <p class="muted" style="font-size:.68rem;margin-top:.5rem">Uses outlook % at first LATE signal vs BRTI at close.</p>
+      </div>`;
+    }
+
+    function renderAllTimeStats(at) {
+      if (!at || (!at.open?.n_resolved && !at.late_entry?.n_resolved && !at.flip?.n_resolved)) return '';
+      const o = at.open || {};
+      const le = at.late_entry || {};
+      const fx = at.flip || {};
+      const archived = at.epochs_archived ? ` · ${at.epochs_archived} prior epoch${at.epochs_archived > 1 ? 's' : ''} archived` : '';
+      return `<div class="stats-block all-time">
+        <h3>All-time (survives reset)${archived}</h3>
+        <div class="cal-stats">
+          <div><span>Slots resolved</span><strong>${o.n_resolved || 0}</strong></div>
+          ${o.brier_score != null ? `<div><span>Brier @ open</span><strong>${o.brier_score.toFixed(4)}</strong></div>` : ''}
+          ${o.accuracy != null ? `<div><span>Open accuracy</span><strong>${pct(o.accuracy)}</strong></div>` : ''}
+          ${o.long_signals ? `<div><span>LONG @ open</span><strong>${o.long_accuracy != null ? pct(o.long_accuracy) : '—'} (${o.long_signals})</strong></div>` : ''}
+          ${o.short_signals ? `<div><span>SHORT @ open</span><strong>${o.short_accuracy != null ? pct(o.short_accuracy) : '—'} (${o.short_signals})</strong></div>` : ''}
+        </div>
+        ${le.n_resolved || le.n_logged ? `
+        <div class="cal-stats" style="margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border)">
+          <div><span>Late resolved</span><strong>${le.n_resolved || 0}</strong></div>
+          ${le.brier_score != null ? `<div><span>Late Brier</span><strong>${le.brier_score.toFixed(4)}</strong></div>` : ''}
+          ${le.accuracy != null ? `<div><span>Late accuracy</span><strong>${pct(le.accuracy)}</strong></div>` : ''}
+          ${le.late_long_signals ? `<div><span>LATE LONG</span><strong>${le.late_long_accuracy != null ? pct(le.late_long_accuracy) : '—'} (${le.late_long_signals})</strong></div>` : ''}
+          ${le.late_short_signals ? `<div><span>LATE SHORT</span><strong>${le.late_short_accuracy != null ? pct(le.late_short_accuracy) : '—'} (${le.late_short_signals})</strong></div>` : ''}
+        </div>
+        ${le.rolling_accuracy ? `<p class="muted" style="font-size:.75rem;margin:.65rem 0 .35rem">Rolling late-entry (all-time window):</p>${renderRollingAccuracy(le.rolling_accuracy)}` : ''}` : ''}
+        ${fx.n_resolved || fx.n_logged ? `
+        <div class="cal-stats" style="margin-top:.65rem;padding-top:.65rem;border-top:1px solid var(--border)">
+          <div><span>Flip resolved</span><strong>${fx.n_resolved || 0}</strong></div>
+          ${fx.brier_score != null ? `<div><span>Flip Brier</span><strong>${fx.brier_score.toFixed(4)}</strong></div>` : ''}
+          ${fx.accuracy != null ? `<div><span>Flip accuracy</span><strong>${pct(fx.accuracy)}</strong></div>` : ''}
+        </div>` : ''}
       </div>`;
     }
 
@@ -676,7 +720,10 @@
       const s = data.summary;
       const le = s.late_entry || {};
       const fx = s.flip || {};
-      if (!s.n_resolved && !le.n_logged && !fx.n_logged) {
+      const at = s.all_time || {};
+      const hasEpoch = s.n_resolved || le.n_logged || fx.n_logged;
+      const hasAllTime = at.open?.n_resolved || at.late_entry?.n_resolved || at.flip?.n_resolved;
+      if (!hasEpoch && !hasAllTime) {
         const excluded = s.n_excluded_non_kalshi ? ` (${s.n_excluded_non_kalshi} older rows excluded — run Kalshi backfill)` : '';
         $('calibration').innerHTML = `<p class="muted">Not enough Kalshi-resolved predictions yet${excluded}. Check back after slots settle.</p>`;
         return;
@@ -684,25 +731,29 @@
       const kalshiNote = s.kalshi_only
         ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Stats use Kalshi BRTI only (t=0 floor_strike → close expiration_value).${s.n_excluded_non_kalshi ? ` Excluded ${s.n_excluded_non_kalshi} pre-Kalshi rows.` : ''}</p>`
         : '';
-      const epoch = s.stats_epoch?.stats_since
-        ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Tracking since <strong>${time(s.stats_epoch.stats_since)}</strong>${s.stats_epoch.note ? ` · ${s.stats_epoch.note}` : ''}</p>`
-        : '';
+      const epochLabel = s.stats_epoch?.stats_since
+        ? `Current epoch since <strong>${time(s.stats_epoch.stats_since)}</strong>${s.stats_epoch.note ? ` · ${s.stats_epoch.note}` : ''}`
+        : 'Current epoch';
       const open = s.open_at_slot || {};
-      $('calibration').innerHTML = `
-        ${kalshiNote}
-        ${epoch}
-        <p class="muted" style="margin-bottom:.75rem">Open signal: when model says X% UP at slot open, does BRTI finish above t=0 ~X% of the time?</p>
+      const epochBlock = hasEpoch ? `<div class="stats-block epoch">
+        <h3>${epochLabel}</h3>
+        <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Brier @ open — slot-open probability vs BRTI close (all slots, not just LONG/SHORT):</p>
         <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Rolling hit rate (open lean) — one count per 15m slot:</p>
         ${renderRollingAccuracy(s.rolling_accuracy)}
         <div class="cal-stats">
           <div><span>Resolved (Kalshi)</span><strong>${s.n_resolved || 0}</strong></div>
-          ${s.brier_score!=null?`<div><span>Open Brier</span><strong>${s.brier_score.toFixed(4)}</strong></div>`:''}
+          ${s.brier_score!=null?`<div><span>Brier @ open</span><strong>${s.brier_score.toFixed(4)}</strong></div>`:''}
           ${s.overall_accuracy!=null?`<div><span>Open accuracy</span><strong>${pct(s.overall_accuracy)}</strong></div>`:''}
           ${open.long_signals ? `<div><span>LONG @ open</span><strong>${open.long_accuracy != null ? pct(open.long_accuracy) : '—'} (${open.long_signals})</strong></div>`:''}
           ${open.short_signals ? `<div><span>SHORT @ open</span><strong>${open.short_accuracy != null ? pct(open.short_accuracy) : '—'} (${open.short_signals})</strong></div>`:''}
         </div>
-        ${renderLateEntryStats(le)}
-        ${renderFlipStats(fx)}`;
+        ${renderLateEntryStats(le, { title: 'Late entry — this epoch', showRolling: true })}
+        ${renderFlipStats(fx)}
+      </div>` : `<p class="muted" style="margin-bottom:.75rem">Current epoch is empty after reset — all-time stats below still include prior epochs.</p>`;
+      $('calibration').innerHTML = `
+        ${kalshiNote}
+        ${renderAllTimeStats(at)}
+        ${epochBlock}`;
     }
 
     function renderPostmortems(rows) {

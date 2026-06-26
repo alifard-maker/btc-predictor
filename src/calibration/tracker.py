@@ -5,8 +5,17 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from src.calibration.sources import is_kalshi_consistent
 from src.calibration.epoch import read_stats_epoch, write_stats_epoch
+from src.calibration.sources import is_kalshi_consistent
+from src.calibration.stats_archive import (
+  CategoryAgg,
+  archive_epoch,
+  category_from_signal_df,
+  combined_public,
+  epoch_aggs_from_df,
+  read_archive,
+  rolling_from_events,
+)
 from src.db.store import PredictionResolution, PredictionStore, create_prediction_store
 from src.features.slots import floor_to_15m
 
@@ -78,10 +87,25 @@ class CalibrationTracker:
     return self.store.latest()
 
   def reset_stats(self, *, note: str = "") -> dict[str, Any]:
-    """Clear all logged predictions and mark a new calibration epoch."""
+    """Archive current epoch aggregates, then clear predictions for a fresh epoch."""
+    archived: dict[str, Any] = {}
+    if self.cfg:
+      df = self._dedupe_by_slot(self.load_resolved())
+      aggs = epoch_aggs_from_df(
+        df,
+        open_correct_fn=self._prediction_correct,
+        late_correct_fn=self._late_entry_correct,
+        flip_correct_fn=self._flip_correct,
+      )
+      archive = archive_epoch(self.cfg, aggs)
+      archived = {
+        "epochs_archived": archive.epochs_archived,
+        "archived_open_n": aggs[0].n_resolved,
+        "archived_late_n": aggs[1].n_resolved,
+      }
     deleted = self.store.clear_all()
     epoch = write_stats_epoch(self.cfg, note=note) if self.cfg else {}
-    return {"deleted_predictions": deleted, **epoch}
+    return {"deleted_predictions": deleted, **archived, **epoch}
 
   def record_late_entry(
     self,
@@ -254,6 +278,7 @@ class CalibrationTracker:
       "n_resolved": int(len(resolved)),
       "accuracy": None,
       "brier_score": None,
+      "rolling_accuracy": None,
       "late_long_signals": int((late["late_entry_signal"] == "LATE LONG").sum()),
       "late_long_accuracy": None,
       "late_short_signals": int((late["late_entry_signal"] == "LATE SHORT").sum()),
@@ -282,13 +307,16 @@ class CalibrationTracker:
       out["late_long_accuracy"] = float(self._late_entry_correct(longs).mean())
     if len(shorts):
       out["late_short_accuracy"] = float(self._late_entry_correct(shorts).mean())
+    out["rolling_accuracy"] = self._late_rolling_accuracy(df)
     return out
 
-  def rolling_accuracy(self, windows_hours: list[int] | None = None) -> dict[str, dict[str, Any]]:
-    """Correct/total counts for resolved predictions in each rolling time window."""
+  def _rolling_open_accuracy(
+    self,
+    df: pd.DataFrame,
+    windows_hours: list[int] | None = None,
+  ) -> dict[str, dict[str, Any]]:
     windows_hours = windows_hours or [1, 2, 4, 12]
     empty = {f"{h}h": {"correct": 0, "total": 0, "accuracy": None} for h in windows_hours}
-    df = self._dedupe_by_slot(self.load_resolved())
     if df.empty:
       return empty
 
@@ -309,6 +337,51 @@ class CalibrationTracker:
         c = int(correct[mask].sum())
         out[f"{h}h"] = {"correct": c, "total": n, "accuracy": float(c / n)}
     return out
+
+  def rolling_accuracy(self, windows_hours: list[int] | None = None) -> dict[str, dict[str, Any]]:
+    """Correct/total counts for resolved open predictions in each rolling time window."""
+    return self._rolling_open_accuracy(self._dedupe_by_slot(self.load_resolved()), windows_hours)
+
+  def _late_rolling_accuracy(
+    self,
+    df: pd.DataFrame,
+    *,
+    archive_events: list[dict[str, Any]] | None = None,
+    windows_hours: list[int] | None = None,
+  ) -> dict[str, dict[str, Any]]:
+    windows_hours = windows_hours or [1, 2, 4, 12]
+    _, late_events = category_from_signal_df(
+      df,
+      signal_col="late_entry_signal",
+      prob_col="late_entry_prob_up",
+      correct_fn=self._late_entry_correct,
+      long_label="LATE LONG",
+      short_label="LATE SHORT",
+    )
+    events = list(archive_events or []) + late_events
+    return rolling_from_events(events, windows_hours=windows_hours)
+
+  def _epoch_aggs(self, df: pd.DataFrame) -> tuple[CategoryAgg, CategoryAgg, CategoryAgg]:
+    open_agg, late_agg, flip_agg, _, _ = epoch_aggs_from_df(
+      df,
+      open_correct_fn=self._prediction_correct,
+      late_correct_fn=self._late_entry_correct,
+      flip_correct_fn=self._flip_correct,
+    )
+    return open_agg, late_agg, flip_agg
+
+  def _all_time_summary(self, df: pd.DataFrame) -> dict[str, Any]:
+    if not self.cfg:
+      return {}
+    archive = read_archive(self.cfg)
+    epoch_open, epoch_late, epoch_flip = self._epoch_aggs(df)
+    combined = combined_public(archive, epoch_open, epoch_late, epoch_flip)
+    combined["late_entry"]["rolling_accuracy"] = self._late_rolling_accuracy(
+      df,
+      archive_events=archive.late_events,
+    )
+    combined["open"]["rolling_accuracy"] = self._rolling_open_accuracy(df)
+    return combined
 
   def calibration_report(self, n_bins: int = 10) -> pd.DataFrame:
     df = self._dedupe_by_slot(self.load_resolved())
@@ -339,6 +412,7 @@ class CalibrationTracker:
         "late_entry": self._late_entry_summary(df),
         "flip": self._flip_summary(df),
         "open_at_slot": {"n_resolved": 0, "long_signals": 0, "short_signals": 0},
+        "all_time": self._all_time_summary(df),
       }
       if self.kalshi_only and total_n > kalshi_n:
         out["n_resolved_total"] = total_n
@@ -375,4 +449,5 @@ class CalibrationTracker:
       "short_signals": len(shorts),
       "short_accuracy": float(1 - shorts["outcome"].mean()) if len(shorts) else None,
       "mean_calibration_error": float(cal["calibration_error"].mean()) if not cal.empty else None,
+      "all_time": self._all_time_summary(df),
     }
