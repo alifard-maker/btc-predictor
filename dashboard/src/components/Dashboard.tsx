@@ -14,7 +14,7 @@ import { HistoryTable } from "@/components/HistoryTable";
 import { PredictionCard } from "@/components/PredictionCard";
 import { StatusPanel } from "@/components/StatusPanel";
 
-const POLL_MS = 30_000;
+const POLL_MS = 5_000;
 
 export function Dashboard() {
   const [health, setHealth] = useState<Health | null>(null);
@@ -80,7 +80,7 @@ export function Dashboard() {
       <HistoryTable predictions={history} />
 
       <footer className="footer">
-        Predictions update every 5 min · Dashboard polls every 30 sec
+        Predictions update every 15 min · Dashboard refreshes every 5 sec
       </footer>
     </div>
   );
