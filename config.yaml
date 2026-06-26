@@ -42,9 +42,11 @@ features:
   momentum_windows: [4, 8, 16, 32, 48]   # 1h, 2h, 4h, 8h, 12h on 15m chart
   volatility_window: 48                    # 12h
   rsi_period: 14
-  volume_spike_window: 48
-  vwap_window: 48                          # 12h VWAP
-  slot_lookback_candles: 48                # 12h of 15m slots
+  volume_spike_window: 16                  # 4h baseline (emphasized for short horizon)
+  vwap_window: 48                          # 12h anchor
+  slot_lookback_candles: 16                # primary slot context = 4h
+  slot_context_windows: [4, 16, 48]        # 1h, 4h, 12h multi-scale slot features
+  expected_move_vol_candles: 4             # 1h vol for next-15m move estimate
 
 model:
   type: lightgbm

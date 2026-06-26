@@ -144,7 +144,8 @@
         ['Exchange', h.exchange || '—', h.exchange_connected],
         ['Model', h.model || '—', true],
         ['15m candles', String(h.candles_15m || 0), (h.candles_15m || 0) >= (h.min_candles_15m || 48)],
-        ['Lookback', (h.lookback_hours || 12) + 'h', true],
+        ['Context', h.slot_context || '1h+4h+12h', true],
+        ['Vol spike', h.volume_spike_window || '4h', true],
         ['Schedule', (h.timezone || 'ET') + ' :00/:15/:30/:45', true],
       ];
       $('status-list').innerHTML = items.map(([l,v,ok]) =>

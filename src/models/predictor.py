@@ -54,17 +54,41 @@ class Predictor:
   def _baseline_prob(self, features: pd.DataFrame) -> float:
     row = features.iloc[-1]
     score = 0.5
-    for key, scale in [("momentum_4", 10), ("momentum_8", 8)]:
+
+    def _bump(key: str, scale: float, cap: float = 0.15) -> None:
+      nonlocal score
       if key in row and not pd.isna(row[key]):
-        score += np.clip(row[key] * scale, -0.15, 0.15)
+        score += np.clip(float(row[key]) * scale, -cap, cap)
+
+    # 1h momentum — strongest signal for next 15m
+    _bump("momentum_4", 14, 0.18)
+
+    # 2h momentum — secondary confirmation
+    _bump("momentum_8", 5, 0.08)
+
+    # 1h slot context (last hour of 15m bars)
+    _bump("slot_return_1h", 10, 0.12)
+    if "slot_up_ratio_1h" in row and not pd.isna(row["slot_up_ratio_1h"]):
+      score += np.clip((float(row["slot_up_ratio_1h"]) - 0.5) * 0.35, -0.08, 0.08)
+
+    # 4h slot context (emphasized medium-term)
+    _bump("slot_return_4h", 6, 0.10)
+    if "slot_up_ratio" in row and not pd.isna(row["slot_up_ratio"]):
+      score += np.clip((float(row["slot_up_ratio"]) - 0.5) * 0.22, -0.06, 0.06)
+
+    # 12h regime — light mean-reversion fade on extended moves
+    _bump("slot_return_12h", -3, 0.06)
+
     if "rsi_norm" in row and not pd.isna(row["rsi_norm"]):
-      score -= np.clip(row["rsi_norm"] * 0.1, -0.1, 0.1)
+      score -= np.clip(float(row["rsi_norm"]) * 0.1, -0.1, 0.1)
     if "vwap_distance" in row and not pd.isna(row["vwap_distance"]):
-      score -= np.clip(row["vwap_distance"] * 2, -0.1, 0.1)
+      score -= np.clip(float(row["vwap_distance"]) * 2, -0.1, 0.1)
     if "volume_spike" in row and not pd.isna(row["volume_spike"]):
-      mom = row.get("momentum_4", 0) or 0
+      mom = float(row.get("momentum_4", 0) or 0)
       if row["volume_spike"] > 1.5:
-        score += np.sign(mom) * 0.05
+        score += np.sign(mom) * 0.07
+      elif row["volume_spike"] > 1.2 and abs(mom) > 0.001:
+        score += np.sign(mom) * 0.03
     return float(np.clip(score, 0.05, 0.95))
 
   def predict(
@@ -98,7 +122,10 @@ class Predictor:
     confidence = abs(prob_up - 0.5) * 2
     horizon = self.cfg.get("prediction_horizon_minutes", 15)
 
-    lookback = self.cfg.get("features", {}).get("slot_lookback_candles", 48)
+    lookback = self.cfg.get("features", {}).get(
+      "expected_move_vol_candles",
+      self.cfg.get("features", {}).get("slot_lookback_candles", 16),
+    )
     vol = features["return_1"].rolling(lookback).std().iloc[-1]
     if pd.isna(vol):
       vol = 0.002

@@ -144,24 +144,59 @@ def compute_market_structure_features(df: pd.DataFrame) -> pd.DataFrame:
   return out
 
 
+def _slot_window_label(candles: int) -> str:
+  hours = candles * 15 // 60
+  return f"{hours}h" if hours * 60 == candles * 15 else f"w{candles}"
+
+
+def _add_slot_features(out: pd.DataFrame, lookback: int, label: str) -> None:
+  sfx = f"_{label}"
+  out[f"slot_up_ratio{sfx}"] = (out["return_1"] > 0).rolling(lookback).mean()
+  out[f"slot_return{sfx}"] = out["close"].pct_change(lookback)
+  out[f"slot_range{sfx}"] = (
+    (out["high"].rolling(lookback).max() - out["low"].rolling(lookback).min())
+    / out["close"].replace(0, np.nan)
+  )
+  out[f"slot_volume{sfx}"] = out["volume"].rolling(lookback).sum()
+  out[f"slot_volatility{sfx}"] = out["return_1"].rolling(lookback).std()
+  out[f"slot_higher_highs{sfx}"] = (out["high"] > out["high"].shift(1)).rolling(lookback).sum()
+  out[f"slot_lower_lows{sfx}"] = (out["low"] < out["low"].shift(1)).rolling(lookback).sum()
+
+
 def compute_slot_context_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
-  """Summarize prior 12h of 15m slots (48 candles by default) for slot-based prediction."""
+  """Multi-scale slot context: 1h (fast), 4h (primary), 12h (regime)."""
   out = df.copy()
-  lookback = cfg.get("features", {}).get("slot_lookback_candles", 48)
+  feat_cfg = cfg.get("features", {})
+  windows = feat_cfg.get("slot_context_windows", [4, 16, 48])
+  primary = feat_cfg.get("slot_lookback_candles", 16)
 
   if "return_1" not in out:
     out["return_1"] = out["close"].pct_change()
 
-  out["slot_up_ratio"] = (out["return_1"] > 0).rolling(lookback).mean()
-  out["slot_return_lb"] = out["close"].pct_change(lookback)
-  out["slot_range_lb"] = (
-    (out["high"].rolling(lookback).max() - out["low"].rolling(lookback).min())
-    / out["close"].replace(0, np.nan)
-  )
-  out["slot_volume_lb"] = out["volume"].rolling(lookback).sum()
-  out["slot_volatility_lb"] = out["return_1"].rolling(lookback).std()
-  out["slot_higher_highs_lb"] = (out["high"] > out["high"].shift(1)).rolling(lookback).sum()
-  out["slot_lower_lows_lb"] = (out["low"] < out["low"].shift(1)).rolling(lookback).sum()
+  seen_labels: set[str] = set()
+  for w in windows:
+    label = _slot_window_label(int(w))
+    if label in seen_labels:
+      continue
+    seen_labels.add(label)
+    _add_slot_features(out, int(w), label)
+
+  primary_label = _slot_window_label(int(primary))
+  for stem in (
+    "slot_up_ratio",
+    "slot_return",
+    "slot_range",
+    "slot_volume",
+    "slot_volatility",
+    "slot_higher_highs",
+    "slot_lower_lows",
+  ):
+    src = f"{stem}_{primary_label}"
+    if src in out.columns:
+      out[stem] = out[src]
+  # Legacy alias used in earlier feature sets
+  if f"slot_return_{primary_label}" in out.columns:
+    out["slot_return_lb"] = out[f"slot_return_{primary_label}"]
 
   return out
 

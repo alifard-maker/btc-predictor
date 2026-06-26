@@ -132,6 +132,8 @@ class PredictionLoop:
       "candles_1m": len(df_1m),
       "min_candles_15m": self.min_candles,
       "lookback_hours": self.cfg.get("lookback_hours", 12),
+      "slot_context": "1h + 4h (primary) + 12h",
+      "volume_spike_window": f"{self.cfg.get('features', {}).get('volume_spike_window', 16)}×15m",
       "latest_candle_15m": df_15m["timestamp"].iloc[-1].isoformat() if not df_15m.empty else None,
       "horizon_minutes": self.horizon,
       "timezone": self.tz,
