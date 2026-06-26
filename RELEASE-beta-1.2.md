@@ -1,33 +1,17 @@
-# Release beta 1.2 — daily retrain + late entry
+# Beta 1.2 — flip-to-opposite
 
-**Tag:** `backup/release-daily-retrain-2026-06-28`  
-**Live:** https://btc-predictor-production-f460.up.railway.app/dashboard
+**Tag:** `release/beta-1.2` (after deploy)
 
-## Restore this version
+## What changed
 
-```bash
-git fetch origin
-git checkout backup/release-daily-retrain-2026-06-28
-```
+When an open **LONG** or **SHORT** is losing past the stop and reassessment + tape strongly favor the other side, the monitor can recommend **FLIP SHORT** or **FLIP LONG** (exit open leg, bet opposite).
 
-## What's in this release
+- **One flip per slot** (`max_flips_per_slot: 1`) — no flip-back
+- After flip is logged, only **HOLD / TAKE PROFIT / CUT LOSS** on the flipped side
+- Separate **flip calibration stats** on the dashboard (like late entry)
 
-- **Trained LightGBM** on ~2y exchange OHLC; Kalshi BRTI for t=0, outcomes, calibration
-- **Regime filter** — blocks only when 2+ flags align; single flags are advisory
-- **Late entry** — WATCH → LATE LONG/SHORT on NO-TRADE slots after conservative gates
-- **Kalshi floor_strike** for t=0 with retry at slot open
-- **Daily auto-retrain** — 2:00 AM ET (first run: next calendar day after deploy)
-- **Calibrator** — refits every 6h from resolved slots
-- **Stats epoch** — reset via `POST /api/admin/reset-stats` for clean release tracking
+Config: `flip:` in `config.yaml`.
 
-## Ops
+## Revert
 
-```bash
-# Reset calibration baseline
-curl -X POST -H "X-API-Key: $ADMIN_API_KEY" \
-  "https://btc-predictor-production-f460.up.railway.app/api/admin/reset-stats?note=beta-1.2"
-
-# Manual train (also runs daily at 2am ET)
-curl -X POST -H "X-API-Key: $ADMIN_API_KEY" \
-  "https://btc-predictor-production-f460.up.railway.app/api/admin/train"
-```
+`git checkout release/beta-1.1`

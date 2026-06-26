@@ -102,6 +102,18 @@ late_entry:
   momentum_bars: 4
   min_momentum_pct: 0.02
 
+# Flip-to-opposite — after open LONG/SHORT is losing, one reverse bet per slot
+flip:
+  enabled: true
+  max_flips_per_slot: 1          # no flip-back; after flip only HOLD/TP/CUT on new side
+  min_elapsed_minutes: 3
+  min_remaining_minutes: 5       # need time for reversed bet to work
+  min_confidence: 0.63           # stricter than open (0.57) and late (0.62)
+  min_loss_pct: 0.15             # open leg must be at stop-loss depth
+  min_move_pct: 0.06             # |move| vs t=0 on flip side
+  min_side_time_pct: 0.55
+  min_momentum_pct: 0.02
+
 model:
   type: lightgbm
   train_test_split: 0.2

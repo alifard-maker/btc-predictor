@@ -92,6 +92,15 @@ class CalibrationTracker:
   ) -> bool:
     return self.store.record_late_entry(slot_timestamp, signal, prob_up, seconds_remaining)
 
+  def record_flip(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+  ) -> bool:
+    return self.store.record_flip(slot_timestamp, signal, prob_up, seconds_remaining)
+
   def stats_epoch(self) -> dict[str, Any] | None:
     if not self.cfg:
       return None
@@ -149,6 +158,76 @@ class CalibrationTracker:
     if "late_entry_signal" not in df.columns:
       return pd.Series(False, index=df.index)
     return df["late_entry_signal"].notna() & (df["late_entry_signal"].astype(str).str.len() > 0)
+
+  def _flip_correct(self, df: pd.DataFrame) -> pd.Series:
+    def _row(r: pd.Series) -> bool:
+      sig = str(r.get("flip_signal") or "")
+      if sig == "FLIP LONG":
+        return bool(r["outcome"])
+      if sig == "FLIP SHORT":
+        return not bool(r["outcome"])
+      return False
+
+    return df.apply(_row, axis=1)
+
+  def _flip_mask(self, df: pd.DataFrame) -> pd.Series:
+    if "flip_signal" not in df.columns:
+      return pd.Series(False, index=df.index)
+    return df["flip_signal"].notna() & (df["flip_signal"].astype(str).str.len() > 0)
+
+  def _flip_summary(self, df: pd.DataFrame) -> dict[str, Any]:
+    empty = {
+      "n_logged": 0,
+      "n_resolved": 0,
+      "accuracy": None,
+      "brier_score": None,
+      "flip_long_signals": 0,
+      "flip_long_accuracy": None,
+      "flip_short_signals": 0,
+      "flip_short_accuracy": None,
+      "avg_seconds_remaining": None,
+    }
+    if df.empty or "flip_signal" not in df.columns:
+      return empty
+
+    flipped = df[self._flip_mask(df)]
+    if flipped.empty:
+      return empty
+
+    resolved = flipped[flipped["outcome"].notna()]
+    out = {
+      "n_logged": int(len(flipped)),
+      "n_resolved": int(len(resolved)),
+      "accuracy": None,
+      "brier_score": None,
+      "flip_long_signals": int((flipped["flip_signal"] == "FLIP LONG").sum()),
+      "flip_long_accuracy": None,
+      "flip_short_signals": int((flipped["flip_signal"] == "FLIP SHORT").sum()),
+      "flip_short_accuracy": None,
+      "avg_seconds_remaining": None,
+    }
+    if "flip_seconds_remaining" in flipped.columns:
+      rem = pd.to_numeric(flipped["flip_seconds_remaining"], errors="coerce").dropna()
+      if len(rem):
+        out["avg_seconds_remaining"] = float(rem.mean())
+    if len(resolved) == 0:
+      return out
+
+    correct = self._flip_correct(resolved)
+    out["accuracy"] = float(correct.mean())
+    if "flip_prob_up" in resolved.columns:
+      probs = pd.to_numeric(resolved["flip_prob_up"], errors="coerce")
+      valid = probs.notna()
+      if valid.any():
+        out["brier_score"] = float(((probs[valid] - resolved.loc[valid, "outcome"]) ** 2).mean())
+
+    longs = resolved[resolved["flip_signal"] == "FLIP LONG"]
+    shorts = resolved[resolved["flip_signal"] == "FLIP SHORT"]
+    if len(longs):
+      out["flip_long_accuracy"] = float(self._flip_correct(longs).mean())
+    if len(shorts):
+      out["flip_short_accuracy"] = float(self._flip_correct(shorts).mean())
+    return out
 
   def _late_entry_summary(self, df: pd.DataFrame) -> dict[str, Any]:
     empty = {
@@ -258,6 +337,7 @@ class CalibrationTracker:
         "rolling_accuracy": self.rolling_accuracy(),
         "stats_epoch": self.stats_epoch(),
         "late_entry": self._late_entry_summary(df),
+        "flip": self._flip_summary(df),
         "open_at_slot": {"n_resolved": 0, "long_signals": 0, "short_signals": 0},
       }
       if self.kalshi_only and total_n > kalshi_n:
@@ -289,6 +369,7 @@ class CalibrationTracker:
         "brier_score": float(((open_df["prob_up"] - open_df["outcome"]) ** 2).mean()) if len(open_df) else None,
       },
       "late_entry": self._late_entry_summary(df),
+      "flip": self._flip_summary(df),
       "long_signals": len(longs),
       "long_accuracy": float(longs["outcome"].mean()) if len(longs) else None,
       "short_signals": len(shorts),

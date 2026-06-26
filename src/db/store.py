@@ -34,6 +34,10 @@ _EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
   ("late_entry_prob_up", "REAL"),
   ("late_entry_at", "TEXT"),
   ("late_entry_seconds_remaining", "INTEGER"),
+  ("flip_signal", "TEXT"),
+  ("flip_prob_up", "REAL"),
+  ("flip_at", "TEXT"),
+  ("flip_seconds_remaining", "INTEGER"),
 )
 
 _EXTRA_COLUMNS_PG: tuple[tuple[str, str], ...] = (
@@ -45,6 +49,10 @@ _EXTRA_COLUMNS_PG: tuple[tuple[str, str], ...] = (
   ("late_entry_prob_up", "DOUBLE PRECISION"),
   ("late_entry_at", "TIMESTAMPTZ"),
   ("late_entry_seconds_remaining", "INTEGER"),
+  ("flip_signal", "TEXT"),
+  ("flip_prob_up", "DOUBLE PRECISION"),
+  ("flip_at", "TIMESTAMPTZ"),
+  ("flip_seconds_remaining", "INTEGER"),
 )
 
 
@@ -120,6 +128,15 @@ class PredictionStore(ABC):
 
   @abstractmethod
   def record_late_entry(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+  ) -> bool: ...
+
+  @abstractmethod
+  def record_flip(
     self,
     slot_timestamp: str,
     signal: str,
@@ -302,6 +319,29 @@ class SqlitePredictionStore(PredictionStore):
            WHERE timestamp = ?
              AND (late_entry_signal IS NULL OR late_entry_signal = '')
              AND signal = 'NO TRADE'""",
+        (signal, prob_up, int(seconds_remaining), ts),
+      )
+      return cur.rowcount > 0
+
+  def record_flip(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+  ) -> bool:
+    ts = pd.Timestamp(slot_timestamp).isoformat()
+    prob_up = float(_py(prob_up))
+    with self._conn() as conn:
+      cur = conn.execute(
+        """UPDATE predictions SET
+             flip_signal = ?,
+             flip_prob_up = ?,
+             flip_at = datetime('now'),
+             flip_seconds_remaining = ?
+           WHERE timestamp = ?
+             AND (flip_signal IS NULL OR flip_signal = '')
+             AND signal IN ('LONG', 'SHORT')""",
         (signal, prob_up, int(seconds_remaining), ts),
       )
       return cur.rowcount > 0
@@ -502,6 +542,32 @@ class PostgresPredictionStore(PredictionStore):
              WHERE timestamp = %s
                AND (late_entry_signal IS NULL OR late_entry_signal = '')
                AND signal = 'NO TRADE'""",
+          (signal, prob_up, int(seconds_remaining), ts),
+        )
+        updated = cur.rowcount > 0
+      conn.commit()
+    return updated
+
+  def record_flip(
+    self,
+    slot_timestamp: str,
+    signal: str,
+    prob_up: float,
+    seconds_remaining: int,
+  ) -> bool:
+    ts = pd.Timestamp(slot_timestamp).isoformat()
+    prob_up = float(_py(prob_up))
+    with self._conn() as conn:
+      with conn.cursor() as cur:
+        cur.execute(
+          """UPDATE predictions SET
+               flip_signal = %s,
+               flip_prob_up = %s,
+               flip_at = NOW(),
+               flip_seconds_remaining = %s
+             WHERE timestamp = %s::timestamptz
+               AND (flip_signal IS NULL OR flip_signal = '')
+               AND signal IN ('LONG', 'SHORT')""",
           (signal, prob_up, int(seconds_remaining), ts),
         )
         updated = cur.rowcount > 0

@@ -72,6 +72,8 @@
     .action-WATCH { background: rgba(99,102,241,.1); color: #a5b4fc; border: 1px solid rgba(99,102,241,.25); }
     .action-LATE_LONG { background: rgba(34,197,94,.15); color: var(--up); border: 1px solid rgba(34,197,94,.35); }
     .action-LATE_SHORT { background: rgba(239,68,68,.15); color: var(--down); border: 1px solid rgba(239,68,68,.35); }
+    .action-FLIP_LONG { background: rgba(59,130,246,.15); color: #60a5fa; border: 1px solid rgba(59,130,246,.35); }
+    .action-FLIP_SHORT { background: rgba(168,85,247,.15); color: #c084fc; border: 1px solid rgba(168,85,247,.35); }
     .slot-progress { height: 8px; background: var(--bg); border-radius: 99px; overflow: hidden; margin: 0.65rem 0; }
     .slot-progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), #818cf8); border-radius: 99px; transition: width .5s; }
     .monitor-reasons { margin: 0.65rem 0 0; padding-left: 1.1rem; font-size: 0.78rem; color: var(--muted); }
@@ -174,6 +176,8 @@
           <dd>In profit and move may be exhausted — consider locking gains.</dd>
           <dt>CUT LOSS</dt>
           <dd>Losing with momentum against you — consider exiting; includes <strong>reassessed UP/DOWN</strong> for time left in the slot.</dd>
+          <dt>FLIP LONG / FLIP SHORT</dt>
+          <dd>Open bet losing past stop <em>and</em> reassessment strongly favors the other side — exit open leg, bet opposite. <strong>One flip per slot</strong>; after that only HOLD/TP/CUT on the flipped side.</dd>
         </dl>
         <ul>
           <li><strong>Ref (t=0)</strong> — Kalshi BRTI target at slot open.</li>
@@ -454,7 +458,7 @@
       const actKey = (m.action || 'WAIT').replace(/\s+/g, '_');
       const pnlCls = pnlDirection(m);
       const bet = m.bet_side && m.bet_side !== 'NONE'
-        ? `<span class="badge badge-${m.bet_side === 'UP' ? 'LONG' : 'SHORT'}">${m.late_entry_action && m.late_entry_action.startsWith('LATE') ? 'Late ' : 'Bet '}${m.bet_side}</span>`
+        ? `<span class="badge badge-${m.bet_side === 'UP' ? 'LONG' : 'SHORT'}">${m.position_mode === 'flip' ? 'Flip ' : m.late_entry_action && m.late_entry_action.startsWith('LATE') ? 'Late ' : 'Bet '}${m.bet_side}</span>`
         : '<span class="muted">No bet at open</span>';
 
       let body = `
@@ -587,6 +591,26 @@
       return `<div class="rolling-acc">${cards}</div>`;
     }
 
+    function renderFlipStats(fx) {
+      if (!fx || (!fx.n_logged && !fx.n_resolved)) return '';
+      const acc = fx.accuracy != null ? pct(fx.accuracy) : '—';
+      const brier = fx.brier_score != null ? fx.brier_score.toFixed(4) : '—';
+      const avgRem = fx.avg_seconds_remaining != null ? Math.round(fx.avg_seconds_remaining) + 's' : '—';
+      return `<div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--border)">
+        <p class="muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">Flip-to-opposite (after losing open)</p>
+        <div class="cal-stats">
+          <div><span>Logged</span><strong>${fx.n_logged}</strong></div>
+          <div><span>Resolved</span><strong>${fx.n_resolved}</strong></div>
+          <div><span>Flip accuracy</span><strong>${acc}</strong></div>
+          <div><span>Flip Brier</span><strong>${brier}</strong></div>
+          <div><span>Avg time left</span><strong>${avgRem}</strong></div>
+          ${fx.flip_long_signals ? `<div><span>FLIP LONG</span><strong>${fx.flip_long_accuracy != null ? pct(fx.flip_long_accuracy) : '—'} (${fx.flip_long_signals})</strong></div>` : ''}
+          ${fx.flip_short_signals ? `<div><span>FLIP SHORT</span><strong>${fx.flip_short_accuracy != null ? pct(fx.flip_short_accuracy) : '—'} (${fx.flip_short_signals})</strong></div>` : ''}
+        </div>
+        <p class="muted" style="font-size:.68rem;margin-top:.5rem">Max one flip per slot; tracked separately from open and late-entry stats.</p>
+      </div>`;
+    }
+
     function renderLateEntryStats(le) {
       if (!le || (!le.n_logged && !le.n_resolved)) return '';
       const acc = le.accuracy != null ? pct(le.accuracy) : '—';
@@ -610,7 +634,8 @@
     function renderCalibration(data) {
       const s = data.summary;
       const le = s.late_entry || {};
-      if (!s.n_resolved && !le.n_logged) {
+      const fx = s.flip || {};
+      if (!s.n_resolved && !le.n_logged && !fx.n_logged) {
         const excluded = s.n_excluded_non_kalshi ? ` (${s.n_excluded_non_kalshi} older rows excluded — run Kalshi backfill)` : '';
         $('calibration').innerHTML = `<p class="muted">Not enough Kalshi-resolved predictions yet${excluded}. Check back after slots settle.</p>`;
         return;
@@ -635,7 +660,8 @@
           ${open.long_signals ? `<div><span>LONG @ open</span><strong>${open.long_accuracy != null ? pct(open.long_accuracy) : '—'} (${open.long_signals})</strong></div>`:''}
           ${open.short_signals ? `<div><span>SHORT @ open</span><strong>${open.short_accuracy != null ? pct(open.short_accuracy) : '—'} (${open.short_signals})</strong></div>`:''}
         </div>
-        ${renderLateEntryStats(le)}`;
+        ${renderLateEntryStats(le)}
+        ${renderFlipStats(fx)}`;
     }
 
     function renderPostmortems(rows) {
@@ -647,9 +673,10 @@
         <thead><tr><th>Slot</th><th>Signal</th><th>Move</th><th>Result</th><th>Lesson</th></tr></thead>
         <tbody>${rows.map(r => {
           const move = r.move_pct != null ? `${r.move_pct >= 0 ? '+' : ''}${r.move_pct.toFixed(2)}%` : '—';
-          const sig = r.late_entry_signal ? `${r.signal} → ${r.late_entry_signal}` : (r.signal || 'NO TRADE');
-          const dir = r.late_entry_signal
-            ? (r.actual_up != null ? ((r.late_entry_signal === 'LATE LONG' ? r.actual_up : !r.actual_up) ? '<span class="up">✓</span>' : '<span class="down">✗</span>') : '—')
+          const sig = [r.signal, r.late_entry_signal, r.flip_signal].filter(Boolean).join(' → ') || (r.signal || 'NO TRADE');
+          const evalSig = r.flip_signal || r.late_entry_signal;
+          const dir = evalSig
+            ? (r.actual_up != null ? (((evalSig.includes('LONG') || evalSig === 'FLIP LONG') ? r.actual_up : !r.actual_up) ? '<span class="up">✓</span>' : '<span class="down">✗</span>') : '—')
             : (r.direction_correct == null ? '—' : r.direction_correct ? '<span class="up">✓</span>' : '<span class="down">✗</span>');
           return `<tr>
             <td>${time(r.slot_start || r.timestamp)}</td>
@@ -667,14 +694,14 @@
         return;
       }
       $('history').innerHTML = `<table>
-        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>Close BRTI</th><th>UP</th><th>Open</th><th>Late</th><th>Outcome</th></tr></thead>
+        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>Close BRTI</th><th>UP</th><th>Open</th><th>Mid-slot</th><th>Outcome</th></tr></thead>
         <tbody>${rows.map(p => `<tr>
           <td>${p.slot_label || time(p.timestamp)}</td>
           <td title="${p.reference_source || ''}">${price(p.reference_price ?? p.price)}</td>
           <td title="${p.exit_source || ''}">${p.exit_price != null ? price(p.exit_price) : '—'}</td>
           <td class="up">${pct(p.prob_up)}</td>
           <td>${badge(p.signal)}</td>
-          <td>${p.late_entry_signal ? badge(p.late_entry_signal) + (p.late_entry_prob_up != null ? ` <span class="muted">${pct(p.late_entry_prob_up)}</span>` : '') : '—'}</td>
+          <td>${p.flip_signal ? badge(p.flip_signal) + (p.flip_prob_up != null ? ` <span class="muted">${pct(p.flip_prob_up)}</span>` : '') : p.late_entry_signal ? badge(p.late_entry_signal) + (p.late_entry_prob_up != null ? ` <span class="muted">${pct(p.late_entry_prob_up)}</span>` : '') : '—'}</td>
           <td>${p.outcome==null?'—':(p.outcome?'<span class="up">UP</span>':'<span class="down">DOWN</span>')}</td>
         </tr>`).join('')}</tbody></table>`;
     }

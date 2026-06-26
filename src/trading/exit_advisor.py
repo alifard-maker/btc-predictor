@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.features.slots import current_slot_start, slot_end, slot_label
 from src.trading.edge import Signal
+from src.trading.flip import FlipAdvisor
 from src.trading.late_entry import LateEntryAdvisor
 
 
@@ -18,6 +19,8 @@ class ExitAction(str, Enum):
   WATCH = "WATCH"
   LATE_LONG = "LATE LONG"
   LATE_SHORT = "LATE SHORT"
+  FLIP_LONG = "FLIP LONG"
+  FLIP_SHORT = "FLIP SHORT"
   HOLD = "HOLD"
   TAKE_PROFIT = "TAKE PROFIT"
   CUT_LOSS = "CUT LOSS"
@@ -50,6 +53,9 @@ class SlotMonitor:
   reassess_summary: str = ""
   late_entry_action: str = ""
   late_entry_summary: str = ""
+  flip_action: str = ""
+  flip_summary: str = ""
+  position_mode: str = "open"  # open | flip
   outlook_ready: bool = False
   reference_source: str = ""
   current_price_source: str = ""
@@ -97,6 +103,11 @@ class SlotMonitor:
       out["late_entry_action"] = self.late_entry_action
     if self.late_entry_summary:
       out["late_entry_summary"] = self.late_entry_summary
+    if self.flip_action:
+      out["flip_action"] = self.flip_action
+    if self.flip_summary:
+      out["flip_summary"] = self.flip_summary
+    out["position_mode"] = self.position_mode
     out["outlook_ready"] = self.outlook_ready
     return out
 
@@ -116,6 +127,7 @@ class ExitAdvisor:
     self.late_window_minutes = float(intra.get("late_window_minutes", 3))
     self.fee_buffer_pct = float(intra.get("fee_buffer_pct", round_trip / 2))
     self.late_entry = LateEntryAdvisor(cfg)
+    self.flip = FlipAdvisor(cfg)
 
   @staticmethod
   def _price_change_usd(reference_price: float, current_price: float) -> float:
@@ -232,6 +244,7 @@ class ExitAdvisor:
     df_1m: pd.DataFrame | None = None,
     slot_start: pd.Timestamp | None = None,
     original_prob_up: float = 0.5,
+    existing_flip: str = "",
   ) -> SlotMonitor:
     now = pd.Timestamp(now or pd.Timestamp.now(tz="UTC"))
     if now.tzinfo is None:
@@ -294,16 +307,32 @@ class ExitAdvisor:
     slot_mom = self._slot_momentum(df_1m, slot_s)
     recent = self._recent_1m_bias(df_1m, slot_s)
 
+    position_mode = "flip" if existing_flip in ("FLIP LONG", "FLIP SHORT") else "open"
+    flip_action = existing_flip if position_mode == "flip" else ""
+    flip_summary = ""
+
     if signal_at_open == Signal.LONG.value:
-      bet_side = "UP"
-      pnl_pct = raw_move_pct
-      fav_mom = slot_mom > 0
-      against_mom = slot_mom < -0.03 or recent < -0.04
+      if position_mode == "flip" and existing_flip == "FLIP SHORT":
+        bet_side = "DOWN"
+        pnl_pct = -raw_move_pct
+        fav_mom = slot_mom < 0
+        against_mom = slot_mom > 0.03 or recent > 0.04
+      else:
+        bet_side = "UP"
+        pnl_pct = raw_move_pct
+        fav_mom = slot_mom > 0
+        against_mom = slot_mom < -0.03 or recent < -0.04
     elif signal_at_open == Signal.SHORT.value:
-      bet_side = "DOWN"
-      pnl_pct = -raw_move_pct
-      fav_mom = slot_mom < 0
-      against_mom = slot_mom > 0.03 or recent > 0.04
+      if position_mode == "flip" and existing_flip == "FLIP LONG":
+        bet_side = "UP"
+        pnl_pct = raw_move_pct
+        fav_mom = slot_mom > 0
+        against_mom = slot_mom < -0.03 or recent < -0.04
+      else:
+        bet_side = "DOWN"
+        pnl_pct = -raw_move_pct
+        fav_mom = slot_mom < 0
+        against_mom = slot_mom > 0.03 or recent > 0.04
     else:
       elapsed_min = elapsed / 60.0
       stats = self.late_entry.slot_path_stats(
@@ -384,6 +413,11 @@ class ExitAdvisor:
     action = ExitAction.HOLD
     urgency = "low"
     message = "Stay in — position is on track."
+
+    if position_mode == "flip":
+      reasons.append(
+        f"Managing {existing_flip} (open was {signal_at_open}) — one flip per slot; no second flip."
+      )
 
     net_after_fees = pnl_pct - self.fee_buffer_pct
 
@@ -494,6 +528,42 @@ class ExitAdvisor:
       elif action == ExitAction.HOLD and reassess_supports and pnl_pct > 0:
         reasons.append("Reassessment supports holding to slot close.")
 
+      # Flip-to-opposite (only while still on the open leg — not after flip logged)
+      if (
+        position_mode == "open"
+        and signal_at_open in (Signal.LONG.value, Signal.SHORT.value)
+        and reassessed_prob_up is not None
+        and action in (ExitAction.CUT_LOSS, ExitAction.HOLD)
+        and (action == ExitAction.CUT_LOSS or pnl_pct <= -self.flip.min_loss_pct)
+      ):
+        elapsed_min = elapsed / 60.0
+        stats = self.late_entry.slot_path_stats(
+          df_1m,
+          slot_s,
+          reference_price,
+          momentum_bars=self.late_entry.momentum_bars,
+          recovery_bars=self.late_entry.recovery_recent_bars,
+        )
+        flip_decision = self.flip.evaluate(
+          signal_at_open=signal_at_open,
+          open_pnl_pct=pnl_pct,
+          elapsed_minutes=elapsed_min,
+          seconds_remaining=remaining,
+          stats=stats,
+          reassessed_prob_up=reassessed_prob_up,
+        )
+        if flip_decision is not None:
+          flip_action = flip_decision.action
+          flip_summary = flip_decision.summary
+          action = (
+            ExitAction.FLIP_SHORT
+            if flip_decision.action == "FLIP SHORT"
+            else ExitAction.FLIP_LONG
+          )
+          urgency = "high"
+          message = flip_decision.summary
+          reasons = list(flip_decision.reasons)
+
     return SlotMonitor(
       active=True,
       slot_label=label,
@@ -516,4 +586,7 @@ class ExitAdvisor:
       reassessed_prob_down=reassessed_prob_down,
       reassessed_close_side=reassessed_close_side,
       reassess_summary=reassess_summary,
+      flip_action=flip_action,
+      flip_summary=flip_summary,
+      position_mode=position_mode,
     )

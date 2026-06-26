@@ -54,6 +54,7 @@ class PredictionLoop:
     self._ticker_cache: tuple[KalshiPriceQuote | None, float] | None = None
     self._slot_tick_cache: dict[str, dict[str, Any]] = {}
     self._late_entry_logged: set[str] = set()
+    self._flip_logged: set[str] = set()
     self.train_status: dict[str, Any] = {"state": "idle"}
 
   def _default_model_path(self) -> str | None:
@@ -198,6 +199,7 @@ class PredictionLoop:
     self.postmortems.clear()
     self.latest_prediction = None
     self._late_entry_logged.clear()
+    self._flip_logged.clear()
     log.info("Calibration stats reset: %s", stats)
     return stats
 
@@ -374,6 +376,7 @@ class PredictionLoop:
           "reference_source": p.reference_source,
           "signal": p.signal.value,
           "prob_up": p.prob_up,
+          "flip_signal": "",
         }
 
     try:
@@ -394,6 +397,7 @@ class PredictionLoop:
         "reference_price": float(row.get("price", 0)),
         "signal": str(row.get("signal", "NO TRADE")),
         "prob_up": float(row.get("prob_up", 0.5)),
+        "flip_signal": str(row.get("flip_signal") or ""),
       }
     except Exception as e:
       log.warning("Could not load slot prediction: %s", e)
@@ -430,6 +434,7 @@ class PredictionLoop:
       using_override = True
 
     original_prob = float(pred.get("prob_up", 0.5)) if pred else 0.5
+    existing_flip = str(pred.get("flip_signal") or "") if pred else ""
 
     if pred is None:
       monitor = self.exit_advisor.evaluate(
@@ -440,6 +445,7 @@ class PredictionLoop:
         df_1m=df_1m if not df_1m.empty else None,
         slot_start=slot_s,
         original_prob_up=original_prob,
+        existing_flip=existing_flip,
       )
     else:
       monitor = self.exit_advisor.evaluate(
@@ -450,6 +456,7 @@ class PredictionLoop:
         df_1m=df_1m if not df_1m.empty else None,
         slot_start=slot_s,
         original_prob_up=original_prob,
+        existing_flip=existing_flip,
       )
 
     monitor.reference_price_api = api_ref if api_ref else None
@@ -462,7 +469,23 @@ class PredictionLoop:
     monitor.live_price_age_sec = round(live_quote.age_sec, 1) if live_quote and live_quote.age_sec is not None else None
     monitor.kalshi = self.kalshi.active_market_summary()
     self._maybe_log_late_entry(slot_s, monitor)
+    self._maybe_log_flip(slot_s, monitor)
     return monitor
+
+  def _maybe_log_flip(self, slot_s: pd.Timestamp, monitor) -> None:
+    action = monitor.action.value if hasattr(monitor.action, "value") else str(monitor.action)
+    if action not in ("FLIP LONG", "FLIP SHORT"):
+      return
+    key = self._slot_cache_key(slot_s)
+    if key in self._flip_logged:
+      return
+    prob = monitor.reassessed_prob_up
+    if prob is None:
+      return
+    ts = floor_to_15m(slot_s, self.tz).isoformat()
+    if self.calibration.record_flip(ts, action, float(prob), int(monitor.seconds_remaining)):
+      self._flip_logged.add(key)
+      log.info("Flip logged: %s %.0f%% UP (%ds left)", action, prob * 100, monitor.seconds_remaining)
 
   def _maybe_log_late_entry(self, slot_s: pd.Timestamp, monitor) -> None:
     action = getattr(monitor, "late_entry_action", "") or ""
