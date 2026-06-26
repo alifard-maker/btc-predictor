@@ -32,11 +32,11 @@ class SlotMonitor:
   reference_price: float
   current_price: float
   unrealized_pct: float
-  unrealized_usd: float = 0.0
   action: ExitAction
   urgency: str  # low, medium, high
   message: str
   reasons: list[str]
+  unrealized_usd: float = 0.0
   reference_price_api: float | None = None
   using_override: bool = False
   reassessed_prob_up: float | None = None
