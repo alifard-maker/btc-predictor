@@ -28,6 +28,13 @@ def _strip_sslmode(url: str) -> str:
   return urlunparse(parsed._replace(query=new_query))
 
 
+def _py(val: Any) -> Any:
+  """Cast numpy scalars to native Python types for Postgres."""
+  if hasattr(val, "item"):
+    return val.item()
+  return val
+
+
 class PredictionStore(ABC):
   @abstractmethod
   def init(self) -> None: ...
@@ -85,6 +92,9 @@ class SqlitePredictionStore(PredictionStore):
       conn.execute("CREATE INDEX IF NOT EXISTS idx_pred_outcome ON predictions(outcome)")
 
   def log_prediction(self, timestamp, price, prob_up, prob_down, confidence, signal, expected_move) -> int:
+    price, prob_up, prob_down, confidence, expected_move = map(
+      _py, (price, prob_up, prob_down, confidence, expected_move)
+    )
     with self._conn() as conn:
       cur = conn.execute(
         """INSERT INTO predictions
@@ -165,6 +175,9 @@ class PostgresPredictionStore(PredictionStore):
       conn.commit()
 
   def log_prediction(self, timestamp, price, prob_up, prob_down, confidence, signal, expected_move) -> int:
+    price, prob_up, prob_down, confidence, expected_move = map(
+      _py, (price, prob_up, prob_down, confidence, expected_move)
+    )
     with self._conn() as conn:
       with conn.cursor() as cur:
         cur.execute(
