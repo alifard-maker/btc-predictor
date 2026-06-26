@@ -44,6 +44,7 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     "confidence": round(pred.confidence, 4),
     "expected_move": round(pred.expected_move, 2),
     "signal": pred.signal.value,
+    "indicators": pred.indicators,
     "formatted": _loop.predictor.format_output(pred) if _loop else "",
   }
 

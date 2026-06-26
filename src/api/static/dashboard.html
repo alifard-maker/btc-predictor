@@ -42,9 +42,25 @@
     .muted { color: var(--muted); }
     .cal-stats { display: flex; flex-wrap: wrap; gap: 1.2rem; margin-bottom: 0.75rem; }
     .cal-stats div span { display: block; font-size: 0.7rem; color: var(--muted); }
+    .rolling-acc { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.65rem; margin: 0.85rem 0; }
+    @media (max-width: 768px) { .rolling-acc { grid-template-columns: repeat(2, 1fr); } }
+    .roll-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.65rem 0.75rem; }
+    .roll-card span { display: block; font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .roll-card strong { font-size: 1rem; }
+    .roll-card .frac { font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
     .ref-block { margin: 0.75rem 0 1rem; padding: 0.75rem; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); }
     .ref-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
     .live-price { font-size: 0.85rem; color: var(--muted); margin-top: 0.35rem; }
+    .indicators { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    .indicators h3 { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.65rem; }
+    .ind-row { display: grid; grid-template-columns: 1fr auto 72px; gap: 0.55rem; align-items: center; margin: 0.45rem 0; font-size: 0.8rem; }
+    .ind-row .name { color: var(--text); }
+    .ind-row .val { color: var(--muted); font-size: 0.75rem; text-align: right; white-space: nowrap; }
+    .ind-track { height: 6px; background: var(--bg); border-radius: 99px; overflow: hidden; }
+    .ind-fill-up { height: 100%; background: var(--up); border-radius: 99px; }
+    .ind-fill-down { height: 100%; background: var(--down); border-radius: 99px; }
+    .ind-fill-neutral { height: 100%; background: var(--muted); border-radius: 99px; opacity: 0.45; }
+    .ind-group { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0.75rem 0 0.35rem; }
   </style>
 </head>
 <body>
@@ -109,6 +125,36 @@
       el.textContent = msg;
     }
 
+    function renderIndicators(items) {
+      if (!items || !items.length) return '';
+      const groups = { short: 'Short-term (1h)', medium: 'Medium (4h)', regime: 'Regime (12h)', context: 'Context' };
+      const order = ['short', 'medium', 'regime', 'context'];
+      const byGroup = {};
+      items.forEach((i) => {
+        const g = i.group || 'context';
+        (byGroup[g] = byGroup[g] || []).push(i);
+      });
+      let html = '<div class="indicators"><h3>Signal breakdown</h3>';
+      order.forEach((g) => {
+        const rows = byGroup[g];
+        if (!rows || !rows.length) return;
+        html += `<div class="ind-group">${groups[g] || g}</div>`;
+        rows.forEach((i) => {
+          const w = Math.round((i.strength || 0) * 100);
+          const fill = i.bias === 'up' ? 'ind-fill-up' : i.bias === 'down' ? 'ind-fill-down' : 'ind-fill-neutral';
+          const biasCls = i.bias === 'up' ? 'up' : i.bias === 'down' ? 'down' : 'muted';
+          const title = i.detail ? ` title="${i.detail}"` : '';
+          html += `<div class="ind-row"${title}>
+            <span class="name ${biasCls}">${i.label}</span>
+            <span class="val">${i.value}</span>
+            <div class="ind-track"><div class="${fill}" style="width:${w}%"></div></div>
+          </div>`;
+        });
+      });
+      html += '<p class="muted" style="font-size:.7rem;margin-top:.65rem">Combined into the headline UP/DOWN % above — not separate trade signals.</p></div>';
+      return html;
+    }
+
     function renderPrediction(p) {
       if (!p) {
         $('pred-card').innerHTML = '<h2>Next 15-minute slot</h2><p class="muted">No prediction yet</p>';
@@ -134,7 +180,8 @@
           <div><span>Expected move</span><strong class="${p.expected_move>=0?'up':'down'}">${p.expected_move>=0?'+':''}${price(p.expected_move)}</strong></div>
           <div><span>Confidence</span><strong>${pct(p.confidence)}</strong></div>
           <div><span>Updated</span><strong style="font-size:.8rem">${time(p.timestamp)}</strong></div>
-        </div>`;
+        </div>
+        ${renderIndicators(p.indicators)}`;
     }
 
     function renderStatus(h) {
@@ -153,6 +200,23 @@
       ).join('');
     }
 
+    function renderRollingAccuracy(rolling) {
+      if (!rolling) return '';
+      const order = ['1h', '2h', '4h', '12h'];
+      const cards = order.map((key) => {
+        const r = rolling[key];
+        if (!r) return '';
+        const label = 'Last ' + key;
+        if (!r.total) {
+          return `<div class="roll-card"><span>${label}</span><strong class="muted">—</strong><div class="frac">0 resolved</div></div>`;
+        }
+        const acc = r.accuracy != null ? (r.accuracy * 100).toFixed(0) + '%' : '—';
+        const cls = r.accuracy != null && r.accuracy >= 0.5 ? 'up' : r.accuracy != null ? 'down' : 'muted';
+        return `<div class="roll-card"><span>${label}</span><strong class="${cls}">${r.correct}/${r.total}</strong><div class="frac">${acc} correct</div></div>`;
+      }).join('');
+      return `<div class="rolling-acc">${cards}</div>`;
+    }
+
     function renderCalibration(data) {
       const s = data.summary;
       if (!s.n_resolved) {
@@ -161,10 +225,12 @@
       }
       $('calibration').innerHTML = `
         <p class="muted" style="margin-bottom:.75rem">When model says X% UP, does price actually go up ~X% of the time?</p>
+        <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Rolling hit rate (predicted direction vs actual outcome):</p>
+        ${renderRollingAccuracy(s.rolling_accuracy)}
         <div class="cal-stats">
           <div><span>Resolved</span><strong>${s.n_resolved}</strong></div>
           ${s.brier_score!=null?`<div><span>Brier</span><strong>${s.brier_score.toFixed(4)}</strong></div>`:''}
-          ${s.overall_accuracy!=null?`<div><span>Accuracy</span><strong>${pct(s.overall_accuracy)}</strong></div>`:''}
+          ${s.overall_accuracy!=null?`<div><span>All-time accuracy</span><strong>${pct(s.overall_accuracy)}</strong></div>`:''}
         </div>`;
     }
 

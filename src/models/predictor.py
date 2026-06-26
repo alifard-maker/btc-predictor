@@ -27,6 +27,7 @@ class Prediction:
   expected_move: float
   signal: Signal
   features_snapshot: dict[str, float]
+  indicators: list[dict[str, Any]]
   slot_start: pd.Timestamp | None = None
   slot_end: pd.Timestamp | None = None
   slot_label: str = ""
@@ -91,6 +92,136 @@ class Predictor:
         score += np.sign(mom) * 0.03
     return float(np.clip(score, 0.05, 0.95))
 
+  def _indicator(
+    self,
+    label: str,
+    value: str,
+    bias: str,
+    strength: float,
+    group: str = "short",
+    detail: str = "",
+  ) -> dict[str, Any]:
+    return {
+      "label": label,
+      "value": value,
+      "bias": bias,
+      "strength": round(float(np.clip(strength, 0, 1)), 2),
+      "group": group,
+      "detail": detail,
+    }
+
+  def _return_indicator(
+    self,
+    row: pd.Series,
+    key: str,
+    label: str,
+    group: str,
+    scale: float = 0.004,
+  ) -> dict[str, Any] | None:
+    if key not in row or pd.isna(row[key]):
+      return None
+    val = float(row[key])
+    strength = min(1.0, abs(val) / scale)
+    if abs(val) < scale * 0.35:
+      bias = "neutral"
+    else:
+      bias = "up" if val > 0 else "down"
+    return self._indicator(label, f"{val * 100:+.2f}%", bias, strength, group)
+
+  def _build_indicators(self, row: pd.Series) -> list[dict[str, Any]]:
+    """Human-readable signal breakdown for the dashboard."""
+    out: list[dict[str, Any]] = []
+
+    for key, label, group in (
+      ("momentum_4", "1h momentum", "short"),
+      ("slot_return_1h", "1h slot return", "short"),
+      ("slot_return_4h", "4h trend", "medium"),
+    ):
+      item = self._return_indicator(row, key, label, group)
+      if item:
+        out.append(item)
+
+    if "slot_up_ratio_1h" in row and not pd.isna(row["slot_up_ratio_1h"]):
+      ratio = float(row["slot_up_ratio_1h"])
+      strength = min(1.0, abs(ratio - 0.5) / 0.25)
+      if ratio > 0.58:
+        bias = "up"
+      elif ratio < 0.42:
+        bias = "down"
+      else:
+        bias = "neutral"
+      out.append(self._indicator(
+        "1h up-slots",
+        f"{ratio * 100:.0f}% green",
+        bias,
+        strength,
+        "short",
+        "Share of last four 15m bars that closed up",
+      ))
+
+    if "slot_return_12h" in row and not pd.isna(row["slot_return_12h"]):
+      val = float(row["slot_return_12h"])
+      strength = min(1.0, abs(val) / 0.02)
+      if abs(val) < 0.005:
+        bias = "neutral"
+      else:
+        # Mean-reversion fade: extended 12h move leans opposite for next 15m
+        bias = "down" if val > 0 else "up"
+      out.append(self._indicator(
+        "12h regime",
+        f"{val * 100:+.2f}%",
+        bias,
+        strength * 0.6,
+        "regime",
+        "Fade extended 12h moves",
+      ))
+
+    if "volume_spike" in row and not pd.isna(row["volume_spike"]):
+      spike = float(row["volume_spike"])
+      mom = float(row.get("momentum_4", 0) or 0)
+      strength = min(1.0, max(0, spike - 1) / 0.8)
+      if spike > 1.2 and abs(mom) > 0.0005:
+        bias = "up" if mom > 0 else "down"
+      else:
+        bias = "neutral"
+      out.append(self._indicator(
+        "Volume vs 4h",
+        f"{spike:.2f}× avg",
+        bias,
+        strength,
+        "context",
+        "High volume confirms 1h direction",
+      ))
+
+    if "rsi" in row and not pd.isna(row["rsi"]):
+      rsi = float(row["rsi"])
+      strength = min(1.0, abs(rsi - 50) / 25)
+      if rsi > 60:
+        bias = "down"
+      elif rsi < 40:
+        bias = "up"
+      else:
+        bias = "neutral"
+      out.append(self._indicator("RSI (14)", f"{rsi:.0f}", bias, strength, "context"))
+
+    if "vwap_distance_pct" in row and not pd.isna(row["vwap_distance_pct"]):
+      dist = float(row["vwap_distance_pct"])
+      strength = min(1.0, abs(dist) / 1.5)
+      if abs(dist) < 0.2:
+        bias = "neutral"
+      else:
+        bias = "down" if dist > 0 else "up"
+      out.append(self._indicator(
+        "vs 12h VWAP",
+        f"{dist:+.2f}%",
+        bias,
+        strength,
+        "context",
+        "Price stretched above/below VWAP",
+      ))
+
+    return out
+
   def predict(
     self,
     df_15m: pd.DataFrame,
@@ -134,6 +265,7 @@ class Predictor:
 
     signal = self.edge.recommend(prob_up)
     snap = {c: float(latest[c]) for c in feature_columns(features) if c in latest and not pd.isna(latest[c])}
+    indicators = self._build_indicators(latest)
 
     return Prediction(
       timestamp=slot_s,
@@ -146,6 +278,7 @@ class Predictor:
       expected_move=expected_move,
       signal=signal,
       features_snapshot=snap,
+      indicators=indicators,
       slot_start=slot_s,
       slot_end=slot_e,
       slot_label=slot_label(slot_s, self.tz),
