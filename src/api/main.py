@@ -308,6 +308,13 @@ def calibration():
   return {"summary": summary, "bins": bins}
 
 
+@app.get("/api/daily/prediction")
+def daily_prediction():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.daily_prediction()
+
+
 @app.post("/api/predict/now")
 def predict_now(_: None = Depends(_verify_admin)):
   if _loop is None:

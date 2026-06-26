@@ -102,6 +102,17 @@ late_entry:
   momentum_bars: 4
   min_momentum_pct: 0.02
 
+# Kalshi daily / hourly threshold + range contracts (separate tab on dashboard)
+daily:
+  enabled: true
+  threshold_series: [BTCD, KXBTCD]   # try daily first, then hourly
+  range_series: [BTC, KXBTC]
+  nearby_strikes: 7                  # threshold rows around spot
+  top_bands: 8                       # hottest range bands to show
+  min_edge: 0.05                     # model vs Kalshi YES mid
+  vol_lookback_1h: 24
+  drift_lookback_1h: 6
+
 # Flip-to-opposite — after open LONG/SHORT is losing, one reverse bet per slot
 flip:
   enabled: true

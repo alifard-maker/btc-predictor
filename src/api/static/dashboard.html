@@ -109,6 +109,13 @@
     .kalshi-block h4 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.5rem; }
     .kalshi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.65rem; }
     @media (max-width: 768px) { .kalshi-grid { grid-template-columns: 1fr 1fr; } }
+    .tab-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    .tab-bar button { background: var(--surface); color: var(--muted); border: 1px solid var(--border); margin-top: 0; }
+    .tab-bar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .daily-levels { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin: 0.75rem 0; }
+    @media (max-width: 640px) { .daily-levels { grid-template-columns: 1fr; } }
+    .edge-yes { color: var(--up); font-weight: 700; }
+    .edge-no { color: var(--down); font-weight: 700; }
   </style>
 </head>
 <body>
@@ -116,7 +123,7 @@
     <header>
       <div>
         <h1>BTC Predictor</h1>
-        <p class="sub">15-minute slots · Eastern Time (ET) · No trading</p>
+        <p class="sub">15m slots + Kalshi daily/hourly contracts · Eastern Time · No trading</p>
         <div class="version" id="app-version">—</div>
       </div>
       <div class="meta">
@@ -128,6 +135,12 @@
 
     <div id="error" class="err"></div>
 
+    <nav class="tab-bar" role="tablist">
+      <button type="button" class="tab active" id="tab-15m" data-panel="panel-15m" onclick="switchTab('15m')">15m slot</button>
+      <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">Daily / threshold</button>
+    </nav>
+
+    <div id="panel-15m">
     <details class="card guide-card" id="dashboard-guide">
       <summary>How to read this dashboard</summary>
       <div class="guide-body">
@@ -239,6 +252,29 @@
     <div class="card">
       <h2>Prediction history</h2>
       <div style="overflow-x:auto" id="history"><p class="muted">Loading…</p></div>
+    </div>
+    </div>
+
+    <div id="panel-daily" style="display:none">
+      <div class="card" id="daily-summary-card">
+        <h2>Kalshi daily / hourly · structure model</h2>
+        <p class="muted" id="daily-meta">Loading…</p>
+        <div id="daily-summary"></div>
+      </div>
+      <div class="card">
+        <h2>Strategy 1 · Above / below (threshold)</h2>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Multi-touch support/resistance, wicks, and volume → odds BRTI finishes above each strike at settle.</p>
+        <div id="daily-threshold"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Strategy 2 · Range bands (stall zone)</h2>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">1h consolidation box + terminal distribution → odds BRTI lands in each Kalshi band.</p>
+        <div id="daily-range"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Chart structure</h2>
+        <div id="daily-structure"><p class="muted">Loading…</p></div>
+      </div>
     </div>
   </div>
 
@@ -707,6 +743,7 @@
     }
 
     async function loadLiveMonitor() {
+      if (activeTab !== '15m') return;
       try {
         let refQ = '';
         const stored = loadRefOverride();
@@ -722,6 +759,83 @@
       } catch (_) {}
     }
 
+    let activeTab = '15m';
+
+    function switchTab(name) {
+      activeTab = name;
+      $('panel-15m').style.display = name === '15m' ? '' : 'none';
+      $('panel-daily').style.display = name === 'daily' ? '' : 'none';
+      $('tab-15m').classList.toggle('active', name === '15m');
+      $('tab-daily').classList.toggle('active', name === 'daily');
+      if (name === 'daily') loadDaily();
+    }
+
+    function renderDailyContracts(rows, containerId) {
+      const el = $(containerId);
+      if (!rows || !rows.length) {
+        el.innerHTML = '<p class="muted">No contracts in this book.</p>';
+        return;
+      }
+      el.innerHTML = `<table>
+        <thead><tr><th>Contract</th><th>Model</th><th>Kalshi</th><th>Edge</th><th>Signal</th></tr></thead>
+        <tbody>${rows.map(r => {
+          const edge = r.edge != null ? (r.edge >= 0 ? '+' : '') + (r.edge * 100).toFixed(1) + '¢' : '—';
+          const edgeCls = r.signal === 'LEAN YES' ? 'edge-yes' : r.signal === 'LEAN NO' ? 'edge-no' : 'muted';
+          return `<tr>
+            <td style="font-size:.78rem">${r.label}</td>
+            <td class="up">${pct(r.model_prob)}</td>
+            <td>${r.kalshi_mid != null ? pct(r.kalshi_mid) : '—'}</td>
+            <td class="${edgeCls}">${edge}</td>
+            <td>${r.signal}</td>
+          </tr>`;
+        }).join('')}</tbody></table>`;
+    }
+
+    function renderDailyStructure(st) {
+      const el = $('daily-structure');
+      if (!st) { el.innerHTML = '<p class="muted">No structure data.</p>'; return; }
+      const sup = (st.support_levels || []).map(l =>
+        `<li><span class="up">Support</span> $${Number(l.price).toLocaleString()} · ${l.touches} touches · wick ${(l.wick_score*100).toFixed(0)}%${l.volume_confirmed ? ' · vol ✓' : ''}</li>`
+      ).join('') || '<li class="muted">No multi-touch support found</li>';
+      const res = (st.resistance_levels || []).map(l =>
+        `<li><span class="down">Resistance</span> $${Number(l.price).toLocaleString()} · ${l.touches} touches${l.volume_confirmed ? ' · vol ✓' : ''}</li>`
+      ).join('') || '<li class="muted">No multi-touch resistance found</li>';
+      const box = st.consolidation
+        ? `<p style="margin-top:.75rem;font-size:.85rem">Consolidation: <strong>$${Number(st.consolidation.low).toLocaleString()} – $${Number(st.consolidation.high).toLocaleString()}</strong> over ~${st.consolidation.hours}h (tightness ${st.consolidation.tightness})</p>`
+        : '<p class="muted" style="margin-top:.75rem">No tight stall box on 1h chart.</p>';
+      el.innerHTML = `<div class="daily-levels"><ul class="monitor-reasons" style="list-style:none;padding:0">${sup}</ul><ul class="monitor-reasons" style="list-style:none;padding:0">${res}</ul></div>${box}`;
+    }
+
+    function renderDaily(data) {
+      if (!data || !data.ok) {
+        $('daily-meta').textContent = data?.error || 'Daily prediction unavailable';
+        $('daily-summary').innerHTML = '';
+        $('daily-threshold').innerHTML = '<p class="muted">—</p>';
+        $('daily-range').innerHTML = '<p class="muted">—</p>';
+        $('daily-structure').innerHTML = '<p class="muted">—</p>';
+        return;
+      }
+      const ev = data.event || {};
+      const settle = ev.close_time ? time(ev.close_time) : '—';
+      $('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · ${ev.frequency || ''} · settles ${settle} · BRTI ${price(data.brti_live || data.current_price)}`;
+      $('daily-summary').innerHTML = `
+        <p style="font-size:.9rem;margin:.5rem 0">${data.strategy_threshold?.summary || ''}</p>
+        <p style="font-size:.9rem;margin:.5rem 0">${data.strategy_range?.summary || ''}</p>
+        <p class="muted" style="font-size:.75rem">Terminal μ ${price(data.terminal_mu)} · σ ${price(data.terminal_sigma)} · ${data.hours_to_settle}h to settle</p>`;
+      renderDailyContracts(data.strategy_threshold?.contracts || [], 'daily-threshold');
+      renderDailyContracts(data.strategy_range?.contracts || [], 'daily-range');
+      renderDailyStructure(data.structure);
+    }
+
+    async function loadDaily() {
+      try {
+        const d = await get('/api/daily/prediction');
+        renderDaily(d);
+      } catch (e) {
+        renderDaily({ ok: false, error: e.message });
+      }
+    }
+
     async function loadAll() {
       $('error').style.display = 'none';
       $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { timeZone: TZ });
@@ -734,6 +848,9 @@
 
       const tasks = [
         get('/health').then(renderStatus).catch(e => showError('Health: ' + e.message)),
+      ];
+      if (activeTab === '15m') {
+        tasks.push(
         get('/api/prediction/latest' + refQ).then((p) => {
           if (stored?.slot_start && p?.slot_start && stored.slot_start !== p.slot_start) {
             clearStoredRefOverride();
@@ -752,7 +869,10 @@
         get('/api/calibration').then(renderCalibration).catch(() =>
           $('calibration').innerHTML = '<p class="muted">Calibration unavailable yet.</p>'),
         get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])),
-      ];
+        );
+      } else {
+        tasks.push(loadDaily());
+      }
       await Promise.all(tasks);
     }
 

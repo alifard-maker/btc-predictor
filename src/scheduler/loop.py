@@ -56,6 +56,49 @@ class PredictionLoop:
     self._late_entry_logged: set[str] = set()
     self._flip_logged: set[str] = set()
     self.train_status: dict[str, Any] = {"state": "idle"}
+    self._daily_predictor = None
+
+  def daily_predictor(self):
+    if self._daily_predictor is None:
+      from src.models.daily_predictor import DailyPredictor
+      self._daily_predictor = DailyPredictor(self.cfg)
+    return self._daily_predictor
+
+  def _ohlc_1h(self) -> pd.DataFrame:
+    """Resample stored 15m candles to 1h for daily structure analysis."""
+    df_15m = self.storage.load("15m")
+    if df_15m.empty:
+      return pd.DataFrame()
+    df = df_15m.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.set_index("timestamp").sort_index()
+    agg = df.resample("1h").agg({
+      "open": "first",
+      "high": "max",
+      "low": "min",
+      "close": "last",
+      "volume": "sum",
+    }).dropna(subset=["close"])
+    agg = agg.reset_index()
+    return agg
+
+  def daily_prediction(self) -> dict[str, Any]:
+    if not self.cfg.get("daily", {}).get("enabled", True):
+      return {"ok": False, "error": "Daily predictions disabled"}
+    quote = self.live_price_quote(fresh=True)
+    price = quote.price if quote else None
+    if price is None:
+      df_1m = self.storage.load("1m")
+      if not df_1m.empty:
+        price = float(df_1m["close"].iloc[-1])
+    if price is None or price <= 0:
+      return {"ok": False, "error": "Live BRTI unavailable"}
+    out = self.daily_predictor().predict(current_price=float(price), df_1h=self._ohlc_1h())
+    if quote:
+      out["brti_live"] = round(quote.price, 2)
+      out["brti_source"] = quote.source
+    out["timezone"] = self.tz
+    return out
 
   def _default_model_path(self) -> str | None:
     p = Path(self.cfg["paths"]["models"]) / "model.joblib"
