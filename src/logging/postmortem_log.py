@@ -40,3 +40,7 @@ class PostmortemLogger:
       except json.JSONDecodeError:
         continue
     return list(reversed(out))
+
+  def clear(self) -> None:
+    if self.path.exists():
+      self.path.unlink()

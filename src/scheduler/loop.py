@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
@@ -168,6 +170,34 @@ class PredictionLoop:
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "error": str(e),
       }
+
+  def auto_retrain(self) -> None:
+    """Daily scheduled retrain — runs in background."""
+    acfg = self.cfg.get("auto_train", {})
+    if not acfg.get("enabled", True):
+      return
+    if self.train_status.get("state") == "running":
+      log.warning("Auto-retrain skipped: training already in progress")
+      return
+    log.info("Daily auto-retrain starting")
+    threading.Thread(target=self.train_model, daemon=True).start()
+
+  def _auto_train_first_run(self) -> datetime:
+    """Next calendar day at configured hour (default 2:00 AM ET)."""
+    tz = ZoneInfo(self.tz)
+    now = datetime.now(tz)
+    nxt = now.date() + timedelta(days=1)
+    acfg = self.cfg.get("auto_train", {})
+    hour = int(acfg.get("hour", 2))
+    minute = int(acfg.get("minute", 0))
+    return datetime(nxt.year, nxt.month, nxt.day, hour, minute, 0, tzinfo=tz)
+
+  def reset_calibration_stats(self, *, note: str = "") -> dict[str, Any]:
+    stats = self.calibration.reset_stats(note=note)
+    self.postmortems.clear()
+    self.latest_prediction = None
+    log.info("Calibration stats reset: %s", stats)
+    return stats
 
   def refit_calibrator(self) -> bool:
     if self.predictor.model is None:
@@ -488,6 +518,21 @@ class PredictionLoop:
     scheduler.add_job(self.collect_auxiliary, "interval", hours=6, id="auxiliary", max_instances=1)
     scheduler.add_job(self.collect_auxiliary, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=12), id="auxiliary_now")
     scheduler.add_job(self.refit_calibrator, "interval", hours=6, id="refit_calibrator", max_instances=1)
+    acfg = self.cfg.get("auto_train", {})
+    if acfg.get("enabled", True):
+      first = self._auto_train_first_run()
+      scheduler.add_job(
+        self.auto_retrain,
+        CronTrigger(
+          hour=int(acfg.get("hour", 2)),
+          minute=int(acfg.get("minute", 0)),
+          timezone=self.tz,
+          start_date=first,
+        ),
+        id="auto_train",
+        max_instances=1,
+      )
+      log.info("Auto-train scheduled daily at %02d:%02d %s from %s", int(acfg.get("hour", 2)), int(acfg.get("minute", 0)), self.tz, first.isoformat())
     poll_sec = float(self.cfg.get("kalshi", {}).get("brti_poll_sec", 1))
     scheduler.add_job(self.poll_brti, "interval", seconds=poll_sec, id="brti_poll", max_instances=1)
     scheduler.add_job(self.poll_brti, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=1), id="brti_now")

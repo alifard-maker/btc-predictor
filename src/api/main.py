@@ -376,6 +376,17 @@ def admin_train_status(_: None = Depends(_verify_admin)):
   return _loop.train_status
 
 
+@app.post("/api/admin/reset-stats")
+def admin_reset_stats(
+  note: str = Query(default="release baseline"),
+  _: None = Depends(_verify_admin),
+):
+  """Clear prediction history and post-mortems; start a fresh calibration epoch."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return {"status": "ok", **_loop.reset_calibration_stats(note=note)}
+
+
 @app.post("/api/admin/backfill-kalshi")
 def backfill_kalshi(_: None = Depends(_verify_admin)):
   """Re-resolve prediction history using Kalshi KXBTC15M BRTI settlement."""

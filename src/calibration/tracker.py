@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from src.calibration.sources import is_kalshi_consistent
+from src.calibration.epoch import read_stats_epoch, write_stats_epoch
 from src.db.store import PredictionResolution, PredictionStore, create_prediction_store
 from src.features.slots import floor_to_15m
 
@@ -75,6 +76,17 @@ class CalibrationTracker:
 
   def latest(self) -> dict[str, Any] | None:
     return self.store.latest()
+
+  def reset_stats(self, *, note: str = "") -> dict[str, Any]:
+    """Clear all logged predictions and mark a new calibration epoch."""
+    deleted = self.store.clear_all()
+    epoch = write_stats_epoch(self.cfg, note=note) if self.cfg else {}
+    return {"deleted_predictions": deleted, **epoch}
+
+  def stats_epoch(self) -> dict[str, Any] | None:
+    if not self.cfg:
+      return None
+    return read_stats_epoch(self.cfg)
 
   def _filter_calibration_df(self, df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or not self.kalshi_only:
@@ -161,7 +173,7 @@ class CalibrationTracker:
     kalshi_n = len(df)
     total_n = len(all_resolved)
     if df.empty:
-      out = {"n_resolved": 0, "rolling_accuracy": self.rolling_accuracy()}
+      out = {"n_resolved": 0, "rolling_accuracy": self.rolling_accuracy(), "stats_epoch": self.stats_epoch()}
       if self.kalshi_only and total_n > kalshi_n:
         out["n_resolved_total"] = total_n
         out["n_excluded_non_kalshi"] = total_n - kalshi_n
@@ -177,6 +189,7 @@ class CalibrationTracker:
       "n_resolved_total": total_n if self.kalshi_only else len(df),
       "n_excluded_non_kalshi": (total_n - kalshi_n) if self.kalshi_only else 0,
       "kalshi_only": self.kalshi_only,
+      "stats_epoch": self.stats_epoch(),
       "brier_score": float(brier),
       "overall_accuracy": float(self._prediction_correct(df).mean()),
       "rolling_accuracy": self.rolling_accuracy(),

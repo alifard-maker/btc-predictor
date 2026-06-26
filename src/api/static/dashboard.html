@@ -597,8 +597,12 @@
       const kalshiNote = s.kalshi_only
         ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Stats use Kalshi BRTI only (t=0 floor_strike → close expiration_value).${s.n_excluded_non_kalshi ? ` Excluded ${s.n_excluded_non_kalshi} pre-Kalshi rows.` : ''}</p>`
         : '';
+      const epoch = s.stats_epoch?.stats_since
+        ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Tracking since <strong>${time(s.stats_epoch.stats_since)}</strong>${s.stats_epoch.note ? ` · ${s.stats_epoch.note}` : ''}</p>`
+        : '';
       $('calibration').innerHTML = `
         ${kalshiNote}
+        ${epoch}
         <p class="muted" style="margin-bottom:.75rem">When model says X% UP, does BRTI finish above t=0 ~X% of the time?</p>
         <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Rolling hit rate — one count per 15m slot (max 4/hour):</p>
         ${renderRollingAccuracy(s.rolling_accuracy)}

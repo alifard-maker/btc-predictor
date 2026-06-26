@@ -113,6 +113,12 @@ regime:
   max_compression_ratio: 1.12
   min_vol_expansion: 0.82
 
+# Daily full model retrain (calibrator still refits every 6h)
+auto_train:
+  enabled: true
+  hour: 2
+  minute: 0
+
 paths:
   candles: data/candles
   models: data/models

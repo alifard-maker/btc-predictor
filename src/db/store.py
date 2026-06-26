@@ -107,6 +107,9 @@ class PredictionStore(ABC):
   @abstractmethod
   def latest(self) -> dict[str, Any] | None: ...
 
+  @abstractmethod
+  def clear_all(self) -> int: ...
+
 
 class SqlitePredictionStore(PredictionStore):
   def __init__(self, db_path: str):
@@ -255,6 +258,13 @@ class SqlitePredictionStore(PredictionStore):
     if df.empty:
       return None
     return df.iloc[0].to_dict()
+
+  def clear_all(self) -> int:
+    with self._conn() as conn:
+      cur = conn.execute("SELECT COUNT(*) FROM predictions")
+      n = int(cur.fetchone()[0])
+      conn.execute("DELETE FROM predictions")
+    return n
 
 
 class PostgresPredictionStore(PredictionStore):
@@ -422,6 +432,15 @@ class PostgresPredictionStore(PredictionStore):
       if hasattr(v, "isoformat"):
         row[k] = v.isoformat()
     return row
+
+  def clear_all(self) -> int:
+    with self._conn() as conn:
+      with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM predictions")
+        n = int(cur.fetchone()[0])
+        cur.execute("DELETE FROM predictions")
+      conn.commit()
+    return n
 
 
 def create_prediction_store(cfg: dict[str, Any]) -> PredictionStore:
