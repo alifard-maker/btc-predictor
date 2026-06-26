@@ -48,6 +48,14 @@ features:
   slot_context_windows: [4, 16, 48]        # 1h, 4h, 12h multi-scale slot features
   expected_move_vol_candles: 4             # 1h vol for next-15m move estimate
 
+# Intra-slot exit guidance (bet placed at t=0, manage during the 15m window)
+intra_slot:
+  take_profit_pct: 0.18       # % in your favor → consider locking gains
+  stop_loss_pct: 0.15         # % against you → cut loss
+  lock_profit_min_pct: 0.10   # min gain to lock when momentum reverses
+  late_window_minutes: 3      # last N minutes — favor taking profit / cutting loss
+  fee_buffer_pct: 0.13        # ~half round-trip cost — minimum "safe" net gain
+
 model:
   type: lightgbm
   train_test_split: 0.2

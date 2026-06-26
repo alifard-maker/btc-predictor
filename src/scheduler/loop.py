@@ -14,9 +14,10 @@ from src.calibration.tracker import CalibrationTracker
 from src.config import ensure_dirs, load_config
 from src.data.fetcher import DataFetcher
 from src.data.storage import CandleStorage
-from src.features.slots import floor_to_15m, slot_end
+from src.features.slots import current_slot_start, floor_to_15m, slot_end
 from src.logging.prediction_log import PredictionLogger
 from src.models.predictor import Prediction, Predictor
+from src.trading.exit_advisor import ExitAdvisor, SlotMonitor
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class PredictionLoop:
     self.min_candles = self.cfg.get("min_candles_15m", 48)
     self.fetch_15m_count = self.cfg.get("fetch_candles_15m", 64)
     self.latest_prediction: Prediction | None = None
+    self.exit_advisor = ExitAdvisor(self.cfg)
     self.last_error: str | None = None
     self._scheduler: BackgroundScheduler | BlockingScheduler | None = None
 
@@ -118,6 +120,90 @@ class PredictionLoop:
       self.last_error = str(e)
       log.exception("Prediction failed: %s", e)
       return None
+
+  def _live_price(self) -> float | None:
+    df_1m = self.storage.load("1m")
+    if not df_1m.empty:
+      return float(df_1m.iloc[-1]["close"])
+    try:
+      batch = self.fetcher.fetch_latest_candles("1m", count=1)
+      if not batch.empty:
+        return float(batch.iloc[-1]["close"])
+    except Exception:
+      pass
+    return None
+
+  def _prediction_for_current_slot(self) -> dict[str, Any] | None:
+    """DB/logged prediction for the slot that is active right now."""
+    slot_s = current_slot_start(tz_name=self.tz)
+    slot_key = floor_to_15m(slot_s, self.tz)
+
+    if self.latest_prediction and self.latest_prediction.slot_start is not None:
+      if floor_to_15m(self.latest_prediction.slot_start, self.tz) == slot_key:
+        p = self.latest_prediction
+        return {
+          "timestamp": p.timestamp.isoformat(),
+          "price": p.reference_price or p.price,
+          "reference_price": p.reference_price or p.price,
+          "signal": p.signal.value,
+          "prob_up": p.prob_up,
+        }
+
+    try:
+      df = self.calibration.load_recent(12)
+      if df.empty:
+        return None
+      df = df.copy()
+      df["_slot"] = pd.to_datetime(df["timestamp"], utc=True).apply(
+        lambda t: floor_to_15m(t, self.tz)
+      )
+      match = df[df["_slot"] == slot_key]
+      if match.empty:
+        return None
+      row = match.iloc[0]
+      return {
+        "timestamp": row["timestamp"],
+        "price": float(row.get("price", 0)),
+        "reference_price": float(row.get("price", 0)),
+        "signal": str(row.get("signal", "NO TRADE")),
+        "prob_up": float(row.get("prob_up", 0.5)),
+      }
+    except Exception as e:
+      log.warning("Could not load slot prediction: %s", e)
+      return None
+
+  def slot_monitor(self) -> SlotMonitor:
+    """Live hold / take-profit / cut-loss guidance for the active 15m window."""
+    now = pd.Timestamp(datetime.now(timezone.utc))
+    slot_s = current_slot_start(now, self.tz)
+    df_1m = self.storage.load("1m")
+
+    pred = self._prediction_for_current_slot()
+    current = self._live_price()
+
+    if pred is None:
+      ref = current or 0.0
+      return self.exit_advisor.evaluate(
+        now=now,
+        reference_price=ref,
+        current_price=current or ref,
+        signal_at_open="NO TRADE",
+        df_1m=df_1m if not df_1m.empty else None,
+        slot_start=slot_s,
+      )
+
+    ref = float(pred.get("reference_price") or pred.get("price") or 0)
+    if current is None:
+      current = ref
+
+    return self.exit_advisor.evaluate(
+      now=now,
+      reference_price=ref,
+      current_price=current,
+      signal_at_open=str(pred.get("signal", "NO TRADE")),
+      df_1m=df_1m if not df_1m.empty else None,
+      slot_start=slot_s,
+    )
 
   def status(self) -> dict[str, Any]:
     df_15m = self.storage.load("15m")

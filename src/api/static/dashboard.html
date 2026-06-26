@@ -61,6 +61,18 @@
     .ind-fill-down { height: 100%; background: var(--down); border-radius: 99px; }
     .ind-fill-neutral { height: 100%; background: var(--muted); border-radius: 99px; opacity: 0.45; }
     .ind-group { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0.75rem 0 0.35rem; }
+    .monitor-card { border-color: #3b3b52; }
+    .monitor-card.urgency-high { border-color: rgba(239,68,68,.55); box-shadow: 0 0 0 1px rgba(239,68,68,.15) inset; }
+    .monitor-card.urgency-medium { border-color: rgba(245,158,11,.45); }
+    .action-badge { display: inline-block; font-size: 0.85rem; font-weight: 800; padding: 0.4rem 0.75rem; border-radius: 8px; letter-spacing: 0.03em; }
+    .action-HOLD { background: rgba(99,102,241,.15); color: #a5b4fc; border: 1px solid rgba(99,102,241,.35); }
+    .action-TAKE_PROFIT { background: rgba(34,197,94,.18); color: var(--up); border: 1px solid rgba(34,197,94,.4); }
+    .action-CUT_LOSS { background: rgba(239,68,68,.18); color: var(--down); border: 1px solid rgba(239,68,68,.4); }
+    .action-NO_BET, .action-WAIT { background: rgba(136,136,160,.12); color: var(--muted); border: 1px solid var(--border); }
+    .slot-progress { height: 8px; background: var(--bg); border-radius: 99px; overflow: hidden; margin: 0.65rem 0; }
+    .slot-progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), #818cf8); border-radius: 99px; transition: width .5s; }
+    .monitor-reasons { margin: 0.65rem 0 0; padding-left: 1.1rem; font-size: 0.78rem; color: var(--muted); }
+    .monitor-reasons li { margin: 0.25rem 0; }
   </style>
 </head>
 <body>
@@ -87,6 +99,11 @@
         <h2>System status</h2>
         <ul class="status" id="status-list"></ul>
       </div>
+    </div>
+
+    <div class="card monitor-card" id="monitor-card">
+      <h2>Live position · intra-slot exit</h2>
+      <div id="slot-monitor"><p class="muted">Loading…</p></div>
     </div>
 
     <div class="card">
@@ -155,6 +172,54 @@
       return html;
     }
 
+    function fmtRemaining(sec) {
+      const m = Math.floor(sec / 60), s = sec % 60;
+      return m + ':' + String(s).padStart(2, '0');
+    }
+
+    function renderSlotMonitor(m) {
+      const card = $('monitor-card');
+      if (!m) {
+        card.className = 'card monitor-card';
+        $('slot-monitor').innerHTML = '<p class="muted">No active slot data.</p>';
+        return;
+      }
+      card.className = 'card monitor-card' + (m.urgency === 'high' ? ' urgency-high' : m.urgency === 'medium' ? ' urgency-medium' : '');
+      const actKey = (m.action || 'WAIT').replace(/\s+/g, '_');
+      const pnlCls = m.unrealized_pct > 0 ? 'up' : m.unrealized_pct < 0 ? 'down' : 'muted';
+      const bet = m.bet_side && m.bet_side !== 'NONE'
+        ? `<span class="badge badge-${m.bet_side === 'UP' ? 'LONG' : 'SHORT'}">Bet ${m.bet_side}</span>`
+        : '<span class="muted">No bet at open</span>';
+
+      let body = `
+        <p class="sub" style="margin-bottom:.5rem">${m.slot_label || ''}</p>
+        <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.65rem">
+          ${bet}
+          <span class="action-badge action-${actKey}">${m.action}</span>
+        </div>
+        <p style="font-size:.9rem;margin-bottom:.5rem">${m.message || ''}</p>`;
+
+      if (m.active && m.bet_side !== 'NONE') {
+        body += `
+        <div class="slot-progress" title="Time elapsed in slot"><div style="width:${m.elapsed_pct || 0}%"></div></div>
+        <div class="metrics" style="margin-top:0;padding-top:0;border-top:none;grid-template-columns:repeat(4,1fr)">
+          <div><span>P&amp;L vs t=0</span><strong class="${pnlCls}">${m.unrealized_pct >= 0 ? '+' : ''}${Number(m.unrealized_pct).toFixed(3)}%</strong></div>
+          <div><span>Ref (t=0)</span><strong>${price(m.reference_price)}</strong></div>
+          <div><span>Now</span><strong>${price(m.current_price)}</strong></div>
+          <div><span>Time left</span><strong>${fmtRemaining(m.seconds_remaining || 0)}</strong></div>
+        </div>`;
+      } else if (m.active) {
+        body += `<div class="slot-progress"><div style="width:${m.elapsed_pct || 0}%"></div></div>
+          <p class="muted" style="font-size:.8rem">${fmtRemaining(m.seconds_remaining || 0)} left in slot</p>`;
+      }
+
+      if (m.reasons && m.reasons.length) {
+        body += '<ul class="monitor-reasons">' + m.reasons.map(r => `<li>${r}</li>`).join('') + '</ul>';
+      }
+      body += '<p class="muted" style="font-size:.68rem;margin-top:.75rem">Guidance only — not financial advice. Assumes you entered at t=0 on the opening LONG/SHORT signal.</p>';
+      $('slot-monitor').innerHTML = body;
+    }
+
     function renderPrediction(p) {
       if (!p) {
         $('pred-card').innerHTML = '<h2>Next 15-minute slot</h2><p class="muted">No prediction yet</p>';
@@ -182,6 +247,7 @@
           <div><span>Updated</span><strong style="font-size:.8rem">${time(p.timestamp)}</strong></div>
         </div>
         ${renderIndicators(p.indicators)}`;
+      if (p.slot_monitor) renderSlotMonitor(p.slot_monitor);
     }
 
     function renderStatus(h) {
@@ -255,7 +321,8 @@
 
       const tasks = [
         get('/health').then(renderStatus).catch(e => showError('Health: ' + e.message)),
-        get('/api/prediction/latest').then(renderPrediction).catch(() => renderPrediction(null)),
+        get('/api/prediction/latest').then(renderPrediction).catch(() => { renderPrediction(null); renderSlotMonitor(null); }),
+        get('/api/slot/monitor').then(renderSlotMonitor).catch(() => {}),
         get('/api/predictions?limit=20').then(renderHistory).catch(() => renderHistory([])),
         get('/api/calibration').then(renderCalibration).catch(() =>
           $('calibration').innerHTML = '<p class="muted">Calibration unavailable yet.</p>'),

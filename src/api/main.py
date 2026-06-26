@@ -158,14 +158,25 @@ def api_status():
   return _loop.status()
 
 
+@app.get("/api/slot/monitor")
+def slot_monitor():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.slot_monitor().to_dict()
+
+
 @app.get("/api/prediction/latest")
 def latest_prediction():
   if _loop is None:
     raise HTTPException(503, "Service starting")
+  monitor = _loop.slot_monitor().to_dict()
   if _loop.latest_prediction:
-    return _prediction_to_dict(_loop.latest_prediction)
+    out = _prediction_to_dict(_loop.latest_prediction)
+    out["slot_monitor"] = monitor
+    return out
   row = _loop.calibration.latest()
   if row:
+    row["slot_monitor"] = monitor
     return row
   raise HTTPException(404, "No predictions yet")
 
