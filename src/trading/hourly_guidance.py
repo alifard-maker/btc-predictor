@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 
-from typing import Any
+def _index_id(live: dict[str, Any], index_id: str | None) -> str:
+  return str(index_id or live.get("index_id") or live.get("settlement_reference") or "BRTI")
 
 
 def _forecast_mu_sigma(data: dict[str, Any]) -> tuple[float | None, float | None]:
@@ -38,7 +39,12 @@ def _near_forecast(
   return abs(float(strike) - mu) <= window
 
 
-def _pick_safest(live: dict[str, Any], locked: dict[str, Any] | None) -> dict[str, Any] | None:
+def _pick_safest(
+  live: dict[str, Any],
+  locked: dict[str, Any] | None,
+  *,
+  index_id: str,
+) -> dict[str, Any] | None:
   """Highest-probability outcome near forecast μ — never a far OTM tail."""
   ref = locked or live
   mu, sigma = _forecast_mu_sigma(ref if locked else live)
@@ -62,7 +68,7 @@ def _pick_safest(live: dict[str, Any], locked: dict[str, Any] | None) -> dict[st
         "title": "Most predictable outcome",
         "pick_type": "zone",
         "label": (
-          f"BRTI ${zone['settlement_zone_low']:,.0f}–${zone['settlement_zone_high']:,.0f}"
+          f"{index_id} ${zone['settlement_zone_low']:,.0f}–${zone['settlement_zone_high']:,.0f}"
         ),
         "model_prob": None,
         "signal": "—",
@@ -85,7 +91,7 @@ def _pick_safest(live: dict[str, Any], locked: dict[str, Any] | None) -> dict[st
     "reason": (
       "Highest model probability near forecast μ — "
       + (
-        "the stall band where BRTI is most likely to finish."
+        f"the stall band where {index_id} is most likely to finish."
         if kind == "range"
         else "the strike closest to forecast μ (not the deepest ITM leg)."
       )
@@ -93,13 +99,13 @@ def _pick_safest(live: dict[str, Any], locked: dict[str, Any] | None) -> dict[st
   }
 
 
-def _pick_locked(locked: dict[str, Any] | None) -> dict[str, Any] | None:
+def _pick_locked(locked: dict[str, Any] | None, *, index_id: str) -> dict[str, Any] | None:
   if not locked:
     return {
       "tier": "locked",
       "title": "Official prediction (not locked yet)",
       "label": "—",
-      "reason": "Wait for :05 ET — this is the pick scored against actual settle BRTI.",
+      "reason": f"Wait for :05 ET — this is the pick scored against actual settle {index_id}.",
     }
   zone = locked.get("most_likely") or {}
   mu, sigma = _forecast_mu_sigma(locked)
@@ -112,7 +118,7 @@ def _pick_locked(locked: dict[str, Any] | None) -> dict[str, Any] | None:
   elif not _near_forecast(pick, mu, sigma):
     pick = {
       "label": (
-        f"BRTI ${zone.get('settlement_zone_low'):,.0f}–${zone.get('settlement_zone_high'):,.0f}"
+        f"{index_id} ${zone.get('settlement_zone_low'):,.0f}–${zone.get('settlement_zone_high'):,.0f}"
         if zone.get("settlement_zone_low") is not None
         else "Settlement zone"
       ),
@@ -175,6 +181,8 @@ def _pick_edge(live: dict[str, Any]) -> dict[str, Any] | None:
 def build_range_strategy_guidance(
   live: dict[str, Any],
   locked: dict[str, Any] | None = None,
+  *,
+  index_id: str = "BRTI",
 ) -> dict[str, Any]:
   live_sr = live.get("strategy_range") or {}
   locked_sr = (locked or {}).get("strategy_range") or {}
@@ -219,7 +227,7 @@ def build_range_strategy_guidance(
         "safest",
         "Most predictable stall band",
         locked_ml or live_ml,
-        "Highest model % that BRTI finishes inside this band — best when price is consolidating.",
+        f"Highest model % that {index_id} finishes inside this band — best when price is consolidating.",
       ),
       locked_card,
       _band_card(
@@ -243,14 +251,17 @@ def build_range_strategy_guidance(
     stall_note = "No tight stall box — range bands are less reliable; prefer locked settlement range or thresholds."
 
   return {
-    "summary": "Strategy 2 bets BRTI lands inside a price band at settle — often the safest directional bet type when chop dominates.",
+    "summary": (
+      f"Strategy 2 bets {index_id} lands inside a price band at settle — "
+      "each row is one band contract; BUY YES/NO is the Kalshi leg to take."
+    ),
     "locked": locked_sr,
     "live": live_sr,
     "recommendations": recs,
     "stall_note": stall_note,
     "locked_vs_live": {
       "locked": "Most-likely band + best band edge at :05 ET.",
-      "live": "Band odds refresh with BRTI — compare to locked pick, do not confuse with scored forecast.",
+      "live": f"Band odds refresh with {index_id} — compare to locked pick, do not confuse with scored forecast.",
     },
   }
 
@@ -258,20 +269,28 @@ def build_range_strategy_guidance(
 def build_hourly_guidance(
   live: dict[str, Any],
   locked: dict[str, Any] | None = None,
+  *,
+  asset: str = "btc",
+  index_id: str | None = None,
 ) -> dict[str, Any]:
   ev = live.get("event") or {}
   freq = str(ev.get("frequency") or "hourly").lower()
   hours = float(live.get("hours_to_settle") or 0)
   series = ev.get("series_ticker") or ""
+  idx = _index_id(live, index_id)
+  asset = str(asset or live.get("asset") or "btc").lower()
+
+  default_hourly_series = "KXETHD" if asset == "eth" else "KXBTCD"
+  default_daily_series = "ETHD" if asset == "eth" else "BTCD"
 
   if freq == "daily":
     interval = {
       "type": "daily",
       "badge": "DAILY",
-      "series": series or "BTCD",
+      "series": series or default_daily_series,
       "settles_in": f"{hours:.1f}h",
       "summary": (
-        "Kalshi daily threshold book — settles once per day (typically 4 PM ET). "
+        f"Kalshi daily threshold book ({series or default_daily_series}) — settles once per day. "
         "More time for price to drift; uncertainty scales with time to settle."
       ),
       "predictability": "higher",
@@ -281,10 +300,10 @@ def build_hourly_guidance(
     interval = {
       "type": "hourly",
       "badge": "HOURLY",
-      "series": series or "KXBTCD",
+      "series": series or default_hourly_series,
       "settles_in": f"{hours:.1f}h",
       "summary": (
-        "Kalshi hourly threshold book (KXBTCD) — settles at the top of each hour. "
+        f"Kalshi hourly book ({series or default_hourly_series}) — settles at the top of each hour. "
         "Official forecast locks at :05 ET; live section updates with the market."
       ),
       "predictability": "moderate",
@@ -298,19 +317,25 @@ def build_hourly_guidance(
     {
       "name": "Locked settlement range",
       "best_for": "Safest read — no contract required",
-      "detail": "Where the model expected BRTI at lock time. Compare actual settle to this band.",
+      "detail": f"Where the model expected {idx} at lock time. Compare actual settle to this band.",
       "risk": "low",
     },
     {
       "name": "Range band (Strategy 2)",
-      "best_for": "Most predictable *bet type* when price is consolidating",
-      "detail": "Bet BRTI finishes inside a narrow band — highest model mass when stall box is tight.",
+      "best_for": "Band contracts when price is consolidating",
+      "detail": (
+        f"Each row is “{idx} settles inside this $20 band.” "
+        "BUY YES = take Yes on that band; BUY NO = take No (even on neighbors of the most-likely band)."
+      ),
       "risk": "low–medium",
     },
     {
       "name": "Near-ATM threshold (Strategy 1)",
-      "best_for": "Directional lean with moderate confidence",
-      "detail": "Strikes close to current BRTI — model % often 40–70%, not lottery-ticket tails.",
+      "best_for": "Explicit BUY YES/NO when model and edge agree",
+      "detail": (
+        f"Strikes close to current {idx} — BUY YES/NO when direction and mispricing align. "
+        "VALUE YES / FADE YES on tails."
+      ),
       "risk": "medium",
     },
     {
@@ -321,7 +346,15 @@ def build_hourly_guidance(
     },
   ]
 
-  recs = [r for r in (_pick_safest(live, locked), _pick_locked(locked), _pick_edge(live)) if r]
+  recs = [
+    r
+    for r in (
+      _pick_safest(live, locked, index_id=idx),
+      _pick_locked(locked, index_id=idx),
+      _pick_edge(live),
+    )
+    if r
+  ]
 
   book_note = None
   if live.get("forecast_covers_book") is False:
@@ -330,10 +363,16 @@ def build_hourly_guidance(
       "trust the settlement zone and re-lock at :05 after deploy."
     )
 
+  use_15m = (
+    "KXBTC15M — 15-minute up/down slots at :00, :15, :30, :45 ET → use the 15m tab."
+    if asset == "btc"
+    else "15m tab is BTC slot LONG/SHORT only — ETH hourly Kalshi contracts live on this tab."
+  )
+
   return {
     "interval": interval,
     "which_tab": {
-      "use_15m": "KXBTC15M — 15-minute up/down slots at :00, :15, :30, :45 ET → use the 15m tab.",
+      "use_15m": use_15m,
       "use_this_tab": f"Kalshi {interval['badge']} threshold + range books for this event → this tab.",
     },
     "locked_vs_live": {
@@ -341,8 +380,15 @@ def build_hourly_guidance(
       "live": "Updates every refresh — for monitoring only until next hour's lock.",
     },
     "strategies": strategies,
+    "signal_legend": {
+      "buy_yes": "Buy Yes on this contract — model says Kalshi underprices it.",
+      "buy_no": "Buy No on this contract — model says Kalshi overprices Yes.",
+      "value_yes": "Cheap OTM tail — speculative Yes, not a high-confidence direction.",
+      "fade_yes": "Kalshi overpriced vs model on a likely leg.",
+      "range_note": "Neighboring bands are separate contracts; BUY NO on a side band means fade that band, not “away from forecast.”",
+    },
     "recommendations": recs,
-    "strategy_range": build_range_strategy_guidance(live, locked),
+    "strategy_range": build_range_strategy_guidance(live, locked, index_id=idx),
     "regime_blocked": not regime.get("allow_trade", True),
     "regime_note": (
       book_note
@@ -353,4 +399,6 @@ def build_hourly_guidance(
       )
     ),
     "book_note": book_note,
+    "index_id": idx,
+    "asset": asset,
   }

@@ -105,6 +105,17 @@
     .guide-body dl { margin: 0.35rem 0; }
     .guide-body dt { font-weight: 600; color: var(--text); margin-top: 0.45rem; }
     .guide-body dd { margin: 0.15rem 0 0 0; color: #c8c8d8; }
+    .guide-note { font-size: 0.75rem; color: var(--muted); margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--border); line-height: 1.45; }
+    .guide-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.65rem; margin: 0.75rem 0; }
+    @media (max-width: 768px) { .guide-tabs { grid-template-columns: 1fr; } }
+    .guide-tab-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; font-size: 0.8rem; }
+    .guide-tab-box h4 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 0.4rem; }
+    .guide-tab-box p { margin: 0.25rem 0; color: #c8c8d8; }
+    .guide-glossary dt { font-size: 0.8rem; }
+    .signal-tag { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.35rem; border-radius: 4px; margin-right: 0.25rem; }
+    .signal-tag.yes { background: rgba(34,197,94,.15); color: var(--up); }
+    .signal-tag.no { background: rgba(239,68,68,.15); color: var(--down); }
+    .signal-tag.neutral { background: rgba(136,136,160,.12); color: var(--muted); }
     .kalshi-block { margin: 0.75rem 0; padding: 0.75rem; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); font-size: 0.8rem; }
     .kalshi-block h4 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.5rem; }
     .kalshi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.65rem; }
@@ -145,7 +156,7 @@
     <header>
       <div>
         <h1>BTC Predictor</h1>
-        <p class="sub">15m slots + Kalshi daily/hourly contracts · Eastern Time · No trading</p>
+        <p class="sub">15m slots + Kalshi BTC/ETH hourly contracts · Eastern Time · No trading</p>
         <div class="version" id="app-version">—</div>
       </div>
       <div class="meta">
@@ -162,6 +173,86 @@
       <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">BTC Hourly</button>
       <button type="button" class="tab" id="tab-eth-hourly" data-panel="panel-eth-hourly" onclick="switchTab('eth-hourly')">ETH Hourly</button>
     </nav>
+
+    <details class="card guide-card" id="app-guide">
+      <summary>Guide · tabs, predictions &amp; terminology</summary>
+      <div class="guide-body">
+        <p>This dashboard shows <strong>model forecasts</strong> and <strong>Kalshi mispricing</strong> for BTC (and ETH on the hourly tab). It does <strong>not</strong> place trades. All times are <strong>Eastern (ET)</strong> unless noted.</p>
+
+        <h3>The three tabs</h3>
+        <div class="guide-tabs">
+          <div class="guide-tab-box">
+            <h4>15m slot</h4>
+            <p><strong>Kalshi KXBTC15M</strong> — will BTC finish <em>above or below</em> its price at each :00, :15, :30, :45 open?</p>
+            <p>Signals: <strong>LONG</strong> / <strong>SHORT</strong> / <strong>NO TRADE</strong>, plus mid-slot <strong>LATE</strong>, <strong>2nd Chance</strong>, and <strong>FLIP</strong>. Settlement uses <strong>BRTI</strong> vs slot t=0.</p>
+            <p class="muted" style="font-size:.75rem">Not per-contract BUY YES/NO — that vocabulary is on the hourly tabs.</p>
+          </div>
+          <div class="guide-tab-box">
+            <h4>BTC Hourly</h4>
+            <p><strong>KXBTCD</strong> thresholds (above/below strikes) + <strong>KXBTC</strong> range bands ($20 “stall” buckets). Settles each hour on <strong>BRTI</strong>.</p>
+            <p>Official pick <strong>locks at :05 ET</strong> each hour. <strong>Locked</strong> blocks are scored; <strong>Live</strong> updates with the market.</p>
+            <p><strong>Strategy 1</strong> = threshold table. <strong>Strategy 2</strong> = range bands near forecast μ.</p>
+          </div>
+          <div class="guide-tab-box">
+            <h4>ETH Hourly</h4>
+            <p>Same layout as BTC Hourly for <strong>KXETHD</strong> / <strong>KXETH</strong>. Settlement index is <strong>ERTI</strong> (CF Benchmarks Ethereum RTI).</p>
+            <p>Also locks at <strong>:05 ET</strong>. Forecast is <strong>structure-only</strong> today (no ETH ML blend yet) — bands can look very peaked.</p>
+          </div>
+        </div>
+
+        <h3>Hourly predictions — what you’re looking at</h3>
+        <ul>
+          <li><strong>Settlement range</strong> — Model band where the index (BRTI / ERTI) is expected at the hour close (μ ± scaled σ).</li>
+          <li><strong>Forecast μ (mu)</strong> — Blended expected settle price; drives which strikes/bands are shown.</li>
+          <li><strong>Most likely band</strong> — Highest model probability among range bands near μ (not necessarily a BUY signal).</li>
+          <li><strong>Best edge</strong> — Largest |model − Kalshi| gap among nearby contracts.</li>
+          <li><strong>Locked @ :05</strong> — Snapshot frozen for calibration; does not move when the market drifts.</li>
+          <li><strong>Hourly calibration</strong> — After settle, compares locked picks to actual index (Brier, BUY YES/NO hit rate, in-band rate for range bands).</li>
+        </ul>
+
+        <h3>Contract signals (BTC &amp; ETH hourly tables)</h3>
+        <p>Each row is <strong>one Kalshi contract</strong>. The signal is which <strong>side to buy</strong>, not a vague “lean” toward a price level.</p>
+        <dl class="guide-glossary">
+          <dt><span class="signal-tag yes">BUY YES</span></dt>
+          <dd>Buy the <strong>Yes</strong> leg — model says Kalshi <strong>underprices</strong> this outcome vs model probability (positive edge on Yes).</dd>
+          <dt><span class="signal-tag no">BUY NO</span></dt>
+          <dd>Buy the <strong>No</strong> leg — model says Kalshi <strong>overprices</strong> Yes. On a <em>range band</em>, this means you do <strong>not</strong> expect settle inside that exact $20 bucket — even if it sits next to the most-likely band.</dd>
+          <dt><span class="signal-tag yes">VALUE YES</span> <span class="muted" style="font-size:.72rem">(thresholds only)</span></dt>
+          <dd>Cheap OTM Yes tail — model &lt;50% but Kalshi is even cheaper; speculative Yes, not a high-confidence direction call.</dd>
+          <dt><span class="signal-tag no">FADE YES</span> <span class="muted" style="font-size:.72rem">(thresholds only)</span></dt>
+          <dd>Kalshi Yes looks rich vs model on a likely leg — fade overpriced Yes (often when model already favors Yes but market is hotter).</dd>
+          <dt><span class="signal-tag neutral">NEUTRAL</span></dt>
+          <dd>Edge below minimum or no Kalshi mid — no actionable mispricing tag. Far OTM rows may also show <em>low predictability</em> or <em>priced in · no edge</em>.</dd>
+        </dl>
+
+        <h3>Strategy 2 (range bands) — common confusion</h3>
+        <p>Every band row asks: <em>“Does the index settle inside <strong>this</strong> band?”</em> Bands are <strong>mutually exclusive</strong>. A strong peak at $1,550–$1,569 does <strong>not</strong> make neighboring bands BUY YES — if model gives ~1% in a side bucket but Kalshi prices ~10%, the tag is <strong>BUY NO</strong> on that bucket.</p>
+
+        <h3>15m tab — extra signals</h3>
+        <dl class="guide-glossary">
+          <dt>LONG / SHORT / NO TRADE</dt>
+          <dd>Directional bet on the <em>whole slot</em> vs t=0 (UP probability thresholds ~57% / ~43%).</dd>
+          <dt>2nd Chance</dt>
+          <dd>Reassessment ~4 minutes into the slot using fresher features.</dd>
+          <dt>LATE LONG / LATE SHORT</dt>
+          <dd>Conservative mid-slot entry when move, time on side of ref, and momentum align.</dd>
+          <dt>FLIP LONG / FLIP SHORT</dt>
+          <dd>Exit a losing open bet and take the other side once per slot when reassessment is strong.</dd>
+          <dt>HOLD / TAKE PROFIT / CUT LOSS</dt>
+          <dd>Intra-slot exit guidance if you already have a position.</dd>
+        </dl>
+
+        <h3>Calibration vocabulary</h3>
+        <ul>
+          <li><strong>Brier score</strong> — Mean squared error of probability vs outcome (lower = better calibrated).</li>
+          <li><strong>In-band hit rate</strong> — % of hours settle index landed inside the locked range band.</li>
+          <li><strong>All BUY-signal bands @ lock</strong> — Every band with BUY YES or BUY NO frozen in the near-μ slice at :05 (can be multiple per hour).</li>
+          <li><strong>Epoch / all-time</strong> — Current scoring window vs archived history (15m tab); hourly uses resolved event rows since last reset.</li>
+        </ul>
+
+        <div class="guide-note">Guidance only — not financial advice. Kalshi settlement uses CF Benchmarks indices (BRTI / ERTI). Past calibration does not guarantee future results.</div>
+      </div>
+    </details>
 
     <div id="panel-15m">
     <details class="card guide-card" id="dashboard-guide">
@@ -335,12 +426,12 @@
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>BUY YES / BUY NO</strong> = explicit Kalshi leg when model direction and edge agree.</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>BUY YES / BUY NO</strong> = explicit Kalshi leg when model direction and edge agree. <strong>VALUE YES</strong> = cheap OTM tail; <strong>FADE YES</strong> = Kalshi overpriced vs model on a likely leg.</p>
         <div id="eth-daily-threshold"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
         <h2>Strategy 2 · Range bands (stall zone)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 range bands nearest forecast μ. <strong>BUY YES</strong> = buy Yes on this band; <strong>BUY NO</strong> = buy No on this band (not “near the forecast”).</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 range bands nearest forecast μ — sorted by model probability. <strong>BUY YES</strong> = buy Yes on <em>this band settles here</em> (model underpriced). <strong>BUY NO</strong> = buy No on <em>this band</em> (model overpriced). Neighboring bands are separate contracts.</p>
         <div id="eth-daily-range-summary" style="margin-bottom:.75rem"></div>
         <div id="eth-daily-range"><p class="muted">Loading…</p></div>
       </div>
@@ -1182,6 +1273,13 @@
             <thead><tr><th>Strategy</th><th>When to use</th><th>Risk</th></tr></thead>
             <tbody>${strat}</tbody>
           </table>
+          ${g.signal_legend ? `<div class="muted" style="margin-top:.5rem;line-height:1.45">
+            <strong>Signals:</strong> <strong>BUY YES</strong> — ${g.signal_legend.buy_yes}
+            · <strong>BUY NO</strong> — ${g.signal_legend.buy_no}
+            · <strong>VALUE YES</strong> — ${g.signal_legend.value_yes}
+            · <strong>FADE YES</strong> — ${g.signal_legend.fade_yes}
+            <div style="margin-top:.25rem">${g.signal_legend.range_note}</div>
+          </div>` : ''}
         </details>`;
       const cheat = el.querySelector('#hourly-guide-cheat');
       if (cheat) {

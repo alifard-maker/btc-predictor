@@ -185,6 +185,8 @@ class PredictionLoop:
       live["brti_source"] = quote.source
     out["timezone"] = self.tz
     live["timezone"] = self.tz
+    live["asset"] = asset
+    live["index_id"] = index_label
     pf = acfg.get("price_feed") or {}
     out["price_feed"] = pf.get("label", index_label)
     out["settlement_reference"] = pf.get("settlement_reference", index_label)
@@ -202,7 +204,7 @@ class PredictionLoop:
 
     from src.trading.hourly_guidance import build_hourly_guidance
 
-    out["guidance"] = build_hourly_guidance(live, locked)
+    out["guidance"] = build_hourly_guidance(live, locked, asset=asset, index_id=index_label)
 
     if asset == "btc":
       self.latest_hourly_prediction = out
