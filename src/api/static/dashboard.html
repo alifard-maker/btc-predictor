@@ -1092,8 +1092,10 @@
           if (tags.safest && r.label === tags.safest) tag = ' <span class="badge" style="background:rgba(34,197,94,.2);color:#86efac;font-size:.65rem">most likely</span>';
           if (tags.locked && r.label === tags.locked) tag += ' <span class="badge" style="background:rgba(59,130,246,.2);color:#93c5fd;font-size:.65rem">locked @ :05</span>';
           if (tags.edge && r.label === tags.edge) tag += ' <span class="badge" style="background:rgba(245,158,11,.2);color:#fbbf24;font-size:.65rem">best edge</span>';
-          const lowConf = r.model_prob < 0.12 || r.model_prob > 0.88;
-          if (lowConf && r.signal === 'NEUTRAL') tag += ' <span class="badge muted" style="font-size:.65rem">low predictability</span>';
+          const farOtm = r.model_prob < 0.12;
+          const pricedIn = r.model_prob > 0.88;
+          if (farOtm && r.signal === 'NEUTRAL') tag += ' <span class="badge muted" style="font-size:.65rem">low predictability</span>';
+          if (pricedIn && r.signal === 'NEUTRAL') tag += ' <span class="badge muted" style="font-size:.65rem">priced in · no edge</span>';
           return `<tr>
             <td style="font-size:.78rem">${r.label}${tag}</td>
             <td class="up">${pct(r.model_prob)}</td>
