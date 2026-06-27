@@ -304,6 +304,7 @@
       <div class="card">
         <h2>Strategy 2 · Range bands (stall zone)</h2>
         <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">1h consolidation box + terminal distribution → odds BRTI lands in each Kalshi band.</p>
+        <div id="daily-range-summary" style="margin-bottom:.75rem"></div>
         <div id="daily-range"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
@@ -952,6 +953,7 @@
     }
 
     let activeTab = '15m';
+    let hourlyGuideCheatOpen = false;
 
     function switchTab(name) {
       activeTab = name;
@@ -962,12 +964,72 @@
       if (name === 'daily') loadDaily();
     }
 
+    function renderRangeTierCards(recs) {
+      return (recs || []).map((r) => {
+        const prob = r.model_prob != null ? ` · ${pct(r.model_prob)} model` : '';
+        const sig = r.signal && r.signal !== 'NEUTRAL' && r.signal !== '—' ? ` · ${r.signal}` : '';
+        const edge = r.edge != null ? ` · ${r.edge >= 0 ? '+' : ''}${(r.edge * 100).toFixed(1)}¢ edge` : '';
+        return `<div class="guide-tier ${r.tier}" style="margin-bottom:.5rem">
+          <h4 style="font-size:.78rem;margin:0 0 .25rem">${r.title}</h4>
+          <strong>${r.label || '—'}</strong>${prob}${sig}${edge}
+          <p class="muted" style="font-size:.7rem;margin:.35rem 0 0">${r.reason || ''}</p>
+        </div>`;
+      }).join('');
+    }
+
+    function renderStrategy2Panel(live, locked, g) {
+      const el = $('daily-range-summary');
+      if (!el) return;
+      const liveSr = live.strategy_range || {};
+      const lockedSr = locked?.strategy_range || {};
+      const liveMl = liveSr.most_likely;
+      const lockedMl = lockedSr.most_likely;
+      const liveBe = liveSr.best_edge;
+      const lockedBe = lockedSr.best_edge;
+      const rg = g.strategy_range || {};
+      const lockedNote = locked
+        ? `Locked ${time(locked.logged_at)} · BRTI ref ${price(locked.reference_price)}`
+        : 'Range band picks lock at :05 ET with the threshold forecast';
+
+      el.innerHTML = `
+        <p class="muted" style="font-size:.72rem;margin-bottom:.5rem">${rg.summary || ''} ${rg.stall_note ? '· ' + rg.stall_note : ''}</p>
+        <p class="muted" style="font-size:.68rem;margin-bottom:.65rem">${lockedNote}</p>
+        ${locked ? `<div class="likely-card" style="border-color:rgba(34,197,94,.35);margin-bottom:.65rem">
+          <h3>Locked stall band @ :05</h3>
+          <div class="headline">${lockedMl?.label || '—'}${lockedMl?.model_prob != null ? ` · ${pct(lockedMl.model_prob)} model` : ''}</div>
+          <p class="muted" style="font-size:.8rem">${lockedSr.summary || ''}</p>
+          <div class="likely-grid">
+            ${renderLikelyPick('Most likely band', lockedMl)}
+            ${renderLikelyPick('Best band edge @ lock', lockedBe)}
+          </div>
+          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Frozen for range-band scoring — table below is live only.</p>
+        </div>` : `<div class="likely-card" style="border-color:rgba(245,158,11,.35);margin-bottom:.65rem">
+          <h3>Awaiting range lock · :05 ET</h3>
+          <p class="muted" style="font-size:.85rem">Preview: ${liveMl?.label || '—'}${liveMl?.model_prob != null ? ` (${pct(liveMl.model_prob)})` : ''}</p>
+        </div>`}
+        <div class="likely-card" style="border-color:rgba(99,102,241,.25);margin-bottom:.65rem">
+          <h3>Live range reassessment <span class="muted" style="font-weight:400;font-size:.7rem">updates with market</span></h3>
+          <div class="headline">${liveMl?.label || '—'}${liveMl?.model_prob != null ? ` · ${pct(liveMl.model_prob)} model` : ''}</div>
+          <p class="muted" style="font-size:.8rem">${liveSr.summary || ''}</p>
+          <div class="likely-grid">
+            ${renderLikelyPick('Most likely band (live)', liveMl)}
+            ${renderLikelyPick('Best band edge (live)', liveBe)}
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.5rem;margin-bottom:.35rem">
+          ${renderRangeTierCards(rg.recommendations)}
+        </div>
+        <p class="muted" style="font-size:.68rem"><strong>Locked vs live:</strong> ${rg.locked_vs_live?.locked || ''} · ${rg.locked_vs_live?.live || ''}</p>`;
+    }
+
     function renderHourlyGuidance(g) {
       const el = $('hourly-guide');
       if (!g) {
         el.innerHTML = '<p class="muted">Guidance unavailable.</p>';
         return;
       }
+      const existingCheat = el.querySelector('#hourly-guide-cheat');
+      if (existingCheat) hourlyGuideCheatOpen = existingCheat.open;
       const iv = g.interval || {};
       const predCls = iv.predictability === 'higher' ? 'risk-low' : 'risk-medium';
       const tiers = (g.recommendations || []).map((r) => {
@@ -1000,13 +1062,17 @@
         ${g.regime_note ? `<p class="muted" style="font-size:.75rem;margin:.65rem 0;padding:.5rem;border-left:3px solid #f59e0b">${g.regime_note}</p>` : ''}
         <p class="muted" style="font-size:.72rem;margin:.75rem 0 .35rem"><strong>Which tab?</strong> ${g.which_tab?.use_15m || ''} · ${g.which_tab?.use_this_tab || ''}</p>
         <p class="muted" style="font-size:.72rem;margin-bottom:.65rem"><strong>Locked vs live:</strong> ${g.locked_vs_live?.locked || ''} · ${g.locked_vs_live?.live || ''}</p>
-        <details style="font-size:.78rem">
+        <details id="hourly-guide-cheat" style="font-size:.78rem"${hourlyGuideCheatOpen ? ' open' : ''}>
           <summary class="muted" style="cursor:pointer;margin-bottom:.35rem">Strategy cheat sheet (threshold vs range)</summary>
           <table style="width:100%;margin-top:.35rem">
             <thead><tr><th>Strategy</th><th>When to use</th><th>Risk</th></tr></thead>
             <tbody>${strat}</tbody>
           </table>
         </details>`;
+      const cheat = el.querySelector('#hourly-guide-cheat');
+      if (cheat) {
+        cheat.addEventListener('toggle', () => { hourlyGuideCheatOpen = cheat.open; });
+      }
     }
 
     function renderDailyContracts(rows, containerId, highlightLabels) {
@@ -1023,6 +1089,7 @@
           const edgeCls = r.signal === 'LEAN YES' ? 'edge-yes' : r.signal === 'LEAN NO' ? 'edge-no' : 'muted';
           let tag = '';
           if (tags.safest && r.label === tags.safest) tag = ' <span class="badge" style="background:rgba(34,197,94,.2);color:#86efac;font-size:.65rem">most likely</span>';
+          if (tags.locked && r.label === tags.locked) tag += ' <span class="badge" style="background:rgba(59,130,246,.2);color:#93c5fd;font-size:.65rem">locked @ :05</span>';
           if (tags.edge && r.label === tags.edge) tag += ' <span class="badge" style="background:rgba(245,158,11,.2);color:#fbbf24;font-size:.65rem">best edge</span>';
           const lowConf = r.model_prob < 0.12 || r.model_prob > 0.88;
           if (lowConf && r.signal === 'NEUTRAL') tag += ' <span class="badge muted" style="font-size:.65rem">low predictability</span>';
@@ -1128,6 +1195,7 @@
         $('daily-primary-signal').innerHTML = '';
         $('daily-summary').innerHTML = '';
         $('daily-threshold').innerHTML = '<p class="muted">—</p>';
+        $('daily-range-summary').innerHTML = '';
         $('daily-range').innerHTML = '<p class="muted">—</p>';
         $('daily-structure').innerHTML = '<p class="muted">—</p>';
         return;
@@ -1210,9 +1278,14 @@
         safest: (g.recommendations || []).find(r => r.tier === 'safest' && r.pick_type === 'threshold')?.label,
         edge: (g.recommendations || []).find(r => r.tier === 'edge' && r.pick_type === 'threshold')?.label,
       });
+      renderStrategy2Panel(live, locked, g);
+      const rangeRg = g.strategy_range || {};
       renderDailyContracts(live.strategy_range?.contracts || [], 'daily-range', {
-        safest: (g.recommendations || []).find(r => r.tier === 'safest' && r.pick_type === 'range')?.label,
-        edge: (g.recommendations || []).find(r => r.tier === 'edge' && r.pick_type === 'range')?.label,
+        safest: (rangeRg.recommendations || []).find(r => r.tier === 'safest')?.label
+          || (g.recommendations || []).find(r => r.tier === 'safest' && r.pick_type === 'range')?.label,
+        edge: (rangeRg.recommendations || []).find(r => r.tier === 'edge')?.label
+          || (g.recommendations || []).find(r => r.tier === 'edge' && r.pick_type === 'range')?.label,
+        locked: (rangeRg.recommendations || []).find(r => r.tier === 'locked')?.label,
       });
       renderDailyStructure(live.structure);
     }

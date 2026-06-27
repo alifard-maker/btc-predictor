@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.models.hourly_range_log import RANGE_BE_PREFIX, RANGE_ML_PREFIX, row_to_contract
+
 
 def _zone_from_mu_sigma(mu: float | None, sigma: float | None) -> tuple[float | None, float | None]:
   if mu is None or sigma is None:
@@ -42,6 +44,8 @@ def locked_prediction_from_row(row: dict[str, Any]) -> dict[str, Any]:
       "label": row.get("most_likely_label"),
       "model_prob": row.get("most_likely_prob"),
     }
+  ml_range = row_to_contract(row, RANGE_ML_PREFIX)
+  be_range = row_to_contract(row, RANGE_BE_PREFIX)
 
   return {
     "ok": True,
@@ -74,6 +78,16 @@ def locked_prediction_from_row(row: dict[str, Any]) -> dict[str, Any]:
         else ""
       ),
       "threshold": ml_threshold,
+      "range": ml_range,
+    },
+    "strategy_range": {
+      "summary": (
+        f"Locked stall band: {ml_range['label']} ({float(ml_range['model_prob']) * 100:.0f}% model)"
+        if ml_range and ml_range.get("model_prob") is not None
+        else "Range band odds at lock"
+      ),
+      "most_likely": ml_range,
+      "best_edge": be_range,
     },
     "event": {
       "event_ticker": row.get("event_ticker"),

@@ -86,6 +86,89 @@ def _pick_edge(live: dict[str, Any]) -> dict[str, Any] | None:
   }
 
 
+def build_range_strategy_guidance(
+  live: dict[str, Any],
+  locked: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+  live_sr = live.get("strategy_range") or {}
+  locked_sr = (locked or {}).get("strategy_range") or {}
+  live_ml = live_sr.get("most_likely")
+  live_be = live_sr.get("best_edge")
+  locked_ml = locked_sr.get("most_likely")
+  locked_be = locked_sr.get("best_edge")
+
+  def _band_card(tier: str, title: str, row: dict[str, Any] | None, reason: str) -> dict[str, Any] | None:
+    if not row:
+      return None
+    return {
+      "tier": tier,
+      "title": title,
+      "label": row.get("label"),
+      "model_prob": row.get("model_prob"),
+      "signal": row.get("signal", "NEUTRAL"),
+      "edge": row.get("edge"),
+      "reason": reason,
+    }
+
+  locked_card = (
+    _band_card(
+      "locked",
+      "Locked range pick @ :05",
+      locked_ml,
+      "Frozen at lock — use this band for honest range-band scoring (not the live table below).",
+    )
+    if locked
+    else {
+      "tier": "locked",
+      "title": "Locked range pick (not yet)",
+      "label": "—",
+      "reason": "Range band locks at :05 ET with the threshold forecast.",
+    }
+  )
+
+  recs = [
+    r
+    for r in (
+      _band_card(
+        "safest",
+        "Most predictable stall band",
+        locked_ml or live_ml,
+        "Highest model % that BRTI finishes inside this band — best when price is consolidating.",
+      ),
+      locked_card,
+      _band_card(
+        "edge",
+        "Best range edge now (live)",
+        live_be,
+        "Largest Kalshi mispricing among bands right now — can be a thin-probability tail band.",
+      ),
+    )
+    if r
+  ]
+
+  consolidation = (live.get("structure") or {}).get("consolidation")
+  stall_note = None
+  if consolidation:
+    stall_note = (
+      f"1h stall box ${consolidation.get('low'):,.0f}–${consolidation.get('high'):,.0f} "
+      f"(tightness {consolidation.get('tightness')}) — range bands work best here."
+    )
+  elif locked_ml or live_ml:
+    stall_note = "No tight stall box — range bands are less reliable; prefer locked settlement range or thresholds."
+
+  return {
+    "summary": "Strategy 2 bets BRTI lands inside a price band at settle — often the safest directional bet type when chop dominates.",
+    "locked": locked_sr,
+    "live": live_sr,
+    "recommendations": recs,
+    "stall_note": stall_note,
+    "locked_vs_live": {
+      "locked": "Most-likely band + best band edge at :05 ET.",
+      "live": "Band odds refresh with BRTI — compare to locked pick, do not confuse with scored forecast.",
+    },
+  }
+
+
 def build_hourly_guidance(
   live: dict[str, Any],
   locked: dict[str, Any] | None = None,
@@ -166,6 +249,7 @@ def build_hourly_guidance(
     },
     "strategies": strategies,
     "recommendations": recs,
+    "strategy_range": build_range_strategy_guidance(live, locked),
     "regime_blocked": not regime.get("allow_trade", True),
     "regime_note": (
       "Regime filter blocked LEAN signals — safest action is NEUTRAL / watch locked range only."

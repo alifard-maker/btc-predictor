@@ -15,6 +15,7 @@ import pandas as pd
 from src.data.auxiliary import AuxiliaryStore
 from src.features.engineering import build_feature_matrix, training_feature_columns
 from src.models.daily_predictor import DailyPredictor
+from src.models.hourly_range_log import RANGE_BE_PREFIX, RANGE_ML_PREFIX, contract_to_row_prefix
 from src.models.prob_calibration import ProbabilityCalibrator
 from src.trading.hourly_regime import HourlyRegimeFilter
 
@@ -205,9 +206,10 @@ class HourlyPredictor:
     pick = pred.get("primary_pick") or {}
     ml = pred.get("most_likely", {}).get("threshold") or {}
     ml_block = pred.get("most_likely") or {}
+    sr = pred.get("strategy_range") or {}
     now = datetime.now(timezone.utc).isoformat()
     regime = pred.get("regime") or {}
-    return {
+    row = {
       "logged_at": now,
       "event_ticker": ev.get("event_ticker", ""),
       "frequency": ev.get("frequency", "hourly"),
@@ -244,3 +246,6 @@ class HourlyPredictor:
       "settlement_zone_low": ml_block.get("settlement_zone_low"),
       "settlement_zone_high": ml_block.get("settlement_zone_high"),
     }
+    row.update(contract_to_row_prefix(sr.get("most_likely"), RANGE_ML_PREFIX))
+    row.update(contract_to_row_prefix(sr.get("best_edge"), RANGE_BE_PREFIX))
+    return row

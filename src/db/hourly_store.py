@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import pandas as pd
 
 from src.db.store import _py, normalize_database_url
+from src.models.hourly_range_log import RANGE_BAND_LOG_FIELDS, range_band_migrations, range_band_migrations_pg
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +92,22 @@ _HOURLY_COLS = """
   prob_15m_avg REAL,
   settlement_zone_low REAL,
   settlement_zone_high REAL,
+  range_ml_ticker TEXT,
+  range_ml_label TEXT,
+  range_ml_prob REAL,
+  range_ml_signal TEXT,
+  range_ml_edge REAL,
+  range_ml_floor REAL,
+  range_ml_cap REAL,
+  range_ml_kalshi_mid REAL,
+  range_be_ticker TEXT,
+  range_be_label TEXT,
+  range_be_prob REAL,
+  range_be_signal TEXT,
+  range_be_edge REAL,
+  range_be_floor REAL,
+  range_be_cap REAL,
+  range_be_kalshi_mid REAL,
   outcome INTEGER,
   settle_brti REAL,
   actual_return REAL,
@@ -122,7 +139,7 @@ class SqliteHourlyStore(HourlyPredictionStore):
   @staticmethod
   def _migrate_sqlite(conn) -> None:
     existing = {row[1] for row in conn.execute("PRAGMA table_info(hourly_predictions)")}
-    for col, typ in (("settlement_zone_low", "REAL"), ("settlement_zone_high", "REAL")):
+    for col, typ in range_band_migrations():
       if col not in existing:
         conn.execute(f"ALTER TABLE hourly_predictions ADD COLUMN {col} {typ}")
 
@@ -136,6 +153,7 @@ class SqliteHourlyStore(HourlyPredictionStore):
       "most_likely_label", "most_likely_prob", "confidence", "expected_move_pct",
       "direction", "method", "regime_blocked", "regime_notes", "prob_15m_avg",
       "settlement_zone_low", "settlement_zone_high",
+      *RANGE_BAND_LOG_FIELDS,
     ]
     vals = [row.get(c) for c in cols]
     with self._conn() as conn:
@@ -267,6 +285,22 @@ class PostgresHourlyStore(HourlyPredictionStore):
         prob_15m_avg DOUBLE PRECISION,
         settlement_zone_low DOUBLE PRECISION,
         settlement_zone_high DOUBLE PRECISION,
+        range_ml_ticker TEXT,
+        range_ml_label TEXT,
+        range_ml_prob DOUBLE PRECISION,
+        range_ml_signal TEXT,
+        range_ml_edge DOUBLE PRECISION,
+        range_ml_floor DOUBLE PRECISION,
+        range_ml_cap DOUBLE PRECISION,
+        range_ml_kalshi_mid DOUBLE PRECISION,
+        range_be_ticker TEXT,
+        range_be_label TEXT,
+        range_be_prob DOUBLE PRECISION,
+        range_be_signal TEXT,
+        range_be_edge DOUBLE PRECISION,
+        range_be_floor DOUBLE PRECISION,
+        range_be_cap DOUBLE PRECISION,
+        range_be_kalshi_mid DOUBLE PRECISION,
         outcome INTEGER,
         settle_brti DOUBLE PRECISION,
         actual_return DOUBLE PRECISION,
@@ -289,7 +323,7 @@ class PostgresHourlyStore(HourlyPredictionStore):
       WHERE table_name = 'hourly_predictions'
     """)
     existing = {row[0] for row in cur.fetchall()}
-    for col, typ in (("settlement_zone_low", "DOUBLE PRECISION"), ("settlement_zone_high", "DOUBLE PRECISION")):
+    for col, typ in range_band_migrations_pg():
       if col not in existing:
         cur.execute(f"ALTER TABLE hourly_predictions ADD COLUMN {col} {typ}")
 
@@ -303,6 +337,7 @@ class PostgresHourlyStore(HourlyPredictionStore):
       "most_likely_label", "most_likely_prob", "confidence", "expected_move_pct",
       "direction", "method", "regime_blocked", "regime_notes", "prob_15m_avg",
       "settlement_zone_low", "settlement_zone_high",
+      *RANGE_BAND_LOG_FIELDS,
     ]
     vals = tuple(row.get(c) for c in cols)
     with self._conn() as conn:
