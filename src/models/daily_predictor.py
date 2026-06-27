@@ -62,8 +62,8 @@ class DailyPredictor:
     self.markets = KalshiDailyMarkets(cfg)
     dcfg = cfg.get("daily", {})
     self.min_edge = float(dcfg.get("min_edge", 0.05))
-    self.nearby_strikes = int(dcfg.get("nearby_strikes", 11))
-    self.top_bands = int(dcfg.get("top_bands", 15))
+    self.nearby_strikes = int(dcfg.get("nearby_strikes", 30))
+    self.top_bands = int(dcfg.get("top_bands", 30))
     self.strike_sigma_window = float(dcfg.get("strike_sigma_window", 2.5))
     self.band_sigma_window = float(dcfg.get("band_sigma_window", 2.5))
     self.vol_lookback_1h = int(dcfg.get("vol_lookback_1h", 24))
@@ -251,7 +251,7 @@ class DailyPredictor:
     mu: float,
     sigma: float,
   ) -> list[KalshiContractMarket]:
-    window = self._mu_window(mu, sigma, self.strike_sigma_window)
+    """Nearest strikes to forecast μ (up to nearby_strikes)."""
     scored: list[tuple[float, KalshiContractMarket]] = []
     for m in markets:
       if m.strike_type not in ("greater", "less"):
@@ -261,10 +261,7 @@ class DailyPredictor:
         continue
       scored.append((abs(strike - mu), m))
     scored.sort(key=lambda x: x[0])
-    in_window = [m for d, m in scored if d <= window]
-    if in_window:
-      return in_window[: self.nearby_strikes]
-    return []
+    return [m for _, m in scored[: self.nearby_strikes]]
 
   def _near_band_markets(
     self,
@@ -272,24 +269,17 @@ class DailyPredictor:
     mu: float,
     sigma: float,
   ) -> list[KalshiContractMarket]:
-    window = self._mu_window(mu, sigma, self.band_sigma_window)
-    scored: list[tuple[float, float, KalshiContractMarket]] = []
+    """Nearest range bands to forecast μ (up to top_bands)."""
+    scored: list[tuple[float, KalshiContractMarket]] = []
     for m in markets:
       bounds = self._band_bounds(m)
       if bounds is None:
         continue
       low, high = bounds
       mid = (low + high) / 2
-      contains_mu = low <= mu <= high
-      dist = abs(mid - mu)
-      if not contains_mu and dist > window:
-        continue
-      p = self._prob_between(low, high, mu, sigma)
-      scored.append((p, dist, m))
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    if scored:
-      return [m for _, _, m in scored[: self.top_bands]]
-    return []
+      scored.append((abs(mid - mu), m))
+    scored.sort(key=lambda x: x[0])
+    return [m for _, m in scored[: self.top_bands]]
 
   def _most_likely_threshold(
     self,
