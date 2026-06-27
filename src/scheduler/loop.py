@@ -149,6 +149,10 @@ class PredictionLoop:
         "logged_at": locked.get("logged_at"),
       }
 
+    from src.trading.hourly_guidance import build_hourly_guidance
+
+    out["guidance"] = build_hourly_guidance(live, locked)
+
     self.latest_hourly_prediction = out
     return out
 
