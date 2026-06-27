@@ -1140,7 +1140,7 @@
         return;
       }
       $('hourly-calibration').innerHTML = `
-        <p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Primary pick = best threshold edge (LEAN YES/NO). Resolved when Kalshi settles the contract.</p>
+        <p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Primary pick = best threshold edge at lock. On misses, settle BRTI and distance vs forecast μ / locked zone are shown.</p>
         ${renderAllTimeStats({ open: at, epochs_archived: s.all_time?.epochs_archived, snapshot_through: s.all_time?.snapshot_through, snapshot_note: s.all_time?.snapshot_note, late_entry: {}, flip: {} })}
         <div class="stats-block epoch" style="margin-top:.75rem">
           <h3>Current epoch</h3>
@@ -1155,6 +1155,31 @@
         </div>`;
     }
 
+    function hourlyPickWrong(r) {
+      if (r.outcome == null) return null;
+      const sig = r.primary_signal || '';
+      if (sig === 'LEAN YES' || sig === 'VALUE YES') return !r.outcome;
+      if (sig === 'LEAN NO' || sig === 'FADE YES') return !!r.outcome;
+      return null;
+    }
+
+    function renderHourlySettleDetail(r) {
+      if (r.settle_brti == null || r.outcome == null) return '';
+      const wrong = hourlyPickWrong(r);
+      if (wrong !== true) return '';
+      const settle = Number(r.settle_brti);
+      const mu = r.terminal_mu != null ? Number(r.terminal_mu) : null;
+      const parts = [`Settled ${price(settle)}`];
+      if (mu != null) parts.push(`${signedPrice(settle - mu)} vs μ ${price(mu)}`);
+      const zLo = r.settlement_zone_low;
+      const zHi = r.settlement_zone_high;
+      if (zLo != null && zHi != null) {
+        if (settle < zLo) parts.push(`${price(zLo - settle)} below zone`);
+        else if (settle > zHi) parts.push(`${price(settle - zHi)} above zone`);
+      }
+      return `<div class="muted" style="font-size:.68rem;margin-top:.2rem">${parts.join(' · ')}</div>`;
+    }
+
     function renderHourlyHistory(rows) {
       if (!rows || !rows.length) {
         $('hourly-history').innerHTML = '<p class="muted">No hourly predictions logged yet.</p>';
@@ -1163,8 +1188,18 @@
       $('hourly-history').innerHTML = `<table>
         <thead><tr><th>Logged</th><th>Freq</th><th>Primary pick</th><th>Signal</th><th>Conf</th><th>Method</th><th>Outcome</th></tr></thead>
         <tbody>${rows.map(r => {
-          const out = r.outcome == null ? '<span class="muted">pending</span>' : (r.outcome ? '<span class="up">YES ✓</span>' : '<span class="down">NO ✗</span>');
-          const sigCls = r.primary_signal === 'LEAN YES' ? 'edge-yes' : r.primary_signal === 'LEAN NO' ? 'edge-no' : 'muted';
+          const wrong = hourlyPickWrong(r);
+          let out;
+          if (r.outcome == null) {
+            out = '<span class="muted">pending</span>';
+          } else if (wrong === true) {
+            out = `<span class="down">MISS ✗</span>${renderHourlySettleDetail(r)}`;
+          } else if (wrong === false) {
+            out = `<span class="up">HIT ✓</span>${r.settle_brti != null ? `<div class="muted" style="font-size:.68rem;margin-top:.2rem">BRTI ${price(r.settle_brti)}</div>` : ''}`;
+          } else {
+            out = `${r.outcome ? '<span class="up">YES</span>' : '<span class="down">NO</span>'}${r.settle_brti != null ? `<div class="muted" style="font-size:.68rem;margin-top:.2rem">BRTI ${price(r.settle_brti)}</div>` : ''}`;
+          }
+          const sigCls = contractSignalCls(r.primary_signal || 'NEUTRAL');
           return `<tr>
             <td style="font-size:.78rem">${time(r.logged_at)}</td>
             <td>${r.frequency || '—'}</td>
