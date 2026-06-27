@@ -394,6 +394,12 @@ class PredictionLoop:
 
       slot_e = slot_end(slot_s, self.tz)
       seconds_remaining = max(0, int((slot_e - now).total_seconds()))
+      elapsed_min = (now - slot_s).total_seconds() / 60.0
+      min_elapsed = float(scfg.get("elapsed_minutes", 4))
+      if elapsed_min < min_elapsed - 0.25:
+        log.debug("2nd Chance skipped — %.1f min elapsed (need %.0f)", elapsed_min, min_elapsed)
+        return None
+
       api_ref, _ = self.kalshi.slot_t0_reference(slot_s, fresh=True)
       ref = float(api_ref) if api_ref else float(pred.get("reference_price") or pred.get("price") or 0)
       if ref <= 0:
@@ -960,6 +966,7 @@ class PredictionLoop:
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")
     scheduler.add_job(self.run_hourly_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=15), id="hourly_now")
+    scheduler.add_job(self.run_second_chance, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=20), id="second_chance_now")
     scheduler.add_job(self.collect_auxiliary, "interval", hours=6, id="auxiliary", max_instances=1)
     scheduler.add_job(self.collect_auxiliary, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=12), id="auxiliary_now")
     scheduler.add_job(self.refit_calibrator, "interval", hours=6, id="refit_calibrator", max_instances=1)

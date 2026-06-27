@@ -534,6 +534,13 @@
           <p style="font-size:.85rem">${badge(m.second_chance_signal)}${m.second_chance_prob_up != null ? ` · <span class="up">${pct(m.second_chance_prob_up)}</span> UP` : ''}</p>
           <p class="muted" style="font-size:.75rem;margin-top:.35rem">${m.second_chance_summary || ''}</p>
         </div>`;
+      } else if (m.active && (m.elapsed_pct || 0) < 28) {
+        const minsIn = Math.max(0, Math.round((m.elapsed_pct || 0) / 100 * 15));
+        const wait = Math.max(0, 4 - minsIn);
+        body += `<div class="reassess-block" style="margin-bottom:.65rem;border-color:rgba(99,102,241,.2);opacity:.9">
+          <h4>2nd Chance</h4>
+          <p class="muted" style="font-size:.8rem">${wait > 0 ? `Reassessment at t+4 min (~${wait}m) — uses open prediction + live slot path.` : '2nd Chance logging at :04/:19/:34/:49 ET…'}</p>
+        </div>`;
       }
 
       if (m.active && m.bet_side !== 'NONE') {
@@ -634,7 +641,7 @@
         ['Kalshi', h.kalshi?.authenticated ? 'KXBTC15M · BRTI live' : (h.kalshi?.connected ? 'KXBTC15M · exchange ticks' : 'No market'), !!h.kalshi?.connected],
         ['Live tick', h.live_tick?.source ? `${h.live_tick.source} · ${h.live_tick.age_sec != null ? h.live_tick.age_sec + 's' : '—'}` : '—', !!(h.live_tick && h.live_tick.age_sec != null && h.live_tick.age_sec < 10)],
         ['Settlement', h.settlement_reference || 'CF Benchmarks BRTI', true],
-        ['Schedule', (h.timezone || 'ET') + ' :00/:15/:30/:45', true],
+        ['Schedule', (h.timezone || 'ET') + ' :00/:15/:30/:45 · 2nd @ :04/:19/:34/:49', true],
       ];
       $('status-list').innerHTML = items.map(([l,v,ok]) =>
         `<li><span class="dot" style="background:${ok?'var(--up)':'#f59e0b'}"></span><span class="muted">${l}</span><span>${v}</span></li>`
@@ -660,7 +667,14 @@
 
     function renderSecondChanceStats(sc, opts = {}) {
       const title = opts.title || '2nd Chance (t+4min)';
-      if (!sc || (!sc.n_logged && !sc.n_resolved)) return '';
+      const alwaysShow = opts.alwaysShow !== false;
+      if (!sc || (!sc.n_logged && !sc.n_resolved)) {
+        if (!alwaysShow) return '';
+        return `<div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--border)">
+          <p class="muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">${title}</p>
+          <p class="muted" style="font-size:.8rem">No 2nd Chance logged yet this epoch. Runs automatically at <strong>:04, :19, :34, :49 ET</strong> (~11 min left in slot) for every slot with an open prediction.</p>
+        </div>`;
+      }
       const acc = sc.accuracy != null ? pct(sc.accuracy) : '—';
       const dirAcc = sc.directional_accuracy != null ? pct(sc.directional_accuracy) : '—';
       const brier = sc.brier_score != null ? sc.brier_score.toFixed(4) : '—';
@@ -676,6 +690,7 @@
         <div class="cal-stats">
           <div><span>Logged</span><strong>${sc.n_logged || 0}</strong></div>
           <div><span>Resolved</span><strong>${sc.n_resolved || 0}</strong></div>
+          ${sc.n_pending ? `<div><span>Pending</span><strong>${sc.n_pending}</strong></div>` : ''}
           <div><span>All accuracy</span><strong>${acc}</strong></div>
           <div><span>Directional</span><strong>${dirAcc}</strong></div>
           <div><span>2nd Brier</span><strong>${brier}</strong></div>

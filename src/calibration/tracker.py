@@ -395,14 +395,20 @@ class CalibrationTracker:
     out["rolling_accuracy"] = self._late_rolling_accuracy(df)
     return out
 
-  def _second_chance_summary(self, df: pd.DataFrame) -> dict[str, Any]:
+  def _second_chance_summary(
+    self,
+    resolved_df: pd.DataFrame,
+    logged_df: pd.DataFrame | None = None,
+  ) -> dict[str, Any]:
+    log_df = logged_df if logged_df is not None else resolved_df
     empty = {
       "n_logged": 0,
       "n_resolved": 0,
+      "n_pending": 0,
       "accuracy": None,
       "brier_score": None,
       "directional_accuracy": None,
-      "rolling_accuracy": self._second_chance_rolling_accuracy(df),
+      "rolling_accuracy": self._second_chance_rolling_accuracy(resolved_df),
       "sc_long_signals": 0,
       "sc_long_accuracy": None,
       "sc_short_signals": 0,
@@ -411,60 +417,66 @@ class CalibrationTracker:
       "avg_seconds_remaining": None,
       "open_vs_sc_delta": None,
     }
-    if df.empty or "second_chance_signal" not in df.columns:
+    if log_df.empty or "second_chance_signal" not in log_df.columns:
       return empty
 
-    sc = df[self._second_chance_mask(df)]
-    if sc.empty:
+    sc_logged = log_df[self._second_chance_mask(log_df)]
+    if sc_logged.empty:
       return empty
 
-    resolved = sc[sc["outcome"].notna()]
-    directional = resolved[resolved["second_chance_signal"].isin(["2ND LONG", "2ND SHORT"])]
+    sc_resolved = (
+      resolved_df[self._second_chance_mask(resolved_df)]
+      if not resolved_df.empty and "second_chance_signal" in resolved_df.columns
+      else sc_logged.iloc[0:0]
+    )
+    directional = sc_resolved[sc_resolved["second_chance_signal"].isin(["2ND LONG", "2ND SHORT"])]
     out = {
-      "n_logged": int(len(sc)),
-      "n_resolved": int(len(resolved)),
+      "n_logged": int(len(sc_logged)),
+      "n_resolved": int(len(sc_resolved)),
+      "n_pending": int(len(sc_logged) - len(sc_resolved)),
       "accuracy": None,
       "brier_score": None,
       "directional_accuracy": None,
       "rolling_accuracy": None,
-      "sc_long_signals": int((sc["second_chance_signal"] == "2ND LONG").sum()),
+      "sc_long_signals": int((sc_logged["second_chance_signal"] == "2ND LONG").sum()),
       "sc_long_accuracy": None,
-      "sc_short_signals": int((sc["second_chance_signal"] == "2ND SHORT").sum()),
+      "sc_short_signals": int((sc_logged["second_chance_signal"] == "2ND SHORT").sum()),
       "sc_short_accuracy": None,
-      "sc_no_trade_signals": int((sc["second_chance_signal"] == "2ND NO TRADE").sum()),
+      "sc_no_trade_signals": int((sc_logged["second_chance_signal"] == "2ND NO TRADE").sum()),
       "avg_seconds_remaining": None,
       "open_vs_sc_delta": None,
     }
-    if "second_chance_seconds_remaining" in sc.columns:
-      rem = pd.to_numeric(sc["second_chance_seconds_remaining"], errors="coerce").dropna()
+    if "second_chance_seconds_remaining" in sc_logged.columns:
+      rem = pd.to_numeric(sc_logged["second_chance_seconds_remaining"], errors="coerce").dropna()
       if len(rem):
         out["avg_seconds_remaining"] = float(rem.mean())
 
-    if resolved.empty:
+    if sc_resolved.empty:
+      out["rolling_accuracy"] = self._second_chance_rolling_accuracy(resolved_df)
       return out
 
-    correct = self._second_chance_correct(resolved)
+    correct = self._second_chance_correct(sc_resolved)
     out["accuracy"] = float(correct.mean())
-    if "second_chance_prob_up" in resolved.columns:
-      probs = pd.to_numeric(resolved["second_chance_prob_up"], errors="coerce")
+    if "second_chance_prob_up" in sc_resolved.columns:
+      probs = pd.to_numeric(sc_resolved["second_chance_prob_up"], errors="coerce")
       valid = probs.notna()
       if valid.any():
-        out["brier_score"] = float(((probs[valid] - resolved.loc[valid, "outcome"]) ** 2).mean())
+        out["brier_score"] = float(((probs[valid] - sc_resolved.loc[valid, "outcome"]) ** 2).mean())
 
     if len(directional):
       out["directional_accuracy"] = float(self._second_chance_correct(directional).mean())
 
-    longs = resolved[resolved["second_chance_signal"] == "2ND LONG"]
-    shorts = resolved[resolved["second_chance_signal"] == "2ND SHORT"]
+    longs = sc_resolved[sc_resolved["second_chance_signal"] == "2ND LONG"]
+    shorts = sc_resolved[sc_resolved["second_chance_signal"] == "2ND SHORT"]
     if len(longs):
       out["sc_long_accuracy"] = float(self._second_chance_correct(longs).mean())
     if len(shorts):
       out["sc_short_accuracy"] = float(self._second_chance_correct(shorts).mean())
-    out["rolling_accuracy"] = self._second_chance_rolling_accuracy(df)
+    out["rolling_accuracy"] = self._second_chance_rolling_accuracy(resolved_df)
 
-    if "prob_up" in resolved.columns and "second_chance_prob_up" in resolved.columns:
-      open_c = self._prediction_correct(resolved)
-      sc_c = self._second_chance_correct(resolved)
+    if "prob_up" in sc_resolved.columns and "second_chance_prob_up" in sc_resolved.columns:
+      open_c = self._prediction_correct(sc_resolved)
+      sc_c = self._second_chance_correct(sc_resolved)
       out["open_vs_sc_delta"] = float(sc_c.mean() - open_c.mean())
 
     return out
@@ -587,6 +599,7 @@ class CalibrationTracker:
 
   def summary(self) -> dict[str, Any]:
     df = self._dedupe_by_slot(self.load_resolved())
+    df_all = self._dedupe_by_slot(self._filter_calibration_df(self.store.load_all()))
     all_resolved = self._dedupe_by_slot(self.store.load_resolved())
     kalshi_n = len(df)
     total_n = len(all_resolved)
@@ -597,7 +610,7 @@ class CalibrationTracker:
         "stats_epoch": self.stats_epoch(),
         "late_entry": self._late_entry_summary(df),
         "flip": self._flip_summary(df),
-        "second_chance": self._second_chance_summary(df),
+        "second_chance": self._second_chance_summary(df, df_all),
         "open_at_slot": {"n_resolved": 0, "long_signals": 0, "short_signals": 0},
         "all_time": self._all_time_summary(df),
       }
@@ -631,7 +644,7 @@ class CalibrationTracker:
       },
       "late_entry": self._late_entry_summary(df),
       "flip": self._flip_summary(df),
-      "second_chance": self._second_chance_summary(df),
+      "second_chance": self._second_chance_summary(df, df_all),
       "long_signals": len(longs),
       "long_accuracy": float(longs["outcome"].mean()) if len(longs) else None,
       "short_signals": len(shorts),
