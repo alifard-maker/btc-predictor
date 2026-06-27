@@ -23,6 +23,7 @@ from src.models.hourly_range_log import (
   serialize_lean_bands,
 )
 from src.models.prob_calibration import ProbabilityCalibrator
+from src.trading.contract_signals import BUY_NO, BUY_YES, VALUE_YES, is_actionable_buy
 from src.trading.hourly_regime import HourlyRegimeFilter
 
 log = logging.getLogger(__name__)
@@ -174,7 +175,7 @@ class HourlyPredictor:
     thresh_ml = (blended.get("strategy_threshold") or {}).get("most_likely")
     pick = range_ml
     if thresh_be and self.structure._row_near_forecast(thresh_be, blended_mu, structure_sigma):
-      if thresh_be.get("signal") in ("LEAN YES", "LEAN NO", "VALUE YES"):
+      if thresh_be.get("signal") in (BUY_YES, BUY_NO, VALUE_YES, "LEAN YES", "LEAN NO"):
         pick = thresh_be
     elif thresh_ml and self.structure._row_near_forecast(thresh_ml, blended_mu, structure_sigma):
       pick = thresh_ml
@@ -197,7 +198,7 @@ class HourlyPredictor:
       edge=edge,
       compression=compression,
     )
-    if not regime.allow_trade and signal in ("LEAN YES", "LEAN NO"):
+    if not regime.allow_trade and is_actionable_buy(signal):
       signal = "NEUTRAL"
 
     direction = "UP" if prob >= 0.55 else ("DOWN" if prob <= 0.45 else "NEUTRAL")

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from src.trading.contract_signals import is_actionable_buy, signal_correct_for_outcome
+
 RANGE_ML_PREFIX = "range_ml"
 RANGE_BE_PREFIX = "range_be"
 
@@ -64,11 +66,11 @@ def row_to_contract(row: dict[str, Any], prefix: str) -> dict[str, Any] | None:
 
 
 def lean_bands_from_contracts(contracts: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-  """All range bands with LEAN YES/NO at lock (near-forecast slice)."""
+  """All range bands with BUY YES/NO at lock (near-forecast slice)."""
   out: list[dict[str, Any]] = []
   for c in contracts or []:
     sig = str(c.get("signal") or "")
-    if sig not in ("LEAN YES", "LEAN NO"):
+    if not is_actionable_buy(sig):
       continue
     floor = c.get("floor_strike")
     cap = c.get("cap_strike")
@@ -132,16 +134,6 @@ def band_outcome_from_row(row: dict[str, Any], prefix: str) -> int | None:
   except (TypeError, ValueError):
     return None
   return 1 if lo_f <= s <= hi_f else 0
-
-
-def signal_correct_for_outcome(signal: str | None, outcome: int, model_prob: float | None) -> bool:
-  sig = str(signal or "")
-  if sig in ("LEAN YES", "VALUE YES"):
-    return outcome == 1
-  if sig in ("LEAN NO", "FADE YES"):
-    return outcome == 0
-  prob = float(model_prob if model_prob is not None else 0.5)
-  return (prob >= 0.5) == bool(outcome)
 
 
 def range_band_migrations() -> tuple[tuple[str, str], ...]:

@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.trading.contract_signals import BUY_NO, BUY_YES, FADE_YES, NEUTRAL, VALUE_YES
+
 from src.data.kalshi_daily import DailyEventBook, KalshiContractMarket, KalshiDailyMarkets
 from src.features.levels import (
   ConsolidationBox,
@@ -32,7 +34,7 @@ class ContractOdds:
   model_prob: float
   kalshi_mid: float | None
   edge: float | None
-  signal: str  # LEAN YES | LEAN NO | NEUTRAL
+  signal: str  # BUY YES | BUY NO | NEUTRAL | VALUE YES | FADE YES
   strike_type: str
   floor_strike: float | None
   cap_strike: float | None
@@ -144,15 +146,15 @@ class DailyPredictor:
     return float(np.clip(prob, 0.02, 0.98)), notes[:3]
 
   def _signal(self, model_p: float, kalshi_mid: float | None) -> tuple[str, float | None]:
-    """Range-band mispricing vs Kalshi YES mid."""
+    """Range band: explicit Kalshi leg when model vs market diverges."""
     edge = None
     if kalshi_mid is not None:
       edge = model_p - kalshi_mid
       if edge >= self.min_edge:
-        return "LEAN YES", edge
+        return BUY_YES, edge
       if edge <= -self.min_edge:
-        return "LEAN NO", edge
-    return "NEUTRAL", edge
+        return BUY_NO, edge
+    return NEUTRAL, edge
 
   def _signal_threshold(
     self,
@@ -160,20 +162,20 @@ class DailyPredictor:
     kalshi_mid: float | None,
     strike_type: str,
   ) -> tuple[str, float | None]:
-    """Threshold signal — LEAN only when model direction and edge agree.
+    """Threshold — BUY YES/NO when model direction and edge agree.
 
-    ≥ strike: model >50% + cheap YES → LEAN YES; model <50% + rich YES → LEAN NO.
+    ≥ strike: model >50% + cheap YES → BUY YES; model <50% + rich YES → BUY NO.
     Otherwise mispricing is tagged VALUE YES (cheap tail) or FADE YES (rich ITM).
     """
     if kalshi_mid is None:
-      return "NEUTRAL", None
+      return NEUTRAL, None
     edge = model_p - kalshi_mid
     if abs(edge) < self.min_edge:
-      return "NEUTRAL", edge
+      return NEUTRAL, edge
     favors_yes = model_p >= 0.5
     if edge > 0:
-      return ("LEAN YES" if favors_yes else "VALUE YES"), edge
-    return ("LEAN NO" if not favors_yes else "FADE YES"), edge
+      return (BUY_YES if favors_yes else VALUE_YES), edge
+    return (BUY_NO if not favors_yes else FADE_YES), edge
 
   @staticmethod
   def _threshold_strike(m: KalshiContractMarket) -> float | None:

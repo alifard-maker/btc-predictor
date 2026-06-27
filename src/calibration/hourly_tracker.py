@@ -28,6 +28,7 @@ from src.models.hourly_range_log import (
   parse_lean_bands,
   signal_correct_for_outcome,
 )
+from src.trading.contract_signals import is_buy_no, is_buy_yes, primary_pick_correct
 
 
 def _archive_path(cfg: dict[str, Any]) -> Path:
@@ -104,16 +105,11 @@ class HourlyCalibrationTracker:
 
   def _correct(self, df: pd.DataFrame) -> pd.Series:
     def _row(r: pd.Series) -> bool:
-      sig = str(r.get("primary_signal") or "")
-      outcome = r.get("outcome")
-      if outcome is None or (isinstance(outcome, float) and pd.isna(outcome)):
-        return False
-      if sig == "LEAN YES":
-        return bool(outcome)
-      if sig == "LEAN NO":
-        return not bool(outcome)
-      prob = float(r.get("primary_model_prob") or 0.5)
-      return (prob >= 0.5) == bool(outcome)
+      return primary_pick_correct(
+        r.get("primary_signal"),
+        r.get("outcome"),
+        r.get("primary_model_prob"),
+      )
     return df.apply(_row, axis=1)
 
   def _rolling(self, df: pd.DataFrame, windows=None) -> dict[str, dict[str, Any]]:
@@ -181,9 +177,9 @@ class HourlyCalibrationTracker:
       ),
       axis=1,
     )
-    leans = sub[sub[signal_col].isin(["LEAN YES", "LEAN NO"])]
-    yes_rows = leans[leans[signal_col] == "LEAN YES"]
-    no_rows = leans[leans[signal_col] == "LEAN NO"]
+    actionable = sub[sub[signal_col].apply(lambda s: is_buy_yes(s) or is_buy_no(s))]
+    yes_rows = actionable[actionable[signal_col].apply(is_buy_yes)]
+    no_rows = actionable[actionable[signal_col].apply(is_buy_no)]
 
     return {
       "n": int(len(sub)),
@@ -225,7 +221,7 @@ class HourlyCalibrationTracker:
     return {"n": int(len(sub)), "in_zone_rate": float(inside.mean())}
 
   def _all_lean_bands_stats(self, df: pd.DataFrame) -> dict[str, Any]:
-    """Every LEAN YES/NO range band frozen in range_lean_bands @ lock."""
+    """Every BUY YES/NO range band frozen in range_lean_bands @ lock."""
     if df.empty or "range_lean_bands" not in df.columns:
       return {"n": 0}
     records: list[dict[str, Any]] = []
@@ -254,8 +250,8 @@ class HourlyCalibrationTracker:
     if not records:
       return {"n": 0, "n_hours_with_lean": hours_with_lean}
     rec = pd.DataFrame(records)
-    yes = rec[rec["signal"] == "LEAN YES"]
-    no = rec[rec["signal"] == "LEAN NO"]
+    yes = rec[rec["signal"].apply(is_buy_yes)]
+    no = rec[rec["signal"].apply(is_buy_no)]
     probs = pd.to_numeric(rec["model_prob"], errors="coerce")
     outcomes = rec["outcome"].astype(int)
     prob_valid = probs.notna()
@@ -315,9 +311,9 @@ class HourlyCalibrationTracker:
     valid = probs.notna() & df["outcome"].notna()
     brier = float(((probs[valid] - df.loc[valid, "outcome"]) ** 2).mean()) if valid.any() else None
 
-    leans = df[df["primary_signal"].isin(["LEAN YES", "LEAN NO"])]
-    yes_rows = leans[leans["primary_signal"] == "LEAN YES"]
-    no_rows = leans[leans["primary_signal"] == "LEAN NO"]
+    actionable = df[df["primary_signal"].apply(lambda s: is_buy_yes(s) or is_buy_no(s))]
+    yes_rows = actionable[actionable["primary_signal"].apply(is_buy_yes)]
+    no_rows = actionable[actionable["primary_signal"].apply(is_buy_no)]
 
     open_agg, _, _, _, _, _, _ = epoch_aggs_from_df(
       epoch_df,

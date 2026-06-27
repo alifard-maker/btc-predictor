@@ -299,12 +299,12 @@
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>LEAN YES/NO</strong> = model direction and Kalshi edge agree on this strike. <strong>VALUE YES</strong> = cheap OTM tail; <strong>FADE YES</strong> = Kalshi overpriced vs model on a likely leg.</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>BUY YES / BUY NO</strong> = explicit Kalshi leg when model direction and edge agree. <strong>VALUE YES</strong> = cheap OTM tail; <strong>FADE YES</strong> = Kalshi overpriced vs model on a likely leg.</p>
         <div id="daily-threshold"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
         <h2>Strategy 2 · Range bands (stall zone)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 range bands nearest forecast μ — sorted by model probability. Highest-mass band tagged most likely.</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 range bands nearest forecast μ — sorted by model probability. <strong>BUY YES</strong> = buy Yes on <em>this band settles here</em> (model underpriced). <strong>BUY NO</strong> = buy No on <em>this band</em> (model overpriced). Neighboring bands are separate contracts.</p>
         <div id="daily-range-summary" style="margin-bottom:.75rem"></div>
         <div id="daily-range"><p class="muted">Loading…</p></div>
       </div>
@@ -335,12 +335,12 @@
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>LEAN YES/NO</strong> = model direction and Kalshi edge agree on this strike.</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>BUY YES / BUY NO</strong> = explicit Kalshi leg when model direction and edge agree.</p>
         <div id="eth-daily-threshold"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
         <h2>Strategy 2 · Range bands (stall zone)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 range bands nearest forecast μ — sorted by model probability.</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 range bands nearest forecast μ. <strong>BUY YES</strong> = buy Yes on this band; <strong>BUY NO</strong> = buy No on this band (not “near the forecast”).</p>
         <div id="eth-daily-range-summary" style="margin-bottom:.75rem"></div>
         <div id="eth-daily-range"><p class="muted">Loading…</p></div>
       </div>
@@ -384,6 +384,11 @@
     const pct = (n) => (n * 100).toFixed(1) + '%';
     const price = (n) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const signedPrice = (n) => (Number(n) >= 0 ? '+' : '−') + price(Math.abs(Number(n)));
+    const isBuyYes = (sig) => sig === 'BUY YES' || sig === 'LEAN YES';
+    const isBuyNo = (sig) => sig === 'BUY NO' || sig === 'LEAN NO';
+    const isYesLeg = (sig) => isBuyYes(sig) || sig === 'VALUE YES';
+    const isNoLeg = (sig) => isBuyNo(sig) || sig === 'FADE YES';
+    const signalEdgeCls = (sig) => isYesLeg(sig) ? 'edge-yes' : isNoLeg(sig) ? 'edge-no' : 'muted';
     const time = (s) => new Date(s).toLocaleString('en-US', {
       timeZone: TZ, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true
     });
@@ -1042,23 +1047,23 @@
       }).join('');
     }
 
-    function renderLockedLeanBands(bands, settleBrti) {
+    function renderLockedBuyBands(bands, settleBrti) {
       if (!bands || !bands.length) {
-        return `<p class="muted" style="font-size:.72rem;margin:.65rem 0 0">No LEAN YES/NO bands in the near-μ slice at lock.</p>`;
+        return `<p class="muted" style="font-size:.72rem;margin:.65rem 0 0">No BUY YES/NO bands in the near-μ slice at lock.</p>`;
       }
       const rows = bands.map((r) => {
         const edge = r.edge != null ? (r.edge >= 0 ? '+' : '') + (r.edge * 100).toFixed(1) + '¢' : '—';
-        const edgeCls = contractSignalCls(r.signal);
+        const edgeCls = signalEdgeCls(r.signal);
         const lo = r.floor_strike ?? r.floor;
         const hi = r.cap_strike ?? r.cap;
         let settleCell = '<span class="muted">—</span>';
         if (settleBrti != null && lo != null && hi != null) {
           const settle = Number(settleBrti);
           const inBand = settle >= Number(lo) && settle <= Number(hi);
-          const leanOk = (r.signal === 'LEAN YES' && inBand) || (r.signal === 'LEAN NO' && !inBand);
+          const buyOk = (isBuyYes(r.signal) && inBand) || (isBuyNo(r.signal) && !inBand);
           settleCell = inBand
-            ? `<span class="up" style="font-size:.72rem">IN BAND</span>${leanOk ? ' ✓' : ' ✗'}`
-            : `<span class="down" style="font-size:.72rem">OUT</span>${leanOk ? ' ✓' : ' ✗'}`;
+            ? `<span class="up" style="font-size:.72rem">IN BAND</span>${buyOk ? ' ✓' : ' ✗'}`
+            : `<span class="down" style="font-size:.72rem">OUT</span>${buyOk ? ' ✓' : ' ✗'}`;
         }
         return `<tr>
           <td style="font-size:.78rem">${r.label || '—'}</td>
@@ -1070,14 +1075,14 @@
         </tr>`;
       }).join('');
       return `<div style="margin-top:.65rem">
-        <h4 style="font-size:.78rem;margin:0 0 .35rem;color:var(--muted)">Locked LEAN bands @ :05 <span style="font-weight:400">(${bands.length} scored)</span></h4>
+        <h4 style="font-size:.78rem;margin:0 0 .35rem;color:var(--muted)">Locked BUY signals @ :05 <span style="font-weight:400">(${bands.length} scored)</span></h4>
         <div style="overflow-x:auto">
           <table>
             <thead><tr><th>Band</th><th>Model</th><th>Kalshi</th><th>Edge</th><th>Signal</th><th>Settle</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
-        <p class="muted" style="font-size:.68rem;margin-top:.35rem">Frozen from the near-μ slice — same rows as calibration · All LEAN bands @ lock.</p>
+        <p class="muted" style="font-size:.68rem;margin-top:.35rem">Frozen from the near-μ slice — same rows as calibration · All BUY-signal bands @ lock.</p>
       </div>`;
     }
 
@@ -1109,8 +1114,8 @@
             ${renderLikelyPick('Most likely band', lockedMl)}
             ${renderLikelyPick('Best band edge @ lock', lockedBe)}
           </div>
-          ${renderLockedLeanBands(lockedLean, settleBrti)}
-          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Most likely / best edge + all LEAN bands above are frozen for scoring — contract table below is live only.</p>
+          ${renderLockedBuyBands(lockedLean, settleBrti)}
+          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Most likely / best edge + all BUY signals above are frozen for scoring — contract table below is live only.</p>
         </div>` : `<div class="likely-card" style="border-color:rgba(245,158,11,.35);margin-bottom:.65rem">
           <h3>Awaiting range lock · :05 ET</h3>
           <p class="muted" style="font-size:.85rem">Preview: ${liveMl?.label || '—'}${liveMl?.model_prob != null ? ` (${pct(liveMl.model_prob)})` : ''}</p>
@@ -1185,9 +1190,7 @@
     }
 
     function contractSignalCls(sig) {
-      if (sig === 'LEAN YES' || sig === 'VALUE YES') return 'edge-yes';
-      if (sig === 'LEAN NO' || sig === 'FADE YES') return 'edge-no';
-      return 'muted';
+      return signalEdgeCls(sig);
     }
 
     function renderDailyContracts(rows, containerId, highlightLabels) {
@@ -1251,8 +1254,8 @@
           ${st.in_band_rate != null ? `<div><span>In-band hit rate</span><strong>${pct(st.in_band_rate)}</strong></div>` : ''}
           ${st.brier_score != null ? `<div><span>Brier</span><strong>${st.brier_score.toFixed(4)}</strong></div>` : ''}
           ${st.mean_calibration_error != null ? `<div><span>Cal error</span><strong>${pct(st.mean_calibration_error)}</strong></div>` : ''}
-          ${st.lean_yes_signals ? `<div><span>LEAN YES</span><strong>${st.lean_yes_accuracy != null ? pct(st.lean_yes_accuracy) : '—'} (${st.lean_yes_signals})</strong></div>` : ''}
-          ${st.lean_no_signals ? `<div><span>LEAN NO</span><strong>${st.lean_no_accuracy != null ? pct(st.lean_no_accuracy) : '—'} (${st.lean_no_signals})</strong></div>` : ''}
+          ${st.lean_yes_signals ? `<div><span>BUY YES</span><strong>${st.lean_yes_accuracy != null ? pct(st.lean_yes_accuracy) : '—'} (${st.lean_yes_signals})</strong></div>` : ''}
+          ${st.lean_no_signals ? `<div><span>BUY NO</span><strong>${st.lean_no_accuracy != null ? pct(st.lean_no_accuracy) : '—'} (${st.lean_no_signals})</strong></div>` : ''}
         </div>
       </div>`;
     }
@@ -1277,15 +1280,15 @@
             <div><span>Resolved</span><strong>${s.n_resolved || 0}</strong></div>
             ${s.brier_score != null ? `<div><span>Brier</span><strong>${s.brier_score.toFixed(4)}</strong></div>` : ''}
             ${s.accuracy != null ? `<div><span>Signal accuracy</span><strong>${pct(s.accuracy)}</strong></div>` : ''}
-            ${s.lean_yes_signals ? `<div><span>LEAN YES</span><strong>${s.lean_yes_accuracy != null ? pct(s.lean_yes_accuracy) : '—'} (${s.lean_yes_signals})</strong></div>` : ''}
-            ${s.lean_no_signals ? `<div><span>LEAN NO</span><strong>${s.lean_no_accuracy != null ? pct(s.lean_no_accuracy) : '—'} (${s.lean_no_signals})</strong></div>` : ''}
+            ${s.lean_yes_signals ? `<div><span>BUY YES</span><strong>${s.lean_yes_accuracy != null ? pct(s.lean_yes_accuracy) : '—'} (${s.lean_yes_signals})</strong></div>` : ''}
+            ${s.lean_no_signals ? `<div><span>BUY NO</span><strong>${s.lean_no_accuracy != null ? pct(s.lean_no_accuracy) : '—'} (${s.lean_no_signals})</strong></div>` : ''}
           </div>
         </div>
         <div class="stats-block epoch" style="margin-top:.75rem">
           <h3>Strategy 2 · Range bands</h3>
           <p class="muted" style="font-size:.72rem;margin-bottom:.35rem">Locked stall bands @ :05 — did settle ${idx} land inside each band?</p>
-          ${renderHourlyBandStats('All LEAN bands @ lock', sr.all_lean_bands)}
-          ${sr.all_lean_bands?.n_hours_with_lean ? `<p class="muted" style="font-size:.7rem;margin:-.25rem 0 .5rem">Every LEAN YES/NO in the near-μ slice (${sr.all_lean_bands.n_hours_with_lean} hours with ≥1 lean band).</p>` : ''}
+          ${renderHourlyBandStats('All BUY-signal bands @ lock', sr.all_lean_bands)}
+          ${sr.all_lean_bands?.n_hours_with_lean ? `<p class="muted" style="font-size:.7rem;margin:-.25rem 0 .5rem">Every BUY YES/NO in the near-μ slice (${sr.all_lean_bands.n_hours_with_lean} hours with ≥1 signal).</p>` : ''}
           ${renderHourlyBandStats('Most likely band @ lock', sr.most_likely_band)}
           ${renderHourlyBandStats('Best edge band @ lock', sr.best_edge_band)}
           ${sr.settlement_zone?.n ? `<div style="margin-top:.35rem"><h4 style="font-size:.8rem;margin:0 0 .35rem;color:var(--muted)">Settlement zone @ lock</h4><div class="cal-stats"><div><span>Scored</span><strong>${sr.settlement_zone.n}</strong></div><div><span>${idx} in zone</span><strong>${pct(sr.settlement_zone.in_zone_rate)}</strong></div></div></div>` : ''}
@@ -1295,8 +1298,8 @@
     function hourlyPickWrong(r) {
       if (r.outcome == null) return null;
       const sig = r.primary_signal || '';
-      if (sig === 'LEAN YES' || sig === 'VALUE YES') return !r.outcome;
-      if (sig === 'LEAN NO' || sig === 'FADE YES') return !!r.outcome;
+      if (isYesLeg(sig)) return !r.outcome;
+      if (isNoLeg(sig)) return !!r.outcome;
       return null;
     }
 
@@ -1364,7 +1367,7 @@
 
     function renderHourlySignalCard(title, pick, data, regime, extra = '') {
       const pickSig = pick?.signal || 'NEUTRAL';
-      const pickCls = pickSig === 'LEAN YES' ? 'edge-yes' : pickSig === 'LEAN NO' ? 'edge-no' : 'muted';
+      const pickCls = signalEdgeCls(pickSig);
       return `<div class="likely-card" style="border-color:rgba(99,102,241,.45)">
         <h3>${title}</h3>
         <div class="headline ${pickCls}">${pickSig}${pick?.label ? ` · ${pick.label}` : ''}</div>
@@ -1426,7 +1429,7 @@
       } else {
         const lpick = live.primary_pick || beT;
         const pickSig = lpick?.signal || 'NEUTRAL';
-        const pickCls = pickSig === 'LEAN YES' ? 'edge-yes' : pickSig === 'LEAN NO' ? 'edge-no' : 'muted';
+        const pickCls = signalEdgeCls(pickSig);
         h$('daily-primary-signal').innerHTML = `<div class="likely-card" style="border-color:rgba(245,158,11,.35)">
           <h3>Awaiting lock · :05 ET</h3>
           <p class="muted" style="font-size:.85rem;margin-bottom:.5rem">Preview only — primary signal and settlement range freeze at :05 ET for scoring.</p>
@@ -1467,7 +1470,7 @@
             ${renderLikelyPick('Threshold mispricing', beT)}
             ${renderLikelyPick('Range mispricing', beR)}
           </div>
-          ${beT?.signal ? `<p class="muted" style="font-size:.75rem;margin-top:.5rem">Live threshold signal: <strong class="${beT.signal === 'LEAN YES' ? 'edge-yes' : beT.signal === 'LEAN NO' ? 'edge-no' : ''}">${beT.signal}</strong>${beT.edge != null ? ` (${beT.edge >= 0 ? '+' : ''}${(beT.edge * 100).toFixed(1)}¢)` : ''}</p>` : ''}
+          ${beT?.signal ? `<p class="muted" style="font-size:.75rem;margin-top:.5rem">Live threshold signal: <strong class="${signalEdgeCls(beT.signal)}">${beT.signal}</strong>${beT.edge != null ? ` (${beT.edge >= 0 ? '+' : ''}${(beT.edge * 100).toFixed(1)}¢)` : ''}</p>` : ''}
         </div>`;
       renderDailyContracts(live.strategy_threshold?.contracts || [], 'daily-threshold', {
         safest: live.strategy_threshold?.most_likely?.label,

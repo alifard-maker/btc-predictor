@@ -347,7 +347,7 @@ def build_hourly_guidance(
     "regime_note": (
       book_note
       or (
-        "Regime filter blocked LEAN signals — safest action is NEUTRAL / watch locked range only."
+        "Regime filter blocked BUY YES/NO signals — safest action is NEUTRAL / watch locked range only."
         if not regime.get("allow_trade", True) and primary_sig in (None, "NEUTRAL")
         else None
       )
