@@ -1060,6 +1060,7 @@
         <p class="muted" style="font-size:.8rem;margin-bottom:.75rem">${iv.summary || ''} ${iv.predictability_note || ''}</p>
         <div class="guide-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">${tiers}</div>
         ${g.regime_note ? `<p class="muted" style="font-size:.75rem;margin:.65rem 0;padding:.5rem;border-left:3px solid #f59e0b">${g.regime_note}</p>` : ''}
+        ${g.book_note && !g.regime_note ? `<p class="muted" style="font-size:.75rem;margin:.65rem 0;padding:.5rem;border-left:3px solid #ef4444">${g.book_note}</p>` : ''}
         <p class="muted" style="font-size:.72rem;margin:.75rem 0 .35rem"><strong>Which tab?</strong> ${g.which_tab?.use_15m || ''} · ${g.which_tab?.use_this_tab || ''}</p>
         <p class="muted" style="font-size:.72rem;margin-bottom:.65rem"><strong>Locked vs live:</strong> ${g.locked_vs_live?.locked || ''} · ${g.locked_vs_live?.live || ''}</p>
         <details id="hourly-guide-cheat" style="font-size:.78rem"${hourlyGuideCheatOpen ? ' open' : ''}>

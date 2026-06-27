@@ -73,7 +73,8 @@ class KalshiDailyMarkets:
       dcfg.get("threshold_series", ["BTCD", "KXBTCD"])
     )
     self.range_series: list[str] = list(dcfg.get("range_series", ["BTC", "KXBTC"]))
-    self.max_markets_per_event = int(dcfg.get("max_markets_per_event", 200))
+    self.max_markets_per_event = int(dcfg.get("max_markets_per_event", 1000))
+    self.max_event_candidates = int(dcfg.get("max_event_candidates", 6))
 
   def _parse_market(self, row: dict[str, Any], series: str) -> KalshiContractMarket | None:
     close_raw = row.get("close_time")
@@ -97,17 +98,20 @@ class KalshiDailyMarkets:
       series_ticker=series,
     )
 
-  def _fetch_open_markets(self, series: str) -> list[KalshiContractMarket]:
+  def _fetch_open_markets(self, series: str, *, event_ticker: str | None = None) -> list[KalshiContractMarket]:
+    """Fetch open markets — prefer event_ticker to get the full strike ladder."""
     if not self.kalshi.enabled:
       return []
+    if event_ticker:
+      return self._fetch_event_markets(series, event_ticker)
     out: list[KalshiContractMarket] = []
     cursor: str | None = None
     pages = 0
-    while pages < 5 and len(out) < self.max_markets_per_event:
+    while pages < 10 and len(out) < self.max_markets_per_event:
       params: dict[str, Any] = {
         "series_ticker": series,
         "status": "open",
-        "limit": 200,
+        "limit": min(1000, self.max_markets_per_event),
       }
       if cursor:
         params["cursor"] = cursor
@@ -126,82 +130,188 @@ class KalshiDailyMarkets:
         break
     return out
 
-  def _pick_nearest_event(
+  def _fetch_event_markets(self, series: str, event_ticker: str) -> list[KalshiContractMarket]:
+    out: list[KalshiContractMarket] = []
+    cursor: str | None = None
+    pages = 0
+    while pages < 10 and len(out) < self.max_markets_per_event:
+      params: dict[str, Any] = {
+        "event_ticker": event_ticker,
+        "status": "open",
+        "limit": min(1000, self.max_markets_per_event),
+      }
+      if cursor:
+        params["cursor"] = cursor
+      try:
+        data = self.kalshi.get("/markets", params=params)
+      except Exception as e:
+        log.warning("Kalshi %s event %s markets failed: %s", series, event_ticker, e)
+        break
+      for row in data.get("markets", []):
+        m = self._parse_market(row, series)
+        if m:
+          out.append(m)
+      cursor = data.get("cursor")
+      pages += 1
+      if not cursor:
+        break
+    return out
+
+  def _fetch_open_events(self, series: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    cursor: str | None = None
+    pages = 0
+    while pages < 10:
+      params: dict[str, Any] = {
+        "series_ticker": series,
+        "status": "open",
+        "limit": 200,
+      }
+      if cursor:
+        params["cursor"] = cursor
+      try:
+        data = self.kalshi.get("/events", params=params)
+      except Exception as e:
+        log.warning("Kalshi %s events fetch failed: %s", series, e)
+        break
+      out.extend(data.get("events", []))
+      cursor = data.get("cursor")
+      pages += 1
+      if not cursor:
+        break
+    return out
+
+  @staticmethod
+  def _event_strike_time(event: dict[str, Any]) -> datetime | None:
+    raw = event.get("strike_date")
+    if not raw:
+      return None
+    return KalshiClient._parse_ts(raw)
+
+  def _rank_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Soonest-settling open events first."""
+    now = datetime.now(timezone.utc)
+    ranked: list[tuple[float, dict[str, Any]]] = []
+    for event in events:
+      close = self._event_strike_time(event)
+      if close is None or close <= now:
+        continue
+      hours = (close - now).total_seconds() / 3600.0
+      if hours > 48:
+        continue
+      ranked.append((hours, event))
+    ranked.sort(key=lambda x: x[0])
+    return [e for _, e in ranked[: self.max_event_candidates]]
+
+  def _ranges_for_threshold_event(
+    self,
+    range_series: str,
+    threshold_event: str,
+    ref_close: datetime,
+  ) -> list[KalshiContractMarket]:
+    range_events = self._fetch_open_events(range_series)
+    if not range_events:
+      return []
+    suffix = threshold_event.split("-", 1)[-1] if "-" in threshold_event else ""
+    best_ticker: str | None = None
+    best_delta = float("inf")
+    for event in range_events:
+      ticker = str(event.get("event_ticker", ""))
+      if suffix and ticker.endswith(suffix):
+        best_ticker = ticker
+        best_delta = 0.0
+        break
+      close = self._event_strike_time(event)
+      if close is None:
+        continue
+      delta = abs((close - ref_close).total_seconds())
+      if delta < best_delta:
+        best_delta = delta
+        best_ticker = ticker
+    if not best_ticker or best_delta > 120:
+      return []
+    return [
+      m
+      for m in self._fetch_event_markets(range_series, best_ticker)
+      if m.strike_type == "between"
+    ]
+
+  @staticmethod
+  def _threshold_strike_values(markets: list[KalshiContractMarket]) -> list[float]:
+    out: list[float] = []
+    for m in markets:
+      if m.strike_type == "greater" and m.floor_strike is not None:
+        out.append(float(m.floor_strike))
+      elif m.strike_type == "less" and m.cap_strike is not None:
+        out.append(float(m.cap_strike))
+    return out
+
+  @staticmethod
+  def _band_mids(markets: list[KalshiContractMarket]) -> list[float]:
+    mids: list[float] = []
+    for m in markets:
+      if m.strike_type != "between":
+        continue
+      low = float(m.floor_strike or 0)
+      high = float(m.cap_strike or low)
+      if low > 0 and high > low:
+        mids.append((low + high) / 2)
+    return mids
+
+  def _event_bracket_score(
     self,
     markets: list[KalshiContractMarket],
-  ) -> str | None:
+    reference_price: float,
+  ) -> float:
+    """Higher = strikes/bands better bracket reference BRTI."""
+    thresholds = [m for m in markets if m.strike_type in ("greater", "less")]
+    ranges = [m for m in markets if m.strike_type == "between"]
+    strikes = self._threshold_strike_values(thresholds)
+    mids = self._band_mids(ranges)
+    score = 0.0
+    if strikes:
+      lo, hi = min(strikes), max(strikes)
+      if lo <= reference_price <= hi:
+        nearest = min(strikes, key=lambda s: abs(s - reference_price))
+        score += 10_000 - abs(nearest - reference_price)
+      else:
+        gap = min(abs(reference_price - lo), abs(reference_price - hi))
+        score -= gap
+    if mids:
+      if any(
+        float(m.floor_strike or 0) <= reference_price <= float(m.cap_strike or 0)
+        for m in ranges
+      ):
+        score += 5_000
+      else:
+        nearest_mid = min(mids, key=lambda m: abs(m - reference_price))
+        score -= abs(nearest_mid - reference_price)
     now = datetime.now(timezone.utc)
-    by_event: dict[str, list[KalshiContractMarket]] = {}
-    for m in markets:
-      if m.open_time <= now < m.close_time:
-        by_event.setdefault(m.event_ticker, []).append(m)
-    if not by_event:
-      # fallback: soonest close among open status markets
-      for m in markets:
-        if m.close_time > now:
-          by_event.setdefault(m.event_ticker, []).append(m)
-    if not by_event:
+    hours_left = max(0.1, (min(m.close_time for m in markets) - now).total_seconds() / 3600)
+    if hours_left <= 2:
+      score += 500
+    return score
+
+  def _make_book(
+    self,
+    thresholds: list[KalshiContractMarket],
+    ranges: list[KalshiContractMarket],
+    used_threshold_series: str,
+    used_range_series: str,
+  ) -> DailyEventBook | None:
+    if not thresholds and not ranges:
       return None
-    return min(by_event.keys(), key=lambda ev: min(x.close_time for x in by_event[ev]))
-
-  def active_book(self) -> DailyEventBook | None:
-    """Nearest settling event with threshold + range legs."""
-    threshold_all: list[KalshiContractMarket] = []
-    range_all: list[KalshiContractMarket] = []
-    used_threshold_series = ""
-    used_range_series = ""
-
-    for series in self.threshold_series:
-      batch = self._fetch_open_markets(series)
-      if batch:
-        threshold_all = batch
-        used_threshold_series = series
-        break
-
-    for series in self.range_series:
-      batch = self._fetch_open_markets(series)
-      if batch:
-        range_all = batch
-        used_range_series = series
-        break
-
-    if not threshold_all and not range_all:
-      return None
-
-    event = self._pick_nearest_event(threshold_all or range_all)
-    if not event:
-      return None
-
-    thresholds = [
-      m for m in threshold_all
-      if m.event_ticker == event and m.strike_type in ("greater", "less")
-    ]
-    ref_close = thresholds[0].close_time if thresholds else None
-    if ref_close is None and range_all:
-      ref_close = min(m.close_time for m in range_all)
-
-    ranges = [m for m in range_all if m.strike_type == "between"]
-    if ref_close is not None:
-      ranges = [
-        m for m in ranges
-        if abs((m.close_time - ref_close).total_seconds()) < 120
-      ]
-    else:
-      ranges = [m for m in ranges if m.event_ticker == event]
-
-    ref = thresholds[0] if thresholds else (ranges[0] if ranges else None)
-    if not ref:
-      return None
+    ref = thresholds[0] if thresholds else ranges[0]
 
     freq = "daily" if used_threshold_series in ("BTCD", "BTC") else "hourly"
     if used_threshold_series.startswith("KX") or used_range_series.startswith("KX"):
       freq = "hourly" if freq != "daily" else freq
 
-    thresholds.sort(key=lambda m: m.floor_strike or 0)
-    ranges.sort(key=lambda m: m.floor_strike or 0)
+    thresholds = sorted(thresholds, key=lambda m: m.floor_strike or m.cap_strike or 0)
+    ranges = sorted(ranges, key=lambda m: m.floor_strike or 0)
 
     return DailyEventBook(
-      event_ticker=event,
+      event_ticker=ref.event_ticker,
       series_ticker=used_threshold_series or used_range_series,
       frequency=freq,
       close_time=ref.close_time,
@@ -209,3 +319,50 @@ class KalshiDailyMarkets:
       threshold_markets=thresholds,
       range_markets=ranges,
     )
+
+  def active_book(self, reference_price: float | None = None) -> DailyEventBook | None:
+    """Pick soonest Kalshi event and load its full strike ladder via event_ticker."""
+    candidates: list[tuple[float, DailyEventBook]] = []
+
+    for thresh_series in self.threshold_series:
+      for event in self._rank_events(self._fetch_open_events(thresh_series)):
+        event_ticker = str(event.get("event_ticker", ""))
+        if not event_ticker:
+          continue
+        threshold_all = [
+          m
+          for m in self._fetch_event_markets(thresh_series, event_ticker)
+          if m.strike_type in ("greater", "less")
+        ]
+        if not threshold_all:
+          continue
+        ref_close = threshold_all[0].close_time
+
+        for range_series in self.range_series:
+          ranges = self._ranges_for_threshold_event(
+            range_series, event_ticker, ref_close
+          )
+          book = self._make_book(
+            threshold_all, ranges, thresh_series, range_series
+          )
+          if not book:
+            continue
+
+          score = 0.0
+          if reference_price and reference_price > 0:
+            score = self._event_bracket_score(
+              book.threshold_markets + book.range_markets,
+              reference_price,
+            )
+            if thresh_series.startswith("KX"):
+              score += 250
+            if range_series.startswith("KX"):
+              score += 100
+          else:
+            score = 1.0
+
+          candidates.append((score, book))
+
+    if not candidates:
+      return None
+    return max(candidates, key=lambda x: x[0])[1]

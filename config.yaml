@@ -121,10 +121,12 @@ second_chance:
 # Kalshi daily / hourly threshold + range contracts (separate tab on dashboard)
 daily:
   enabled: true
-  threshold_series: [BTCD, KXBTCD]   # try daily first, then hourly
-  range_series: [BTC, KXBTC]
+  threshold_series: [KXBTCD, BTCD]   # hourly first — must bracket live BRTI
+  range_series: [KXBTC, BTC]
   nearby_strikes: 11
   top_bands: 15
+  max_markets_per_event: 1000
+  max_event_candidates: 6
   strike_sigma_window: 2.5
   band_sigma_window: 2.5
   min_edge: 0.05

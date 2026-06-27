@@ -5,17 +5,74 @@ from __future__ import annotations
 from typing import Any
 
 
+from typing import Any
+
+
+def _forecast_mu_sigma(data: dict[str, Any]) -> tuple[float | None, float | None]:
+  mu = data.get("terminal_mu") or data.get("blended_mu")
+  sigma = data.get("terminal_sigma")
+  if mu is None or sigma is None:
+    return None, None
+  return float(mu), float(sigma)
+
+
+def _near_forecast(
+  row: dict[str, Any] | None,
+  mu: float | None,
+  sigma: float | None,
+  *,
+  window_mult: float = 2.5,
+) -> bool:
+  if not row or mu is None or sigma is None:
+    return False
+  window = max(sigma * window_mult, mu * 0.003)
+  if row.get("contract_type") == "range":
+    lo, hi = row.get("floor_strike"), row.get("cap_strike")
+    if lo is not None and hi is not None:
+      lo_f, hi_f = float(lo), float(hi)
+      return lo_f <= mu <= hi_f or abs((lo_f + hi_f) / 2 - mu) <= window
+    return False
+  strike = row.get("floor_strike") or row.get("cap_strike")
+  if strike is None:
+    return False
+  return abs(float(strike) - mu) <= window
+
+
 def _pick_safest(live: dict[str, Any], locked: dict[str, Any] | None) -> dict[str, Any] | None:
-  """Highest-probability near-forecast outcome — range band mass or ATM threshold."""
+  """Highest-probability outcome near forecast μ — never a far OTM tail."""
   ref = locked or live
+  mu, sigma = _forecast_mu_sigma(ref if locked else live)
   range_row = (ref.get("strategy_range") or live.get("strategy_range") or {}).get("most_likely")
   thresh_row = (ref.get("strategy_threshold") or live.get("strategy_threshold") or {}).get("most_likely")
   candidates: list[tuple[float, dict[str, Any], str]] = []
-  if range_row and range_row.get("model_prob") is not None:
+  if range_row and range_row.get("model_prob") is not None and _near_forecast(range_row, mu, sigma):
     candidates.append((float(range_row["model_prob"]), range_row, "range"))
-  if thresh_row and thresh_row.get("model_prob") is not None:
+  if (
+    thresh_row
+    and thresh_row.get("model_prob") is not None
+    and float(thresh_row["model_prob"]) >= 0.08
+    and _near_forecast(thresh_row, mu, sigma)
+  ):
     candidates.append((float(thresh_row["model_prob"]), thresh_row, "threshold"))
   if not candidates:
+    zone = (ref.get("most_likely") or live.get("most_likely") or {})
+    if zone.get("settlement_zone_low") is not None:
+      return {
+        "tier": "safest",
+        "title": "Most predictable outcome",
+        "pick_type": "zone",
+        "label": (
+          f"BRTI ${zone['settlement_zone_low']:,.0f}–${zone['settlement_zone_high']:,.0f}"
+        ),
+        "model_prob": None,
+        "signal": "—",
+        "settlement_zone": (
+          f"${zone['settlement_zone_low']:,.0f}–${zone['settlement_zone_high']:,.0f}"
+        ),
+        "reason": (
+          "No Kalshi contract brackets forecast μ — use the settlement zone, not far OTM strikes."
+        ),
+      }
     return None
   prob, row, kind = max(candidates, key=lambda x: x[0])
   return {
@@ -44,12 +101,30 @@ def _pick_locked(locked: dict[str, Any] | None) -> dict[str, Any] | None:
       "label": "—",
       "reason": "Wait for :05 ET — this is the pick scored against actual settle BRTI.",
     }
-  pick = locked.get("primary_pick") or {}
   zone = locked.get("most_likely") or {}
+  mu, sigma = _forecast_mu_sigma(locked)
+  pick = locked.get("primary_pick") or {}
+  range_pick = (locked.get("strategy_range") or {}).get("most_likely")
+  pick_type = pick.get("contract_type", "threshold")
+  if range_pick and not _near_forecast(pick, mu, sigma):
+    pick = range_pick
+    pick_type = "range"
+  elif not _near_forecast(pick, mu, sigma):
+    pick = {
+      "label": (
+        f"BRTI ${zone.get('settlement_zone_low'):,.0f}–${zone.get('settlement_zone_high'):,.0f}"
+        if zone.get("settlement_zone_low") is not None
+        else "Settlement zone"
+      ),
+      "signal": pick.get("signal", "NEUTRAL"),
+      "model_prob": None,
+      "contract_type": "zone",
+    }
+    pick_type = "zone"
   return {
     "tier": "locked",
     "title": "Official scored pick @ lock",
-    "pick_type": pick.get("contract_type", "threshold"),
+    "pick_type": pick_type,
     "label": pick.get("label") or "—",
     "signal": pick.get("signal", "NEUTRAL"),
     "model_prob": pick.get("model_prob"),
@@ -66,9 +141,14 @@ def _pick_locked(locked: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _pick_edge(live: dict[str, Any]) -> dict[str, Any] | None:
+  mu, sigma = _forecast_mu_sigma(live)
   be_t = (live.get("strategy_threshold") or {}).get("best_edge")
   be_r = (live.get("strategy_range") or {}).get("best_edge")
-  candidates = [c for c in (be_t, be_r) if c and c.get("edge") is not None]
+  candidates = [
+    c
+    for c in (be_t, be_r)
+    if c and c.get("edge") is not None and _near_forecast(c, mu, sigma)
+  ]
   if not candidates:
     return None
   row = max(candidates, key=lambda c: abs(float(c["edge"])))
@@ -243,6 +323,13 @@ def build_hourly_guidance(
 
   recs = [r for r in (_pick_safest(live, locked), _pick_locked(locked), _pick_edge(live)) if r]
 
+  book_note = None
+  if live.get("forecast_covers_book") is False:
+    book_note = (
+      "Kalshi book does not bracket forecast μ — contract tables may be empty; "
+      "trust the settlement zone and re-lock at :05 after deploy."
+    )
+
   return {
     "interval": interval,
     "which_tab": {
@@ -258,8 +345,12 @@ def build_hourly_guidance(
     "strategy_range": build_range_strategy_guidance(live, locked),
     "regime_blocked": not regime.get("allow_trade", True),
     "regime_note": (
-      "Regime filter blocked LEAN signals — safest action is NEUTRAL / watch locked range only."
-      if not regime.get("allow_trade", True) and primary_sig in (None, "NEUTRAL")
-      else None
+      book_note
+      or (
+        "Regime filter blocked LEAN signals — safest action is NEUTRAL / watch locked range only."
+        if not regime.get("allow_trade", True) and primary_sig in (None, "NEUTRAL")
+        else None
+      )
     ),
+    "book_note": book_note,
   }

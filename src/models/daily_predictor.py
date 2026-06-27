@@ -262,9 +262,9 @@ class DailyPredictor:
       scored.append((abs(strike - mu), m))
     scored.sort(key=lambda x: x[0])
     in_window = [m for d, m in scored if d <= window]
-    if len(in_window) >= self.nearby_strikes:
+    if in_window:
       return in_window[: self.nearby_strikes]
-    return [m for _, m in scored[: self.nearby_strikes]]
+    return []
 
   def _near_band_markets(
     self,
@@ -287,22 +287,9 @@ class DailyPredictor:
       p = self._prob_between(low, high, mu, sigma)
       scored.append((p, dist, m))
     scored.sort(key=lambda x: (-x[0], x[1]))
-    if len(scored) < self.top_bands:
-      seen = {m.ticker for _, _, m in scored}
-      extra: list[tuple[float, float, KalshiContractMarket]] = []
-      for m in markets:
-        if m.ticker in seen:
-          continue
-        bounds = self._band_bounds(m)
-        if bounds is None:
-          continue
-        low, high = bounds
-        mid = (low + high) / 2
-        p = self._prob_between(low, high, mu, sigma)
-        extra.append((p, abs(mid - mu), m))
-      extra.sort(key=lambda x: (-x[0], x[1]))
-      scored.extend(extra[: max(0, self.top_bands - len(scored))])
-    return [m for _, _, m in scored[: self.top_bands]]
+    if scored:
+      return [m for _, _, m in scored[: self.top_bands]]
+    return []
 
   def _most_likely_threshold(
     self,
@@ -311,7 +298,8 @@ class DailyPredictor:
     sigma: float,
     levels: list[PriceLevel],
   ) -> ContractOdds | None:
-    """ATM threshold — strike nearest blended μ (not deepest ITM ≥ leg)."""
+    """ATM threshold within forecast window — None if book doesn't cover μ."""
+    window = self._mu_window(mu, sigma, self.strike_sigma_window)
     best: ContractOdds | None = None
     best_dist = float("inf")
     for m in markets:
@@ -319,6 +307,8 @@ class DailyPredictor:
       if strike is None:
         continue
       dist = abs(strike - mu)
+      if dist > window:
+        continue
       if dist >= best_dist:
         continue
       row = self._build_threshold_odds(m, mu, sigma, levels)
@@ -335,9 +325,18 @@ class DailyPredictor:
     sigma: float,
     box: ConsolidationBox | None,
   ) -> ContractOdds | None:
+    window = self._mu_window(mu, sigma, self.band_sigma_window)
     best: ContractOdds | None = None
     best_p = -1.0
     for m in markets:
+      bounds = self._band_bounds(m)
+      if bounds is None:
+        continue
+      low, high = bounds
+      mid = (low + high) / 2
+      contains = low <= mu <= high
+      if not contains and abs(mid - mu) > window:
+        continue
       row = self._build_range_odds(m, mu, sigma, box)
       if row is None:
         continue
@@ -345,6 +344,57 @@ class DailyPredictor:
         best_p = row.model_prob
         best = row
     return best
+
+  def _row_near_forecast(
+    self,
+    row: dict[str, Any] | ContractOdds,
+    mu: float,
+    sigma: float,
+  ) -> bool:
+    window = self._mu_window(mu, sigma, self.strike_sigma_window)
+    if isinstance(row, ContractOdds):
+      data = row.to_dict()
+    else:
+      data = row
+    if data.get("contract_type") == "range":
+      lo, hi = data.get("floor_strike"), data.get("cap_strike")
+      if lo is not None and hi is not None:
+        lo_f, hi_f = float(lo), float(hi)
+        return lo_f <= mu <= hi_f or abs((lo_f + hi_f) / 2 - mu) <= window
+      return False
+    strike = data.get("floor_strike") or data.get("cap_strike")
+    if strike is None:
+      return False
+    return abs(float(strike) - mu) <= window
+
+  def _book_covers_forecast(
+    self,
+    book: DailyEventBook,
+    mu: float,
+    sigma: float,
+  ) -> bool:
+    window = self._mu_window(mu, sigma, self.strike_sigma_window)
+    strikes = self._threshold_strike_values(book.threshold_markets)
+    if strikes and min(abs(s - mu) for s in strikes) <= window:
+      return True
+    for m in book.range_markets:
+      bounds = self._band_bounds(m)
+      if bounds is None:
+        continue
+      low, high = bounds
+      if low <= mu <= high or abs((low + high) / 2 - mu) <= window:
+        return True
+    return False
+
+  @staticmethod
+  def _threshold_strike_values(markets: list[KalshiContractMarket]) -> list[float]:
+    out: list[float] = []
+    for m in markets:
+      if m.strike_type == "greater" and m.floor_strike is not None:
+        out.append(float(m.floor_strike))
+      elif m.strike_type == "less" and m.cap_strike is not None:
+        out.append(float(m.cap_strike))
+    return out
 
   @staticmethod
   def _threshold_strike_from_row(row: ContractOdds) -> float | None:
@@ -363,7 +413,7 @@ class DailyPredictor:
     override_mu: float | None = None,
     override_sigma: float | None = None,
   ) -> dict[str, Any]:
-    book = book or self.markets.active_book()
+    book = book or self.markets.active_book(reference_price=current_price)
     now = datetime.now(timezone.utc)
 
     if book is None:
@@ -396,7 +446,10 @@ class DailyPredictor:
         range_rows.append(row)
     range_rows.sort(key=lambda r: r.model_prob, reverse=True)
 
-    best_threshold = max(threshold_rows, key=lambda r: abs(r.edge or 0), default=None)
+    near_threshold_rows = [r for r in threshold_rows if self._row_near_forecast(r, mu, sigma)]
+    near_range_rows = [r for r in range_rows if self._row_near_forecast(r, mu, sigma)]
+
+    best_threshold = max(near_threshold_rows, key=lambda r: abs(r.edge or 0), default=None)
     most_likely_threshold = self._most_likely_threshold(
       book.threshold_markets, mu, sigma, levels
     )
@@ -417,6 +470,8 @@ class DailyPredictor:
     supports = [l for l in levels if l.level_type == "support"][:3]
     resists = [l for l in levels if l.level_type == "resistance"][:3]
 
+    covers = self._book_covers_forecast(book, mu, sigma)
+
     return {
       "ok": True,
       "method": "daily_structure",
@@ -424,6 +479,7 @@ class DailyPredictor:
       "terminal_mu": round(mu, 2),
       "terminal_sigma": round(sigma, 2),
       "hours_to_settle": round(hours_left, 2),
+      "forecast_covers_book": covers,
       "event": {
         "event_ticker": book.event_ticker,
         "series_ticker": book.series_ticker,
@@ -458,7 +514,11 @@ class DailyPredictor:
         "summary": (
           f"Best edge (mispricing): {best_threshold.label} ({best_threshold.signal})"
           if best_threshold and best_threshold.edge is not None
-          else "Threshold odds vs Kalshi YES mid"
+          else (
+            "No threshold near forecast μ — see range bands or settlement zone."
+            if not covers
+            else "Threshold odds vs Kalshi YES mid"
+          )
         ),
         "contracts": [c.to_dict() for c in threshold_rows],
         "best_edge": best_threshold.to_dict() if best_threshold else None,
@@ -468,12 +528,18 @@ class DailyPredictor:
         "summary": (
           f"Most likely stall band: {most_likely_range.label} ({most_likely_range.model_prob * 100:.0f}% model)"
           if most_likely_range
-          else "Range band odds"
+          else (
+            "No range band near forecast μ — Kalshi book may not bracket BRTI."
+            if not covers
+            else "Range band odds"
+          )
         ),
         "contracts": [c.to_dict() for c in range_rows],
-        "best_edge": max(range_rows, key=lambda r: abs(r.edge or 0), default=None).to_dict()
-        if range_rows
-        else None,
+        "best_edge": (
+          max(near_range_rows, key=lambda r: abs(r.edge or 0), default=None).to_dict()
+          if near_range_rows
+          else None
+        ),
         "most_likely": most_likely_range.to_dict() if most_likely_range else None,
       },
     }

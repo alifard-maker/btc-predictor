@@ -131,7 +131,12 @@ class HourlyPredictor:
     prob_15m_avg = self._prob_15m_aggregate(calibration_tracker) if calibration_tracker else None
     ml_prob, _ = self._ml_prob_up(df_1h if df_1h is not None else pd.DataFrame(), df_15m, prob_15m_avg)
 
-    structure_out = self.structure.predict(current_price=current_price, df_1h=df_1h)
+    kalshi_book = self.structure.markets.active_book(reference_price=current_price)
+    structure_out = self.structure.predict(
+      current_price=current_price,
+      df_1h=df_1h,
+      book=kalshi_book,
+    )
     if not structure_out.get("ok"):
       return structure_out
 
@@ -150,15 +155,22 @@ class HourlyPredictor:
     blended = self.structure.predict(
       current_price=current_price,
       df_1h=df_1h,
+      book=kalshi_book,
       override_mu=blended_mu,
       override_sigma=structure_sigma,
     )
     if not blended.get("ok"):
       return blended
 
-    primary = blended.get("strategy_threshold", {}).get("best_edge")
-    most_likely = blended.get("most_likely", {}).get("threshold")
-    pick = primary or most_likely
+    range_ml = (blended.get("strategy_range") or {}).get("most_likely")
+    thresh_be = (blended.get("strategy_threshold") or {}).get("best_edge")
+    thresh_ml = (blended.get("strategy_threshold") or {}).get("most_likely")
+    pick = range_ml
+    if thresh_be and self.structure._row_near_forecast(thresh_be, blended_mu, structure_sigma):
+      if thresh_be.get("signal") in ("LEAN YES", "LEAN NO"):
+        pick = thresh_be
+    elif thresh_ml and self.structure._row_near_forecast(thresh_ml, blended_mu, structure_sigma):
+      pick = thresh_ml
 
     prob = float(pick.get("model_prob", 0.5)) if pick else 0.5
     edge = pick.get("edge") if pick else None
