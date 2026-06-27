@@ -4,13 +4,33 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.models.hourly_range_log import RANGE_BE_PREFIX, RANGE_ML_PREFIX, row_to_contract
+from src.models.hourly_range_log import (
+  RANGE_BE_PREFIX,
+  RANGE_ML_PREFIX,
+  parse_lean_bands,
+  row_to_contract,
+)
 
 
 def _zone_from_mu_sigma(mu: float | None, sigma: float | None) -> tuple[float | None, float | None]:
   if mu is None or sigma is None:
     return None, None
   return round(mu - sigma * 0.45, 2), round(mu + sigma * 0.45, 2)
+
+
+def _lean_band_api(band: dict[str, Any]) -> dict[str, Any]:
+  return {
+    "ticker": band.get("ticker"),
+    "contract_type": "range",
+    "label": band.get("label"),
+    "model_prob": band.get("model_prob"),
+    "kalshi_mid": band.get("kalshi_mid"),
+    "edge": band.get("edge"),
+    "signal": band.get("signal"),
+    "strike_type": "between",
+    "floor_strike": band.get("floor"),
+    "cap_strike": band.get("cap"),
+  }
 
 
 def locked_prediction_from_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -46,6 +66,7 @@ def locked_prediction_from_row(row: dict[str, Any]) -> dict[str, Any]:
     }
   ml_range = row_to_contract(row, RANGE_ML_PREFIX)
   be_range = row_to_contract(row, RANGE_BE_PREFIX)
+  lean_bands = [_lean_band_api(b) for b in parse_lean_bands(row)]
 
   return {
     "ok": True,
@@ -88,7 +109,9 @@ def locked_prediction_from_row(row: dict[str, Any]) -> dict[str, Any]:
       ),
       "most_likely": ml_range,
       "best_edge": be_range,
+      "lean_bands": lean_bands,
     },
+    "settle_brti": row.get("settle_brti"),
     "event": {
       "event_ticker": row.get("event_ticker"),
       "series_ticker": row.get("series_ticker"),

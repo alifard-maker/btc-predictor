@@ -977,6 +977,45 @@
       }).join('');
     }
 
+    function renderLockedLeanBands(bands, settleBrti) {
+      if (!bands || !bands.length) {
+        return `<p class="muted" style="font-size:.72rem;margin:.65rem 0 0">No LEAN YES/NO bands in the near-μ slice at lock.</p>`;
+      }
+      const rows = bands.map((r) => {
+        const edge = r.edge != null ? (r.edge >= 0 ? '+' : '') + (r.edge * 100).toFixed(1) + '¢' : '—';
+        const edgeCls = contractSignalCls(r.signal);
+        const lo = r.floor_strike ?? r.floor;
+        const hi = r.cap_strike ?? r.cap;
+        let settleCell = '<span class="muted">—</span>';
+        if (settleBrti != null && lo != null && hi != null) {
+          const settle = Number(settleBrti);
+          const inBand = settle >= Number(lo) && settle <= Number(hi);
+          const leanOk = (r.signal === 'LEAN YES' && inBand) || (r.signal === 'LEAN NO' && !inBand);
+          settleCell = inBand
+            ? `<span class="up" style="font-size:.72rem">IN BAND</span>${leanOk ? ' ✓' : ' ✗'}`
+            : `<span class="down" style="font-size:.72rem">OUT</span>${leanOk ? ' ✓' : ' ✗'}`;
+        }
+        return `<tr>
+          <td style="font-size:.78rem">${r.label || '—'}</td>
+          <td class="up">${r.model_prob != null ? pct(r.model_prob) : '—'}</td>
+          <td>${r.kalshi_mid != null ? pct(r.kalshi_mid) : '—'}</td>
+          <td class="${edgeCls}">${edge}</td>
+          <td class="${edgeCls}">${r.signal || '—'}</td>
+          <td>${settleCell}</td>
+        </tr>`;
+      }).join('');
+      return `<div style="margin-top:.65rem">
+        <h4 style="font-size:.78rem;margin:0 0 .35rem;color:var(--muted)">Locked LEAN bands @ :05 <span style="font-weight:400">(${bands.length} scored)</span></h4>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>Band</th><th>Model</th><th>Kalshi</th><th>Edge</th><th>Signal</th><th>Settle</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <p class="muted" style="font-size:.68rem;margin-top:.35rem">Frozen from the near-μ slice — same rows as calibration · All LEAN bands @ lock.</p>
+      </div>`;
+    }
+
     function renderStrategy2Panel(live, locked, g) {
       const el = $('daily-range-summary');
       if (!el) return;
@@ -986,6 +1025,8 @@
       const lockedMl = lockedSr.most_likely;
       const liveBe = liveSr.best_edge;
       const lockedBe = lockedSr.best_edge;
+      const lockedLean = lockedSr.lean_bands || [];
+      const settleBrti = locked?.settle_brti;
       const rg = g.strategy_range || {};
       const lockedNote = locked
         ? `Locked ${time(locked.logged_at)} · BRTI ref ${price(locked.reference_price)}`
@@ -1002,7 +1043,8 @@
             ${renderLikelyPick('Most likely band', lockedMl)}
             ${renderLikelyPick('Best band edge @ lock', lockedBe)}
           </div>
-          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Frozen for range-band scoring — table below is live only.</p>
+          ${renderLockedLeanBands(lockedLean, settleBrti)}
+          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Most likely / best edge + all LEAN bands above are frozen for scoring — contract table below is live only.</p>
         </div>` : `<div class="likely-card" style="border-color:rgba(245,158,11,.35);margin-bottom:.65rem">
           <h3>Awaiting range lock · :05 ET</h3>
           <p class="muted" style="font-size:.85rem">Preview: ${liveMl?.label || '—'}${liveMl?.model_prob != null ? ` (${pct(liveMl.model_prob)})` : ''}</p>
