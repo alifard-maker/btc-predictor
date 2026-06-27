@@ -341,6 +341,13 @@ def daily_prediction():
   return _loop.daily_prediction()
 
 
+@app.get("/api/eth/hourly/prediction")
+def eth_hourly_prediction():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.eth_hourly_prediction()
+
+
 @app.get("/api/hourly/calibration")
 def hourly_calibration():
   if _loop is None:
@@ -352,11 +359,36 @@ def hourly_calibration():
     raise HTTPException(500, f"Hourly calibration failed: {e}") from e
 
 
+@app.get("/api/eth/hourly/calibration")
+def eth_hourly_calibration():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_hourly_calibration is None:
+    raise HTTPException(503, "ETH hourly disabled")
+  try:
+    return _sanitize_json({"summary": _loop.eth_hourly_calibration.summary()})
+  except Exception as e:
+    log.exception("ETH hourly calibration failed: %s", e)
+    raise HTTPException(500, f"ETH hourly calibration failed: {e}") from e
+
+
 @app.get("/api/hourly/predictions")
 def hourly_predictions(limit: int = Query(default=30, le=200)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   df = _loop.hourly_calibration.load_recent(limit)
+  if df.empty:
+    return []
+  return _serialize_records(df)
+
+
+@app.get("/api/eth/hourly/predictions")
+def eth_hourly_predictions(limit: int = Query(default=30, le=200)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_hourly_calibration is None:
+    return []
+  df = _loop.eth_hourly_calibration.load_recent(limit)
   if df.empty:
     return []
   return _serialize_records(df)
@@ -372,6 +404,19 @@ def hourly_predict_now(
   out = _loop.run_hourly_prediction(force=force)
   if not out or not out.get("ok"):
     raise HTTPException(500, out.get("error") if out else "Hourly prediction failed")
+  return out
+
+
+@app.post("/api/admin/eth/hourly/predict-now")
+def eth_hourly_predict_now(
+  force: bool = Query(default=False),
+  _: None = Depends(_verify_admin),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  out = _loop.run_eth_hourly_prediction(force=force)
+  if not out or not out.get("ok"):
+    raise HTTPException(500, out.get("error") if out else "ETH hourly prediction failed")
   return out
 
 

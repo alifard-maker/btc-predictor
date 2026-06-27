@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 DEFAULT_SERIES = "KXBTC15M"
 BRTI_INDEX_ID = "BRTI"
+ERTI_INDEX_ID = "ERTI"
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,8 @@ class KalshiClient:
     self._cache_sec = float(kcfg.get("cache_sec", 15))
     self._brtI_cache: tuple[KalshiPriceQuote | None, float] | None = None
     self._brtI_cache_sec = float(kcfg.get("brti_cache_sec", 0))
+    self._index_last_good: dict[str, KalshiPriceQuote] = {}
+    self._index_cache: dict[str, tuple[KalshiPriceQuote | None, float]] = {}
     self._brtI_last_good: KalshiPriceQuote | None = None
     self._slot_targets: dict[str, float] = {}
     self._brtI_index = kcfg.get("brti_index_id", BRTI_INDEX_ID)
@@ -306,28 +309,43 @@ class KalshiClient:
 
   def fetch_brti_live(self, *, fresh: bool = False) -> KalshiPriceQuote | None:
     """Live CF Benchmarks BRTI via Kalshi passthrough (requires API auth)."""
+    return self.fetch_index_live(self._brtI_index, fresh=fresh)
+
+  def fetch_index_live(self, index_id: str | None = None, *, fresh: bool = False) -> KalshiPriceQuote | None:
+    """Live CF Benchmarks index (BRTI, ERTI, …) via Kalshi passthrough."""
     if not self.authenticated:
       return None
+    idx = (index_id or self._brtI_index).upper()
+    source = f"{idx.lower()}_live"
     now_mono = time.monotonic()
-    if not fresh and self._brtI_cache and (now_mono - self._brtI_cache[1]) < self._brtI_cache_sec:
-      return self._brtI_cache[0]
+    cached = self._index_cache.get(idx)
+    if not fresh and cached and (now_mono - cached[1]) < self._brtI_cache_sec:
+      return cached[0]
     quote: KalshiPriceQuote | None = None
     try:
       data = self.get(
         "/cfbenchmarks/values",
-        params={"id": self._brtI_index},
+        params={"id": idx},
         auth=True,
       )
       price = self._parse_brti_value(data)
       if price is not None:
-        quote = KalshiPriceQuote(price=price, source="brti_live", trade_time=datetime.now(timezone.utc))
-        self._brtI_last_good = quote
+        quote = KalshiPriceQuote(price=price, source=source, trade_time=datetime.now(timezone.utc))
+        self._index_last_good[idx] = quote
+        if idx == self._brtI_index:
+          self._brtI_last_good = quote
       elif log.isEnabledFor(logging.DEBUG):
-        log.debug("Kalshi BRTI response had no parseable value: %s", data)
+        log.debug("Kalshi %s response had no parseable value: %s", idx, data)
     except Exception as e:
-      log.warning("Kalshi BRTI fetch failed: %s", e)
-    self._brtI_cache = (quote, now_mono)
+      log.warning("Kalshi %s fetch failed: %s", idx, e)
+    self._index_cache[idx] = (quote, now_mono)
+    if idx == self._brtI_index:
+      self._brtI_cache = (quote, now_mono)
     return quote
+
+  def last_index_quote(self, index_id: str | None = None) -> KalshiPriceQuote | None:
+    idx = (index_id or self._brtI_index).upper()
+    return self._index_last_good.get(idx) or (self._brtI_last_good if idx == self._brtI_index else None)
 
   def last_brti_quote(self) -> KalshiPriceQuote | None:
     """Most recent successful BRTI tick (may be stale if fetch is failing)."""

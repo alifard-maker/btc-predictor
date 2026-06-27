@@ -65,10 +65,10 @@ class DailyEventBook:
 class KalshiDailyMarkets:
   """Fetch threshold (above/below) and range-band contracts."""
 
-  def __init__(self, cfg: dict[str, Any]):
+  def __init__(self, cfg: dict[str, Any], *, daily_cfg: dict[str, Any] | None = None):
     self.cfg = cfg
     self.kalshi = KalshiClient(cfg)
-    dcfg = cfg.get("daily", {})
+    dcfg = daily_cfg if daily_cfg is not None else cfg.get("daily", {})
     self.threshold_series: list[str] = list(
       dcfg.get("threshold_series", ["BTCD", "KXBTCD"])
     )
@@ -303,7 +303,7 @@ class KalshiDailyMarkets:
       return None
     ref = thresholds[0] if thresholds else ranges[0]
 
-    freq = "daily" if used_threshold_series in ("BTCD", "BTC") else "hourly"
+    freq = "daily" if used_threshold_series in ("BTCD", "BTC", "ETHD", "ETH") else "hourly"
     if used_threshold_series.startswith("KX") or used_range_series.startswith("KX"):
       freq = "hourly" if freq != "daily" else freq
 

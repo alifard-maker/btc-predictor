@@ -28,5 +28,8 @@ click>=8.1.0
 pyyaml>=6.0.0
 rich>=13.7.0
 
+# Testing
+pytest>=8.0.0
+
 # Optional deep learning (Phase 3)
 # torch>=2.2.0

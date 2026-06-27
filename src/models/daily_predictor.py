@@ -57,10 +57,10 @@ class ContractOdds:
 class DailyPredictor:
   """Map chart structure → terminal BRTI odds for Kalshi daily/hourly books."""
 
-  def __init__(self, cfg: dict[str, Any]):
+  def __init__(self, cfg: dict[str, Any], *, daily_cfg: dict[str, Any] | None = None):
     self.cfg = cfg
-    self.markets = KalshiDailyMarkets(cfg)
-    dcfg = cfg.get("daily", {})
+    dcfg = daily_cfg if daily_cfg is not None else cfg.get("daily", {})
+    self.markets = KalshiDailyMarkets(cfg, daily_cfg=dcfg)
     self.min_edge = float(dcfg.get("min_edge", 0.05))
     self.nearby_strikes = int(dcfg.get("nearby_strikes", 30))
     self.top_bands = int(dcfg.get("top_bands", 30))

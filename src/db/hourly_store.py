@@ -111,7 +111,8 @@ _HOURLY_COLS = """
   outcome INTEGER,
   settle_brti REAL,
   actual_return REAL,
-  resolved_at TEXT
+  resolved_at TEXT,
+  asset TEXT NOT NULL DEFAULT 'btc'
 """
 
 _HOURLY_COLS_PG = _HOURLY_COLS.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY").replace(
@@ -120,8 +121,9 @@ _HOURLY_COLS_PG = _HOURLY_COLS.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SER
 
 
 class SqliteHourlyStore(HourlyPredictionStore):
-  def __init__(self, db_path: str):
+  def __init__(self, db_path: str, *, asset: str = "btc"):
     self.db_path = Path(db_path)
+    self.asset = asset
 
   def _conn(self):
     import sqlite3
@@ -142,8 +144,12 @@ class SqliteHourlyStore(HourlyPredictionStore):
     for col, typ in range_band_migrations():
       if col not in existing:
         conn.execute(f"ALTER TABLE hourly_predictions ADD COLUMN {col} {typ}")
+    if "asset" not in existing:
+      conn.execute("ALTER TABLE hourly_predictions ADD COLUMN asset TEXT NOT NULL DEFAULT 'btc'")
+      conn.execute("UPDATE hourly_predictions SET asset = 'btc' WHERE asset IS NULL")
 
   def log_prediction(self, row: dict[str, Any], *, force: bool = False) -> int:
+    row = {**row, "asset": row.get("asset") or self.asset}
     cols = [
       "logged_at", "event_ticker", "frequency", "settle_time", "series_ticker", "title",
       "reference_price", "terminal_mu", "terminal_sigma", "ml_prob_up", "ml_mu",
@@ -154,20 +160,21 @@ class SqliteHourlyStore(HourlyPredictionStore):
       "direction", "method", "regime_blocked", "regime_notes", "prob_15m_avg",
       "settlement_zone_low", "settlement_zone_high",
       *RANGE_BAND_LOG_FIELDS,
+      "asset",
     ]
     vals = [row.get(c) for c in cols]
     with self._conn() as conn:
       existing = conn.execute(
-        "SELECT id FROM hourly_predictions WHERE event_ticker = ?",
-        (row["event_ticker"],),
+        "SELECT id FROM hourly_predictions WHERE event_ticker = ? AND asset = ?",
+        (row["event_ticker"], row["asset"]),
       ).fetchone()
       if existing and not force:
         return int(existing[0])
       if existing:
-        placeholders = ", ".join(f"{c}=?" for c in cols if c != "event_ticker")
-        update_vals = [row.get(c) for c in cols if c != "event_ticker"] + [row["event_ticker"]]
+        placeholders = ", ".join(f"{c}=?" for c in cols if c not in ("event_ticker", "asset"))
+        update_vals = [row.get(c) for c in cols if c not in ("event_ticker", "asset")] + [row["event_ticker"], row["asset"]]
         conn.execute(
-          f"UPDATE hourly_predictions SET {placeholders} WHERE event_ticker = ?",
+          f"UPDATE hourly_predictions SET {placeholders} WHERE event_ticker = ? AND asset = ?",
           update_vals,
         )
         return int(existing[0])
@@ -181,8 +188,8 @@ class SqliteHourlyStore(HourlyPredictionStore):
     with self._conn() as conn:
       conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
       row = conn.execute(
-        "SELECT * FROM hourly_predictions WHERE event_ticker = ? LIMIT 1",
-        (event_ticker,),
+        "SELECT * FROM hourly_predictions WHERE event_ticker = ? AND asset = ? LIMIT 1",
+        (event_ticker, self.asset),
       ).fetchone()
       return dict(row) if row else None
 
@@ -190,7 +197,8 @@ class SqliteHourlyStore(HourlyPredictionStore):
     with self._conn() as conn:
       conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
       rows = conn.execute(
-        "SELECT * FROM hourly_predictions WHERE outcome IS NULL ORDER BY settle_time"
+        "SELECT * FROM hourly_predictions WHERE outcome IS NULL AND asset = ? ORDER BY settle_time",
+        (self.asset,),
       ).fetchall()
       return list(rows)
 
@@ -199,31 +207,41 @@ class SqliteHourlyStore(HourlyPredictionStore):
       cur = conn.execute(
         """UPDATE hourly_predictions SET
              outcome=?, settle_brti=?, actual_return=?, resolved_at=datetime('now')
-           WHERE event_ticker=? AND outcome IS NULL""",
-        (resolution.outcome, resolution.settle_brti, resolution.actual_return, event_ticker),
+           WHERE event_ticker=? AND outcome IS NULL AND asset=?""",
+        (resolution.outcome, resolution.settle_brti, resolution.actual_return, event_ticker, self.asset),
       )
       return cur.rowcount > 0
 
   def load_all(self) -> pd.DataFrame:
     with self._conn() as conn:
-      return pd.read_sql("SELECT * FROM hourly_predictions ORDER BY logged_at", conn)
+      return pd.read_sql(
+        "SELECT * FROM hourly_predictions WHERE asset = ? ORDER BY logged_at",
+        conn,
+        params=(self.asset,),
+      )
 
   def load_resolved(self) -> pd.DataFrame:
     with self._conn() as conn:
       return pd.read_sql(
-        "SELECT * FROM hourly_predictions WHERE outcome IS NOT NULL ORDER BY settle_time", conn
+        "SELECT * FROM hourly_predictions WHERE outcome IS NOT NULL AND asset = ? ORDER BY settle_time",
+        conn,
+        params=(self.asset,),
       )
 
   def load_recent(self, limit: int = 50) -> pd.DataFrame:
     with self._conn() as conn:
       return pd.read_sql(
-        f"SELECT * FROM hourly_predictions ORDER BY logged_at DESC LIMIT {int(limit)}", conn
+        f"SELECT * FROM hourly_predictions WHERE asset = ? ORDER BY logged_at DESC LIMIT {int(limit)}",
+        conn,
+        params=(self.asset,),
       )
 
   def clear_all(self) -> int:
     with self._conn() as conn:
-      n = int(conn.execute("SELECT COUNT(*) FROM hourly_predictions").fetchone()[0])
-      conn.execute("DELETE FROM hourly_predictions")
+      n = int(conn.execute(
+        "SELECT COUNT(*) FROM hourly_predictions WHERE asset = ?", (self.asset,)
+      ).fetchone()[0])
+      conn.execute("DELETE FROM hourly_predictions WHERE asset = ?", (self.asset,))
     return n
 
 
@@ -238,10 +256,11 @@ def _strip_sslmode(url: str) -> str:
 
 
 class PostgresHourlyStore(HourlyPredictionStore):
-  def __init__(self, database_url: str):
+  def __init__(self, database_url: str, *, asset: str = "btc"):
     import psycopg2
     self.database_url = _strip_sslmode(normalize_database_url(database_url))
     self._psycopg2 = psycopg2
+    self.asset = asset
 
   def _conn(self):
     return self._psycopg2.connect(self.database_url, sslmode="require")
@@ -304,7 +323,8 @@ class PostgresHourlyStore(HourlyPredictionStore):
         outcome INTEGER,
         settle_brti DOUBLE PRECISION,
         actual_return DOUBLE PRECISION,
-        resolved_at TIMESTAMPTZ
+        resolved_at TIMESTAMPTZ,
+        asset TEXT NOT NULL DEFAULT 'btc'
       )
     """
     with self._conn() as conn:
@@ -326,8 +346,12 @@ class PostgresHourlyStore(HourlyPredictionStore):
     for col, typ in range_band_migrations_pg():
       if col not in existing:
         cur.execute(f"ALTER TABLE hourly_predictions ADD COLUMN {col} {typ}")
+    if "asset" not in existing:
+      cur.execute("ALTER TABLE hourly_predictions ADD COLUMN asset TEXT NOT NULL DEFAULT 'btc'")
+      cur.execute("UPDATE hourly_predictions SET asset = 'btc' WHERE asset IS NULL")
 
   def log_prediction(self, row: dict[str, Any], *, force: bool = False) -> int:
+    row = {**row, "asset": row.get("asset") or self.asset}
     cols = [
       "logged_at", "event_ticker", "frequency", "settle_time", "series_ticker", "title",
       "reference_price", "terminal_mu", "terminal_sigma", "ml_prob_up", "ml_mu",
@@ -338,18 +362,28 @@ class PostgresHourlyStore(HourlyPredictionStore):
       "direction", "method", "regime_blocked", "regime_notes", "prob_15m_avg",
       "settlement_zone_low", "settlement_zone_high",
       *RANGE_BAND_LOG_FIELDS,
+      "asset",
     ]
     vals = tuple(row.get(c) for c in cols)
     with self._conn() as conn:
       with conn.cursor() as cur:
-        cur.execute("SELECT id FROM hourly_predictions WHERE event_ticker = %s", (row["event_ticker"],))
+        cur.execute(
+          "SELECT id FROM hourly_predictions WHERE event_ticker = %s AND asset = %s",
+          (row["event_ticker"], row["asset"]),
+        )
         existing = cur.fetchone()
         if existing and not force:
           return int(existing[0])
         if existing:
-          sets = ", ".join(f"{c}=%s" for c in cols if c != "event_ticker")
-          update_vals = tuple(row.get(c) for c in cols if c != "event_ticker") + (row["event_ticker"],)
-          cur.execute(f"UPDATE hourly_predictions SET {sets} WHERE event_ticker = %s", update_vals)
+          sets = ", ".join(f"{c}=%s" for c in cols if c not in ("event_ticker", "asset"))
+          update_vals = tuple(row.get(c) for c in cols if c not in ("event_ticker", "asset")) + (
+            row["event_ticker"],
+            row["asset"],
+          )
+          cur.execute(
+            f"UPDATE hourly_predictions SET {sets} WHERE event_ticker = %s AND asset = %s",
+            update_vals,
+          )
           conn.commit()
           return int(existing[0])
         cur.execute(
@@ -363,9 +397,9 @@ class PostgresHourlyStore(HourlyPredictionStore):
   def get_by_event_ticker(self, event_ticker: str) -> dict[str, Any] | None:
     with self._conn() as conn:
       df = pd.read_sql(
-        "SELECT * FROM hourly_predictions WHERE event_ticker = %s LIMIT 1",
+        "SELECT * FROM hourly_predictions WHERE event_ticker = %s AND asset = %s LIMIT 1",
         conn,
-        params=(event_ticker,),
+        params=(event_ticker, self.asset),
       )
     if df.empty:
       return None
@@ -374,7 +408,9 @@ class PostgresHourlyStore(HourlyPredictionStore):
   def get_pending(self) -> list[dict[str, Any]]:
     with self._conn() as conn:
       df = pd.read_sql(
-        "SELECT * FROM hourly_predictions WHERE outcome IS NULL ORDER BY settle_time", conn
+        "SELECT * FROM hourly_predictions WHERE outcome IS NULL AND asset = %s ORDER BY settle_time",
+        conn,
+        params=(self.asset,),
       )
     return df.to_dict(orient="records")
 
@@ -384,8 +420,8 @@ class PostgresHourlyStore(HourlyPredictionStore):
         cur.execute(
           """UPDATE hourly_predictions SET
                outcome=%s, settle_brti=%s, actual_return=%s, resolved_at=NOW()
-             WHERE event_ticker=%s AND outcome IS NULL""",
-          (resolution.outcome, resolution.settle_brti, resolution.actual_return, event_ticker),
+             WHERE event_ticker=%s AND outcome IS NULL AND asset=%s""",
+          (resolution.outcome, resolution.settle_brti, resolution.actual_return, event_ticker, self.asset),
         )
         ok = cur.rowcount > 0
       conn.commit()
@@ -393,42 +429,50 @@ class PostgresHourlyStore(HourlyPredictionStore):
 
   def load_all(self) -> pd.DataFrame:
     with self._conn() as conn:
-      return pd.read_sql("SELECT * FROM hourly_predictions ORDER BY logged_at", conn)
+      return pd.read_sql(
+        "SELECT * FROM hourly_predictions WHERE asset = %s ORDER BY logged_at",
+        conn,
+        params=(self.asset,),
+      )
 
   def load_resolved(self) -> pd.DataFrame:
     with self._conn() as conn:
       return pd.read_sql(
-        "SELECT * FROM hourly_predictions WHERE outcome IS NOT NULL ORDER BY settle_time", conn
+        "SELECT * FROM hourly_predictions WHERE outcome IS NOT NULL AND asset = %s ORDER BY settle_time",
+        conn,
+        params=(self.asset,),
       )
 
   def load_recent(self, limit: int = 50) -> pd.DataFrame:
     with self._conn() as conn:
       return pd.read_sql(
-        f"SELECT * FROM hourly_predictions ORDER BY logged_at DESC LIMIT {int(limit)}", conn
+        f"SELECT * FROM hourly_predictions WHERE asset = %s ORDER BY logged_at DESC LIMIT {int(limit)}",
+        conn,
+        params=(self.asset,),
       )
 
   def clear_all(self) -> int:
     with self._conn() as conn:
       with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM hourly_predictions")
+        cur.execute("SELECT COUNT(*) FROM hourly_predictions WHERE asset = %s", (self.asset,))
         n = int(cur.fetchone()[0])
-        cur.execute("DELETE FROM hourly_predictions")
+        cur.execute("DELETE FROM hourly_predictions WHERE asset = %s", (self.asset,))
       conn.commit()
     return n
 
 
-def create_hourly_store(cfg: dict[str, Any]) -> HourlyPredictionStore:
+def create_hourly_store(cfg: dict[str, Any], *, asset: str = "btc") -> HourlyPredictionStore:
   db_url = os.getenv("DATABASE_URL") or cfg.get("database_url")
   if db_url:
     try:
-      store = PostgresHourlyStore(db_url)
+      store = PostgresHourlyStore(db_url, asset=asset)
       store.init()
-      log.info("Using PostgreSQL for hourly predictions")
+      log.info("Using PostgreSQL for hourly predictions (%s)", asset)
       return store
     except Exception as e:
       log.warning("PostgreSQL hourly store unavailable (%s), using SQLite", e)
   db_path = str(Path(cfg["paths"]["logs"]) / "hourly_predictions.db")
-  store = SqliteHourlyStore(db_path)
+  store = SqliteHourlyStore(db_path, asset=asset)
   store.init()
-  log.info("Using SQLite for hourly predictions at %s", db_path)
+  log.info("Using SQLite for hourly predictions at %s (%s)", db_path, asset)
   return store

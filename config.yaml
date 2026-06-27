@@ -189,6 +189,50 @@ auto_train:
   hour: 2
   minute: 0
 
+# Ethereum hourly — mirrors BTC hourly (Kalshi KXETHD/KXETH, CF Benchmarks ERTI)
+eth:
+  enabled: true
+  symbol: ETH/USD
+  exchange: coinbaseexchange
+  exchange_fallbacks:
+    - coinbase
+    - kraken
+    - bitstamp
+  price_feed:
+    live: kalshi
+    label: Kalshi CF Benchmarks ERTI
+    index_id: ERTI
+    settlement_reference: CF Benchmarks ERTI (Kalshi KXETH)
+  daily:
+    enabled: true
+    threshold_series: [KXETHD, ETHD]
+    range_series: [KXETH, ETH]
+    nearby_strikes: 30
+    top_bands: 30
+    max_markets_per_event: 1000
+    max_event_candidates: 6
+    strike_sigma_window: 2.5
+    band_sigma_window: 2.5
+    min_edge: 0.05
+    vol_lookback_1h: 24
+    drift_lookback_1h: 6
+  hourly:
+    enabled: true
+    log_minute: 5
+    min_train_samples: 500
+    fetch_candles_1h: 720
+    blend:
+      ml_weight: 0.6
+      structure_weight: 0.4
+    regime:
+      enabled: true
+      min_expected_move_pct: 0.12
+      min_edge: 0.05
+      min_hours_to_settle: 0.25
+      max_sigma_pct: 2.5
+      min_reasons_to_block: 2
+    sigma_calibration: true
+
 paths:
   candles: data/candles
   models: data/models

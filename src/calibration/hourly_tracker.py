@@ -79,9 +79,10 @@ def archive_hourly_epoch(
 
 
 class HourlyCalibrationTracker:
-  def __init__(self, cfg: dict[str, Any]):
+  def __init__(self, cfg: dict[str, Any], *, asset: str = "btc"):
     self.cfg = cfg
-    self.store: HourlyPredictionStore = create_hourly_store(cfg)
+    self.asset = asset
+    self.store: HourlyPredictionStore = create_hourly_store(cfg, asset=asset)
 
   def log_prediction(self, row: dict[str, Any], *, force: bool = False) -> int:
     return self.store.log_prediction(row, force=force)

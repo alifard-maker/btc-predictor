@@ -31,9 +31,10 @@ log = logging.getLogger(__name__)
 class HourlyPredictor:
   """Blend 1h ML direction with structure terminal distribution for Kalshi contracts."""
 
-  def __init__(self, cfg: dict[str, Any]):
+  def __init__(self, cfg: dict[str, Any], *, asset: str = "btc"):
     self.cfg = cfg
-    self.structure = DailyPredictor(cfg)
+    self.asset = asset
+    self.structure = DailyPredictor(cfg, daily_cfg=cfg.get("daily"))
     self.regime = HourlyRegimeFilter(cfg)
     self.hcfg = cfg.get("hourly", {})
     self.ml_weight = float(self.hcfg.get("blend", {}).get("ml_weight", 0.6))
@@ -267,4 +268,5 @@ class HourlyPredictor:
     row.update(contract_to_row_prefix(sr.get("most_likely"), RANGE_ML_PREFIX))
     row.update(contract_to_row_prefix(sr.get("best_edge"), RANGE_BE_PREFIX))
     row["range_lean_bands"] = serialize_lean_bands(lean_bands_from_contracts(sr.get("contracts")))
+    row["asset"] = self.asset
     return row

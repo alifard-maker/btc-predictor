@@ -32,15 +32,15 @@ class TickerQuote:
 
 # Per-exchange symbol mapping when config symbol doesn't match
 EXCHANGE_SYMBOLS = {
-  "binance": "BTC/USDT",
-  "kraken": "BTC/USD",
-  "coinbase": "BTC/USD",
-  "coinbaseexchange": "BTC/USD",
-  "bitstamp": "BTC/USD",
+  "binance": {"BTC/USDT": "BTC/USDT", "ETH/USDT": "ETH/USDT"},
+  "kraken": {"BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD"},
+  "coinbase": {"BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD"},
+  "coinbaseexchange": {"BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD"},
+  "bitstamp": {"BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD"},
 }
 
-COINBASE_EXCHANGE_TICKER_URL = "https://api.exchange.coinbase.com/products/BTC-USD/ticker"
-COINBASE_SPOT_URL = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+COINBASE_EXCHANGE_TICKER_URL = "https://api.exchange.coinbase.com/products/{product}/ticker"
+COINBASE_SPOT_URL = "https://api.coinbase.com/v2/prices/{product}/spot"
 
 
 class DataFetcher:
@@ -52,6 +52,16 @@ class DataFetcher:
     self._exchange_id: str | None = None
     self.exchange: ccxt.Exchange | None = None
     self._last_connect_error: str | None = None
+
+  def _coinbase_product(self) -> str:
+    base, quote = self.symbol.split("/")
+    return f"{base}-{quote}"
+
+  def _symbol_for_exchange(self, ex_id: str) -> str:
+    per_ex = EXCHANGE_SYMBOLS.get(ex_id, {})
+    if isinstance(per_ex, dict):
+      return per_ex.get(self.symbol, self.symbol)
+    return self.symbol
 
   def _ensure_exchange(self) -> ccxt.Exchange:
     if self.exchange is not None:
@@ -68,7 +78,7 @@ class DataFetcher:
         continue
       try:
         ex = getattr(ccxt, ex_id)({"enableRateLimit": True})
-        sym = EXCHANGE_SYMBOLS.get(ex_id, self.symbol)
+        sym = self._symbol_for_exchange(ex_id)
         ex.fetch_ohlcv(sym, "1m", limit=1)
         self._exchange_id = ex_id
         self.symbol = sym
@@ -138,8 +148,9 @@ class DataFetcher:
 
   def fetch_coinbase_ticker(self) -> TickerQuote:
     """Last Coinbase Exchange trade with exchange timestamp."""
+    product = self._coinbase_product()
     resp = requests.get(
-      COINBASE_EXCHANGE_TICKER_URL,
+      COINBASE_EXCHANGE_TICKER_URL.format(product=product),
       headers={"User-Agent": "btc-predictor/1.0"},
       timeout=10,
     )
@@ -162,7 +173,8 @@ class DataFetcher:
 
   def fetch_coinbase_spot(self) -> float:
     """Coinbase retail spot quote."""
-    resp = requests.get(COINBASE_SPOT_URL, timeout=10)
+    product = self._coinbase_product()
+    resp = requests.get(COINBASE_SPOT_URL.format(product=product), timeout=10)
     resp.raise_for_status()
     amount = resp.json().get("data", {}).get("amount")
     if amount is None:

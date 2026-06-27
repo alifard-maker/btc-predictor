@@ -159,7 +159,8 @@
 
     <nav class="tab-bar" role="tablist">
       <button type="button" class="tab active" id="tab-15m" data-panel="panel-15m" onclick="switchTab('15m')">15m slot</button>
-      <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">Hourly / Kalshi</button>
+      <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">BTC Hourly</button>
+      <button type="button" class="tab" id="tab-eth-hourly" data-panel="panel-eth-hourly" onclick="switchTab('eth-hourly')">ETH Hourly</button>
     </nav>
 
     <div id="panel-15m">
@@ -312,10 +313,73 @@
         <div id="daily-structure"><p class="muted">Loading…</p></div>
       </div>
     </div>
+
+    <div id="panel-eth-hourly" style="display:none">
+      <div class="card" id="eth-hourly-guide-card">
+        <h2>How to read this tab</h2>
+        <div id="eth-hourly-guide"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="eth-daily-summary-card">
+        <h2>ETH Kalshi event <span id="eth-daily-freq-badge"></span></h2>
+        <p class="muted" id="eth-daily-meta">Loading…</p>
+        <div id="eth-daily-primary-signal"></div>
+        <div id="eth-daily-summary"></div>
+      </div>
+      <div class="card">
+        <h2>Hourly calibration</h2>
+        <div id="eth-hourly-calibration"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Hourly prediction history</h2>
+        <div style="overflow-x:auto" id="eth-hourly-history"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Strategy 1 · Above / below (threshold)</h2>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>LEAN YES/NO</strong> = model direction and Kalshi edge agree on this strike.</p>
+        <div id="eth-daily-threshold"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Strategy 2 · Range bands (stall zone)</h2>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 range bands nearest forecast μ — sorted by model probability.</p>
+        <div id="eth-daily-range-summary" style="margin-bottom:.75rem"></div>
+        <div id="eth-daily-range"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Chart structure</h2>
+        <div id="eth-daily-structure"><p class="muted">Loading…</p></div>
+      </div>
+    </div>
   </div>
 
   <script>
     const $ = (id) => document.getElementById(id);
+    let activeTab = '15m';
+    let hourlyGuideCheatOpen = false;
+
+    function hourlyPrefix() {
+      return activeTab === 'eth-hourly' ? 'eth-' : '';
+    }
+
+    function h$(id) {
+      return $(hourlyPrefix() + id);
+    }
+
+    function hourlyApi() {
+      if (activeTab === 'eth-hourly') {
+        return {
+          prediction: '/api/eth/hourly/prediction',
+          calibration: '/api/eth/hourly/calibration',
+          history: '/api/eth/hourly/predictions?limit=20',
+          indexLabel: 'ERTI',
+        };
+      }
+      return {
+        prediction: '/api/daily/prediction',
+        calibration: '/api/hourly/calibration',
+        history: '/api/hourly/predictions?limit=20',
+        indexLabel: 'BRTI',
+      };
+    }
     const TZ = 'America/New_York';
     const pct = (n) => (n * 100).toFixed(1) + '%';
     const price = (n) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -333,6 +397,7 @@
     const REF_SOURCE_LABEL = {
       kalshi_brti_target: 'Kalshi BRTI target at slot open',
       brti_live: 'CF Benchmarks BRTI (live)',
+      erti_live: 'CF Benchmarks ERTI (live)',
       exchange_live: 'Exchange last trade (live)',
       exchange_fallback: 'Exchange (BRTI unavailable)',
       coinbase_fallback: 'Coinbase (approx — set KALSHI_PRIVATE_KEY for BRTI)',
@@ -348,6 +413,7 @@
     function liveNowLabel(m) {
       const src = m.current_price_source;
       if (src === 'brti_live') return 'Now · BRTI live';
+      if (src === 'erti_live') return 'Now · ERTI live';
       if (src === 'exchange_live' || src === 'exchange_fallback' || src === 'coinbase_fallback') {
         return 'Now · exchange live';
       }
@@ -952,16 +1018,15 @@
       } catch (_) {}
     }
 
-    let activeTab = '15m';
-    let hourlyGuideCheatOpen = false;
-
     function switchTab(name) {
       activeTab = name;
       $('panel-15m').style.display = name === '15m' ? '' : 'none';
       $('panel-daily').style.display = name === 'daily' ? '' : 'none';
+      $('panel-eth-hourly').style.display = name === 'eth-hourly' ? '' : 'none';
       $('tab-15m').classList.toggle('active', name === '15m');
       $('tab-daily').classList.toggle('active', name === 'daily');
-      if (name === 'daily') loadDaily();
+      $('tab-eth-hourly').classList.toggle('active', name === 'eth-hourly');
+      if (name === 'daily' || name === 'eth-hourly') loadDaily();
     }
 
     function renderRangeTierCards(recs) {
@@ -1017,7 +1082,7 @@
     }
 
     function renderStrategy2Panel(live, locked, g) {
-      const el = $('daily-range-summary');
+      const el = h$('daily-range-summary');
       if (!el) return;
       const liveSr = live.strategy_range || {};
       const lockedSr = locked?.strategy_range || {};
@@ -1028,8 +1093,9 @@
       const lockedLean = lockedSr.lean_bands || [];
       const settleBrti = locked?.settle_brti;
       const rg = g.strategy_range || {};
+      const idx = hourlyApi().indexLabel;
       const lockedNote = locked
-        ? `Locked ${time(locked.logged_at)} · BRTI ref ${price(locked.reference_price)}`
+        ? `Locked ${time(locked.logged_at)} · ${idx} ref ${price(locked.reference_price)}`
         : 'Range band picks lock at :05 ET with the threshold forecast';
 
       el.innerHTML = `
@@ -1065,7 +1131,7 @@
     }
 
     function renderHourlyGuidance(g) {
-      const el = $('hourly-guide');
+      const el = h$('hourly-guide');
       if (!g) {
         el.innerHTML = '<p class="muted">Guidance unavailable.</p>';
         return;
@@ -1126,7 +1192,7 @@
 
     function renderDailyContracts(rows, containerId, highlightLabels) {
       const tags = highlightLabels || {};
-      const el = $(containerId);
+      const el = h$(containerId);
       if (!rows || !rows.length) {
         el.innerHTML = '<p class="muted">No contracts in this book.</p>';
         return;
@@ -1155,7 +1221,7 @@
     }
 
     function renderDailyStructure(st) {
-      const el = $('daily-structure');
+      const el = h$('daily-structure');
       if (!st) { el.innerHTML = '<p class="muted">No structure data.</p>'; return; }
       const sup = (st.support_levels || []).map(l =>
         `<li><span class="up">Support</span> $${Number(l.price).toLocaleString()} · ${l.touches} touches · wick ${(l.wick_score*100).toFixed(0)}%${l.volume_confirmed ? ' · vol ✓' : ''}</li>`
@@ -1197,10 +1263,11 @@
       const at = s.all_time?.open || {};
       const hasRange = (sr.most_likely_band?.n || 0) > 0 || (sr.all_lean_bands?.n || 0) > 0 || (sr.settlement_zone?.n || 0) > 0;
       if (!s.n_resolved && !at.n_resolved && !hasRange) {
-        $('hourly-calibration').innerHTML = '<p class="muted">No resolved hourly events yet — logged each hour at :05 ET when a Kalshi book is open.</p>';
+        h$('hourly-calibration').innerHTML = '<p class="muted">No resolved hourly events yet — logged each hour at :05 ET when a Kalshi book is open.</p>';
         return;
       }
-      $('hourly-calibration').innerHTML = `
+      const idx = hourlyApi().indexLabel;
+      h$('hourly-calibration').innerHTML = `
         ${renderAllTimeStats({ open: at, epochs_archived: s.all_time?.epochs_archived, snapshot_through: s.all_time?.snapshot_through, snapshot_note: s.all_time?.snapshot_note, late_entry: {}, flip: {} })}
         <div class="stats-block epoch" style="margin-top:.75rem">
           <h3>Strategy 1 · Threshold (primary pick)</h3>
@@ -1216,12 +1283,12 @@
         </div>
         <div class="stats-block epoch" style="margin-top:.75rem">
           <h3>Strategy 2 · Range bands</h3>
-          <p class="muted" style="font-size:.72rem;margin-bottom:.35rem">Locked stall bands @ :05 — did settle BRTI land inside each band?</p>
+          <p class="muted" style="font-size:.72rem;margin-bottom:.35rem">Locked stall bands @ :05 — did settle ${idx} land inside each band?</p>
           ${renderHourlyBandStats('All LEAN bands @ lock', sr.all_lean_bands)}
           ${sr.all_lean_bands?.n_hours_with_lean ? `<p class="muted" style="font-size:.7rem;margin:-.25rem 0 .5rem">Every LEAN YES/NO in the near-μ slice (${sr.all_lean_bands.n_hours_with_lean} hours with ≥1 lean band).</p>` : ''}
           ${renderHourlyBandStats('Most likely band @ lock', sr.most_likely_band)}
           ${renderHourlyBandStats('Best edge band @ lock', sr.best_edge_band)}
-          ${sr.settlement_zone?.n ? `<div style="margin-top:.35rem"><h4 style="font-size:.8rem;margin:0 0 .35rem;color:var(--muted)">Settlement zone @ lock</h4><div class="cal-stats"><div><span>Scored</span><strong>${sr.settlement_zone.n}</strong></div><div><span>BRTI in zone</span><strong>${pct(sr.settlement_zone.in_zone_rate)}</strong></div></div></div>` : ''}
+          ${sr.settlement_zone?.n ? `<div style="margin-top:.35rem"><h4 style="font-size:.8rem;margin:0 0 .35rem;color:var(--muted)">Settlement zone @ lock</h4><div class="cal-stats"><div><span>Scored</span><strong>${sr.settlement_zone.n}</strong></div><div><span>${idx} in zone</span><strong>${pct(sr.settlement_zone.in_zone_rate)}</strong></div></div></div>` : ''}
         </div>`;
     }
 
@@ -1260,16 +1327,17 @@
       const inBand = settle >= Number(r.range_ml_floor) && settle <= Number(r.range_ml_cap);
       const detail = inBand
         ? '<span class="up" style="font-size:.68rem">IN BAND ✓</span>'
-        : `<span class="down" style="font-size:.68rem">MISS ✗ · BRTI ${price(settle)}</span>`;
+        : `<span class="down" style="font-size:.68rem">MISS ✗ · ${hourlyApi().indexLabel} ${price(settle)}</span>`;
       return `<span style="font-size:.78rem">${r.range_ml_label}${prob}</span><div>${detail}</div>`;
     }
 
     function renderHourlyHistory(rows) {
       if (!rows || !rows.length) {
-        $('hourly-history').innerHTML = '<p class="muted">No hourly predictions logged yet.</p>';
+        h$('hourly-history').innerHTML = '<p class="muted">No hourly predictions logged yet.</p>';
         return;
       }
-      $('hourly-history').innerHTML = `<table>
+      const idx = hourlyApi().indexLabel;
+      h$('hourly-history').innerHTML = `<table>
         <thead><tr><th>Logged</th><th>Primary pick (S1)</th><th>Signal</th><th>Range band @ lock (S2)</th><th>Outcome (S1)</th></tr></thead>
         <tbody>${rows.map(r => {
           const wrong = hourlyPickWrong(r);
@@ -1279,9 +1347,9 @@
           } else if (wrong === true) {
             out = `<span class="down">MISS ✗</span>${renderHourlySettleDetail(r)}`;
           } else if (wrong === false) {
-            out = `<span class="up">HIT ✓</span>${r.settle_brti != null ? `<div class="muted" style="font-size:.68rem;margin-top:.2rem">BRTI ${price(r.settle_brti)}</div>` : ''}`;
+            out = `<span class="up">HIT ✓</span>${r.settle_brti != null ? `<div class="muted" style="font-size:.68rem;margin-top:.2rem">${idx} ${price(r.settle_brti)}</div>` : ''}`;
           } else {
-            out = `${r.outcome ? '<span class="up">YES</span>' : '<span class="down">NO</span>'}${r.settle_brti != null ? `<div class="muted" style="font-size:.68rem;margin-top:.2rem">BRTI ${price(r.settle_brti)}</div>` : ''}`;
+            out = `${r.outcome ? '<span class="up">YES</span>' : '<span class="down">NO</span>'}${r.settle_brti != null ? `<div class="muted" style="font-size:.68rem;margin-top:.2rem">${idx} ${price(r.settle_brti)}</div>` : ''}`;
           }
           const sigCls = contractSignalCls(r.primary_signal || 'NEUTRAL');
           return `<tr>
@@ -1315,15 +1383,15 @@
 
     function renderDaily(data) {
       if (!data || !data.ok) {
-        $('daily-meta').textContent = data?.error || 'Hourly prediction unavailable';
-        $('hourly-guide').innerHTML = '<p class="muted">—</p>';
-        $('daily-freq-badge').innerHTML = '';
-        $('daily-primary-signal').innerHTML = '';
-        $('daily-summary').innerHTML = '';
-        $('daily-threshold').innerHTML = '<p class="muted">—</p>';
-        $('daily-range-summary').innerHTML = '';
-        $('daily-range').innerHTML = '<p class="muted">—</p>';
-        $('daily-structure').innerHTML = '<p class="muted">—</p>';
+        h$('daily-meta').textContent = data?.error || 'Hourly prediction unavailable';
+        h$('hourly-guide').innerHTML = '<p class="muted">—</p>';
+        h$('daily-freq-badge').innerHTML = '';
+        h$('daily-primary-signal').innerHTML = '';
+        h$('daily-summary').innerHTML = '';
+        h$('daily-threshold').innerHTML = '<p class="muted">—</p>';
+        h$('daily-range-summary').innerHTML = '';
+        h$('daily-range').innerHTML = '<p class="muted">—</p>';
+        h$('daily-structure').innerHTML = '<p class="muted">—</p>';
         return;
       }
       const live = data.live || data;
@@ -1331,23 +1399,24 @@
       const ev = live.event || data.event || {};
       const freq = (ev.frequency || 'hourly').toLowerCase();
       const freqCls = freq === 'daily' ? 'freq-daily' : 'freq-hourly';
-      $('daily-freq-badge').innerHTML = `<span class="freq-badge ${freqCls}">${freq.toUpperCase()}</span>`;
+      h$('daily-freq-badge').innerHTML = `<span class="freq-badge ${freqCls}">${freq.toUpperCase()}</span>`;
       const settle = ev.close_time ? time(ev.close_time) : '—';
       const liveMl = live.most_likely || {};
       const lockedMl = locked?.most_likely || {};
       const beT = live.strategy_threshold?.best_edge;
       const beR = live.strategy_range?.best_edge;
+      const idx = hourlyApi().indexLabel;
       const lockNote = locked
-        ? `Locked ${time(locked.logged_at)} · BRTI ref ${price(locked.reference_price)}`
+        ? `Locked ${time(locked.logged_at)} · ${idx} ref ${price(locked.reference_price)}`
         : 'Official prediction locks at :05 ET';
       const g = data.guidance || {};
       renderHourlyGuidance(g);
 
-      $('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · settles ${settle} · BRTI now ${price(data.brti_live || live.current_price)} · ${live.hours_to_settle}h left · ${lockNote}`;
+      h$('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · settles ${settle} · ${idx} now ${price(data.brti_live || live.current_price)} · ${live.hours_to_settle}h left · ${lockNote}`;
 
       if (locked) {
         const lpick = locked.primary_pick || {};
-        $('daily-primary-signal').innerHTML = renderHourlySignalCard(
+        h$('daily-primary-signal').innerHTML = renderHourlySignalCard(
           `Locked primary signal · ${locked.method || 'structure'} @ ${time(locked.logged_at)}`,
           lpick,
           locked,
@@ -1358,7 +1427,7 @@
         const lpick = live.primary_pick || beT;
         const pickSig = lpick?.signal || 'NEUTRAL';
         const pickCls = pickSig === 'LEAN YES' ? 'edge-yes' : pickSig === 'LEAN NO' ? 'edge-no' : 'muted';
-        $('daily-primary-signal').innerHTML = `<div class="likely-card" style="border-color:rgba(245,158,11,.35)">
+        h$('daily-primary-signal').innerHTML = `<div class="likely-card" style="border-color:rgba(245,158,11,.35)">
           <h3>Awaiting lock · :05 ET</h3>
           <p class="muted" style="font-size:.85rem;margin-bottom:.5rem">Preview only — primary signal and settlement range freeze at :05 ET for scoring.</p>
           <div class="headline ${pickCls}">${pickSig}${lpick?.label ? ` · ${lpick.label}` : ''}</div>
@@ -1371,19 +1440,19 @@
         ? `<p class="muted" style="font-size:.75rem;margin-top:.35rem">μ shifted ${muShift >= 0 ? '+' : ''}${price(muShift)} vs locked forecast.</p>`
         : '';
 
-      $('daily-summary').innerHTML = `
+      h$('daily-summary').innerHTML = `
         ${locked ? `<div class="likely-card" style="border-color:rgba(34,197,94,.35)">
           <h3>Locked settlement range</h3>
-          <div class="headline">BRTI ${price(lockedMl.settlement_zone_low)} – ${price(lockedMl.settlement_zone_high)} at settle</div>
+          <div class="headline">${idx} ${price(lockedMl.settlement_zone_low)} – ${price(lockedMl.settlement_zone_high)} at settle</div>
           <p class="muted" style="font-size:.8rem">${lockedMl.summary || ''}</p>
           <div class="likely-grid">
             ${renderLikelyPick('Threshold @ lock', lockedMl.threshold)}
           </div>
-          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Blended μ ${price(locked.terminal_mu)} · σ ${price(locked.terminal_sigma)} — scored against actual settle BRTI.</p>
+          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Blended μ ${price(locked.terminal_mu)} · σ ${price(locked.terminal_sigma)} — scored against actual settle ${idx}.</p>
         </div>` : ''}
         <div class="likely-card" style="border-color:rgba(99,102,241,.25)">
           <h3>Live reassessment <span class="muted" style="font-weight:400;font-size:.7rem">updates with market</span></h3>
-          <div class="headline">BRTI ${price(liveMl.settlement_zone_low)} – ${price(liveMl.settlement_zone_high)} now</div>
+          <div class="headline">${idx} ${price(liveMl.settlement_zone_low)} – ${price(liveMl.settlement_zone_high)} now</div>
           <p class="muted" style="font-size:.8rem">${liveMl.summary || ''}</p>
           ${shiftTxt}
           <div class="likely-grid">
@@ -1416,10 +1485,11 @@
 
     async function loadDaily() {
       try {
+        const api = hourlyApi();
         const [d, cal, hist] = await Promise.all([
-          get('/api/daily/prediction'),
-          get('/api/hourly/calibration').catch(() => ({ summary: {} })),
-          get('/api/hourly/predictions?limit=20').catch(() => []),
+          get(api.prediction),
+          get(api.calibration).catch(() => ({ summary: {} })),
+          get(api.history).catch(() => []),
         ]);
         renderDaily(d);
         renderHourlyCalibration(cal);
@@ -1465,7 +1535,7 @@
           $('calibration').innerHTML = `<p class="muted">Calibration unavailable: ${e.message || 'API error'}</p>`),
         get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])),
         );
-      } else {
+      } else if (activeTab === 'daily' || activeTab === 'eth-hourly') {
         tasks.push(loadDaily());
       }
       await Promise.all(tasks);

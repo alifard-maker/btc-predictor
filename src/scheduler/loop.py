@@ -17,6 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from src.calibration.sources import KALSHI_EXIT_SOURCE, KALSHI_REF_SOURCE
 from src.calibration.hourly_tracker import HourlyCalibrationTracker
 from src.calibration.tracker import CalibrationTracker
+from src.assets import asset_cfg, asset_enabled, index_id_for_cfg
 from src.config import ensure_dirs, load_config
 from src.data.fetcher import DataFetcher
 from src.data.kalshi import KalshiClient, KalshiPriceQuote
@@ -66,6 +67,40 @@ class PredictionLoop:
     self.second_chance_train_status: dict[str, Any] = {"state": "idle"}
     self._hourly_predictor = None
     self.latest_hourly_prediction: dict[str, Any] | None = None
+    self._eth_cfg: dict[str, Any] | None = None
+    self._eth_fetcher: DataFetcher | None = None
+    self._eth_storage: CandleStorage | None = None
+    self._eth_hourly_predictor = None
+    self._eth_ticker_cache: tuple[KalshiPriceQuote | None, float] | None = None
+    self.eth_hourly_calibration: HourlyCalibrationTracker | None = None
+    self.latest_eth_hourly_prediction: dict[str, Any] | None = None
+    if asset_enabled(self.cfg, "eth"):
+      self._eth_cfg = asset_cfg(self.cfg, "eth")
+      ensure_dirs(self._eth_cfg)
+      self.eth_hourly_calibration = HourlyCalibrationTracker(self._eth_cfg, asset="eth")
+
+  def _asset_hourly_calibration(self, asset: str) -> HourlyCalibrationTracker:
+    if asset == "eth":
+      if self.eth_hourly_calibration is None:
+        raise RuntimeError("ETH hourly is disabled")
+      return self.eth_hourly_calibration
+    return self.hourly_calibration
+
+  def eth_fetcher(self) -> DataFetcher:
+    if self._eth_fetcher is None:
+      self._eth_fetcher = DataFetcher(self._eth_cfg or asset_cfg(self.cfg, "eth"))
+    return self._eth_fetcher
+
+  def eth_storage(self) -> CandleStorage:
+    if self._eth_storage is None:
+      self._eth_storage = CandleStorage(self._eth_cfg or asset_cfg(self.cfg, "eth"))
+    return self._eth_storage
+
+  def eth_hourly_predictor(self):
+    if self._eth_hourly_predictor is None:
+      from src.models.hourly_predictor import HourlyPredictor
+      self._eth_hourly_predictor = HourlyPredictor(self._eth_cfg or asset_cfg(self.cfg, "eth"), asset="eth")
+    return self._eth_hourly_predictor
 
   def second_chance_advisor(self) -> SecondChanceAdvisor:
     if self._second_chance_advisor is None:
@@ -78,12 +113,13 @@ class PredictionLoop:
       self._hourly_predictor = HourlyPredictor(self.cfg)
     return self._hourly_predictor
 
-  def _ohlc_1h(self) -> pd.DataFrame:
+  def _ohlc_1h(self, *, storage: CandleStorage | None = None) -> pd.DataFrame:
     """Native 1h candles, falling back to resampled 15m."""
-    df_1h = self.storage.load("1h")
+    store = storage or self.storage
+    df_1h = store.load("1h")
     if not df_1h.empty and len(df_1h) >= 24:
       return df_1h
-    df_15m = self.storage.load("15m")
+    df_15m = store.load("15m")
     if df_15m.empty:
       return pd.DataFrame()
     df = df_15m.copy()
@@ -100,23 +136,34 @@ class PredictionLoop:
     return agg
 
   def daily_prediction(self) -> dict[str, Any]:
-    if not self.cfg.get("daily", {}).get("enabled", True):
-      return {"ok": False, "error": "Daily predictions disabled"}
-    quote = self.live_price_quote(fresh=True)
+    return self._hourly_tab_prediction("btc")
+
+  def eth_hourly_prediction(self) -> dict[str, Any]:
+    return self._hourly_tab_prediction("eth")
+
+  def _hourly_tab_prediction(self, asset: str) -> dict[str, Any]:
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    if not acfg.get("daily", {}).get("enabled", True):
+      return {"ok": False, "error": f"{asset.upper()} hourly predictions disabled"}
+    quote = self.live_price_quote(fresh=True, asset=asset)
     price = quote.price if quote else None
+    storage = self.storage if asset == "btc" else self.eth_storage()
     if price is None:
-      df_1m = self.storage.load("1m")
+      df_1m = storage.load("1m")
       if not df_1m.empty:
         price = float(df_1m["close"].iloc[-1])
+    index_label = index_id_for_cfg(acfg)
     if price is None or price <= 0:
-      return {"ok": False, "error": "Live BRTI unavailable"}
-    df_1h = self._ohlc_1h()
-    df_15m = self.storage.load("15m")
-    live = self.hourly_predictor().predict(
+      return {"ok": False, "error": f"Live {index_label} unavailable"}
+    df_1h = self._ohlc_1h(storage=storage)
+    df_15m = storage.load("15m") if asset == "btc" else pd.DataFrame()
+    predictor = self.hourly_predictor() if asset == "btc" else self.eth_hourly_predictor()
+    tracker = self._asset_hourly_calibration(asset)
+    live = predictor.predict(
       current_price=float(price),
       df_1h=df_1h,
       df_15m=df_15m if not df_15m.empty else None,
-      calibration_tracker=self.calibration,
+      calibration_tracker=self.calibration if asset == "btc" else None,
     )
     if not live.get("ok"):
       return live
@@ -126,11 +173,11 @@ class PredictionLoop:
     event_ticker = (live.get("event") or {}).get("event_ticker")
     locked = None
     if event_ticker:
-      row = self.hourly_calibration.get_logged(event_ticker)
+      row = tracker.get_logged(event_ticker)
       if row:
         locked = locked_prediction_from_row(row)
 
-    out = {**live, "live": live, "locked": locked, "has_locked": locked is not None}
+    out = {**live, "live": live, "locked": locked, "has_locked": locked is not None, "asset": asset}
     if quote:
       out["brti_live"] = round(quote.price, 2)
       out["brti_source"] = quote.source
@@ -138,6 +185,9 @@ class PredictionLoop:
       live["brti_source"] = quote.source
     out["timezone"] = self.tz
     live["timezone"] = self.tz
+    pf = acfg.get("price_feed") or {}
+    out["price_feed"] = pf.get("label", index_label)
+    out["settlement_reference"] = pf.get("settlement_reference", index_label)
 
     if locked:
       mu_shift = None
@@ -148,41 +198,61 @@ class PredictionLoop:
         "reference_at_log": locked.get("reference_price"),
         "logged_at": locked.get("logged_at"),
       }
+      live["live_vs_locked"] = out["live_vs_locked"]
 
     from src.trading.hourly_guidance import build_hourly_guidance
 
     out["guidance"] = build_hourly_guidance(live, locked)
 
-    self.latest_hourly_prediction = out
+    if asset == "btc":
+      self.latest_hourly_prediction = out
+    else:
+      self.latest_eth_hourly_prediction = out
     return out
 
   def run_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
-    if not self.cfg.get("hourly", {}).get("enabled", True):
+    return self._run_hourly_prediction_for_asset("btc", force=force)
+
+  def run_eth_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
+    if not asset_enabled(self.cfg, "eth"):
+      return None
+    acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+    if not acfg.get("hourly", {}).get("enabled", True):
+      return None
+    return self._run_hourly_prediction_for_asset("eth", force=force)
+
+  def _run_hourly_prediction_for_asset(self, asset: str, *, force: bool = False) -> dict[str, Any] | None:
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    if not acfg.get("hourly", {}).get("enabled", True):
       return None
     try:
-      self.resolve_hourly_outcomes()
-      out = self.daily_prediction()
+      self.resolve_hourly_outcomes(asset=asset)
+      out = self._hourly_tab_prediction(asset)
       if not out.get("ok"):
         return out
-      row = self.hourly_predictor().to_log_row(out.get("live") or out)
+      predictor = self.hourly_predictor() if asset == "btc" else self.eth_hourly_predictor()
+      row = predictor.to_log_row(out.get("live") or out)
+      tracker = self._asset_hourly_calibration(asset)
       if row.get("event_ticker"):
-        self.hourly_calibration.log_prediction(row, force=force)
+        tracker.log_prediction(row, force=force)
         log.info(
-          "Hourly prediction logged: %s %s %s",
+          "%s hourly prediction logged: %s %s %s",
+          asset.upper(),
           row["event_ticker"],
           row.get("primary_signal"),
           row.get("primary_label"),
         )
       return out
     except Exception as e:
-      log.exception("Hourly prediction failed: %s", e)
+      log.exception("%s hourly prediction failed: %s", asset.upper(), e)
       self.last_error = str(e)
       return None
 
-  def resolve_hourly_outcomes(self) -> None:
+  def resolve_hourly_outcomes(self, *, asset: str = "btc") -> None:
     from src.data.kalshi_hourly import try_resolve_pending
 
-    pending = self.hourly_calibration.get_pending()
+    tracker = self._asset_hourly_calibration(asset)
+    pending = tracker.get_pending()
     if not pending:
       return
     resolved = 0
@@ -190,12 +260,19 @@ class PredictionLoop:
       res = try_resolve_pending(self.kalshi, row)
       if res is None:
         continue
-      if self.hourly_calibration.resolve(str(row["event_ticker"]), res):
+      if tracker.resolve(str(row["event_ticker"]), res):
         resolved += 1
     if resolved:
-      log.info("Resolved %d hourly predictions via Kalshi", resolved)
-      self.refit_hourly_calibrator()
-      self.calibrate_hourly_sigma()
+      log.info("Resolved %d %s hourly predictions via Kalshi", resolved, asset.upper())
+      if asset == "btc":
+        self.refit_hourly_calibrator()
+        self.calibrate_hourly_sigma()
+      else:
+        self.refit_eth_hourly_calibrator()
+        self.calibrate_eth_hourly_sigma()
+
+  def resolve_eth_hourly_outcomes(self) -> None:
+    self.resolve_hourly_outcomes(asset="eth")
 
   def refit_hourly_calibrator(self) -> bool:
     hp = self.hourly_predictor()
@@ -215,19 +292,38 @@ class PredictionLoop:
     return False
 
   def calibrate_hourly_sigma(self) -> None:
-    if not self.cfg.get("hourly", {}).get("sigma_calibration", True):
+    self._calibrate_hourly_sigma_for_asset("btc")
+
+  def calibrate_eth_hourly_sigma(self) -> None:
+    self._calibrate_hourly_sigma_for_asset("eth")
+
+  def _calibrate_hourly_sigma_for_asset(self, asset: str) -> None:
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    if not acfg.get("hourly", {}).get("sigma_calibration", True):
       return
-    df = self.hourly_calibration.load_resolved()
+    tracker = self._asset_hourly_calibration(asset)
+    df = tracker.load_resolved()
     if len(df) < 10:
       return
     err = (pd.to_numeric(df["settle_brti"], errors="coerce") - pd.to_numeric(df["blended_mu"], errors="coerce")).abs()
     sigma = pd.to_numeric(df["terminal_sigma"], errors="coerce").replace(0, np.nan)
     ratio = float((err / sigma).median())
     if ratio > 0 and not np.isnan(ratio):
-      hp = self.hourly_predictor()
+      hp = self.hourly_predictor() if asset == "btc" else self.eth_hourly_predictor()
       new_scale = max(0.5, min(2.0, hp._sigma_scale * ratio))
       hp.save_sigma_scale(new_scale)
-      log.info("Hourly sigma scale updated to %.3f", new_scale)
+      log.info("%s hourly sigma scale updated to %.3f", asset.upper(), new_scale)
+
+  def refit_eth_hourly_calibrator(self) -> bool:
+    if not asset_enabled(self.cfg, "eth"):
+      return False
+    hp = self.eth_hourly_predictor()
+    if hp.calibrator is None:
+      return False
+    if self.eth_hourly_calibration and self.eth_hourly_calibration.fit_calibrator(hp.calibrator):
+      log.info("ETH hourly calibrator refit from resolved events")
+      return True
+    return False
 
   def train_hourly_model(self, min_samples: int | None = None) -> None:
     from src.models.hourly_trainer import HourlyModelTrainer
@@ -295,8 +391,31 @@ class PredictionLoop:
     except Exception as e:
       log.warning("Failed to fetch 1h: %s", e)
 
+    if asset_enabled(self.cfg, "eth"):
+      self._fetch_and_store_eth()
+
+  def _fetch_and_store_eth(self) -> None:
+    acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+    fetcher = self.eth_fetcher()
+    storage = self.eth_storage()
+    try:
+      df_1m = fetcher.fetch_latest_candles("1m", count=240)
+      if not df_1m.empty:
+        storage.save("1m", df_1m)
+    except Exception as e:
+      log.warning("Failed to fetch ETH 1m: %s", e)
+    try:
+      count_1h = int(acfg.get("hourly", {}).get("fetch_candles_1h", 720))
+      df_1h = fetcher.fetch_latest_candles("1h", count=count_1h)
+      if not df_1h.empty:
+        storage.save("1h", df_1h)
+    except Exception as e:
+      log.warning("Failed to fetch ETH 1h: %s", e)
+
   def resolve_outcomes(self) -> None:
-    self.resolve_hourly_outcomes()
+    self.resolve_hourly_outcomes(asset="btc")
+    if asset_enabled(self.cfg, "eth"):
+      self.resolve_eth_hourly_outcomes()
     pending = self.calibration.get_pending()
     if not pending:
       return
@@ -552,22 +671,31 @@ class PredictionLoop:
       threading.Thread(target=self.train_second_chance_model, daemon=True).start()
 
   def _schedule_hourly(self, scheduler) -> None:
-    if not self.cfg.get("hourly", {}).get("enabled", True):
-      return
-    minute = int(self.cfg.get("hourly", {}).get("log_minute", 5))
-    scheduler.add_job(
-      self.run_hourly_prediction,
-      CronTrigger(minute=str(minute), timezone=self.tz),
-      id="hourly_predict",
-      max_instances=1,
-    )
-    scheduler.add_job(
-      self.refit_hourly_calibrator,
-      "interval",
-      hours=6,
-      id="refit_hourly_calibrator",
-      max_instances=1,
-    )
+    if self.cfg.get("hourly", {}).get("enabled", True):
+      minute = int(self.cfg.get("hourly", {}).get("log_minute", 5))
+      scheduler.add_job(
+        self.run_hourly_prediction,
+        CronTrigger(minute=str(minute), timezone=self.tz),
+        id="hourly_predict",
+        max_instances=1,
+      )
+      scheduler.add_job(
+        self.refit_hourly_calibrator,
+        "interval",
+        hours=6,
+        id="refit_hourly_calibrator",
+        max_instances=1,
+      )
+    if asset_enabled(self.cfg, "eth"):
+      acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+      if acfg.get("hourly", {}).get("enabled", True):
+        minute = int(acfg.get("hourly", {}).get("log_minute", 5))
+        scheduler.add_job(
+          self.run_eth_hourly_prediction,
+          CronTrigger(minute=str(minute), timezone=self.tz),
+          id="eth_hourly_predict",
+          max_instances=1,
+        )
 
   def _auto_train_first_run(self) -> datetime:
     """Next calendar day at configured hour (default 2:00 AM ET)."""
@@ -677,14 +805,16 @@ class PredictionLoop:
   def _exchange_tick_cache_sec(self) -> float:
     return float(self.cfg.get("kalshi", {}).get("exchange_tick_cache_sec", 1.0))
 
-  def _exchange_live_quote(self, *, fresh: bool = True) -> KalshiPriceQuote | None:
-    """Fresh exchange last trade — used when BRTI auth is missing or stale."""
+  def _exchange_live_quote(self, *, fresh: bool = True, asset: str = "btc") -> KalshiPriceQuote | None:
+    """Fresh exchange last trade — used when index auth is missing or stale."""
+    cache = self._ticker_cache if asset == "btc" else self._eth_ticker_cache
     now_mono = time.monotonic()
     cache_sec = self._exchange_tick_cache_sec()
-    if not fresh and self._ticker_cache and (now_mono - self._ticker_cache[1]) < cache_sec:
-      return self._ticker_cache[0]
+    if not fresh and cache and (now_mono - cache[1]) < cache_sec:
+      return cache[0]
     try:
-      ticker = self.fetcher.fetch_ticker_quote()
+      fetcher = self.fetcher if asset == "btc" else self.eth_fetcher()
+      ticker = fetcher.fetch_ticker_quote()
       trade_time = ticker.trade_time
       if trade_time is None:
         trade_time = datetime.now(timezone.utc)
@@ -692,30 +822,35 @@ class PredictionLoop:
         trade_time = trade_time.replace(tzinfo=timezone.utc)
       source = "exchange_live" if not self.kalshi.authenticated else "exchange_fallback"
       quote = KalshiPriceQuote(price=ticker.price, source=source, trade_time=trade_time)
-      self._ticker_cache = (quote, now_mono)
+      if asset == "btc":
+        self._ticker_cache = (quote, now_mono)
+      else:
+        self._eth_ticker_cache = (quote, now_mono)
       return quote
     except Exception as e:
-      log.warning("Exchange live tick failed: %s", e)
-      if self._ticker_cache:
-        return self._ticker_cache[0]
+      log.warning("%s exchange live tick failed: %s", asset.upper(), e)
+      if cache:
+        return cache[0]
       return None
 
   def _live_quote(self, *, fresh: bool = False) -> KalshiPriceQuote | None:
     """Kalshi BRTI live price for P&L and display."""
     return self.kalshi.live_quote(fresh=fresh)
 
-  def live_price_quote(self, *, fresh: bool = True) -> KalshiPriceQuote | None:
-    """BRTI when authed; otherwise always a fresh exchange tick (never static t=0)."""
+  def live_price_quote(self, *, fresh: bool = True, asset: str = "btc") -> KalshiPriceQuote | None:
+    """CF Benchmarks index when authed; otherwise fresh exchange tick."""
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    index_id = index_id_for_cfg(acfg)
     max_stale = float(self.cfg.get("kalshi", {}).get("brti_max_stale_sec", 5))
     if self.kalshi.authenticated:
-      brti = self.kalshi.fetch_brti_live(fresh=True)
-      if brti is not None:
-        return brti
-      last = self.kalshi.last_brti_quote()
+      live = self.kalshi.fetch_index_live(index_id, fresh=True)
+      if live is not None:
+        return live
+      last = self.kalshi.last_index_quote(index_id)
       if last is not None and last.age_sec is not None and last.age_sec <= max_stale:
         return last
     if self._live_fallback_enabled():
-      return self._exchange_live_quote(fresh=fresh)
+      return self._exchange_live_quote(fresh=fresh, asset=asset)
     return None
 
   def _live_price(self, max_age_sec: float | None = None) -> float | None:
@@ -1011,6 +1146,13 @@ class PredictionLoop:
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")
     scheduler.add_job(self.run_hourly_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=15), id="hourly_now")
+    if asset_enabled(self.cfg, "eth"):
+      scheduler.add_job(
+        self.run_eth_hourly_prediction,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=18),
+        id="eth_hourly_now",
+      )
     scheduler.add_job(self.run_second_chance, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=20), id="second_chance_now")
     scheduler.add_job(self.collect_auxiliary, "interval", hours=6, id="auxiliary", max_instances=1)
     scheduler.add_job(self.collect_auxiliary, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=12), id="auxiliary_now")
