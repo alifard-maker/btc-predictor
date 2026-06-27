@@ -15,7 +15,13 @@ import pandas as pd
 from src.data.auxiliary import AuxiliaryStore
 from src.features.engineering import build_feature_matrix, training_feature_columns
 from src.models.daily_predictor import DailyPredictor
-from src.models.hourly_range_log import RANGE_BE_PREFIX, RANGE_ML_PREFIX, contract_to_row_prefix
+from src.models.hourly_range_log import (
+  RANGE_BE_PREFIX,
+  RANGE_ML_PREFIX,
+  contract_to_row_prefix,
+  lean_bands_from_contracts,
+  serialize_lean_bands,
+)
 from src.models.prob_calibration import ProbabilityCalibrator
 from src.trading.hourly_regime import HourlyRegimeFilter
 
@@ -260,4 +266,5 @@ class HourlyPredictor:
     }
     row.update(contract_to_row_prefix(sr.get("most_likely"), RANGE_ML_PREFIX))
     row.update(contract_to_row_prefix(sr.get("best_edge"), RANGE_BE_PREFIX))
+    row["range_lean_bands"] = serialize_lean_bands(lean_bands_from_contracts(sr.get("contracts")))
     return row

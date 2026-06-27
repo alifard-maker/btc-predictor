@@ -1132,26 +1132,54 @@
       return `<div><span class="muted">${label}</span><strong>${row.label}</strong><div class="muted">${pct(row.model_prob)} model${row.kalshi_mid != null ? ` · Kalshi ${pct(row.kalshi_mid)}` : ''}</div></div>`;
     }
 
+    function renderHourlyBandStats(title, st) {
+      if (!st || !st.n) {
+        return `<p class="muted" style="font-size:.78rem;margin:.35rem 0">${title}: no locked bands in epoch yet.</p>`;
+      }
+      return `<div style="margin:.5rem 0 .75rem">
+        <h4 style="font-size:.8rem;margin:0 0 .35rem;color:var(--muted)">${title}</h4>
+        <div class="cal-stats">
+          <div><span>Scored</span><strong>${st.n}</strong></div>
+          ${st.in_band_rate != null ? `<div><span>In-band hit rate</span><strong>${pct(st.in_band_rate)}</strong></div>` : ''}
+          ${st.brier_score != null ? `<div><span>Brier</span><strong>${st.brier_score.toFixed(4)}</strong></div>` : ''}
+          ${st.mean_calibration_error != null ? `<div><span>Cal error</span><strong>${pct(st.mean_calibration_error)}</strong></div>` : ''}
+          ${st.lean_yes_signals ? `<div><span>LEAN YES</span><strong>${st.lean_yes_accuracy != null ? pct(st.lean_yes_accuracy) : '—'} (${st.lean_yes_signals})</strong></div>` : ''}
+          ${st.lean_no_signals ? `<div><span>LEAN NO</span><strong>${st.lean_no_accuracy != null ? pct(st.lean_no_accuracy) : '—'} (${st.lean_no_signals})</strong></div>` : ''}
+        </div>
+      </div>`;
+    }
+
     function renderHourlyCalibration(data) {
       const s = data?.summary || {};
+      const sr = s.strategy_range || {};
       const at = s.all_time?.open || {};
-      if (!s.n_resolved && !at.n_resolved) {
+      const hasRange = (sr.most_likely_band?.n || 0) > 0 || (sr.all_lean_bands?.n || 0) > 0 || (sr.settlement_zone?.n || 0) > 0;
+      if (!s.n_resolved && !at.n_resolved && !hasRange) {
         $('hourly-calibration').innerHTML = '<p class="muted">No resolved hourly events yet — logged each hour at :05 ET when a Kalshi book is open.</p>';
         return;
       }
       $('hourly-calibration').innerHTML = `
-        <p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Primary pick = best threshold edge at lock. On misses, settle BRTI and distance vs forecast μ / locked zone are shown.</p>
         ${renderAllTimeStats({ open: at, epochs_archived: s.all_time?.epochs_archived, snapshot_through: s.all_time?.snapshot_through, snapshot_note: s.all_time?.snapshot_note, late_entry: {}, flip: {} })}
         <div class="stats-block epoch" style="margin-top:.75rem">
-          <h3>Current epoch</h3>
+          <h3>Strategy 1 · Threshold (primary pick)</h3>
+          <p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Locked best threshold edge @ :05 ET vs Kalshi settle.</p>
           ${renderRollingAccuracy(s.rolling_accuracy)}
           <div class="cal-stats">
             <div><span>Resolved</span><strong>${s.n_resolved || 0}</strong></div>
-            ${s.brier_score != null ? `<div><span>Brier (primary)</span><strong>${s.brier_score.toFixed(4)}</strong></div>` : ''}
-            ${s.accuracy != null ? `<div><span>Accuracy</span><strong>${pct(s.accuracy)}</strong></div>` : ''}
+            ${s.brier_score != null ? `<div><span>Brier</span><strong>${s.brier_score.toFixed(4)}</strong></div>` : ''}
+            ${s.accuracy != null ? `<div><span>Signal accuracy</span><strong>${pct(s.accuracy)}</strong></div>` : ''}
             ${s.lean_yes_signals ? `<div><span>LEAN YES</span><strong>${s.lean_yes_accuracy != null ? pct(s.lean_yes_accuracy) : '—'} (${s.lean_yes_signals})</strong></div>` : ''}
             ${s.lean_no_signals ? `<div><span>LEAN NO</span><strong>${s.lean_no_accuracy != null ? pct(s.lean_no_accuracy) : '—'} (${s.lean_no_signals})</strong></div>` : ''}
           </div>
+        </div>
+        <div class="stats-block epoch" style="margin-top:.75rem">
+          <h3>Strategy 2 · Range bands</h3>
+          <p class="muted" style="font-size:.72rem;margin-bottom:.35rem">Locked stall bands @ :05 — did settle BRTI land inside each band?</p>
+          ${renderHourlyBandStats('All LEAN bands @ lock', sr.all_lean_bands)}
+          ${sr.all_lean_bands?.n_hours_with_lean ? `<p class="muted" style="font-size:.7rem;margin:-.25rem 0 .5rem">Every LEAN YES/NO in the near-μ slice (${sr.all_lean_bands.n_hours_with_lean} hours with ≥1 lean band).</p>` : ''}
+          ${renderHourlyBandStats('Most likely band @ lock', sr.most_likely_band)}
+          ${renderHourlyBandStats('Best edge band @ lock', sr.best_edge_band)}
+          ${sr.settlement_zone?.n ? `<div style="margin-top:.35rem"><h4 style="font-size:.8rem;margin:0 0 .35rem;color:var(--muted)">Settlement zone @ lock</h4><div class="cal-stats"><div><span>Scored</span><strong>${sr.settlement_zone.n}</strong></div><div><span>BRTI in zone</span><strong>${pct(sr.settlement_zone.in_zone_rate)}</strong></div></div></div>` : ''}
         </div>`;
     }
 
@@ -1180,13 +1208,27 @@
       return `<div class="muted" style="font-size:.68rem;margin-top:.2rem">${parts.join(' · ')}</div>`;
     }
 
+    function renderRangeBandCell(r) {
+      if (!r.range_ml_label) return '<span class="muted">—</span>';
+      const prob = r.range_ml_prob != null ? ` <span class="muted">${pct(r.range_ml_prob)}</span>` : '';
+      if (r.settle_brti == null || r.range_ml_floor == null || r.range_ml_cap == null) {
+        return `<span style="font-size:.78rem">${r.range_ml_label}${prob}</span>`;
+      }
+      const settle = Number(r.settle_brti);
+      const inBand = settle >= Number(r.range_ml_floor) && settle <= Number(r.range_ml_cap);
+      const detail = inBand
+        ? '<span class="up" style="font-size:.68rem">IN BAND ✓</span>'
+        : `<span class="down" style="font-size:.68rem">MISS ✗ · BRTI ${price(settle)}</span>`;
+      return `<span style="font-size:.78rem">${r.range_ml_label}${prob}</span><div>${detail}</div>`;
+    }
+
     function renderHourlyHistory(rows) {
       if (!rows || !rows.length) {
         $('hourly-history').innerHTML = '<p class="muted">No hourly predictions logged yet.</p>';
         return;
       }
       $('hourly-history').innerHTML = `<table>
-        <thead><tr><th>Logged</th><th>Freq</th><th>Primary pick</th><th>Signal</th><th>Conf</th><th>Method</th><th>Outcome</th></tr></thead>
+        <thead><tr><th>Logged</th><th>Primary pick (S1)</th><th>Signal</th><th>Range band @ lock (S2)</th><th>Outcome (S1)</th></tr></thead>
         <tbody>${rows.map(r => {
           const wrong = hourlyPickWrong(r);
           let out;
@@ -1202,11 +1244,9 @@
           const sigCls = contractSignalCls(r.primary_signal || 'NEUTRAL');
           return `<tr>
             <td style="font-size:.78rem">${time(r.logged_at)}</td>
-            <td>${r.frequency || '—'}</td>
             <td style="font-size:.78rem">${r.primary_label || '—'} <span class="muted">${r.primary_model_prob != null ? pct(r.primary_model_prob) : ''}</span></td>
             <td class="${sigCls}">${r.primary_signal || '—'}</td>
-            <td>${r.confidence != null ? pct(r.confidence) : '—'}</td>
-            <td>${r.method || '—'}</td>
+            <td style="font-size:.78rem">${renderRangeBandCell(r)}</td>
             <td>${out}</td>
           </tr>`;
         }).join('')}</tbody></table>`;

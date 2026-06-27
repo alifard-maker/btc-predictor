@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 RANGE_ML_PREFIX = "range_ml"
@@ -24,6 +25,7 @@ RANGE_BAND_LOG_FIELDS: tuple[str, ...] = (
   "range_be_floor",
   "range_be_cap",
   "range_be_kalshi_mid",
+  "range_lean_bands",
 )
 
 
@@ -61,13 +63,99 @@ def row_to_contract(row: dict[str, Any], prefix: str) -> dict[str, Any] | None:
   }
 
 
+def lean_bands_from_contracts(contracts: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+  """All range bands with LEAN YES/NO at lock (near-forecast slice)."""
+  out: list[dict[str, Any]] = []
+  for c in contracts or []:
+    sig = str(c.get("signal") or "")
+    if sig not in ("LEAN YES", "LEAN NO"):
+      continue
+    floor = c.get("floor_strike")
+    cap = c.get("cap_strike")
+    if floor is None or cap is None:
+      continue
+    out.append(
+      {
+        "ticker": c.get("ticker"),
+        "label": c.get("label"),
+        "model_prob": c.get("model_prob"),
+        "signal": sig,
+        "edge": c.get("edge"),
+        "floor": floor,
+        "cap": cap,
+        "kalshi_mid": c.get("kalshi_mid"),
+      }
+    )
+  return out
+
+
+def serialize_lean_bands(bands: list[dict[str, Any]]) -> str | None:
+  if not bands:
+    return None
+  return json.dumps(bands)
+
+
+def parse_lean_bands(row: dict[str, Any]) -> list[dict[str, Any]]:
+  raw = row.get("range_lean_bands")
+  if not raw:
+    return []
+  if isinstance(raw, list):
+    return raw
+  try:
+    data = json.loads(raw)
+    return data if isinstance(data, list) else []
+  except (TypeError, json.JSONDecodeError):
+    return []
+
+
+def band_outcome_from_band(settle_brti: float, band: dict[str, Any]) -> int | None:
+  lo = band.get("floor")
+  hi = band.get("cap")
+  if lo is None or hi is None:
+    return None
+  try:
+    s, lo_f, hi_f = float(settle_brti), float(lo), float(hi)
+  except (TypeError, ValueError):
+    return None
+  return 1 if lo_f <= s <= hi_f else 0
+
+
+def band_outcome_from_row(row: dict[str, Any], prefix: str) -> int | None:
+  """1 if settle BRTI landed inside the band, 0 if not, None if unknown."""
+  settle = row.get("settle_brti")
+  lo = row.get(f"{prefix}_floor")
+  hi = row.get(f"{prefix}_cap")
+  if settle is None or lo is None or hi is None:
+    return None
+  try:
+    s, lo_f, hi_f = float(settle), float(lo), float(hi)
+  except (TypeError, ValueError):
+    return None
+  return 1 if lo_f <= s <= hi_f else 0
+
+
+def signal_correct_for_outcome(signal: str | None, outcome: int, model_prob: float | None) -> bool:
+  sig = str(signal or "")
+  if sig in ("LEAN YES", "VALUE YES"):
+    return outcome == 1
+  if sig in ("LEAN NO", "FADE YES"):
+    return outcome == 0
+  prob = float(model_prob if model_prob is not None else 0.5)
+  return (prob >= 0.5) == bool(outcome)
+
+
 def range_band_migrations() -> tuple[tuple[str, str], ...]:
   out: list[tuple[str, str]] = [
     ("settlement_zone_low", "REAL"),
     ("settlement_zone_high", "REAL"),
   ]
   for f in RANGE_BAND_LOG_FIELDS:
-    typ = "REAL" if f.endswith(("_prob", "_edge", "_floor", "_cap", "_kalshi_mid")) else "TEXT"
+    if f == "range_lean_bands":
+      typ = "TEXT"
+    elif f.endswith(("_prob", "_edge", "_floor", "_cap", "_kalshi_mid")):
+      typ = "REAL"
+    else:
+      typ = "TEXT"
     out.append((f, typ))
   return tuple(out)
 

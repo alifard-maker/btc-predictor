@@ -20,6 +20,14 @@ from src.calibration.stats_archive import (
   to_utc_timestamp,
 )
 from src.db.hourly_store import HourlyPredictionStore, create_hourly_store
+from src.models.hourly_range_log import (
+  RANGE_BE_PREFIX,
+  RANGE_ML_PREFIX,
+  band_outcome_from_band,
+  band_outcome_from_row,
+  parse_lean_bands,
+  signal_correct_for_outcome,
+)
 
 
 def _archive_path(cfg: dict[str, Any]) -> Path:
@@ -136,6 +144,150 @@ class HourlyCalibrationTracker:
     out["signal"] = out["primary_signal"]
     return out
 
+  def _band_stats(self, df: pd.DataFrame, prefix: str) -> dict[str, Any]:
+    if df.empty:
+      return {"n": 0}
+    prob_col = f"{prefix}_prob"
+    signal_col = f"{prefix}_signal"
+    label_col = f"{prefix}_label"
+    if label_col not in df.columns:
+      return {"n": 0}
+    has_band = df[label_col].notna() & (df[label_col].astype(str).str.len() > 0)
+    sub = df[has_band].copy()
+    if sub.empty:
+      return {"n": 0}
+
+    outcomes = sub.apply(lambda r: band_outcome_from_row(r, prefix), axis=1)
+    valid = outcomes.notna()
+    sub = sub.loc[valid].copy()
+    outcomes = outcomes.loc[valid].astype(int)
+    if sub.empty:
+      return {"n": 0}
+
+    probs = pd.to_numeric(sub[prob_col], errors="coerce")
+    prob_valid = probs.notna()
+    brier = None
+    mce = None
+    if prob_valid.any():
+      brier = float(((probs[prob_valid] - outcomes[prob_valid]) ** 2).mean())
+      mce = float((probs[prob_valid] - outcomes[prob_valid]).abs().mean())
+
+    correct = sub.apply(
+      lambda r: signal_correct_for_outcome(
+        r.get(signal_col),
+        int(band_outcome_from_row(r, prefix) or 0),
+        r.get(prob_col),
+      ),
+      axis=1,
+    )
+    leans = sub[sub[signal_col].isin(["LEAN YES", "LEAN NO"])]
+    yes_rows = leans[leans[signal_col] == "LEAN YES"]
+    no_rows = leans[leans[signal_col] == "LEAN NO"]
+
+    return {
+      "n": int(len(sub)),
+      "in_band_rate": float(outcomes.mean()),
+      "brier_score": brier,
+      "mean_calibration_error": mce,
+      "signal_accuracy": float(correct.mean()),
+      "lean_yes_signals": int(len(yes_rows)),
+      "lean_yes_accuracy": float(
+        yes_rows.apply(
+          lambda r: signal_correct_for_outcome(
+            r[signal_col], int(band_outcome_from_row(r, prefix) or 0), r.get(prob_col)
+          ),
+          axis=1,
+        ).mean()
+      ) if len(yes_rows) else None,
+      "lean_no_signals": int(len(no_rows)),
+      "lean_no_accuracy": float(
+        no_rows.apply(
+          lambda r: signal_correct_for_outcome(
+            r[signal_col], int(band_outcome_from_row(r, prefix) or 0), r.get(prob_col)
+          ),
+          axis=1,
+        ).mean()
+      ) if len(no_rows) else None,
+    }
+
+  def _zone_stats(self, df: pd.DataFrame) -> dict[str, Any]:
+    if df.empty or "settlement_zone_low" not in df.columns:
+      return {"n": 0}
+    has_zone = df["settlement_zone_low"].notna() & df["settlement_zone_high"].notna()
+    sub = df[has_zone & df["settle_brti"].notna()].copy()
+    if sub.empty:
+      return {"n": 0}
+    inside = sub.apply(
+      lambda r: float(r["settlement_zone_low"]) <= float(r["settle_brti"]) <= float(r["settlement_zone_high"]),
+      axis=1,
+    )
+    return {"n": int(len(sub)), "in_zone_rate": float(inside.mean())}
+
+  def _all_lean_bands_stats(self, df: pd.DataFrame) -> dict[str, Any]:
+    """Every LEAN YES/NO range band frozen in range_lean_bands @ lock."""
+    if df.empty or "range_lean_bands" not in df.columns:
+      return {"n": 0}
+    records: list[dict[str, Any]] = []
+    hours_with_lean = 0
+    for _, r in df.iterrows():
+      settle = r.get("settle_brti")
+      if settle is None:
+        continue
+      bands = parse_lean_bands(r)
+      if not bands:
+        continue
+      hours_with_lean += 1
+      for band in bands:
+        outcome = band_outcome_from_band(settle, band)
+        if outcome is None:
+          continue
+        sig = str(band.get("signal") or "")
+        records.append(
+          {
+            "signal": sig,
+            "outcome": int(outcome),
+            "correct": signal_correct_for_outcome(sig, int(outcome), band.get("model_prob")),
+            "model_prob": band.get("model_prob"),
+          }
+        )
+    if not records:
+      return {"n": 0, "n_hours_with_lean": hours_with_lean}
+    rec = pd.DataFrame(records)
+    yes = rec[rec["signal"] == "LEAN YES"]
+    no = rec[rec["signal"] == "LEAN NO"]
+    probs = pd.to_numeric(rec["model_prob"], errors="coerce")
+    outcomes = rec["outcome"].astype(int)
+    prob_valid = probs.notna()
+    brier = float(((probs[prob_valid] - outcomes[prob_valid]) ** 2).mean()) if prob_valid.any() else None
+    return {
+      "n": int(len(rec)),
+      "n_hours_with_lean": hours_with_lean,
+      "in_band_rate": float(outcomes.mean()),
+      "brier_score": brier,
+      "signal_accuracy": float(rec["correct"].mean()),
+      "lean_yes_signals": int(len(yes)),
+      "lean_yes_accuracy": float(yes["correct"].mean()) if len(yes) else None,
+      "lean_no_signals": int(len(no)),
+      "lean_no_accuracy": float(no["correct"].mean()) if len(no) else None,
+    }
+
+  def _strategy_range_summary(self, df: pd.DataFrame) -> dict[str, Any]:
+    if df.empty:
+      return {
+        "n_resolved": 0,
+        "most_likely_band": {"n": 0},
+        "best_edge_band": {"n": 0},
+        "all_lean_bands": {"n": 0},
+        "settlement_zone": {"n": 0},
+      }
+    return {
+      "n_resolved": int(len(df)),
+      "most_likely_band": self._band_stats(df, RANGE_ML_PREFIX),
+      "best_edge_band": self._band_stats(df, RANGE_BE_PREFIX),
+      "all_lean_bands": self._all_lean_bands_stats(df),
+      "settlement_zone": self._zone_stats(df),
+    }
+
   def summary(self) -> dict[str, Any]:
     df = self.load_resolved()
     archive = read_hourly_archive(self.cfg)
@@ -149,6 +301,7 @@ class HourlyCalibrationTracker:
       return {
         "n_resolved": 0,
         "rolling_accuracy": self._rolling(df),
+        "strategy_range": self._strategy_range_summary(df),
         "stats_epoch": read_hourly_stats_epoch(self.cfg),
         "all_time": {
           **combined_public(archive, CategoryAgg(), CategoryAgg(), CategoryAgg()),
@@ -192,6 +345,7 @@ class HourlyCalibrationTracker:
       "mean_calibration_error": float(
         (probs[valid] - df.loc[valid, "outcome"]).abs().mean()
       ) if valid.any() else None,
+      "strategy_range": self._strategy_range_summary(df),
       "stats_epoch": read_hourly_stats_epoch(self.cfg),
       "all_time": all_time,
     }
