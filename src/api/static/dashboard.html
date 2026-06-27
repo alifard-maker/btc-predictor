@@ -506,6 +506,49 @@
       </div>`;
     }
 
+    function renderSecondChanceBlock(m) {
+      if (!m.second_chance_signal || m.second_chance_prob_up == null) return '';
+      const up = m.second_chance_prob_up * 100;
+      const down = 100 - up;
+      const sig = m.second_chance_signal;
+      const minBar = 57;
+      let verdict = '';
+      let verdictCls = 'muted';
+      if (sig === '2ND LONG') {
+        verdict = `Fresh lean: UP (${up.toFixed(0)}% ≥ ${minBar}% bar).`;
+        verdictCls = 'up';
+      } else if (sig === '2ND SHORT') {
+        verdict = `Fresh lean: DOWN (${down.toFixed(0)}% down lean).`;
+        verdictCls = 'down';
+      } else {
+        verdict = `Outlook ${up.toFixed(0)}% UP — too close to call for a new lean (need ${minBar}%+ for 2ND LONG).`;
+      }
+      const openSig = m.second_chance_open_signal || m.signal_at_open || '';
+      const openPct = m.second_chance_open_prob != null ? (m.second_chance_open_prob * 100).toFixed(0) : null;
+      let vsOpen = '';
+      if (openSig && openSig !== 'NO TRADE') {
+        if (sig === '2ND NO TRADE' && (openSig === 'LONG' || openSig === 'SHORT')) {
+          vsOpen = ` Open ${openSig}${openPct ? ` (${openPct}% UP)` : ''} — direction not contradicted; use <strong>HOLD / TAKE PROFIT / CUT LOSS</strong> above for your position.`;
+        } else if (sig === '2ND LONG' && openSig === 'SHORT') {
+          vsOpen = ' Conflicts with open SHORT — watch for <strong>FLIP</strong> or <strong>CUT LOSS</strong> below.';
+        } else if (sig === '2ND SHORT' && openSig === 'LONG') {
+          vsOpen = ' Conflicts with open LONG — watch for <strong>FLIP</strong> or <strong>CUT LOSS</strong> below.';
+        } else if (sig.includes('LONG') && openSig === 'LONG') {
+          vsOpen = ' Agrees with open LONG.';
+        } else if (sig.includes('SHORT') && openSig === 'SHORT') {
+          vsOpen = ' Agrees with open SHORT.';
+        }
+      }
+      return `<div class="reassess-block" style="margin-bottom:.65rem;border-color:rgba(99,102,241,.35)">
+        <h4>2nd Chance @ t+4 <span class="muted" style="font-weight:400;font-size:.7rem">outlook only</span></h4>
+        <div class="bar-row"><span class="up">UP @ close</span><div class="track"><div class="fill-up" style="width:${up}%"></div></div><span>${up.toFixed(0)}%</span></div>
+        <div class="bar-row"><span class="down">DOWN @ close</span><div class="track"><div class="fill-down" style="width:${down}%"></div></div><span>${down.toFixed(0)}%</span></div>
+        <p style="font-size:.8rem;margin-top:.55rem">${badge(sig)}</p>
+        <p style="font-size:.8rem;margin-top:.35rem" class="${verdictCls}">${verdict}${vsOpen}</p>
+        <p class="muted" style="font-size:.68rem;margin-top:.4rem">2nd Chance logs a directional reassessment for stats — not flips or cuts. Position actions stay in the purple badge above.</p>
+      </div>`;
+    }
+
     function renderSlotMonitor(m) {
       const card = $('monitor-card');
       if (!m) {
@@ -529,11 +572,7 @@
         <p style="font-size:.9rem;margin-bottom:.5rem">${m.message || ''}</p>`;
 
       if (m.second_chance_signal) {
-        body += `<div class="reassess-block" style="margin-bottom:.65rem;border-color:rgba(99,102,241,.35)">
-          <h4>2nd Chance @ t+4</h4>
-          <p style="font-size:.85rem">${badge(m.second_chance_signal)}${m.second_chance_prob_up != null ? ` · <span class="up">${pct(m.second_chance_prob_up)}</span> UP` : ''}</p>
-          <p class="muted" style="font-size:.75rem;margin-top:.35rem">${m.second_chance_summary || ''}</p>
-        </div>`;
+        body += renderSecondChanceBlock(m);
       } else if (m.active && (m.elapsed_pct || 0) < 28) {
         const minsIn = Math.max(0, Math.round((m.elapsed_pct || 0) / 100 * 15));
         const wait = Math.max(0, 4 - minsIn);

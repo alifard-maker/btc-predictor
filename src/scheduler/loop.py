@@ -886,9 +886,23 @@ class PredictionLoop:
       prob = row.get("second_chance_prob_up")
       if prob is not None and prob == prob:
         monitor.second_chance_prob_up = float(prob)
-      monitor.second_chance_summary = (
-        f"{sig} @ t+4 — {float(prob) * 100:.0f}% UP" if prob is not None and prob == prob else sig
-      )
+      open_prob = row.get("prob_up")
+      if open_prob is not None and open_prob == open_prob:
+        monitor.second_chance_open_prob = float(open_prob)
+      monitor.second_chance_open_signal = str(row.get("signal") or pred.get("signal") or "")
+      secs = row.get("second_chance_seconds_remaining")
+      mins = int(secs) // 60 if secs is not None and secs == secs else None
+      sc_pct = float(prob) * 100 if prob is not None and prob == prob else None
+      open_pct = float(open_prob) * 100 if open_prob is not None and open_prob == open_prob else None
+      if sc_pct is not None:
+        monitor.second_chance_summary = (
+          f"{sig.replace('2ND ', '')} outlook at t+4"
+          + (f" ({mins}m left when logged)" if mins is not None else "")
+          + f" — {sc_pct:.0f}% UP"
+          + (f" vs {open_pct:.0f}% at open" if open_pct is not None else "")
+        )
+      else:
+        monitor.second_chance_summary = sig
     except Exception as e:
       log.debug("2nd Chance preview failed: %s", e)
 
