@@ -167,7 +167,7 @@ class HourlyPredictor:
     thresh_ml = (blended.get("strategy_threshold") or {}).get("most_likely")
     pick = range_ml
     if thresh_be and self.structure._row_near_forecast(thresh_be, blended_mu, structure_sigma):
-      if thresh_be.get("signal") in ("LEAN YES", "LEAN NO"):
+      if thresh_be.get("signal") in ("LEAN YES", "LEAN NO", "VALUE YES"):
         pick = thresh_be
     elif thresh_ml and self.structure._row_near_forecast(thresh_ml, blended_mu, structure_sigma):
       pick = thresh_ml

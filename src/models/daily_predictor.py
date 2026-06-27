@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -144,6 +144,7 @@ class DailyPredictor:
     return float(np.clip(prob, 0.02, 0.98)), notes[:3]
 
   def _signal(self, model_p: float, kalshi_mid: float | None) -> tuple[str, float | None]:
+    """Range-band mispricing vs Kalshi YES mid."""
     edge = None
     if kalshi_mid is not None:
       edge = model_p - kalshi_mid
@@ -152,6 +153,27 @@ class DailyPredictor:
       if edge <= -self.min_edge:
         return "LEAN NO", edge
     return "NEUTRAL", edge
+
+  def _signal_threshold(
+    self,
+    model_p: float,
+    kalshi_mid: float | None,
+    strike_type: str,
+  ) -> tuple[str, float | None]:
+    """Threshold signal — LEAN only when model direction and edge agree.
+
+    ≥ strike: model >50% + cheap YES → LEAN YES; model <50% + rich YES → LEAN NO.
+    Otherwise mispricing is tagged VALUE YES (cheap tail) or FADE YES (rich ITM).
+    """
+    if kalshi_mid is None:
+      return "NEUTRAL", None
+    edge = model_p - kalshi_mid
+    if abs(edge) < self.min_edge:
+      return "NEUTRAL", edge
+    favors_yes = model_p >= 0.5
+    if edge > 0:
+      return ("LEAN YES" if favors_yes else "VALUE YES"), edge
+    return ("LEAN NO" if not favors_yes else "FADE YES"), edge
 
   @staticmethod
   def _threshold_strike(m: KalshiContractMarket) -> float | None:
@@ -197,7 +219,7 @@ class DailyPredictor:
       floor_strike, cap_strike = None, strike
     else:
       return None
-    sig, edge = self._signal(p, m.yes_mid)
+    sig, edge = self._signal_threshold(p, m.yes_mid, strike_type)
     return ContractOdds(
       ticker=m.ticker,
       contract_type="threshold",
@@ -425,7 +447,7 @@ class DailyPredictor:
       if row:
         threshold_rows.append(row)
     threshold_rows.sort(
-      key=lambda r: abs((self._threshold_strike_from_row(r) or mu) - mu),
+      key=lambda r: (self._threshold_strike_from_row(r) or mu),
     )
 
     # --- Strategy 2: range bands with highest mass near μ ---
