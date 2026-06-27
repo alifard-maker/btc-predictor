@@ -75,8 +75,11 @@ class HourlyCalibrationTracker:
     self.cfg = cfg
     self.store: HourlyPredictionStore = create_hourly_store(cfg)
 
-  def log_prediction(self, row: dict[str, Any]) -> int:
-    return self.store.log_prediction(row)
+  def log_prediction(self, row: dict[str, Any], *, force: bool = False) -> int:
+    return self.store.log_prediction(row, force=force)
+
+  def get_logged(self, event_ticker: str) -> dict[str, Any] | None:
+    return self.store.get_by_event_ticker(event_ticker)
 
   def get_pending(self) -> list[dict[str, Any]]:
     return self.store.get_pending()

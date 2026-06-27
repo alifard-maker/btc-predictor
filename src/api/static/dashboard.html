@@ -1036,6 +1036,25 @@
         }).join('')}</tbody></table>`;
     }
 
+    function renderHourlySignalCard(title, pick, data, regime, extra = '') {
+      const pickSig = pick?.signal || 'NEUTRAL';
+      const pickCls = pickSig === 'LEAN YES' ? 'edge-yes' : pickSig === 'LEAN NO' ? 'edge-no' : 'muted';
+      return `<div class="likely-card" style="border-color:rgba(99,102,241,.45)">
+        <h3>${title}</h3>
+        <div class="headline ${pickCls}">${pickSig}${pick?.label ? ` · ${pick.label}` : ''}</div>
+        <div class="likely-grid" style="margin-top:.65rem">
+          <div><span class="muted">Model prob</span><strong>${pick?.model_prob != null ? pct(pick.model_prob) : '—'}</strong></div>
+          <div><span class="muted">Confidence</span><strong>${data.confidence != null ? pct(data.confidence) : '—'}</strong></div>
+          <div><span class="muted">Direction</span><strong>${data.direction || '—'}</strong></div>
+          <div><span class="muted">Edge vs Kalshi</span><strong>${pick?.edge != null ? (pick.edge >= 0 ? '+' : '') + (pick.edge * 100).toFixed(1) + '¢' : '—'}</strong></div>
+          ${data.ml_prob_up != null ? `<div><span class="muted">1h ML prob UP</span><strong>${pct(data.ml_prob_up)}</strong></div>` : ''}
+          ${data.prob_15m_avg != null ? `<div><span class="muted">15m avg prob</span><strong>${pct(data.prob_15m_avg)}</strong></div>` : ''}
+        </div>
+        ${regime?.reasons?.length ? `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${regime.allow_trade ? 'Regime note:' : 'Regime blocked:'} ${regime.reasons.join(' · ')}</p>` : ''}
+        ${extra}
+      </div>`;
+    }
+
     function renderDaily(data) {
       if (!data || !data.ok) {
         $('daily-meta').textContent = data?.error || 'Hourly prediction unavailable';
@@ -1047,55 +1066,80 @@
         $('daily-structure').innerHTML = '<p class="muted">—</p>';
         return;
       }
-      const ev = data.event || {};
+      const live = data.live || data;
+      const locked = data.locked || null;
+      const ev = live.event || data.event || {};
       const freq = (ev.frequency || 'hourly').toLowerCase();
       const freqCls = freq === 'daily' ? 'freq-daily' : 'freq-hourly';
       $('daily-freq-badge').innerHTML = `<span class="freq-badge ${freqCls}">${freq.toUpperCase()}</span>`;
       const settle = ev.close_time ? time(ev.close_time) : '—';
-      const ml = data.most_likely || {};
-      const beT = data.strategy_threshold?.best_edge;
-      const beR = data.strategy_range?.best_edge;
-      const pick = data.primary_pick || beT;
-      const regime = data.regime || {};
-      $('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · settles ${settle} · BRTI ${price(data.brti_live || data.current_price)} · ${data.hours_to_settle}h left`;
-      const pickSig = pick?.signal || 'NEUTRAL';
-      const pickCls = pickSig === 'LEAN YES' ? 'edge-yes' : pickSig === 'LEAN NO' ? 'edge-no' : 'muted';
-      $('daily-primary-signal').innerHTML = `
-        <div class="likely-card" style="border-color:rgba(99,102,241,.45)">
-          <h3>Primary signal · ${data.method || 'structure'} model</h3>
-          <div class="headline ${pickCls}">${pickSig}${pick?.label ? ` · ${pick.label}` : ''}</div>
-          <div class="likely-grid" style="margin-top:.65rem">
-            <div><span class="muted">Model prob</span><strong>${pick?.model_prob != null ? pct(pick.model_prob) : '—'}</strong></div>
-            <div><span class="muted">Confidence</span><strong>${data.confidence != null ? pct(data.confidence) : '—'}</strong></div>
-            <div><span class="muted">Direction</span><strong>${data.direction || '—'}</strong></div>
-            <div><span class="muted">Edge vs Kalshi</span><strong>${pick?.edge != null ? (pick.edge >= 0 ? '+' : '') + (pick.edge * 100).toFixed(1) + '¢' : '—'}</strong></div>
-            ${data.ml_prob_up != null ? `<div><span class="muted">1h ML prob UP</span><strong>${pct(data.ml_prob_up)}</strong></div>` : ''}
-            ${data.prob_15m_avg != null ? `<div><span class="muted">15m avg prob</span><strong>${pct(data.prob_15m_avg)}</strong></div>` : ''}
-          </div>
-          ${regime.reasons?.length ? `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${regime.allow_trade ? 'Regime note:' : 'Regime blocked:'} ${regime.reasons.join(' · ')}</p>` : ''}
+      const liveMl = live.most_likely || {};
+      const lockedMl = locked?.most_likely || {};
+      const beT = live.strategy_threshold?.best_edge;
+      const beR = live.strategy_range?.best_edge;
+      const lockNote = locked
+        ? `Locked ${time(locked.logged_at)} · BRTI ref ${price(locked.reference_price)}`
+        : 'Official prediction locks at :05 ET';
+      $('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · settles ${settle} · BRTI now ${price(data.brti_live || live.current_price)} · ${live.hours_to_settle}h left · ${lockNote}`;
+
+      if (locked) {
+        const lpick = locked.primary_pick || {};
+        $('daily-primary-signal').innerHTML = renderHourlySignalCard(
+          `Locked primary signal · ${locked.method || 'structure'} @ ${time(locked.logged_at)}`,
+          lpick,
+          locked,
+          locked.regime,
+          `<p class="muted" style="font-size:.68rem;margin-top:.5rem">This pick is frozen for calibration — it will not move with the market.</p>`
+        );
+      } else {
+        const lpick = live.primary_pick || beT;
+        const pickSig = lpick?.signal || 'NEUTRAL';
+        const pickCls = pickSig === 'LEAN YES' ? 'edge-yes' : pickSig === 'LEAN NO' ? 'edge-no' : 'muted';
+        $('daily-primary-signal').innerHTML = `<div class="likely-card" style="border-color:rgba(245,158,11,.35)">
+          <h3>Awaiting lock · :05 ET</h3>
+          <p class="muted" style="font-size:.85rem;margin-bottom:.5rem">Preview only — primary signal and settlement range freeze at :05 ET for scoring.</p>
+          <div class="headline ${pickCls}">${pickSig}${lpick?.label ? ` · ${lpick.label}` : ''}</div>
+          <p class="muted" style="font-size:.75rem;margin-top:.35rem">Live zone ${price(liveMl.settlement_zone_low)} – ${price(liveMl.settlement_zone_high)} (will not count until locked)</p>
         </div>`;
+      }
+
+      const muShift = data.live_vs_locked?.mu_shift;
+      const shiftTxt = muShift != null
+        ? `<p class="muted" style="font-size:.75rem;margin-top:.35rem">μ shifted ${muShift >= 0 ? '+' : ''}${price(muShift)} vs locked forecast.</p>`
+        : '';
+
       $('daily-summary').innerHTML = `
-        <div class="likely-card">
-          <h3>Most likely outcome</h3>
-          <div class="headline">BRTI ${price(ml.settlement_zone_low)} – ${price(ml.settlement_zone_high)} at settle</div>
-          <p class="muted" style="font-size:.8rem">${ml.summary || ''}</p>
+        ${locked ? `<div class="likely-card" style="border-color:rgba(34,197,94,.35)">
+          <h3>Locked settlement range</h3>
+          <div class="headline">BRTI ${price(lockedMl.settlement_zone_low)} – ${price(lockedMl.settlement_zone_high)} at settle</div>
+          <p class="muted" style="font-size:.8rem">${lockedMl.summary || ''}</p>
           <div class="likely-grid">
-            ${renderLikelyPick('Threshold (highest model %)', ml.threshold)}
-            ${renderLikelyPick('Range band (highest model %)', ml.range)}
+            ${renderLikelyPick('Threshold @ lock', lockedMl.threshold)}
           </div>
+          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Blended μ ${price(locked.terminal_mu)} · σ ${price(locked.terminal_sigma)} — scored against actual settle BRTI.</p>
+        </div>` : ''}
+        <div class="likely-card" style="border-color:rgba(99,102,241,.25)">
+          <h3>Live reassessment <span class="muted" style="font-weight:400;font-size:.7rem">updates with market</span></h3>
+          <div class="headline">BRTI ${price(liveMl.settlement_zone_low)} – ${price(liveMl.settlement_zone_high)} now</div>
+          <p class="muted" style="font-size:.8rem">${liveMl.summary || ''}</p>
+          ${shiftTxt}
+          <div class="likely-grid">
+            ${renderLikelyPick('Threshold (live)', liveMl.threshold)}
+            ${renderLikelyPick('Range band (live)', liveMl.range)}
+          </div>
+          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Live μ ${price(live.terminal_mu)} · σ ${price(live.terminal_sigma)}${live.structure_mu != null ? ` · structure μ ${price(live.structure_mu)}` : ''}${live.ml_mu != null ? ` · ML μ ${price(live.ml_mu)}` : ''}</p>
         </div>
         <div class="likely-card" style="border-color:var(--border)">
-          <h3 style="color:var(--muted)">Best edge (model vs Kalshi)</h3>
+          <h3 style="color:var(--muted)">Best edge now (model vs Kalshi)</h3>
           <div class="likely-grid">
             ${renderLikelyPick('Threshold mispricing', beT)}
             ${renderLikelyPick('Range mispricing', beR)}
           </div>
-          ${beT?.signal ? `<p class="muted" style="font-size:.75rem;margin-top:.5rem">Threshold signal: <strong class="${beT.signal === 'LEAN YES' ? 'edge-yes' : beT.signal === 'LEAN NO' ? 'edge-no' : ''}">${beT.signal}</strong>${beT.edge != null ? ` (${beT.edge >= 0 ? '+' : ''}${(beT.edge * 100).toFixed(1)}¢)` : ''}</p>` : ''}
-        </div>
-        <p class="muted" style="font-size:.75rem;margin-top:.5rem">Blended μ ${price(data.terminal_mu)} · σ ${price(data.terminal_sigma)}${data.structure_mu != null ? ` · structure μ ${price(data.structure_mu)}` : ''}${data.ml_mu != null ? ` · ML μ ${price(data.ml_mu)}` : ''}</p>`;
-      renderDailyContracts(data.strategy_threshold?.contracts || [], 'daily-threshold');
-      renderDailyContracts(data.strategy_range?.contracts || [], 'daily-range');
-      renderDailyStructure(data.structure);
+          ${beT?.signal ? `<p class="muted" style="font-size:.75rem;margin-top:.5rem">Live threshold signal: <strong class="${beT.signal === 'LEAN YES' ? 'edge-yes' : beT.signal === 'LEAN NO' ? 'edge-no' : ''}">${beT.signal}</strong>${beT.edge != null ? ` (${beT.edge >= 0 ? '+' : ''}${(beT.edge * 100).toFixed(1)}¢)` : ''}</p>` : ''}
+        </div>`;
+      renderDailyContracts(live.strategy_threshold?.contracts || [], 'daily-threshold');
+      renderDailyContracts(live.strategy_range?.contracts || [], 'daily-range');
+      renderDailyStructure(live.structure);
     }
 
     async function loadDaily() {

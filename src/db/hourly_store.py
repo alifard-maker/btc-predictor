@@ -30,7 +30,10 @@ class HourlyPredictionStore(ABC):
   def init(self) -> None: ...
 
   @abstractmethod
-  def log_prediction(self, row: dict[str, Any]) -> int: ...
+  def log_prediction(self, row: dict[str, Any], *, force: bool = False) -> int: ...
+
+  @abstractmethod
+  def get_by_event_ticker(self, event_ticker: str) -> dict[str, Any] | None: ...
 
   @abstractmethod
   def get_pending(self) -> list[dict[str, Any]]: ...
@@ -86,6 +89,8 @@ _HOURLY_COLS = """
   regime_blocked INTEGER DEFAULT 0,
   regime_notes TEXT,
   prob_15m_avg REAL,
+  settlement_zone_low REAL,
+  settlement_zone_high REAL,
   outcome INTEGER,
   settle_brti REAL,
   actual_return REAL,
@@ -109,11 +114,19 @@ class SqliteHourlyStore(HourlyPredictionStore):
   def init(self) -> None:
     with self._conn() as conn:
       conn.execute(f"CREATE TABLE IF NOT EXISTS hourly_predictions ({_HOURLY_COLS})")
+      self._migrate_sqlite(conn)
       conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_hourly_settle ON hourly_predictions(settle_time)"
       )
 
-  def log_prediction(self, row: dict[str, Any]) -> int:
+  @staticmethod
+  def _migrate_sqlite(conn) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(hourly_predictions)")}
+    for col, typ in (("settlement_zone_low", "REAL"), ("settlement_zone_high", "REAL")):
+      if col not in existing:
+        conn.execute(f"ALTER TABLE hourly_predictions ADD COLUMN {col} {typ}")
+
+  def log_prediction(self, row: dict[str, Any], *, force: bool = False) -> int:
     cols = [
       "logged_at", "event_ticker", "frequency", "settle_time", "series_ticker", "title",
       "reference_price", "terminal_mu", "terminal_sigma", "ml_prob_up", "ml_mu",
@@ -122,6 +135,7 @@ class SqliteHourlyStore(HourlyPredictionStore):
       "primary_model_prob", "primary_kalshi_mid", "primary_edge", "primary_signal",
       "most_likely_label", "most_likely_prob", "confidence", "expected_move_pct",
       "direction", "method", "regime_blocked", "regime_notes", "prob_15m_avg",
+      "settlement_zone_low", "settlement_zone_high",
     ]
     vals = [row.get(c) for c in cols]
     with self._conn() as conn:
@@ -129,6 +143,8 @@ class SqliteHourlyStore(HourlyPredictionStore):
         "SELECT id FROM hourly_predictions WHERE event_ticker = ?",
         (row["event_ticker"],),
       ).fetchone()
+      if existing and not force:
+        return int(existing[0])
       if existing:
         placeholders = ", ".join(f"{c}=?" for c in cols if c != "event_ticker")
         update_vals = [row.get(c) for c in cols if c != "event_ticker"] + [row["event_ticker"]]
@@ -142,6 +158,15 @@ class SqliteHourlyStore(HourlyPredictionStore):
         vals,
       )
       return int(cur.lastrowid)
+
+  def get_by_event_ticker(self, event_ticker: str) -> dict[str, Any] | None:
+    with self._conn() as conn:
+      conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+      row = conn.execute(
+        "SELECT * FROM hourly_predictions WHERE event_ticker = ? LIMIT 1",
+        (event_ticker,),
+      ).fetchone()
+      return dict(row) if row else None
 
   def get_pending(self) -> list[dict[str, Any]]:
     with self._conn() as conn:
@@ -240,6 +265,8 @@ class PostgresHourlyStore(HourlyPredictionStore):
         regime_blocked INTEGER DEFAULT 0,
         regime_notes TEXT,
         prob_15m_avg DOUBLE PRECISION,
+        settlement_zone_low DOUBLE PRECISION,
+        settlement_zone_high DOUBLE PRECISION,
         outcome INTEGER,
         settle_brti DOUBLE PRECISION,
         actual_return DOUBLE PRECISION,
@@ -252,9 +279,21 @@ class PostgresHourlyStore(HourlyPredictionStore):
         cur.execute(
           "CREATE INDEX IF NOT EXISTS idx_hourly_settle ON hourly_predictions(settle_time)"
         )
+        self._migrate_pg(cur)
       conn.commit()
 
-  def log_prediction(self, row: dict[str, Any]) -> int:
+  @staticmethod
+  def _migrate_pg(cur) -> None:
+    cur.execute("""
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name = 'hourly_predictions'
+    """)
+    existing = {row[0] for row in cur.fetchall()}
+    for col, typ in (("settlement_zone_low", "DOUBLE PRECISION"), ("settlement_zone_high", "DOUBLE PRECISION")):
+      if col not in existing:
+        cur.execute(f"ALTER TABLE hourly_predictions ADD COLUMN {col} {typ}")
+
+  def log_prediction(self, row: dict[str, Any], *, force: bool = False) -> int:
     cols = [
       "logged_at", "event_ticker", "frequency", "settle_time", "series_ticker", "title",
       "reference_price", "terminal_mu", "terminal_sigma", "ml_prob_up", "ml_mu",
@@ -263,12 +302,15 @@ class PostgresHourlyStore(HourlyPredictionStore):
       "primary_model_prob", "primary_kalshi_mid", "primary_edge", "primary_signal",
       "most_likely_label", "most_likely_prob", "confidence", "expected_move_pct",
       "direction", "method", "regime_blocked", "regime_notes", "prob_15m_avg",
+      "settlement_zone_low", "settlement_zone_high",
     ]
     vals = tuple(row.get(c) for c in cols)
     with self._conn() as conn:
       with conn.cursor() as cur:
         cur.execute("SELECT id FROM hourly_predictions WHERE event_ticker = %s", (row["event_ticker"],))
         existing = cur.fetchone()
+        if existing and not force:
+          return int(existing[0])
         if existing:
           sets = ", ".join(f"{c}=%s" for c in cols if c != "event_ticker")
           update_vals = tuple(row.get(c) for c in cols if c != "event_ticker") + (row["event_ticker"],)
@@ -282,6 +324,17 @@ class PostgresHourlyStore(HourlyPredictionStore):
         rid = int(cur.fetchone()[0])
       conn.commit()
       return rid
+
+  def get_by_event_ticker(self, event_ticker: str) -> dict[str, Any] | None:
+    with self._conn() as conn:
+      df = pd.read_sql(
+        "SELECT * FROM hourly_predictions WHERE event_ticker = %s LIMIT 1",
+        conn,
+        params=(event_ticker,),
+      )
+    if df.empty:
+      return None
+    return df.iloc[0].to_dict()
 
   def get_pending(self) -> list[dict[str, Any]]:
     with self._conn() as conn:

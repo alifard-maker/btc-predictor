@@ -363,10 +363,13 @@ def hourly_predictions(limit: int = Query(default=30, le=200)):
 
 
 @app.post("/api/admin/hourly/predict-now")
-def hourly_predict_now(_: None = Depends(_verify_admin)):
+def hourly_predict_now(
+  force: bool = Query(default=False),
+  _: None = Depends(_verify_admin),
+):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  out = _loop.run_hourly_prediction()
+  out = _loop.run_hourly_prediction(force=force)
   if not out or not out.get("ok"):
     raise HTTPException(500, out.get("error") if out else "Hourly prediction failed")
   return out

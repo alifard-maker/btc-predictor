@@ -112,20 +112,47 @@ class PredictionLoop:
       return {"ok": False, "error": "Live BRTI unavailable"}
     df_1h = self._ohlc_1h()
     df_15m = self.storage.load("15m")
-    out = self.hourly_predictor().predict(
+    live = self.hourly_predictor().predict(
       current_price=float(price),
       df_1h=df_1h,
       df_15m=df_15m if not df_15m.empty else None,
       calibration_tracker=self.calibration,
     )
+    if not live.get("ok"):
+      return live
+
+    from src.models.hourly_snapshot import locked_prediction_from_row
+
+    event_ticker = (live.get("event") or {}).get("event_ticker")
+    locked = None
+    if event_ticker:
+      row = self.hourly_calibration.get_logged(event_ticker)
+      if row:
+        locked = locked_prediction_from_row(row)
+
+    out = {**live, "live": live, "locked": locked, "has_locked": locked is not None}
     if quote:
       out["brti_live"] = round(quote.price, 2)
       out["brti_source"] = quote.source
+      live["brti_live"] = out["brti_live"]
+      live["brti_source"] = quote.source
     out["timezone"] = self.tz
-    self.latest_hourly_prediction = out if out.get("ok") else None
+    live["timezone"] = self.tz
+
+    if locked:
+      mu_shift = None
+      if locked.get("terminal_mu") is not None and live.get("terminal_mu") is not None:
+        mu_shift = round(float(live["terminal_mu"]) - float(locked["terminal_mu"]), 2)
+      out["live_vs_locked"] = {
+        "mu_shift": mu_shift,
+        "reference_at_log": locked.get("reference_price"),
+        "logged_at": locked.get("logged_at"),
+      }
+
+    self.latest_hourly_prediction = out
     return out
 
-  def run_hourly_prediction(self) -> dict[str, Any] | None:
+  def run_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
     if not self.cfg.get("hourly", {}).get("enabled", True):
       return None
     try:
@@ -133,9 +160,9 @@ class PredictionLoop:
       out = self.daily_prediction()
       if not out.get("ok"):
         return out
-      row = self.hourly_predictor().to_log_row(out)
+      row = self.hourly_predictor().to_log_row(out.get("live") or out)
       if row.get("event_ticker"):
-        self.hourly_calibration.log_prediction(row)
+        self.hourly_calibration.log_prediction(row, force=force)
         log.info(
           "Hourly prediction logged: %s %s %s",
           row["event_ticker"],

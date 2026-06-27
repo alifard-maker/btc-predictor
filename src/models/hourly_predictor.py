@@ -204,6 +204,7 @@ class HourlyPredictor:
     ev = pred.get("event") or {}
     pick = pred.get("primary_pick") or {}
     ml = pred.get("most_likely", {}).get("threshold") or {}
+    ml_block = pred.get("most_likely") or {}
     now = datetime.now(timezone.utc).isoformat()
     regime = pred.get("regime") or {}
     return {
@@ -240,4 +241,6 @@ class HourlyPredictor:
       "regime_blocked": 0 if regime.get("allow_trade", True) else 1,
       "regime_notes": "; ".join(regime.get("reasons") or []),
       "prob_15m_avg": pred.get("prob_15m_avg"),
+      "settlement_zone_low": ml_block.get("settlement_zone_low"),
+      "settlement_zone_high": ml_block.get("settlement_zone_high"),
     }
