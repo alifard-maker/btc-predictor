@@ -6,13 +6,15 @@ from typing import Any
 
 
 def _pick_safest(live: dict[str, Any], locked: dict[str, Any] | None) -> dict[str, Any] | None:
-  """Highest model-probability outcome — most predictable landing zone."""
+  """Highest-probability near-forecast outcome — range band mass or ATM threshold."""
   ref = locked or live
-  ml = ref.get("most_likely") or live.get("most_likely") or {}
+  range_row = (ref.get("strategy_range") or live.get("strategy_range") or {}).get("most_likely")
+  thresh_row = (ref.get("strategy_threshold") or live.get("strategy_threshold") or {}).get("most_likely")
   candidates: list[tuple[float, dict[str, Any], str]] = []
-  for kind, row in (("range", ml.get("range")), ("threshold", ml.get("threshold"))):
-    if row and row.get("model_prob") is not None:
-      candidates.append((float(row["model_prob"]), row, kind))
+  if range_row and range_row.get("model_prob") is not None:
+    candidates.append((float(range_row["model_prob"]), range_row, "range"))
+  if thresh_row and thresh_row.get("model_prob") is not None:
+    candidates.append((float(thresh_row["model_prob"]), thresh_row, "threshold"))
   if not candidates:
     return None
   prob, row, kind = max(candidates, key=lambda x: x[0])
@@ -24,8 +26,12 @@ def _pick_safest(live: dict[str, Any], locked: dict[str, Any] | None) -> dict[st
     "model_prob": prob,
     "signal": row.get("signal", "—"),
     "reason": (
-      "Highest model probability — where BRTI is most likely to finish "
-      f"({'inside this band' if kind == 'range' else 'relative to this strike'})."
+      "Highest model probability near forecast μ — "
+      + (
+        "the stall band where BRTI is most likely to finish."
+        if kind == "range"
+        else "the strike closest to forecast μ (not the deepest ITM leg)."
+      )
     ),
   }
 

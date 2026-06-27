@@ -298,12 +298,12 @@
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Multi-touch support/resistance, wicks, and volume → odds BRTI finishes above each strike at settle.</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Strikes nearest forecast μ (blended terminal BRTI) — not the full 100+ leg book. Tags mark ATM most-likely and best edge in this slice.</p>
         <div id="daily-threshold"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
         <h2>Strategy 2 · Range bands (stall zone)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">1h consolidation box + terminal distribution → odds BRTI lands in each Kalshi band.</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Top bands by model probability near forecast μ — not all 180+ Kalshi bands. Highest-mass band tagged most likely.</p>
         <div id="daily-range-summary" style="margin-bottom:.75rem"></div>
         <div id="daily-range"><p class="muted">Loading…</p></div>
       </div>
@@ -1275,16 +1275,14 @@
           ${beT?.signal ? `<p class="muted" style="font-size:.75rem;margin-top:.5rem">Live threshold signal: <strong class="${beT.signal === 'LEAN YES' ? 'edge-yes' : beT.signal === 'LEAN NO' ? 'edge-no' : ''}">${beT.signal}</strong>${beT.edge != null ? ` (${beT.edge >= 0 ? '+' : ''}${(beT.edge * 100).toFixed(1)}¢)` : ''}</p>` : ''}
         </div>`;
       renderDailyContracts(live.strategy_threshold?.contracts || [], 'daily-threshold', {
-        safest: (g.recommendations || []).find(r => r.tier === 'safest' && r.pick_type === 'threshold')?.label,
-        edge: (g.recommendations || []).find(r => r.tier === 'edge' && r.pick_type === 'threshold')?.label,
+        safest: live.strategy_threshold?.most_likely?.label,
+        edge: live.strategy_threshold?.best_edge?.label,
       });
       renderStrategy2Panel(live, locked, g);
       const rangeRg = g.strategy_range || {};
       renderDailyContracts(live.strategy_range?.contracts || [], 'daily-range', {
-        safest: (rangeRg.recommendations || []).find(r => r.tier === 'safest')?.label
-          || (g.recommendations || []).find(r => r.tier === 'safest' && r.pick_type === 'range')?.label,
-        edge: (rangeRg.recommendations || []).find(r => r.tier === 'edge')?.label
-          || (g.recommendations || []).find(r => r.tier === 'edge' && r.pick_type === 'range')?.label,
+        safest: live.strategy_range?.most_likely?.label,
+        edge: live.strategy_range?.best_edge?.label,
         locked: (rangeRg.recommendations || []).find(r => r.tier === 'locked')?.label,
       });
       renderDailyStructure(live.structure);

@@ -62,8 +62,10 @@ class DailyPredictor:
     self.markets = KalshiDailyMarkets(cfg)
     dcfg = cfg.get("daily", {})
     self.min_edge = float(dcfg.get("min_edge", 0.05))
-    self.nearby_strikes = int(dcfg.get("nearby_strikes", 7))
-    self.top_bands = int(dcfg.get("top_bands", 8))
+    self.nearby_strikes = int(dcfg.get("nearby_strikes", 11))
+    self.top_bands = int(dcfg.get("top_bands", 15))
+    self.strike_sigma_window = float(dcfg.get("strike_sigma_window", 2.5))
+    self.band_sigma_window = float(dcfg.get("band_sigma_window", 2.5))
     self.vol_lookback_1h = int(dcfg.get("vol_lookback_1h", 24))
     self.drift_lookback_1h = int(dcfg.get("drift_lookback_1h", 6))
 
@@ -151,6 +153,207 @@ class DailyPredictor:
         return "LEAN NO", edge
     return "NEUTRAL", edge
 
+  @staticmethod
+  def _threshold_strike(m: KalshiContractMarket) -> float | None:
+    if m.strike_type == "greater" and m.floor_strike is not None:
+      return float(m.floor_strike)
+    if m.strike_type == "less" and m.cap_strike is not None:
+      return float(m.cap_strike)
+    return None
+
+  @staticmethod
+  def _band_bounds(m: KalshiContractMarket) -> tuple[float, float] | None:
+    if m.strike_type != "between":
+      return None
+    low = float(m.floor_strike or 0)
+    high = float(m.cap_strike or low)
+    if low <= 0 or high <= low:
+      return None
+    return low, high
+
+  def _mu_window(self, mu: float, sigma: float, sigma_mult: float) -> float:
+    return max(sigma * sigma_mult, mu * 0.003)
+
+  def _build_threshold_odds(
+    self,
+    m: KalshiContractMarket,
+    mu: float,
+    sigma: float,
+    levels: list[PriceLevel],
+  ) -> ContractOdds | None:
+    if m.strike_type == "greater" and m.floor_strike is not None:
+      strike = float(m.floor_strike)
+      p = self._prob_above(strike, mu, sigma)
+      p, notes = self._level_nudge(p, strike, levels, above=True)
+      label = m.subtitle or f"≥ ${strike:,.0f}"
+      strike_type = "greater"
+      floor_strike, cap_strike = strike, None
+    elif m.strike_type == "less" and m.cap_strike is not None:
+      strike = float(m.cap_strike)
+      p = self._prob_below(strike, mu, sigma)
+      p, notes = self._level_nudge(p, strike, levels, above=False)
+      label = m.subtitle or f"< ${strike:,.0f}"
+      strike_type = "less"
+      floor_strike, cap_strike = None, strike
+    else:
+      return None
+    sig, edge = self._signal(p, m.yes_mid)
+    return ContractOdds(
+      ticker=m.ticker,
+      contract_type="threshold",
+      label=label,
+      model_prob=p,
+      kalshi_mid=m.yes_mid,
+      edge=edge,
+      signal=sig,
+      strike_type=strike_type,
+      floor_strike=floor_strike,
+      cap_strike=cap_strike,
+      notes=notes,
+    )
+
+  def _build_range_odds(
+    self,
+    m: KalshiContractMarket,
+    mu: float,
+    sigma: float,
+    box: ConsolidationBox | None,
+  ) -> ContractOdds | None:
+    bounds = self._band_bounds(m)
+    if bounds is None:
+      return None
+    low, high = bounds
+    p = self._prob_between(low, high, mu, sigma)
+    notes: list[str] = []
+    if box and box.low <= (low + high) / 2 <= box.high:
+      p = min(0.92, p + 0.08 * max(0, 1.0 - box.tightness))
+      notes.append(
+        f"Inside {box.hours:.0f}h consolidation ${box.low:,.0f}–${box.high:,.0f}"
+      )
+    sig, edge = self._signal(p, m.yes_mid)
+    return ContractOdds(
+      ticker=m.ticker,
+      contract_type="range",
+      label=m.subtitle or f"${low:,.0f}–${high:,.0f}",
+      model_prob=p,
+      kalshi_mid=m.yes_mid,
+      edge=edge,
+      signal=sig,
+      strike_type="between",
+      floor_strike=low,
+      cap_strike=high,
+      notes=notes,
+    )
+
+  def _near_threshold_markets(
+    self,
+    markets: list[KalshiContractMarket],
+    mu: float,
+    sigma: float,
+  ) -> list[KalshiContractMarket]:
+    window = self._mu_window(mu, sigma, self.strike_sigma_window)
+    scored: list[tuple[float, KalshiContractMarket]] = []
+    for m in markets:
+      if m.strike_type not in ("greater", "less"):
+        continue
+      strike = self._threshold_strike(m)
+      if strike is None:
+        continue
+      scored.append((abs(strike - mu), m))
+    scored.sort(key=lambda x: x[0])
+    in_window = [m for d, m in scored if d <= window]
+    if len(in_window) >= self.nearby_strikes:
+      return in_window[: self.nearby_strikes]
+    return [m for _, m in scored[: self.nearby_strikes]]
+
+  def _near_band_markets(
+    self,
+    markets: list[KalshiContractMarket],
+    mu: float,
+    sigma: float,
+  ) -> list[KalshiContractMarket]:
+    window = self._mu_window(mu, sigma, self.band_sigma_window)
+    scored: list[tuple[float, float, KalshiContractMarket]] = []
+    for m in markets:
+      bounds = self._band_bounds(m)
+      if bounds is None:
+        continue
+      low, high = bounds
+      mid = (low + high) / 2
+      contains_mu = low <= mu <= high
+      dist = abs(mid - mu)
+      if not contains_mu and dist > window:
+        continue
+      p = self._prob_between(low, high, mu, sigma)
+      scored.append((p, dist, m))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    if len(scored) < self.top_bands:
+      seen = {m.ticker for _, _, m in scored}
+      extra: list[tuple[float, float, KalshiContractMarket]] = []
+      for m in markets:
+        if m.ticker in seen:
+          continue
+        bounds = self._band_bounds(m)
+        if bounds is None:
+          continue
+        low, high = bounds
+        mid = (low + high) / 2
+        p = self._prob_between(low, high, mu, sigma)
+        extra.append((p, abs(mid - mu), m))
+      extra.sort(key=lambda x: (-x[0], x[1]))
+      scored.extend(extra[: max(0, self.top_bands - len(scored))])
+    return [m for _, _, m in scored[: self.top_bands]]
+
+  def _most_likely_threshold(
+    self,
+    markets: list[KalshiContractMarket],
+    mu: float,
+    sigma: float,
+    levels: list[PriceLevel],
+  ) -> ContractOdds | None:
+    """ATM threshold — strike nearest blended μ (not deepest ITM ≥ leg)."""
+    best: ContractOdds | None = None
+    best_dist = float("inf")
+    for m in markets:
+      strike = self._threshold_strike(m)
+      if strike is None:
+        continue
+      dist = abs(strike - mu)
+      if dist >= best_dist:
+        continue
+      row = self._build_threshold_odds(m, mu, sigma, levels)
+      if row is None:
+        continue
+      best = row
+      best_dist = dist
+    return best
+
+  def _most_likely_range(
+    self,
+    markets: list[KalshiContractMarket],
+    mu: float,
+    sigma: float,
+    box: ConsolidationBox | None,
+  ) -> ContractOdds | None:
+    best: ContractOdds | None = None
+    best_p = -1.0
+    for m in markets:
+      row = self._build_range_odds(m, mu, sigma, box)
+      if row is None:
+        continue
+      if row.model_prob > best_p:
+        best_p = row.model_prob
+        best = row
+    return best
+
+  @staticmethod
+  def _threshold_strike_from_row(row: ContractOdds) -> float | None:
+    if row.strike_type == "greater":
+      return row.floor_strike
+    if row.strike_type == "less":
+      return row.cap_strike
+    return None
+
   def predict(
     self,
     *,
@@ -175,77 +378,29 @@ class DailyPredictor:
     levels = detect_levels(df_1h, current_price) if df_1h is not None else []
     box = consolidation_box(df_1h) if df_1h is not None else None
 
-    # --- Strategy 1: threshold (above/below) ---
+    # --- Strategy 1: threshold (above/below) near forecast μ ---
     threshold_rows: list[ContractOdds] = []
-    greater = [m for m in book.threshold_markets if m.strike_type == "greater" and m.floor_strike]
-    greater.sort(key=lambda m: abs((m.floor_strike or 0) - current_price))
-    for m in greater[: self.nearby_strikes]:
-      strike = float(m.floor_strike)
-      p = self._prob_above(strike, mu, sigma)
-      p, notes = self._level_nudge(p, strike, levels, above=True)
-      sig, edge = self._signal(p, m.yes_mid)
-      threshold_rows.append(
-        ContractOdds(
-          ticker=m.ticker,
-          contract_type="threshold",
-          label=m.subtitle or f"≥ ${strike:,.0f}",
-          model_prob=p,
-          kalshi_mid=m.yes_mid,
-          edge=edge,
-          signal=sig,
-          strike_type="greater",
-          floor_strike=strike,
-          cap_strike=None,
-          notes=notes,
-        )
-      )
+    for m in self._near_threshold_markets(book.threshold_markets, mu, sigma):
+      row = self._build_threshold_odds(m, mu, sigma, levels)
+      if row:
+        threshold_rows.append(row)
+    threshold_rows.sort(
+      key=lambda r: abs((self._threshold_strike_from_row(r) or mu) - mu),
+    )
 
-    # --- Strategy 2: range bands ---
+    # --- Strategy 2: range bands with highest mass near μ ---
     range_rows: list[ContractOdds] = []
-    bands = [m for m in book.range_markets if m.strike_type == "between"]
-    band_scores: list[tuple[float, KalshiContractMarket, float, list[str]]] = []
-
-    for m in bands:
-      low = float(m.floor_strike or 0)
-      high = float(m.cap_strike or low)
-      if low <= 0 or high <= low:
-        continue
-      p = self._prob_between(low, high, mu, sigma)
-      notes: list[str] = []
-      if box and box.low <= (low + high) / 2 <= box.high:
-        p = min(0.92, p + 0.08 * max(0, 1.0 - box.tightness))
-        notes.append(
-          f"Inside {box.hours:.0f}h consolidation ${box.low:,.0f}–${box.high:,.0f}"
-        )
-      mid = (low + high) / 2
-      dist = abs(mid - current_price) / current_price * 100
-      score = p - dist * 0.002
-      band_scores.append((score, m, p, notes))
-
-    band_scores.sort(key=lambda x: x[0], reverse=True)
-    for _score, m, p, notes in band_scores[: self.top_bands]:
-      low = float(m.floor_strike or 0)
-      high = float(m.cap_strike or low)
-      sig, edge = self._signal(p, m.yes_mid)
-      range_rows.append(
-        ContractOdds(
-          ticker=m.ticker,
-          contract_type="range",
-          label=m.subtitle or f"${low:,.0f}–${high:,.0f}",
-          model_prob=p,
-          kalshi_mid=m.yes_mid,
-          edge=edge,
-          signal=sig,
-          strike_type="between",
-          floor_strike=low,
-          cap_strike=high,
-          notes=notes,
-        )
-      )
+    for m in self._near_band_markets(book.range_markets, mu, sigma):
+      row = self._build_range_odds(m, mu, sigma, box)
+      if row:
+        range_rows.append(row)
+    range_rows.sort(key=lambda r: r.model_prob, reverse=True)
 
     best_threshold = max(threshold_rows, key=lambda r: abs(r.edge or 0), default=None)
-    most_likely_threshold = max(threshold_rows, key=lambda r: r.model_prob, default=None)
-    most_likely_range = max(range_rows, key=lambda r: r.model_prob, default=None)
+    most_likely_threshold = self._most_likely_threshold(
+      book.threshold_markets, mu, sigma, levels
+    )
+    most_likely_range = self._most_likely_range(book.range_markets, mu, sigma, box)
 
     zone_lo = mu - sigma * 0.45
     zone_hi = mu + sigma * 0.45
