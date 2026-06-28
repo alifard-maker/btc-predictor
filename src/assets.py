@@ -47,8 +47,10 @@ def asset_cfg(base_cfg: dict[str, Any], asset: str) -> dict[str, Any]:
     cfg["exchange_fallbacks"] = list(fallbacks)
 
   cfg["price_feed"] = {**base_cfg.get("price_feed", {}), **block.get("price_feed", {})}
+  cfg["kalshi"] = {**base_cfg.get("kalshi", {}), **block.get("kalshi", {})}
   cfg["daily"] = {**base_cfg.get("daily", {}), **block.get("daily", {})}
   cfg["hourly"] = {**base_cfg.get("hourly", {}), **block.get("hourly", {})}
+  cfg["paths"]["db"] = str(Path(cfg["paths"]["logs"]) / "predictions.db")
   cfg["_asset"] = asset
   return cfg
 

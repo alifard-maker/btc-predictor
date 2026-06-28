@@ -35,14 +35,17 @@ _loop: PredictionLoop | None = None
 _scheduler = None
 
 
-def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
+def _prediction_to_dict(pred: Prediction, *, asset: str = "btc") -> dict[str, Any]:
+  acfg = _cfg if asset == "btc" else (_loop._eth_cfg if _loop and _loop._eth_cfg else _cfg)
+  kalshi = _loop._kalshi_for(asset) if _loop else None
+  predictor = _loop._predictor_for(asset) if _loop else None
   out = {
     "timestamp": pred.timestamp.isoformat() if hasattr(pred.timestamp, "isoformat") else str(pred.timestamp),
     "slot_start": pred.slot_start.isoformat() if pred.slot_start is not None else None,
     "slot_end": pred.slot_end.isoformat() if pred.slot_end is not None else None,
     "slot_label": pred.slot_label,
-    "horizon_minutes": _cfg.get("prediction_horizon_minutes", 15),
-    "timezone": _cfg.get("timezone", "America/New_York"),
+    "horizon_minutes": acfg.get("prediction_horizon_minutes", 15),
+    "timezone": acfg.get("timezone", "America/New_York"),
     "reference_price": pred.reference_price or pred.price,
     "reference_source": pred.reference_source,
     "current_price": pred.current_price,
@@ -57,15 +60,17 @@ def _prediction_to_dict(pred: Prediction) -> dict[str, Any]:
     "regime_notes": pred.regime_notes or [],
     "model_signal": pred.model_signal,
     "indicators": pred.indicators,
-    "formatted": _loop.predictor.format_output(pred) if _loop else "",
+    "formatted": predictor.format_output(pred) if predictor else "",
+    "asset": asset,
   }
   if _loop is not None:
-    quote = _loop.live_price_quote(fresh=True)
+    quote = _loop.live_price_quote(fresh=True, asset=asset)
     if quote is not None:
       out["current_price"] = round(quote.price, 2)
       out["current_price_source"] = quote.source
-      out["price_feed"] = _loop.kalshi.price_feed_label()
-      out["settlement_reference"] = _loop.kalshi.settlement_reference_label()
+      if kalshi:
+        out["price_feed"] = kalshi.price_feed_label()
+        out["settlement_reference"] = kalshi.settlement_reference_label()
       if quote.trade_time is not None:
         out["current_price_as_of"] = quote.trade_time.isoformat()
       if quote.age_sec is not None:
@@ -235,7 +240,10 @@ def health():
   if _loop is None:
     return base
   status = _loop.status()
-  return {"status": "ok", "service": "btc-predictor", "version": APP_VERSION, **status}
+  out = {"status": "ok", "service": "btc-predictor", "version": APP_VERSION, **status}
+  if _loop.eth_calibration is not None:
+    out["eth_15m"] = _loop.eth_status()
+  return out
 
 
 @app.get("/api/status")
@@ -332,6 +340,94 @@ def calibration():
   except Exception as e:
     log.exception("Calibration summary failed: %s", e)
     raise HTTPException(500, f"Calibration failed: {e}") from e
+
+
+@app.get("/api/eth/15m/status")
+def eth_15m_status():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _loop.eth_status()
+
+
+@app.get("/api/eth/15m/slot/monitor")
+def eth_slot_monitor(reference_override: float | None = Query(default=None, gt=0)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  kalshi = _loop._kalshi_for("eth")
+  monitor = _loop.eth_slot_monitor(reference_override).to_dict()
+  monitor["price_feed"] = kalshi.price_feed_label()
+  monitor["settlement_reference"] = kalshi.settlement_reference_label()
+  monitor["kalshi_authenticated"] = kalshi.authenticated
+  monitor["asset"] = "eth"
+  return monitor
+
+
+@app.get("/api/eth/15m/prediction/latest")
+def eth_latest_prediction(reference_override: float | None = Query(default=None, gt=0)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  monitor = _loop.eth_slot_monitor(reference_override).to_dict()
+  if _loop.latest_eth_prediction:
+    out = _prediction_to_dict(_loop.latest_eth_prediction, asset="eth")
+    out["slot_monitor"] = monitor
+    _apply_ref_override_fields(out, monitor)
+    return out
+  row = _loop.eth_calibration.latest()
+  if row:
+    row["slot_monitor"] = monitor
+    row["asset"] = "eth"
+    _apply_ref_override_fields(row, monitor)
+    return row
+  raise HTTPException(404, "No ETH 15m predictions yet")
+
+
+@app.get("/api/eth/15m/predictions")
+def eth_list_predictions(limit: int = Query(default=50, le=500)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    return []
+  try:
+    df = _loop.eth_calibration.load_recent(limit)
+    if df.empty:
+      return []
+    return _serialize_records(df)
+  except Exception as e:
+    log.exception("Failed to load ETH 15m predictions: %s", e)
+    raise HTTPException(500, str(e)) from e
+
+
+@app.get("/api/eth/15m/calibration")
+def eth_15m_calibration():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  try:
+    tracker = _loop.eth_calibration
+    summary = tracker.summary()
+    report = tracker.calibration_report()
+    bins = report.to_dict(orient="records") if not report.empty else []
+    return _sanitize_json({"summary": summary, "bins": bins})
+  except Exception as e:
+    log.exception("ETH 15m calibration summary failed: %s", e)
+    raise HTTPException(500, f"ETH 15m calibration failed: {e}") from e
+
+
+@app.post("/api/admin/eth/15m/predict-now")
+def eth_15m_predict_now(_: None = Depends(_verify_admin)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  pred = _loop.run_eth_prediction()
+  if pred is None:
+    raise HTTPException(500, _loop.eth_last_error or "ETH 15m prediction failed")
+  return _prediction_to_dict(pred, asset="eth")
 
 
 @app.get("/api/daily/prediction")

@@ -1,4 +1,4 @@
-"""Kalshi Trade API — KXBTC15M slot reference, BRTI live price, optional RSA auth."""
+"""Kalshi Trade API — 15m slot reference (KXBTC15M/KXETH15M), index live price, optional RSA auth."""
 
 from __future__ import annotations
 
@@ -103,6 +103,7 @@ class KalshiClient:
   """Public market data + optional authenticated portfolio access."""
 
   def __init__(self, cfg: dict[str, Any]):
+    self.cfg = cfg
     kcfg = cfg.get("kalshi", {})
     self.base_url = (kcfg.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
     self.series_ticker = kcfg.get("series_ticker", DEFAULT_SERIES)
@@ -118,13 +119,21 @@ class KalshiClient:
     self._index_cache: dict[str, tuple[KalshiPriceQuote | None, float]] = {}
     self._brtI_last_good: KalshiPriceQuote | None = None
     self._slot_targets: dict[str, float] = {}
-    self._brtI_index = kcfg.get("brti_index_id", BRTI_INDEX_ID)
+    pf = cfg.get("price_feed") or {}
+    self._brtI_index = kcfg.get("brti_index_id") or pf.get("index_id") or BRTI_INDEX_ID
 
   def price_feed_label(self) -> str:
-    return "Kalshi CF Benchmarks BRTI"
+    pf = self.cfg.get("price_feed") or {}
+    return str(pf.get("label") or f"Kalshi CF Benchmarks {self._brtI_index}")
 
   def settlement_reference_label(self) -> str:
-    return "CF Benchmarks BRTI (Kalshi KXBTC15M settlement)"
+    pf = self.cfg.get("price_feed") or {}
+    if ref := pf.get("settlement_reference"):
+      return str(ref)
+    return f"CF Benchmarks {self._brtI_index} (Kalshi {self.series_ticker} settlement)"
+
+  def _index_target_source(self) -> str:
+    return f"kalshi_{self._brtI_index.lower()}_target"
 
   def _load_private_key(self, kcfg: dict[str, Any]) -> None:
     pem = kcfg.get("private_key", "")
@@ -238,8 +247,8 @@ class KalshiClient:
       rules_primary=str(row.get("rules_primary", "")),
     )
 
-  def active_btc15m_market(self, *, fresh: bool = False) -> KalshiSlotMarket | None:
-    """Current open KXBTC15M contract (BRTI target at slot open)."""
+  def active_slot15m_market(self, *, fresh: bool = False) -> KalshiSlotMarket | None:
+    """Current open 15m up/down contract (index target at slot open)."""
     if not self.enabled:
       return None
     now_mono = time.monotonic()
@@ -271,6 +280,10 @@ class KalshiClient:
 
     self._cache = (market, now_mono)
     return market
+
+  def active_btc15m_market(self, *, fresh: bool = False) -> KalshiSlotMarket | None:
+    """Backward-compatible alias for active_slot15m_market."""
+    return self.active_slot15m_market(fresh=fresh)
 
   @staticmethod
   def _parse_brti_value(data: dict[str, Any]) -> float | None:
@@ -365,7 +378,8 @@ class KalshiClient:
     *,
     fresh: bool = False,
   ) -> tuple[float | None, str]:
-    """Kalshi KXBTC15M floor_strike — BRTI 60s avg before slot open."""
+    """Kalshi 15m floor_strike — index 60s avg before slot open."""
+    target_src = self._index_target_source()
     if slot_start is not None:
       slot_s = pd.Timestamp(slot_start)
       if slot_s.tzinfo is None:
@@ -374,7 +388,7 @@ class KalshiClient:
         slot_s = slot_s.tz_convert("UTC")
       key = self._slot_key(slot_s)
       if key in self._slot_targets:
-        return self._slot_targets[key], "kalshi_brti_target"
+        return self._slot_targets[key], target_src
 
       row = self.market_for_slot(slot_s)
       if row is not None:
@@ -382,15 +396,15 @@ class KalshiClient:
         if floor is not None:
           price = float(floor)
           self._slot_targets[key] = price
-          return price, "kalshi_brti_target"
+          return price, target_src
 
-    market = self.active_btc15m_market(fresh=fresh)
+    market = self.active_slot15m_market(fresh=fresh)
     if market is not None:
       now = datetime.now(timezone.utc)
       if market.open_time <= now < market.close_time:
         key = self._slot_key(market.open_time)
         self._slot_targets[key] = market.target_price
-        return market.target_price, "kalshi_brti_target"
+        return market.target_price, target_src
       if slot_start is not None:
         slot_s = pd.Timestamp(slot_start)
         if slot_s.tzinfo is None:
@@ -400,7 +414,7 @@ class KalshiClient:
         if self._slot_key(market.open_time) == self._slot_key(slot_s):
           key = self._slot_key(slot_s)
           self._slot_targets[key] = market.target_price
-          return market.target_price, "kalshi_brti_target"
+          return market.target_price, target_src
 
     return None, ""
 
@@ -412,11 +426,11 @@ class KalshiClient:
     if not fresh and self._brtI_last_good is not None:
       return self._brtI_last_good
     if allow_target_fallback:
-      market = self.active_btc15m_market(fresh=fresh)
+      market = self.active_slot15m_market(fresh=fresh)
       if market:
         return KalshiPriceQuote(
           price=market.target_price,
-          source="kalshi_brti_target",
+          source=self._index_target_source(),
           trade_time=market.open_time,
         )
     return None
@@ -523,7 +537,7 @@ class KalshiClient:
 
   def active_market_summary(self) -> dict[str, Any] | None:
     """Compact Kalshi market info for dashboard (YES mid, ticker)."""
-    active = self.active_btc15m_market()
+    active = self.active_slot15m_market()
     if not active:
       return None
     yes_mid = None
@@ -539,7 +553,7 @@ class KalshiClient:
 
   def status(self) -> dict[str, Any]:
     bal = self.portfolio_balance() if self.authenticated else None
-    active = self.active_btc15m_market()
+    active = self.active_slot15m_market()
     brti = self.fetch_brti_live()
     out: dict[str, Any] = {
       "enabled": self.enabled,

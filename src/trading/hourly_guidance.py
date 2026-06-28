@@ -364,9 +364,9 @@ def build_hourly_guidance(
     )
 
   use_15m = (
-    "KXBTC15M — 15-minute up/down slots at :00, :15, :30, :45 ET → use the 15m tab."
+    "KXBTC15M — 15-minute up/down slots at :00, :15, :30, :45 ET → use the BTC 15m tab."
     if asset == "btc"
-    else "15m tab is BTC slot LONG/SHORT only — ETH hourly Kalshi contracts live on this tab."
+    else "KXETH15M — 15-minute ETH up/down slots at :00, :15, :30, :45 ET → use the ETH 15m tab."
   )
 
   return {

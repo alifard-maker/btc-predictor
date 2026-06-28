@@ -169,7 +169,8 @@
     <div id="error" class="err"></div>
 
     <nav class="tab-bar" role="tablist">
-      <button type="button" class="tab active" id="tab-15m" data-panel="panel-15m" onclick="switchTab('15m')">15m slot</button>
+      <button type="button" class="tab active" id="tab-15m" data-panel="panel-15m" onclick="switchTab('15m')">BTC 15m</button>
+      <button type="button" class="tab" id="tab-eth-15m" data-panel="panel-eth-15m" onclick="switchTab('eth-15m')">ETH 15m</button>
       <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">BTC Hourly</button>
       <button type="button" class="tab" id="tab-eth-hourly" data-panel="panel-eth-hourly" onclick="switchTab('eth-hourly')">ETH Hourly</button>
     </nav>
@@ -179,13 +180,18 @@
       <div class="guide-body">
         <p>This dashboard shows <strong>model forecasts</strong> and <strong>Kalshi mispricing</strong> for BTC (and ETH on the hourly tab). It does <strong>not</strong> place trades. All times are <strong>Eastern (ET)</strong> unless noted.</p>
 
-        <h3>The three tabs</h3>
+        <h3>The four tabs</h3>
         <div class="guide-tabs">
           <div class="guide-tab-box">
-            <h4>15m slot</h4>
+            <h4>BTC 15m</h4>
             <p><strong>Kalshi KXBTC15M</strong> — will BTC finish <em>above or below</em> its price at each :00, :15, :30, :45 open?</p>
             <p>Signals: <strong>LONG</strong> / <strong>SHORT</strong> / <strong>NO TRADE</strong>, plus mid-slot <strong>LATE</strong>, <strong>2nd Chance</strong>, and <strong>FLIP</strong>. Settlement uses <strong>BRTI</strong> vs slot t=0.</p>
             <p class="muted" style="font-size:.75rem">Not per-contract BUY YES/NO — that vocabulary is on the hourly tabs.</p>
+          </div>
+          <div class="guide-tab-box">
+            <h4>ETH 15m</h4>
+            <p><strong>Kalshi KXETH15M</strong> — same slot structure for ETH. Settlement uses <strong>ERTI</strong> (CF Benchmarks Ethereum RTI) vs slot t=0.</p>
+            <p>Same LONG/SHORT/NO TRADE + LATE / 2nd Chance / FLIP signals as BTC 15m. Live price via ERTI (Kalshi) or Coinbase ETH/USD fallback.</p>
           </div>
           <div class="guide-tab-box">
             <h4>BTC Hourly</h4>
@@ -369,6 +375,44 @@
     </div>
     </div>
 
+    <div id="panel-eth-15m" style="display:none">
+    <div class="card ref-override" id="eth15-ref-override-panel">
+      <label for="eth15-ref-override-input">Override Kalshi t=0 (optional)</label>
+      <div class="ref-override-row">
+        <input type="number" id="eth15-ref-override-input" step="0.01" min="0" placeholder="e.g. 1573.97" />
+        <button type="button" class="primary" onclick="applyRefOverride()">Use my price</button>
+        <button type="button" onclick="clearRefOverride()">Reset to API</button>
+      </div>
+      <div class="ref-override-hint" id="eth15-ref-override-hint">Kalshi sets t=0 from ERTI automatically — only override if your contract shows a different target.</div>
+    </div>
+
+    <div class="grid">
+      <div class="card" id="eth15-pred-card">
+        <h2>Next 15-minute slot</h2>
+        <p class="muted">Loading…</p>
+      </div>
+      <div class="card">
+        <h2>System status</h2>
+        <ul class="status" id="eth15-status-list"></ul>
+      </div>
+    </div>
+
+    <div class="card monitor-card" id="eth15-monitor-card">
+      <h2>Live position · intra-slot exit</h2>
+      <div id="eth15-slot-monitor"><p class="muted">Loading…</p></div>
+    </div>
+
+    <div class="card">
+      <h2>Calibration</h2>
+      <div id="eth15-calibration"><p class="muted">Loading…</p></div>
+    </div>
+
+    <div class="card">
+      <h2>Prediction history</h2>
+      <div style="overflow-x:auto" id="eth15-history"><p class="muted">Loading…</p></div>
+    </div>
+    </div>
+
     <div id="panel-daily" style="display:none">
       <div class="card" id="hourly-guide-card">
         <h2>How to read this tab</h2>
@@ -447,6 +491,41 @@
     let activeTab = '15m';
     let hourlyGuideCheatOpen = false;
 
+    function slot15Prefix() {
+      return activeTab === 'eth-15m' ? 'eth15-' : '';
+    }
+
+    function s15$(id) {
+      return $(slot15Prefix() + id);
+    }
+
+    function slot15Api() {
+      if (activeTab === 'eth-15m') {
+        return {
+          prediction: '/api/eth/15m/prediction/latest',
+          monitor: '/api/eth/15m/slot/monitor',
+          history: '/api/eth/15m/predictions?limit=20',
+          calibration: '/api/eth/15m/calibration',
+          health: '/api/eth/15m/status',
+          indexLabel: 'ERTI',
+          series: 'KXETH15M',
+        };
+      }
+      return {
+        prediction: '/api/prediction/latest',
+        monitor: '/api/slot/monitor',
+        history: '/api/predictions?limit=20',
+        calibration: '/api/calibration',
+        health: '/health',
+        indexLabel: 'BRTI',
+        series: 'KXBTC15M',
+      };
+    }
+
+    function refStorageKey() {
+      return activeTab === 'eth-15m' ? 'eth_ref_override_v1' : 'btc_ref_override_v1';
+    }
+
     function hourlyPrefix() {
       return activeTab === 'eth-hourly' ? 'eth-' : '';
     }
@@ -492,6 +571,7 @@
 
     const REF_SOURCE_LABEL = {
       kalshi_brti_target: 'Kalshi BRTI target at slot open',
+      kalshi_erti_target: 'Kalshi ERTI target at slot open',
       brti_live: 'CF Benchmarks BRTI (live)',
       erti_live: 'CF Benchmarks ERTI (live)',
       exchange_live: 'Exchange last trade (live)',
@@ -525,17 +605,17 @@
     }
 
     function loadRefOverride() {
-      try { return JSON.parse(localStorage.getItem(REF_KEY) || 'null'); }
+      try { return JSON.parse(localStorage.getItem(refStorageKey()) || 'null'); }
       catch { return null; }
     }
 
     function saveRefOverride(slotStart, price) {
-      localStorage.setItem(REF_KEY, JSON.stringify({ slot_start: slotStart, price: Number(price) }));
+      localStorage.setItem(refStorageKey(), JSON.stringify({ slot_start: slotStart, price: Number(price) }));
     }
 
     function clearStoredRefOverride() {
-      localStorage.removeItem(REF_KEY);
-      $('ref-override-input').value = '';
+      localStorage.removeItem(refStorageKey());
+      s15$('ref-override-input').value = '';
     }
 
     function clearRefOverride() {
@@ -556,35 +636,38 @@
     }
 
     function updateRefOverrideHint(monitor) {
-      const hint = $('ref-override-hint');
+      const hint = s15$('ref-override-hint');
+      if (!hint) return;
       if (!monitor) {
         hint.innerHTML = 'Overrides API reference for this slot only — saved in your browser.';
         return;
       }
       const ovr = getActiveRefOverride(monitor.slot_start);
+      const input = s15$('ref-override-input');
       if (ovr != null && monitor.using_override) {
         hint.innerHTML = `Using your price <strong>${price(ovr)}</strong> · API was ${price(monitor.reference_price_api ?? monitor.reference_price)} <span class="ref-override-active">(active)</span>`;
-        $('ref-override-input').value = ovr;
+        if (input) input.value = ovr;
       } else if (monitor.reference_price_api != null) {
         const src = refSourceLabel(monitor.reference_source);
         hint.innerHTML = `API reference: ${price(monitor.reference_price_api)} <span class="muted">(${src})</span>`;
-        if (!$('ref-override-input').value) $('ref-override-input').placeholder = Number(monitor.reference_price_api).toFixed(2);
+        if (input && !input.value) input.placeholder = Number(monitor.reference_price_api).toFixed(2);
       }
     }
 
     async function applyRefOverride() {
-      const val = parseFloat($('ref-override-input').value);
+      const val = parseFloat(s15$('ref-override-input')?.value);
       if (!val || val <= 0) {
         showError('Enter a valid price (e.g. 59504.44)');
         return;
       }
       $('error').style.display = 'none';
+      const api = slot15Api();
       let slotStart = null;
       try {
-        const m = await get('/api/slot/monitor');
+        const m = await get(api.monitor);
         slotStart = m.slot_start;
       } catch {
-        const p = await get('/api/prediction/latest').catch(() => null);
+        const p = await get(api.prediction).catch(() => null);
         slotStart = p?.slot_start;
       }
       if (!slotStart) {
@@ -725,10 +808,14 @@
     }
 
     function renderSlotMonitor(m) {
-      const card = $('monitor-card');
+      const card = s15$('monitor-card');
+      const api = slot15Api();
+      const idx = api.indexLabel;
+      if (!card) return;
       if (!m) {
         card.className = 'card monitor-card';
-        $('slot-monitor').innerHTML = '<p class="muted">No active slot data.</p>';
+        const mon = s15$('slot-monitor');
+        if (mon) mon.innerHTML = '<p class="muted">No active slot data.</p>';
         return;
       }
       card.className = 'card monitor-card' + (m.urgency === 'high' ? ' urgency-high' : m.urgency === 'medium' ? ' urgency-medium' : '');
@@ -758,13 +845,13 @@
       }
 
       if (m.active && m.bet_side !== 'NONE') {
-        const refHdr = m.using_override ? 'Ref (t=0) · override' : 'Ref (t=0) · Kalshi BRTI';
+        const refHdr = m.using_override ? 'Ref (t=0) · override' : `Ref (t=0) · Kalshi ${idx}`;
         const nowAge = m.live_price_age_sec != null ? ` · ${liveAgeLabel(m.live_price_age_sec)}` : '';
         const staleWarn = m.current_price_source === 'unavailable'
           ? '<div class="muted" style="font-size:.65rem;color:#ef4444">Live price unavailable</div>'
           : m.current_price_source === 'exchange_live' || m.current_price_source === 'exchange_fallback' || m.current_price_source === 'coinbase_fallback'
-            ? '<div class="muted" style="font-size:.65rem;color:#f59e0b">Set KALSHI_PRIVATE_KEY for BRTI</div>'
-          : m.current_price_source === 'kalshi_brti_target'
+            ? `<div class="muted" style="font-size:.65rem;color:#f59e0b">Set KALSHI_PRIVATE_KEY for ${idx}</div>`
+          : m.current_price_source === 'kalshi_brti_target' || m.current_price_source === 'kalshi_erti_target'
             ? '<div class="muted" style="font-size:.65rem;color:#ef4444">Stale — redeploy needed</div>'
             : (m.live_price_age_sec != null && m.live_price_age_sec > 15)
               ? '<div class="muted" style="font-size:.65rem;color:#f59e0b">Tick stale</div>'
@@ -778,7 +865,7 @@
           <div><span>Time left</span><strong>${fmtRemaining(m.seconds_remaining || 0)}</strong></div>
         </div>${renderReassessBlock(m)}${renderKalshiYesMid(m.kalshi)}`;
       } else if (m.active) {
-        const refHdr = m.using_override ? 'Ref (t=0) · override' : 'Ref (t=0) · Kalshi BRTI';
+        const refHdr = m.using_override ? 'Ref (t=0) · override' : `Ref (t=0) · Kalshi ${idx}`;
         const nowAge = m.live_price_age_sec != null ? ` · ${liveAgeLabel(m.live_price_age_sec)}` : '';
         body += `
         <div class="slot-progress"><div style="width:${m.elapsed_pct || 0}%"></div></div>
@@ -796,14 +883,18 @@
           body += '<ul class="monitor-reasons">' + bullets.map(r => `<li>${r}</li>`).join('') + '</ul>';
         }
       }
-      body += '<p class="muted" style="font-size:.68rem;margin-top:.75rem">Guidance only — not financial advice. t=0 and P&amp;L use Kalshi CF Benchmarks BRTI.</p>';
-      $('slot-monitor').innerHTML = body;
+      body += `<p class="muted" style="font-size:.68rem;margin-top:.75rem">Guidance only — not financial advice. t=0 and P&amp;L use Kalshi CF Benchmarks ${idx}.</p>`;
+      s15$('slot-monitor').innerHTML = body;
       updateRefOverrideHint(m);
     }
 
     function renderPrediction(p) {
+      const card = s15$('pred-card');
+      if (!card) return;
+      const api = slot15Api();
+      const idx = api.indexLabel;
       if (!p) {
-        $('pred-card').innerHTML = '<h2>Next 15-minute slot</h2><p class="muted">No prediction yet</p>';
+        card.innerHTML = '<h2>Next 15-minute slot</h2><p class="muted">No prediction yet</p>';
         return;
       }
       const up = p.prob_up * 100, down = p.prob_down * 100;
@@ -811,13 +902,13 @@
       const refApi = p.reference_price_api;
       const refLabel = p.using_override
         ? `Your t=0 entry (API was ${refApi != null ? price(refApi) : '—'})`
-        : `Reference (t=0) · ${refSourceLabel(p.reference_source)} — Kalshi BRTI target`;
+        : `Reference (t=0) · ${refSourceLabel(p.reference_source)} — Kalshi ${idx} target`;
       const slot = p.slot_label ? `<div class="sub" style="margin-bottom:.5rem">${p.slot_label}</div>` : '';
       const liveAge = p.live_price_age_sec != null ? ` <span class="muted">(${liveAgeLabel(p.live_price_age_sec)})</span>` : '';
       const liveSrc = p.current_price_source ? ` · ${refSourceLabel(p.current_price_source)}` : '';
       const live = p.current_price
         ? `<div class="live-price">Live: ${price(p.current_price)}${liveAge}<span class="muted">${liveSrc}</span></div>` : '';
-      $('pred-card').innerHTML = `
+      card.innerHTML = `
         <h2>Next 15-minute slot</h2>
         ${slot}
         <div class="ref-block">
@@ -843,21 +934,27 @@
 
     function renderStatus(h) {
       if (h.version) $('app-version').textContent = h.version;
+      const api = slot15Api();
+      const data = activeTab === 'eth-15m' ? (h.eth_15m || h) : h;
+      const series = data.series_ticker || api.series;
+      const idx = data.index_id || api.indexLabel;
       const items = [
-        ['API', h.status, h.status === 'ok'],
-        ['Scheduler', h.scheduler_running ? 'Running' : 'Stopped', h.scheduler_running],
-        ['Exchange', h.exchange || '—', h.exchange_connected],
-        ['Model', h.model || '—', true],
-        ['15m candles', String(h.candles_15m || 0), (h.candles_15m || 0) >= (h.min_candles_15m || 48)],
-        ['Context', h.slot_context || '1h+4h+12h', true],
-        ['Vol spike', h.volume_spike_window || '4h', true],
-        ['Price feed', h.price_feed || 'Kalshi BRTI', true],
-        ['Kalshi', h.kalshi?.authenticated ? 'KXBTC15M · BRTI live' : (h.kalshi?.connected ? 'KXBTC15M · exchange ticks' : 'No market'), !!h.kalshi?.connected],
-        ['Live tick', h.live_tick?.source ? `${h.live_tick.source} · ${h.live_tick.age_sec != null ? h.live_tick.age_sec + 's' : '—'}` : '—', !!(h.live_tick && h.live_tick.age_sec != null && h.live_tick.age_sec < 10)],
-        ['Settlement', h.settlement_reference || 'CF Benchmarks BRTI', true],
-        ['Schedule', (h.timezone || 'ET') + ' :00/:15/:30/:45 · 2nd @ :04/:19/:34/:49', true],
+        ['API', h.status || data.status || 'ok', (h.status || data.status) === 'ok'],
+        ['Scheduler', data.scheduler_running ? 'Running' : 'Stopped', data.scheduler_running],
+        ['Exchange', data.exchange || '—', data.exchange_connected],
+        ['Model', data.model || '—', true],
+        ['15m candles', String(data.candles_15m || 0), (data.candles_15m || 0) >= (data.min_candles_15m || 48)],
+        ['Context', data.slot_context || '1h+4h+12h', true],
+        ['Vol spike', data.volume_spike_window || '4h', true],
+        ['Price feed', data.price_feed || `Kalshi ${idx}`, true],
+        ['Kalshi', data.kalshi?.authenticated ? `${series} · ${idx} live` : (data.kalshi?.connected ? `${series} · exchange ticks` : 'No market'), !!data.kalshi?.connected],
+        ['Live tick', data.live_tick?.source ? `${data.live_tick.source} · ${data.live_tick.age_sec != null ? data.live_tick.age_sec + 's' : '—'}` : '—', !!(data.live_tick && data.live_tick.age_sec != null && data.live_tick.age_sec < 10)],
+        ['Settlement', data.settlement_reference || `CF Benchmarks ${idx}`, true],
+        ['Schedule', (data.timezone || 'ET') + ' :00/:15/:30/:45 · 2nd @ :04/:19/:34/:49', true],
       ];
-      $('status-list').innerHTML = items.map(([l,v,ok]) =>
+      const list = s15$('status-list');
+      if (!list) return;
+      list.innerHTML = items.map(([l,v,ok]) =>
         `<li><span class="dot" style="background:${ok?'var(--up)':'#f59e0b'}"></span><span class="muted">${l}</span><span>${v}</span></li>`
       ).join('');
     }
@@ -1013,6 +1110,10 @@
     }
 
     function renderCalibration(data) {
+      const el = s15$('calibration');
+      if (!el) return;
+      const api = slot15Api();
+      const idx = api.indexLabel;
       const s = data.summary;
       const le = s.late_entry || {};
       const fx = s.flip || {};
@@ -1022,11 +1123,11 @@
       const hasAllTime = at.open?.n_resolved || at.late_entry?.n_resolved || at.flip?.n_resolved || at.second_chance?.n_resolved;
       if (!hasEpoch && !hasAllTime) {
         const excluded = s.n_excluded_non_kalshi ? ` (${s.n_excluded_non_kalshi} older rows excluded — run Kalshi backfill)` : '';
-        $('calibration').innerHTML = `<p class="muted">Not enough Kalshi-resolved predictions yet${excluded}. Check back after slots settle.</p>`;
+        el.innerHTML = `<p class="muted">Not enough Kalshi-resolved predictions yet${excluded}. Check back after slots settle.</p>`;
         return;
       }
       const kalshiNote = s.kalshi_only
-        ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Stats use Kalshi BRTI only (t=0 floor_strike → close expiration_value).${s.n_excluded_non_kalshi ? ` Excluded ${s.n_excluded_non_kalshi} pre-Kalshi rows.` : ''}</p>`
+        ? `<p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Stats use Kalshi ${idx} only (t=0 floor_strike → close expiration_value).${s.n_excluded_non_kalshi ? ` Excluded ${s.n_excluded_non_kalshi} pre-Kalshi rows.` : ''}</p>`
         : '';
       const epochLabel = s.stats_epoch?.stats_since
         ? `Current epoch since <strong>${time(s.stats_epoch.stats_since)}</strong>${s.stats_epoch.note ? ` · ${s.stats_epoch.note}` : ''}`
@@ -1034,7 +1135,7 @@
       const open = s.open_at_slot || {};
       const epochBlock = hasEpoch ? `<div class="stats-block epoch">
         <h3>${epochLabel}</h3>
-        <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Brier @ open — slot-open probability vs BRTI close (all slots, not just LONG/SHORT):</p>
+        <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Brier @ open — slot-open probability vs ${idx} close (all slots, not just LONG/SHORT):</p>
         <p class="muted" style="font-size:.75rem;margin-bottom:.5rem">Rolling hit rate (open lean) — one count per 15m slot:</p>
         ${renderRollingAccuracy(s.rolling_accuracy)}
         <div class="cal-stats">
@@ -1048,7 +1149,7 @@
         ${renderLateEntryStats(le, { title: 'Late entry — this epoch', showRolling: true })}
         ${renderFlipStats(fx)}
       </div>` : `<p class="muted" style="margin-bottom:.75rem">Current epoch is empty after reset — all-time stats below still include prior epochs.</p>`;
-      $('calibration').innerHTML = `
+      el.innerHTML = `
         ${kalshiNote}
         ${renderAllTimeStats(at)}
         ${epochBlock}`;
@@ -1079,12 +1180,16 @@
     }
 
     function renderHistory(rows) {
+      const el = s15$('history');
+      if (!el) return;
+      const api = slot15Api();
+      const idx = api.indexLabel;
       if (!rows.length) {
-        $('history').innerHTML = '<p class="muted">No predictions logged yet.</p>';
+        el.innerHTML = '<p class="muted">No predictions logged yet.</p>';
         return;
       }
-      $('history').innerHTML = `<table>
-        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>Close BRTI</th><th>UP</th><th>Open</th><th>2nd Chance</th><th>Mid-slot</th><th>Outcome</th></tr></thead>
+      el.innerHTML = `<table>
+        <thead><tr><th>Slot (ET)</th><th>Ref t=0</th><th>Close ${idx}</th><th>UP</th><th>Open</th><th>2nd Chance</th><th>Mid-slot</th><th>Outcome</th></tr></thead>
         <tbody>${rows.map(p => `<tr>
           <td>${p.slot_label || time(p.timestamp)}</td>
           <td title="${p.reference_source || ''}">${price(p.reference_price ?? p.price)}</td>
@@ -1098,17 +1203,18 @@
     }
 
     async function loadLiveMonitor() {
-      if (activeTab !== '15m') return;
+      if (activeTab !== '15m' && activeTab !== 'eth-15m') return;
       try {
+        const api = slot15Api();
         let refQ = '';
         const stored = loadRefOverride();
         if (stored?.slot_start && stored.price > 0) {
           refQ = `?reference_override=${encodeURIComponent(stored.price)}`;
         }
-        const m = await get('/api/slot/monitor' + refQ);
+        const m = await get(api.monitor + refQ);
         if (stored?.slot_start && m?.slot_start && stored.slot_start !== m.slot_start) {
           clearStoredRefOverride();
-          return get('/api/slot/monitor').then(renderSlotMonitor);
+          return get(api.monitor).then(renderSlotMonitor);
         }
         renderSlotMonitor(m);
       } catch (_) {}
@@ -1117,12 +1223,15 @@
     function switchTab(name) {
       activeTab = name;
       $('panel-15m').style.display = name === '15m' ? '' : 'none';
+      $('panel-eth-15m').style.display = name === 'eth-15m' ? '' : 'none';
       $('panel-daily').style.display = name === 'daily' ? '' : 'none';
       $('panel-eth-hourly').style.display = name === 'eth-hourly' ? '' : 'none';
       $('tab-15m').classList.toggle('active', name === '15m');
+      $('tab-eth-15m').classList.toggle('active', name === 'eth-15m');
       $('tab-daily').classList.toggle('active', name === 'daily');
       $('tab-eth-hourly').classList.toggle('active', name === 'eth-hourly');
       if (name === 'daily' || name === 'eth-hourly') loadDaily();
+      else if (name === '15m' || name === 'eth-15m') loadAll();
     }
 
     function renderRangeTierCards(recs) {
@@ -1615,27 +1724,32 @@
       const tasks = [
         get('/health').then(renderStatus).catch(e => showError('Health: ' + e.message)),
       ];
-      if (activeTab === '15m') {
+      if (activeTab === '15m' || activeTab === 'eth-15m') {
+        const api = slot15Api();
         tasks.push(
-        get('/api/prediction/latest' + refQ).then((p) => {
+        get(api.prediction + refQ).then((p) => {
           if (stored?.slot_start && p?.slot_start && stored.slot_start !== p.slot_start) {
             clearStoredRefOverride();
-            return get('/api/prediction/latest').then(renderPrediction);
+            return get(api.prediction).then(renderPrediction);
           }
           renderPrediction(p);
         }).catch(() => { renderPrediction(null); renderSlotMonitor(null); }),
-        get('/api/slot/monitor' + refQ).then((m) => {
+        get(api.monitor + refQ).then((m) => {
           if (stored?.slot_start && m?.slot_start && stored.slot_start !== m.slot_start) {
             clearStoredRefOverride();
-            return get('/api/slot/monitor').then(renderSlotMonitor);
+            return get(api.monitor).then(renderSlotMonitor);
           }
           renderSlotMonitor(m);
         }).catch(() => {}),
-        get('/api/predictions?limit=20').then(renderHistory).catch(() => renderHistory([])),
-        get('/api/calibration').then(renderCalibration).catch((e) =>
-          $('calibration').innerHTML = `<p class="muted">Calibration unavailable: ${e.message || 'API error'}</p>`),
-        get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])),
+        get(api.history).then(renderHistory).catch(() => renderHistory([])),
+        get(api.calibration).then(renderCalibration).catch((e) => {
+          const calEl = s15$('calibration');
+          if (calEl) calEl.innerHTML = `<p class="muted">Calibration unavailable: ${e.message || 'API error'}</p>`;
+        }),
         );
+        if (activeTab === '15m') {
+          tasks.push(get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])));
+        }
       } else if (activeTab === 'daily' || activeTab === 'eth-hourly') {
         tasks.push(loadDaily());
       }

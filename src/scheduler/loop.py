@@ -74,10 +74,23 @@ class PredictionLoop:
     self._eth_ticker_cache: tuple[KalshiPriceQuote | None, float] | None = None
     self.eth_hourly_calibration: HourlyCalibrationTracker | None = None
     self.latest_eth_hourly_prediction: dict[str, Any] | None = None
+    self._eth_kalshi: KalshiClient | None = None
+    self._eth_predictor: Predictor | None = None
+    self.eth_calibration: CalibrationTracker | None = None
+    self._eth_logger: PredictionLogger | None = None
+    self.latest_eth_prediction: Prediction | None = None
+    self._eth_slot_tick_cache: dict[str, dict[str, Any]] = {}
+    self._eth_late_entry_logged: set[str] = set()
+    self._eth_flip_logged: set[str] = set()
+    self._eth_second_chance_logged: set[str] = set()
+    self._eth_second_chance_advisor: SecondChanceAdvisor | None = None
+    self.eth_last_error: str | None = None
     if asset_enabled(self.cfg, "eth"):
       self._eth_cfg = asset_cfg(self.cfg, "eth")
       ensure_dirs(self._eth_cfg)
       self.eth_hourly_calibration = HourlyCalibrationTracker(self._eth_cfg, asset="eth")
+      if self._eth_cfg.get("kalshi", {}).get("enabled", True):
+        self.eth_calibration = CalibrationTracker(self._eth_cfg)
 
   def _asset_hourly_calibration(self, asset: str) -> HourlyCalibrationTracker:
     if asset == "eth":
@@ -85,6 +98,73 @@ class PredictionLoop:
         raise RuntimeError("ETH hourly is disabled")
       return self.eth_hourly_calibration
     return self.hourly_calibration
+
+  def _slot15m_enabled(self, asset: str) -> bool:
+    if asset == "btc":
+      return True
+    if not asset_enabled(self.cfg, "eth") or self.eth_calibration is None:
+      return False
+    acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+    return bool(acfg.get("kalshi", {}).get("enabled", True))
+
+  def _acfg_15m(self, asset: str) -> dict[str, Any]:
+    return self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+
+  def _kalshi_for(self, asset: str) -> KalshiClient:
+    if asset == "btc":
+      return self.kalshi
+    if self._eth_kalshi is None:
+      self._eth_kalshi = KalshiClient(self._eth_cfg or asset_cfg(self.cfg, "eth"))
+    return self._eth_kalshi
+
+  def _calibration_for(self, asset: str) -> CalibrationTracker:
+    if asset == "btc":
+      return self.calibration
+    if self.eth_calibration is None:
+      raise RuntimeError("ETH 15m is disabled")
+    return self.eth_calibration
+
+  def _predictor_for(self, asset: str) -> Predictor:
+    if asset == "btc":
+      return self.predictor
+    if self._eth_predictor is None:
+      eth_path = Path(self._acfg_15m("eth")["paths"]["models"]) / "model.joblib"
+      self._eth_predictor = Predictor(
+        self._eth_cfg or asset_cfg(self.cfg, "eth"),
+        model_path=str(eth_path) if eth_path.exists() else None,
+      )
+    return self._eth_predictor
+
+  def _logger_for(self, asset: str) -> PredictionLogger:
+    if asset == "btc":
+      return self.logger
+    if self._eth_logger is None:
+      self._eth_logger = PredictionLogger(self._eth_cfg or asset_cfg(self.cfg, "eth"))
+    return self._eth_logger
+
+  def _slot_state(self, asset: str) -> dict[str, Any]:
+    if asset == "btc":
+      return {
+        "latest_prediction": self.latest_prediction,
+        "slot_tick_cache": self._slot_tick_cache,
+        "late_entry_logged": self._late_entry_logged,
+        "flip_logged": self._flip_logged,
+        "second_chance_logged": self._second_chance_logged,
+        "last_error_attr": "last_error",
+      }
+    return {
+      "latest_prediction": self.latest_eth_prediction,
+      "slot_tick_cache": self._eth_slot_tick_cache,
+      "late_entry_logged": self._eth_late_entry_logged,
+      "flip_logged": self._eth_flip_logged,
+      "second_chance_logged": self._eth_second_chance_logged,
+      "last_error_attr": "eth_last_error",
+    }
+
+  def eth_second_chance_advisor(self) -> SecondChanceAdvisor:
+    if self._eth_second_chance_advisor is None:
+      self._eth_second_chance_advisor = SecondChanceAdvisor(self._eth_cfg or asset_cfg(self.cfg, "eth"))
+    return self._eth_second_chance_advisor
 
   def eth_fetcher(self) -> DataFetcher:
     if self._eth_fetcher is None:
@@ -413,23 +493,38 @@ class PredictionLoop:
         storage.save("1h", df_1h)
     except Exception as e:
       log.warning("Failed to fetch ETH 1h: %s", e)
+    if acfg.get("kalshi", {}).get("enabled", True):
+      try:
+        df_15m = fetcher.fetch_latest_candles("15m", count=self.fetch_15m_count)
+        if not df_15m.empty:
+          storage.save("15m", df_15m)
+      except Exception as e:
+        log.warning("Failed to fetch ETH 15m: %s", e)
 
   def resolve_outcomes(self) -> None:
     self.resolve_hourly_outcomes(asset="btc")
     if asset_enabled(self.cfg, "eth"):
       self.resolve_eth_hourly_outcomes()
-    pending = self.calibration.get_pending()
+    self._resolve_slot_outcomes("btc")
+    if self._slot15m_enabled("eth"):
+      self._resolve_slot_outcomes("eth")
+
+  def _resolve_slot_outcomes(self, asset: str) -> None:
+    kalshi = self._kalshi_for(asset)
+    calibration = self._calibration_for(asset)
+    pending = calibration.get_pending()
     if not pending:
       return
 
+    index_id = index_id_for_cfg(self._acfg_15m(asset))
     price_lookup: dict[str, PredictionResolution] = {}
     for _row_id, ts_str, entry_price in pending:
       slot_s = floor_to_15m(pd.Timestamp(ts_str), self.tz)
-      settlement = self.kalshi.slot_settlement(slot_s)
+      settlement = kalshi.slot_settlement(slot_s)
       if settlement is None or not settlement.settled:
         continue
 
-      resolution = self.kalshi.resolution_for_entry(float(entry_price), settlement)
+      resolution = kalshi.resolution_for_entry(float(entry_price), settlement)
       if resolution is None:
         continue
 
@@ -445,9 +540,10 @@ class PredictionLoop:
       )
 
     if price_lookup:
-      resolved = self.calibration.resolve_with_prices(price_lookup)
-      log.info("Resolved %d predictions via Kalshi BRTI", resolved)
-      self._log_postmortems(price_lookup.keys())
+      resolved = calibration.resolve_with_prices(price_lookup)
+      log.info("Resolved %d %s 15m predictions via Kalshi %s", resolved, asset.upper(), index_id)
+      if asset == "btc":
+        self._log_postmortems(price_lookup.keys())
 
   def _log_postmortems(self, timestamps: Any) -> None:
     try:
@@ -527,21 +623,33 @@ class PredictionLoop:
       }
 
   def run_second_chance(self) -> dict[str, Any] | None:
+    out = self._run_second_chance_for_asset("btc")
+    if self._slot15m_enabled("eth"):
+      self._run_second_chance_for_asset("eth")
+    return out
+
+  def _run_second_chance_for_asset(self, asset: str) -> dict[str, Any] | None:
     """Log 2nd Chance reassessment at t+4min for the active slot."""
-    scfg = self.cfg.get("second_chance", {})
+    acfg = self._acfg_15m(asset)
+    scfg = acfg.get("second_chance", {})
     if not scfg.get("enabled", True):
       return None
+    state = self._slot_state(asset)
+    kalshi = self._kalshi_for(asset)
+    storage = self.storage if asset == "btc" else self.eth_storage()
+    calibration = self._calibration_for(asset)
+    advisor = self.second_chance_advisor() if asset == "btc" else self.eth_second_chance_advisor()
     try:
       self.fetch_and_store()
       now = pd.Timestamp(datetime.now(timezone.utc))
       slot_s = current_slot_start(now, self.tz)
       key = self._slot_cache_key(slot_s)
-      if key in self._second_chance_logged:
+      if key in state["second_chance_logged"]:
         return None
 
-      pred = self._prediction_for_current_slot()
+      pred = self._prediction_for_current_slot(asset=asset)
       if pred is None:
-        log.warning("2nd Chance skipped — no opening prediction for slot %s", slot_s)
+        log.warning("%s 2nd Chance skipped — no opening prediction for slot %s", asset.upper(), slot_s)
         return None
 
       slot_e = slot_end(slot_s, self.tz)
@@ -549,24 +657,24 @@ class PredictionLoop:
       elapsed_min = (now - slot_s).total_seconds() / 60.0
       min_elapsed = float(scfg.get("elapsed_minutes", 4))
       if elapsed_min < min_elapsed - 0.25:
-        log.debug("2nd Chance skipped — %.1f min elapsed (need %.0f)", elapsed_min, min_elapsed)
+        log.debug("%s 2nd Chance skipped — %.1f min elapsed (need %.0f)", asset.upper(), elapsed_min, min_elapsed)
         return None
 
-      api_ref, _ = self.kalshi.slot_t0_reference(slot_s, fresh=True)
+      api_ref, _ = kalshi.slot_t0_reference(slot_s, fresh=True)
       ref = float(api_ref) if api_ref else float(pred.get("reference_price") or pred.get("price") or 0)
       if ref <= 0:
-        locked = self._locked_slot_reference(slot_s)
+        locked = self._locked_slot_reference(slot_s, asset=asset)
         if locked:
           ref = float(locked["price"])
       if ref <= 0:
-        log.warning("2nd Chance skipped — no reference for slot %s", slot_s)
+        log.warning("%s 2nd Chance skipped — no reference for slot %s", asset.upper(), slot_s)
         return None
 
-      live_quote = self.live_price_quote(fresh=True)
+      live_quote = self.live_price_quote(fresh=True, asset=asset)
       current = live_quote.price if live_quote else ref
-      df_1m = self.storage.load("1m")
+      df_1m = storage.load("1m")
 
-      decision = self.second_chance_advisor().evaluate(
+      decision = advisor.evaluate(
         open_prob_up=float(pred.get("prob_up", 0.5)),
         open_signal=str(pred.get("signal", "NO TRADE")),
         reference_price=ref,
@@ -577,7 +685,7 @@ class PredictionLoop:
       )
 
       ts = floor_to_15m(slot_s, self.tz).isoformat()
-      if self.calibration.record_second_chance(
+      if calibration.record_second_chance(
         ts,
         decision.signal,
         decision.prob_up,
@@ -585,9 +693,10 @@ class PredictionLoop:
         confidence=decision.confidence,
         expected_move=decision.expected_move_pct,
       ):
-        self._second_chance_logged.add(key)
+        state["second_chance_logged"].add(key)
         log.info(
-          "2nd Chance logged: %s %s %.0f%% UP (%ds left, method=%s)",
+          "%s 2nd Chance logged: %s %s %.0f%% UP (%ds left, method=%s)",
+          asset.upper(),
           ts,
           decision.signal,
           decision.prob_up * 100,
@@ -601,11 +710,15 @@ class PredictionLoop:
           "confidence": decision.confidence,
           "summary": decision.summary,
           "method": decision.method,
+          "asset": asset,
         }
       return None
     except Exception as e:
-      log.exception("2nd Chance failed: %s", e)
-      self.last_error = str(e)
+      log.exception("%s 2nd Chance failed: %s", asset.upper(), e)
+      if asset == "btc":
+        self.last_error = str(e)
+      else:
+        self.eth_last_error = str(e)
       return None
 
   def collect_auxiliary(self) -> None:
@@ -735,33 +848,49 @@ class PredictionLoop:
     return False
 
   def run_prediction(self) -> Prediction | None:
+    return self._run_slot_prediction("btc")
+
+  def run_eth_prediction(self) -> Prediction | None:
+    if not self._slot15m_enabled("eth"):
+      return None
+    return self._run_slot_prediction("eth")
+
+  def _run_slot_prediction(self, asset: str) -> Prediction | None:
+    acfg = self._acfg_15m(asset)
+    kalshi = self._kalshi_for(asset)
+    storage = self.storage if asset == "btc" else self.eth_storage()
+    predictor = self._predictor_for(asset)
+    logger = self._logger_for(asset)
+    state = self._slot_state(asset)
+    err_attr = state["last_error_attr"]
     try:
       self.resolve_outcomes()
       self.fetch_and_store()
 
-      df_15m = self.storage.load("15m")
-      df_1m = self.storage.load("1m")
+      df_15m = storage.load("15m")
+      df_1m = storage.load("1m")
 
       if df_15m.empty or len(df_15m) < self.min_candles:
         self.fetch_and_store()
-        df_15m = self.storage.load("15m")
-        df_1m = self.storage.load("1m")
+        df_15m = storage.load("15m")
+        df_1m = storage.load("1m")
 
       if df_15m.empty or len(df_15m) < self.min_candles:
-        self.last_error = f"Need {self.min_candles}+ fifteen-minute candles, have {len(df_15m)}"
-        log.error(self.last_error)
+        msg = f"Need {self.min_candles}+ fifteen-minute candles, have {len(df_15m)}"
+        setattr(self, err_attr, msg)
+        log.error("%s 15m: %s", asset.upper(), msg)
         return None
 
       slot_s = floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz)
-      kalshi_ref = self._resolve_kalshi_t0(slot_s)
-      open_quote = self.live_price_quote(fresh=True)
-      current_quote = self.live_price_quote(fresh=True)
-      locked = self._locked_slot_reference(slot_s)
+      kalshi_ref = self._resolve_kalshi_t0(slot_s, asset=asset)
+      open_quote = self.live_price_quote(fresh=True, asset=asset)
+      current_quote = self.live_price_quote(fresh=True, asset=asset)
+      locked = self._locked_slot_reference(slot_s, asset=asset)
       locked_ref = kalshi_ref
       if locked_ref is None and locked:
         locked_ref = float(locked["price"])
 
-      pred = self.predictor.predict(
+      pred = predictor.predict(
         df_15m,
         df_1m if not df_1m.empty else None,
         live_price=kalshi_ref,
@@ -771,31 +900,35 @@ class PredictionLoop:
         current_trade_time=current_quote.trade_time if current_quote else None,
         kalshi_reference=kalshi_ref,
       )
-      self._remember_slot_reference(pred, open_quote, kalshi_ref)
-      active = self.kalshi.active_btc15m_market()
+      self._remember_slot_reference(pred, open_quote, kalshi_ref, asset=asset)
+      active = kalshi.active_slot15m_market()
       kalshi_ticker = active.market_ticker if active else ""
-      self.logger.log(pred, kalshi_market_ticker=kalshi_ticker)
-      self.latest_prediction = pred
-      self.last_error = None
+      logger.log(pred, kalshi_market_ticker=kalshi_ticker)
+      if asset == "btc":
+        self.latest_prediction = pred
+      else:
+        self.latest_eth_prediction = pred
+      setattr(self, err_attr, None)
       log.info(
-        "Slot %s: UP=%.1f%% signal=%s price=$%.2f",
-        pred.slot_label, pred.prob_up * 100, pred.signal.value, pred.price,
+        "%s slot %s: UP=%.1f%% signal=%s price=$%.2f",
+        asset.upper(), pred.slot_label, pred.prob_up * 100, pred.signal.value, pred.price,
       )
       return pred
     except Exception as e:
-      self.last_error = str(e)
-      log.exception("Prediction failed: %s", e)
+      setattr(self, err_attr, str(e))
+      log.exception("%s 15m prediction failed: %s", asset.upper(), e)
       return None
 
-  def _resolve_kalshi_t0(self, slot_s: pd.Timestamp, *, retries: int = 6, delay_sec: float = 0.5) -> float | None:
+  def _resolve_kalshi_t0(self, slot_s: pd.Timestamp, *, asset: str = "btc", retries: int = 6, delay_sec: float = 0.5) -> float | None:
     """Kalshi floor_strike at slot open — retry briefly while market row populates."""
+    kalshi = self._kalshi_for(asset)
     for attempt in range(retries):
-      ref, _ = self.kalshi.slot_t0_reference(slot_s, fresh=True)
+      ref, _ = kalshi.slot_t0_reference(slot_s, fresh=True)
       if ref is not None and ref > 0:
         return float(ref)
       if attempt < retries - 1:
         time.sleep(delay_sec)
-    log.warning("Kalshi floor_strike unavailable for slot %s after %d tries", slot_s, retries)
+    log.warning("Kalshi floor_strike unavailable for %s slot %s after %d tries", asset.upper(), slot_s, retries)
     return None
 
   def _live_cache_sec(self) -> float:
@@ -868,29 +1001,36 @@ class PredictionLoop:
     pred: Prediction,
     quote: KalshiPriceQuote | None,
     kalshi_ref: float | None,
+    *,
+    asset: str = "btc",
   ) -> None:
     if pred.slot_start is None:
       return
     key = self._slot_cache_key(pred.slot_start)
-    self._slot_tick_cache[key] = {
+    cache = self._slot_state(asset)["slot_tick_cache"]
+    cache[key] = {
       "price": pred.reference_price,
       "source": pred.reference_source,
       "trade_time": pred.reference_trade_time or (quote.trade_time.isoformat() if quote and quote.trade_time else None),
     }
     if kalshi_ref:
-      self.kalshi._slot_targets[key] = float(kalshi_ref)
+      self._kalshi_for(asset)._slot_targets[key] = float(kalshi_ref)
 
-  def _locked_slot_reference(self, slot_s: pd.Timestamp) -> dict[str, Any] | None:
-    return self._slot_tick_cache.get(self._slot_cache_key(slot_s))
+  def _locked_slot_reference(self, slot_s: pd.Timestamp, *, asset: str = "btc") -> dict[str, Any] | None:
+    cache = self._slot_state(asset)["slot_tick_cache"]
+    return cache.get(self._slot_cache_key(slot_s))
 
-  def _prediction_for_current_slot(self) -> dict[str, Any] | None:
+  def _prediction_for_current_slot(self, *, asset: str = "btc") -> dict[str, Any] | None:
     """DB/logged prediction for the slot that is active right now."""
+    state = self._slot_state(asset)
+    calibration = self._calibration_for(asset)
     slot_s = current_slot_start(tz_name=self.tz)
     slot_key = floor_to_15m(slot_s, self.tz)
 
-    if self.latest_prediction and self.latest_prediction.slot_start is not None:
-      if floor_to_15m(self.latest_prediction.slot_start, self.tz) == slot_key:
-        p = self.latest_prediction
+    latest = state["latest_prediction"]
+    if latest and latest.slot_start is not None:
+      if floor_to_15m(latest.slot_start, self.tz) == slot_key:
+        p = latest
         return {
           "timestamp": p.timestamp.isoformat(),
           "price": p.reference_price or p.price,
@@ -902,7 +1042,7 @@ class PredictionLoop:
         }
 
     try:
-      df = self.calibration.load_recent(12)
+      df = calibration.load_recent(12)
       if df.empty:
         return None
       df = df.copy()
@@ -922,28 +1062,38 @@ class PredictionLoop:
         "flip_signal": str(row.get("flip_signal") or ""),
       }
     except Exception as e:
-      log.warning("Could not load slot prediction: %s", e)
+      log.warning("Could not load %s slot prediction: %s", asset.upper(), e)
       return None
 
   def slot_monitor(self, reference_override: float | None = None) -> SlotMonitor:
+    return self._slot_monitor_for_asset("btc", reference_override)
+
+  def eth_slot_monitor(self, reference_override: float | None = None) -> SlotMonitor:
+    return self._slot_monitor_for_asset("eth", reference_override)
+
+  def _slot_monitor_for_asset(self, asset: str, reference_override: float | None = None) -> SlotMonitor:
     """Live hold / take-profit / cut-loss guidance for the active 15m window."""
+    kalshi = self._kalshi_for(asset)
+    storage = self.storage if asset == "btc" else self.eth_storage()
+    calibration = self._calibration_for(asset)
+    state = self._slot_state(asset)
     now = pd.Timestamp(datetime.now(timezone.utc))
     slot_s = current_slot_start(now, self.tz)
-    df_1m = self.storage.load("1m")
+    df_1m = storage.load("1m")
 
-    pred = self._prediction_for_current_slot()
-    live_quote = self.live_price_quote(fresh=True)
+    pred = self._prediction_for_current_slot(asset=asset)
+    live_quote = self.live_price_quote(fresh=True, asset=asset)
     current = live_quote.price if live_quote else None
 
-    api_ref, ref_source = self.kalshi.slot_t0_reference(slot_s, fresh=True)
+    api_ref, ref_source = kalshi.slot_t0_reference(slot_s, fresh=True)
     if api_ref is None and pred is not None:
       api_ref = float(pred.get("reference_price") or pred.get("price") or 0)
-      ref_source = str(pred.get("reference_source") or "kalshi_brti_target")
+      ref_source = str(pred.get("reference_source") or kalshi._index_target_source())
     elif api_ref is None:
-      locked = self._locked_slot_reference(slot_s)
+      locked = self._locked_slot_reference(slot_s, asset=asset)
       if locked:
         api_ref = float(locked["price"])
-        ref_source = str(locked.get("source") or "kalshi_brti_target")
+        ref_source = str(locked.get("source") or kalshi._index_target_source())
 
     if api_ref is None:
       api_ref = 0.0
@@ -989,53 +1139,77 @@ class PredictionLoop:
       live_quote.trade_time.isoformat() if live_quote and live_quote.trade_time else None
     )
     monitor.live_price_age_sec = round(live_quote.age_sec, 1) if live_quote and live_quote.age_sec is not None else None
-    monitor.kalshi = self.kalshi.active_market_summary()
-    self._attach_second_chance_preview(slot_s, pred, monitor)
-    self._maybe_log_late_entry(slot_s, monitor)
-    self._maybe_log_flip(slot_s, monitor)
+    monitor.kalshi = kalshi.active_market_summary()
+    self._attach_second_chance_preview(slot_s, pred, monitor, asset=asset, calibration=calibration)
+    self._maybe_log_late_entry(slot_s, monitor, asset=asset, calibration=calibration, state=state)
+    self._maybe_log_flip(slot_s, monitor, asset=asset, calibration=calibration, state=state)
     return monitor
 
-  def _maybe_log_flip(self, slot_s: pd.Timestamp, monitor) -> None:
+  def _maybe_log_flip(
+    self,
+    slot_s: pd.Timestamp,
+    monitor,
+    *,
+    asset: str = "btc",
+    calibration: CalibrationTracker | None = None,
+    state: dict[str, Any] | None = None,
+  ) -> None:
     action = monitor.action.value if hasattr(monitor.action, "value") else str(monitor.action)
     if action not in ("FLIP LONG", "FLIP SHORT"):
       return
+    state = state or self._slot_state(asset)
     key = self._slot_cache_key(slot_s)
-    if key in self._flip_logged:
+    if key in state["flip_logged"]:
       return
     prob = monitor.reassessed_prob_up
     if prob is None:
       return
     ts = floor_to_15m(slot_s, self.tz).isoformat()
-    if self.calibration.record_flip(ts, action, float(prob), int(monitor.seconds_remaining)):
-      self._flip_logged.add(key)
-      log.info("Flip logged: %s %.0f%% UP (%ds left)", action, prob * 100, monitor.seconds_remaining)
+    tracker = calibration or self._calibration_for(asset)
+    if tracker.record_flip(ts, action, float(prob), int(monitor.seconds_remaining)):
+      state["flip_logged"].add(key)
+      log.info("%s flip logged: %s %.0f%% UP (%ds left)", asset.upper(), action, prob * 100, monitor.seconds_remaining)
 
-  def _maybe_log_late_entry(self, slot_s: pd.Timestamp, monitor) -> None:
+  def _maybe_log_late_entry(
+    self,
+    slot_s: pd.Timestamp,
+    monitor,
+    *,
+    asset: str = "btc",
+    calibration: CalibrationTracker | None = None,
+    state: dict[str, Any] | None = None,
+  ) -> None:
     action = getattr(monitor, "late_entry_action", "") or ""
     if action not in ("LATE LONG", "LATE SHORT"):
       return
+    state = state or self._slot_state(asset)
     key = self._slot_cache_key(slot_s)
-    if key in self._late_entry_logged:
+    if key in state["late_entry_logged"]:
       return
     prob = monitor.reassessed_prob_up
     if prob is None:
       return
     ts = floor_to_15m(slot_s, self.tz).isoformat()
-    if self.calibration.record_late_entry(ts, action, float(prob), int(monitor.seconds_remaining)):
-      self._late_entry_logged.add(key)
-      log.info("Late entry logged: %s %.0f%% UP (%ds left)", action, prob * 100, monitor.seconds_remaining)
+    tracker = calibration or self._calibration_for(asset)
+    if tracker.record_late_entry(ts, action, float(prob), int(monitor.seconds_remaining)):
+      state["late_entry_logged"].add(key)
+      log.info("%s late entry logged: %s %.0f%% UP (%ds left)", asset.upper(), action, prob * 100, monitor.seconds_remaining)
 
   def _attach_second_chance_preview(
     self,
     slot_s: pd.Timestamp,
     pred: dict[str, Any] | None,
     monitor: SlotMonitor,
+    *,
+    asset: str = "btc",
+    calibration: CalibrationTracker | None = None,
   ) -> None:
     """Show logged 2nd Chance on slot monitor when available."""
     if pred is None:
       return
     try:
-      df = self.calibration.load_recent(8)
+      tracker = calibration or self._calibration_for(asset)
+      df = tracker.load_recent(8)
       if df.empty or "second_chance_signal" not in df.columns:
         return
       slot_key = floor_to_15m(slot_s, self.tz)
@@ -1075,13 +1249,28 @@ class PredictionLoop:
       log.debug("2nd Chance preview failed: %s", e)
 
   def poll_brti(self) -> None:
-    """Background refresh of live price (BRTI or exchange)."""
-    self.live_price_quote(fresh=True)
+    """Background refresh of live price (BRTI/ERTI or exchange)."""
+    self.live_price_quote(fresh=True, asset="btc")
+    if self._slot15m_enabled("eth"):
+      self.live_price_quote(fresh=True, asset="eth")
 
   def status(self) -> dict[str, Any]:
-    df_15m = self.storage.load("15m")
-    df_1m = self.storage.load("1m")
-    live = self.live_price_quote(fresh=True)
+    return self._status_for_asset("btc")
+
+  def eth_status(self) -> dict[str, Any]:
+    if not self._slot15m_enabled("eth"):
+      return {"ok": False, "error": "ETH 15m disabled"}
+    return self._status_for_asset("eth")
+
+  def _status_for_asset(self, asset: str) -> dict[str, Any]:
+    acfg = self._acfg_15m(asset)
+    kalshi = self._kalshi_for(asset)
+    storage = self.storage if asset == "btc" else self.eth_storage()
+    predictor = self._predictor_for(asset)
+    fetcher = self.fetcher if asset == "btc" else self.eth_fetcher()
+    df_15m = storage.load("15m")
+    df_1m = storage.load("1m")
+    live = self.live_price_quote(fresh=True, asset=asset)
     live_tick: dict[str, Any] | None = None
     if live:
       live_tick = {
@@ -1089,28 +1278,34 @@ class PredictionLoop:
         "source": live.source,
         "age_sec": round(live.age_sec, 1) if live.age_sec is not None else None,
       }
+    series = kalshi.series_ticker
+    index_id = index_id_for_cfg(acfg)
+    last_err = self.last_error if asset == "btc" else self.eth_last_error
     return {
-      "symbol": self.cfg["symbol"],
-      "exchange": getattr(self.fetcher, "_exchange_id", None) or self.cfg.get("exchange"),
-      "exchange_connected": self.fetcher.is_connected(),
-      "model": "trained" if self.predictor.model else "baseline",
+      "asset": asset,
+      "symbol": acfg["symbol"],
+      "exchange": getattr(fetcher, "_exchange_id", None) or acfg.get("exchange"),
+      "exchange_connected": fetcher.is_connected(),
+      "model": "trained" if predictor.model else "baseline",
       "primary_timeframe": "15m",
       "candles_15m": len(df_15m),
       "candles_1m": len(df_1m),
       "min_candles_15m": self.min_candles,
-      "lookback_hours": self.cfg.get("lookback_hours", 12),
+      "lookback_hours": acfg.get("lookback_hours", 12),
       "slot_context": "1h + 4h (primary) + 12h",
-      "volume_spike_window": f"{self.cfg.get('features', {}).get('volume_spike_window', 16)}×15m",
-      "price_feed": self.kalshi.price_feed_label(),
-      "settlement_reference": self.kalshi.settlement_reference_label(),
+      "volume_spike_window": f"{acfg.get('features', {}).get('volume_spike_window', 16)}×15m",
+      "price_feed": kalshi.price_feed_label(),
+      "settlement_reference": kalshi.settlement_reference_label(),
+      "index_id": index_id,
       "live_tick": live_tick,
-      "kalshi": self.kalshi.status(),
+      "kalshi": kalshi.status(),
       "latest_candle_15m": df_15m["timestamp"].iloc[-1].isoformat() if not df_15m.empty else None,
       "horizon_minutes": self.horizon,
       "timezone": self.tz,
       "prediction_schedule": "every :00, :15, :30, :45 ET",
-      "last_error": self.last_error,
+      "last_error": last_err,
       "scheduler_running": self._scheduler is not None and getattr(self._scheduler, "running", False),
+      "series_ticker": series,
     }
 
   def _schedule_second_chance(self, scheduler) -> None:
@@ -1137,6 +1332,13 @@ class PredictionLoop:
       id="predict",
       max_instances=1,
     )
+    if self._slot15m_enabled("eth"):
+      scheduler.add_job(
+        self.run_eth_prediction,
+        CronTrigger(minute="0,15,30,45", timezone=self.tz),
+        id="eth_predict",
+        max_instances=1,
+      )
 
   def start_background(self) -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone=self.tz)
@@ -1147,6 +1349,13 @@ class PredictionLoop:
     self._schedule_hourly(scheduler)
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")
+    if self._slot15m_enabled("eth"):
+      scheduler.add_job(
+        self.run_eth_prediction,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=10),
+        id="eth_predict_now",
+      )
     scheduler.add_job(self.run_hourly_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=15), id="hourly_now")
     if asset_enabled(self.cfg, "eth"):
       scheduler.add_job(
