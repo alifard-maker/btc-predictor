@@ -304,6 +304,11 @@
     </details>
 
     <div id="panel-15m">
+    <div class="card" id="btc-slot15-bot-card">
+      <h2>BTC 15m auto-bet</h2>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s</strong> while enabled — enters and exits paper/live positions from live 15m signals (open LONG/SHORT, late entry, flip). <strong>Max at-risk $/slot</strong> caps open exposure; exits free budget for re-entry. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any LONG/SHORT).</p>
+      <div id="btc-slot15-bot"><p class="muted">Loading…</p></div>
+    </div>
     <details class="card guide-card" id="dashboard-guide">
       <summary>How to read this dashboard</summary>
       <div class="guide-body">
@@ -419,6 +424,11 @@
     </div>
 
     <div id="panel-eth-15m" style="display:none">
+    <div class="card" id="eth-slot15-bot-card">
+      <h2>ETH 15m auto-bet</h2>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s</strong> — same as BTC: continuous enter/exit within your <strong>max at-risk $/slot</strong>. Uses LONG/SHORT, late entry, and flip signals from the monitor. <strong>Both filters off</strong> = free mode.</p>
+      <div id="eth-slot15-bot"><p class="muted">Loading…</p></div>
+    </div>
     <div class="card ref-override" id="eth15-ref-override-panel">
       <label for="eth15-ref-override-input">Override Kalshi t=0 (optional)</label>
       <div class="ref-override-row">
@@ -549,6 +559,7 @@
     let hourlyRenderTab = 'daily';
     let dailyFetchGen = 0;
     let hourlyGuideCheatOpen = false;
+    const lastBotStatus = { btc: null, eth: null };
 
     function slot15Prefix() {
       return activeTab === 'eth-15m' ? 'eth15-' : '';
@@ -566,6 +577,8 @@
           history: '/api/eth/15m/predictions?limit=20',
           calibration: '/api/eth/15m/calibration',
           health: '/api/eth/15m/status',
+          bot: '/api/eth/15m/bot',
+          botSettings: '/api/eth/15m/bot/settings',
           indexLabel: 'ERTI',
           series: 'KXETH15M',
         };
@@ -576,6 +589,8 @@
         history: '/api/predictions?limit=20',
         calibration: '/api/calibration',
         health: '/health',
+        bot: '/api/slot15/bot',
+        botSettings: '/api/slot15/bot/settings',
         indexLabel: 'BRTI',
         series: 'KXBTC15M',
       };
@@ -1335,16 +1350,14 @@
       $('tab-eth-15m').classList.toggle('active', name === 'eth-15m');
       $('tab-daily').classList.toggle('active', name === 'daily');
       $('tab-eth-hourly').classList.toggle('active', name === 'eth-hourly');
-      if (name === 'daily') {
-        const st = $('btc-hourly-bot-status');
-        if (st) st.innerHTML = '<p class="muted" style="font-size:.72rem">Loading BTC bot…</p>';
+      if (name === 'daily' || name === 'eth-hourly') {
+        const asset = name === 'eth-hourly' ? 'eth' : 'btc';
+        const cached = lastBotStatus[asset];
+        if (cached) renderHourlyBot(cached, asset);
+        loadDaily();
+        return;
       }
-      if (name === 'eth-hourly') {
-        const st = $('eth-hourly-bot-status');
-        if (st) st.innerHTML = '<p class="muted" style="font-size:.72rem">Loading ETH bot…</p>';
-      }
-      if (name === 'daily' || name === 'eth-hourly') loadDaily();
-      else if (name === '15m' || name === 'eth-15m') loadAll();
+      if (name === '15m' || name === 'eth-15m') loadAll();
     }
 
     function renderRangeTierCards(recs) {
@@ -1739,7 +1752,53 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/settings' : '/api/hourly/bot/settings';
     }
 
+    function hourlyBotStatusUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
+    }
+
+    function mergeHourSummary(prev, next, eventTicker) {
+      if (!next) return prev || {};
+      if (!prev) return next;
+      const prevEvt = prev.event_ticker || eventTicker;
+      const nextEvt = next.event_ticker || eventTicker;
+      if (prevEvt && nextEvt && prevEvt !== nextEvt) return next;
+      const merged = { ...prev, ...next };
+      for (const k of ['realized_pnl_usd', 'unrealized_pnl_usd', 'total_pnl_usd']) {
+        if (next[k] == null && prev[k] != null) merged[k] = prev[k];
+      }
+      return merged;
+    }
+
+    function mergeBotStatus(asset, incoming) {
+      if (!incoming || !incoming.ok || (incoming.asset && incoming.asset !== asset)) {
+        return lastBotStatus[asset];
+      }
+      const prev = lastBotStatus[asset];
+      if (!prev) {
+        lastBotStatus[asset] = incoming;
+        return incoming;
+      }
+      const eventTicker = incoming.event_ticker
+        || (incoming.hour_summary || incoming.hourly_summary || {}).event_ticker
+        || prev.event_ticker;
+      const prevHs = prev.hour_summary || prev.hourly_summary || {};
+      const nextHs = incoming.hour_summary || incoming.hourly_summary || {};
+      const mergedHs = mergeHourSummary(prevHs, nextHs, eventTicker);
+      const merged = {
+        ...prev,
+        ...incoming,
+        event_ticker: eventTicker,
+        hour_summary: mergedHs,
+        hourly_summary: mergedHs,
+        open_positions: incoming.open_positions ?? prev.open_positions,
+        recent_trades: incoming.recent_trades ?? prev.recent_trades,
+      };
+      lastBotStatus[asset] = merged;
+      return merged;
+    }
+
     const botForceSettingsRender = { btc: true, eth: true };
+    const slot15BotForceSettingsRender = { btc: true, eth: true };
 
     function readBotSettingsFromDom(asset) {
       const p = asset;
@@ -1814,7 +1873,184 @@
           <thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
-      </div>`;
+      </div>      `;
+    }
+
+    function slot15BotSettingsUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m/bot/settings' : '/api/slot15/bot/settings';
+    }
+
+    function readSlot15BotSettingsFromDom(asset) {
+      const p = `slot15-${asset}`;
+      const enabledEl = $(`bot-enabled-${p}`);
+      if (!enabledEl) return null;
+      return {
+        enabled: !!enabledEl.checked,
+        mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
+        max_spend_per_slot_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
+        allow_strong: !!$(`bot-strong-${p}`)?.checked,
+        allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
+      };
+    }
+
+    function slot15BotSettingsHtml(asset, s) {
+      const p = `slot15-${asset}`;
+      return `
+        <div class="bot-row">
+          <label class="bot-label">Auto-bet
+            <label class="switch"><input type="checkbox" id="bot-enabled-${p}" ${s.enabled ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label">Paper
+            <label class="switch"><input type="checkbox" id="bot-paper-${p}" ${s.mode === 'paper' ? 'checked' : ''} onchange="onSlot15BotModeToggle('${asset}', event)"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label">Live
+            <label class="switch"><input type="checkbox" id="bot-live-${p}" ${s.mode === 'live' ? 'checked' : ''} onchange="onSlot15BotModeToggle('${asset}', event)"><span class="slider"></span></label>
+          </label>
+        </div>
+        <div class="bot-row">
+          <label class="bot-label" title="Max open exposure at once this slot — not cumulative spend">Max at-risk $ / slot
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_slot_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="saveSlot15BotSettings('${asset}')">
+          </label>
+          <label class="bot-label">STRONG bets
+            <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label">ACTIONABLE bets
+            <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+        </div>`;
+    }
+
+    function renderSlot15Bot(bot, asset) {
+      const el = $(`${asset}-slot15-bot`);
+      if (!el) return;
+      const tab = asset === 'eth' ? 'eth-15m' : '15m';
+      if (activeTab !== tab) return;
+      if (bot && bot.asset && bot.asset !== asset) return;
+      if (!bot || !bot.ok) {
+        el.innerHTML = '<p class="muted">Bot status unavailable.</p>';
+        slot15BotForceSettingsRender[asset] = true;
+        return;
+      }
+      const p = `slot15-${asset}`;
+      const serverSettings = bot.settings || {};
+      const settingsWrapId = `${asset}-slot15-bot-settings`;
+      const statusWrapId = `${asset}-slot15-bot-status`;
+      if (!$(settingsWrapId)) {
+        el.innerHTML = `<div class="bot-panel"><div id="${settingsWrapId}"></div><div id="${statusWrapId}"></div></div>`;
+      }
+      const settingsWrap = $(settingsWrapId);
+      const statusWrap = $(statusWrapId);
+      if (!settingsWrap || !statusWrap) return;
+
+      const domSettings = readSlot15BotSettingsFromDom(asset);
+      const shouldRenderSettings = slot15BotForceSettingsRender[asset] || !domSettings;
+      if (shouldRenderSettings) {
+        settingsWrap.innerHTML = slot15BotSettingsHtml(asset, serverSettings);
+        slot15BotForceSettingsRender[asset] = false;
+      }
+
+      const s = domSettings || serverSettings;
+      const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
+      const freeMode = !s.allow_strong && !s.allow_actionable;
+      const exposure = bot.open_exposure_usd ?? 0;
+      const openN = bot.open_position_count ?? 0;
+      const ss = bot.slot_summary || {};
+      const realized = ss.realized_pnl_usd ?? 0;
+      const unrealized = ss.unrealized_pnl_usd ?? 0;
+      const totalPnl = ss.total_pnl_usd ?? (realized + unrealized);
+      const totalCls = totalPnl > 0 ? 'up' : totalPnl < 0 ? 'down' : 'muted';
+      const realizedCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
+      const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
+      const slotId = bot.slot_label || ss.event_ticker || bot.event_ticker || '—';
+      const assetLabel = asset === 'eth' ? 'ETH' : 'BTC';
+      const trades = (bot.recent_trades || []).map((t) => {
+        const st = t.status === 'filled' ? 'up' : t.status === 'skipped' ? 'muted' : 'down';
+        const act = t.action || 'enter';
+        const entryC = t.entry_price_cents;
+        const exitC = t.exit_price_cents;
+        const pnlCell = act === 'exit' ? botPnlUsd(t.realized_pnl_usd ?? t.pnl_usd) : '—';
+        const mkt = t.label || t.market_ticker || '—';
+        const evt = t.event_ticker || '—';
+        const evtCls = evt === (ss.event_ticker || bot.event_ticker) ? '' : 'muted';
+        return `<tr>
+          <td>${time(t.created_at)}</td>
+          <td class="${evtCls}" style="font-size:.65rem">${evt}</td>
+          <td>${act}</td>
+          <td class="${st}">${t.status}</td>
+          <td style="font-size:.68rem">${mkt}</td>
+          <td>${botCents(entryC)}</td>
+          <td>${botCents(exitC)}</td>
+          <td>${pnlCell}</td>
+          <td style="font-size:.68rem">${t.detail || ''}</td>
+        </tr>`;
+      }).join('');
+      const emptyLog = s.enabled
+        ? `No bot activity yet${freeMode ? ' — free mode waits for any live LONG/SHORT on the 15m tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
+        : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
+      const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
+      statusWrap.innerHTML = `
+        <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
+        <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
+          <div class="bot-stat"><span class="muted">Slot total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Realized (closed)</span><strong class="${realizedCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Unrealized (open)</span><strong class="${unrealCls}">${unrealized >= 0 ? '+' : ''}$${Number(unrealized).toFixed(2)}</strong></div>
+        </div>
+        <div class="bot-row" style="padding:0 .15rem .35rem">
+          <div class="bot-stat"><span class="muted">Enters / Exits this slot</span><strong>${ss.enter_count ?? 0} / ${ss.exit_count ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Sum of all enter fills this slot — can exceed max at-risk when positions rotate">Cumulative $ entered (slot)</span><strong>$${Number(ss.total_entered_usd ?? 0).toFixed(2)}</strong></div>
+        </div>
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Budget cap applies to <strong>at risk now</strong> only. Cumulative entered tracks total buy volume across round-trips and may be much higher than your cap.</p>
+        ${openPosHtml}
+        <div class="bot-row">
+          <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
+          <div class="bot-stat"><span class="muted">At risk now</span><strong>$${Number(exposure).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
+          <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
+        </div>
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log is kept permanently — not cleared when Auto-bet or filters change.</p>
+        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Slot</th><th>Action</th><th>Status</th><th>Signal</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
+      `;
+    }
+
+    function onSlot15BotModeToggle(asset, ev) {
+      const p = `slot15-${asset}`;
+      const paper = $(`bot-paper-${p}`);
+      const live = $(`bot-live-${p}`);
+      if (!paper || !live) return;
+      const targetId = ev?.target?.id;
+      if (targetId === `bot-paper-${p}` && paper.checked) live.checked = false;
+      if (targetId === `bot-live-${p}` && live.checked) paper.checked = false;
+      if (!paper.checked && !live.checked) paper.checked = true;
+      saveSlot15BotSettings(asset);
+    }
+
+    async function saveSlot15BotSettings(asset) {
+      const p = `slot15-${asset}`;
+      const enabledEl = $(`bot-enabled-${p}`);
+      if (!enabledEl) return;
+      const body = {
+        enabled: !!enabledEl.checked,
+        mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
+        max_spend_per_slot_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
+        allow_strong: !!$(`bot-strong-${p}`)?.checked,
+        allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
+      };
+      try {
+        const res = await fetch(slot15BotSettingsUrl(asset), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const tab = asset === 'eth' ? 'eth-15m' : '15m';
+        if (activeTab === tab) {
+          const bot = await res.json();
+          renderSlot15Bot(bot, asset);
+        }
+      } catch (e) {
+        showError('15m bot settings: ' + e.message);
+      }
     }
 
     function renderHourlyBot(bot, asset) {
@@ -1823,6 +2059,7 @@
       const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
       if (activeTab !== tab) return;
       if (bot && bot.asset && bot.asset !== asset) return;
+      if (bot && bot.ok) bot = mergeBotStatus(asset, bot) || bot;
       if (!bot || !bot.ok) {
         el.innerHTML = '<p class="muted">Bot status unavailable.</p>';
         botForceSettingsRender[asset] = true;
@@ -1852,9 +2089,9 @@
       const exposure = bot.open_exposure_usd ?? bot.spent_usd ?? 0;
       const openN = bot.open_position_count ?? 0;
       const hs = bot.hourly_summary || bot.hour_summary || {};
-      const realized = hs.realized_pnl_usd ?? 0;
-      const unrealized = hs.unrealized_pnl_usd ?? 0;
-      const totalPnl = hs.total_pnl_usd ?? (realized + unrealized);
+      const realized = Number(hs.realized_pnl_usd ?? 0);
+      const unrealized = Number(hs.unrealized_pnl_usd ?? 0);
+      const totalPnl = hs.total_pnl_usd != null ? Number(hs.total_pnl_usd) : (realized + unrealized);
       const totalCls = totalPnl > 0 ? 'up' : totalPnl < 0 ? 'down' : 'muted';
       const realizedCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
       const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
@@ -2110,21 +2347,36 @@
       if (tabAtStart !== 'daily' && tabAtStart !== 'eth-hourly') return;
       const gen = ++dailyFetchGen;
       const api = hourlyApiFor(tabAtStart);
+      const asset = tabAtStart === 'eth-hourly' ? 'eth' : 'btc';
       try {
-        const [d, cal, hist] = await Promise.all([
+        const [d, cal, hist, botDirect] = await Promise.all([
           get(api.prediction),
           get(api.calibration).catch(() => ({ summary: {} })),
           get(api.history).catch(() => []),
+          get(hourlyBotStatusUrl(asset)).catch(() => null),
         ]);
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         hourlyRenderTab = tabAtStart;
+        let bot = botDirect || d.bot;
+        if (botDirect && d.bot) {
+          const evt = botDirect.event_ticker || d.bot.event_ticker;
+          const hs = mergeHourSummary(
+            d.bot.hour_summary || d.bot.hourly_summary || {},
+            botDirect.hour_summary || botDirect.hourly_summary || {},
+            evt,
+          );
+          bot = { ...d.bot, ...botDirect, event_ticker: evt, hour_summary: hs, hourly_summary: hs };
+        }
+        bot = mergeBotStatus(asset, bot);
+        if (bot) d.bot = bot;
         renderDaily(d);
         renderHourlyCalibration(cal);
         renderHourlyHistory(hist);
       } catch (e) {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         hourlyRenderTab = tabAtStart;
-        renderDaily({ ok: false, error: e.message });
+        const cached = lastBotStatus[asset];
+        renderDaily({ ok: false, error: e.message, bot: cached || undefined });
         renderHourlyCalibration({});
         renderHourlyHistory([]);
       }
@@ -2165,6 +2417,7 @@
           const calEl = s15$('calibration');
           if (calEl) calEl.innerHTML = `<p class="muted">Calibration unavailable: ${e.message || 'API error'}</p>`;
         }),
+        get(api.bot).then((b) => renderSlot15Bot(b, activeTab === 'eth-15m' ? 'eth' : 'btc')).catch(() => {}),
         );
         if (activeTab === '15m') {
           tasks.push(get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])));

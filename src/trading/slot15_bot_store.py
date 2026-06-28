@@ -1,4 +1,4 @@
-"""Persist hourly auto-bet bot settings, open positions, and trade log (per asset)."""
+"""Persist 15-minute auto-bet bot settings, open positions, and trade log (per asset)."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ from typing import Any
 
 
 @dataclass
-class HourlyBotSettings:
+class Slot15BotSettings:
   enabled: bool = False
   mode: str = "paper"  # paper | live
-  max_spend_per_hour_usd: float = 25.0
+  max_spend_per_slot_usd: float = 25.0
   allow_strong: bool = True
   allow_actionable: bool = True
   continuous: bool = True
@@ -24,13 +24,13 @@ class HourlyBotSettings:
     return asdict(self)
 
   @classmethod
-  def from_dict(cls, raw: dict[str, Any] | None) -> HourlyBotSettings:
+  def from_dict(cls, raw: dict[str, Any] | None) -> Slot15BotSettings:
     if not raw:
       return cls()
     return cls(
       enabled=bool(raw.get("enabled", False)),
       mode=str(raw.get("mode", "paper")),
-      max_spend_per_hour_usd=float(raw.get("max_spend_per_hour_usd", 25.0)),
+      max_spend_per_slot_usd=float(raw.get("max_spend_per_slot_usd", raw.get("max_spend_per_hour_usd", 25.0))),
       allow_strong=bool(raw.get("allow_strong", True)),
       allow_actionable=bool(raw.get("allow_actionable", True)),
       continuous=bool(raw.get("continuous", True)),
@@ -85,7 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_bot_positions_open ON bot_positions(event_ticker,
 """
 
 
-class HourlyBotStore:
+class Slot15BotStore:
   def __init__(self, db_path: Path):
     self.db_path = Path(db_path)
     self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -96,36 +96,22 @@ class HourlyBotStore:
     conn.row_factory = sqlite3.Row
     return conn
 
-  def _migrate(self, conn: sqlite3.Connection) -> None:
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_trades)").fetchall()}
-    if cols and "action" not in cols:
-      conn.execute("ALTER TABLE bot_trades ADD COLUMN action TEXT NOT NULL DEFAULT 'enter'")
-    if cols and "pnl_usd" not in cols:
-      conn.execute("ALTER TABLE bot_trades ADD COLUMN pnl_usd REAL")
-    if cols and "position_id" not in cols:
-      conn.execute("ALTER TABLE bot_trades ADD COLUMN position_id TEXT")
-    if cols and "entry_price_cents" not in cols:
-      conn.execute("ALTER TABLE bot_trades ADD COLUMN entry_price_cents INTEGER")
-    if cols and "exit_price_cents" not in cols:
-      conn.execute("ALTER TABLE bot_trades ADD COLUMN exit_price_cents INTEGER")
-
   def _init_db(self) -> None:
     with self._connect() as conn:
       conn.executescript(_SCHEMA)
-      self._migrate(conn)
       row = conn.execute("SELECT json FROM bot_settings WHERE id = 1").fetchone()
       if row is None:
         conn.execute(
           "INSERT INTO bot_settings (id, json) VALUES (1, ?)",
-          (json.dumps(HourlyBotSettings().to_dict()),),
+          (json.dumps(Slot15BotSettings().to_dict()),),
         )
 
-  def get_settings(self) -> HourlyBotSettings:
+  def get_settings(self) -> Slot15BotSettings:
     with self._connect() as conn:
       row = conn.execute("SELECT json FROM bot_settings WHERE id = 1").fetchone()
-    return HourlyBotSettings.from_dict(json.loads(row["json"]) if row else {})
+    return Slot15BotSettings.from_dict(json.loads(row["json"]) if row else {})
 
-  def save_settings(self, settings: HourlyBotSettings) -> HourlyBotSettings:
+  def save_settings(self, settings: Slot15BotSettings) -> Slot15BotSettings:
     with self._connect() as conn:
       conn.execute(
         "UPDATE bot_settings SET json = ? WHERE id = 1",
@@ -145,9 +131,9 @@ class HourlyBotStore:
     positions = self.open_positions(event_ticker)
     return round(sum(float(p.get("cost_usd") or 0) for p in positions), 2)
 
-  def remaining_budget_usd(self, event_ticker: str, max_hourly: float) -> float:
+  def remaining_budget_usd(self, event_ticker: str, max_slot: float) -> float:
     """Room for new entries: max at-risk cap minus current open exposure (exits free budget)."""
-    return max(0.0, float(max_hourly) - self.open_exposure_usd(event_ticker))
+    return max(0.0, float(max_slot) - self.open_exposure_usd(event_ticker))
 
   def has_open_position(self, event_ticker: str, market_ticker: str) -> bool:
     with self._connect() as conn:
@@ -198,41 +184,6 @@ class HourlyBotStore:
       conn.execute("UPDATE bot_positions SET status = 'closed' WHERE id = ?", (position_id,))
     return dict(row)
 
-  @staticmethod
-  def _exit_pnl_from_prices(row: dict[str, Any]) -> float | None:
-    """Derive exit P&L from entry/exit cents when pnl_usd was not persisted."""
-    entry_c = row.get("entry_price_cents")
-    exit_c = row.get("exit_price_cents")
-    contracts = row.get("contracts")
-    side = (row.get("side") or "").lower()
-    if entry_c is None or exit_c is None or contracts is None:
-      return None
-    entry_c, exit_c, contracts = int(entry_c), int(exit_c), int(contracts)
-    if side == "yes":
-      return round(contracts * (exit_c - entry_c) / 100.0, 2)
-    if side == "no":
-      return round(contracts * (entry_c - exit_c) / 100.0, 2)
-    return None
-
-  def _realized_pnl_usd(self, event_ticker: str) -> float:
-    with self._connect() as conn:
-      exits = conn.execute(
-        """
-        SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
-        FROM bot_trades
-        WHERE event_ticker = ? AND action = 'exit' AND status = 'filled'
-        """,
-        (event_ticker,),
-      ).fetchall()
-    total = 0.0
-    for r in exits:
-      row = dict(r)
-      pnl = row.get("pnl_usd")
-      if pnl is None:
-        pnl = self._exit_pnl_from_prices(row)
-      total += float(pnl or 0)
-    return round(total, 2)
-
   def _enrich_trade(self, row: dict[str, Any]) -> dict[str, Any]:
     action = row.get("action") or "enter"
     entry_c = row.get("entry_price_cents")
@@ -249,8 +200,8 @@ class HourlyBotStore:
       out["realized_pnl_usd"] = out["pnl_usd"]
     return out
 
-  def hour_interval_summary(self, event_ticker: str) -> dict[str, Any]:
-    """Per-hour stats. total_entered_usd sums all enter fills (can exceed max at-risk with churn)."""
+  def slot_interval_summary(self, event_ticker: str) -> dict[str, Any]:
+    """Per-slot stats. total_entered_usd sums all enter fills (can exceed max at-risk with churn)."""
     with self._connect() as conn:
       row = conn.execute(
         """
@@ -266,15 +217,12 @@ class HourlyBotStore:
       ).fetchone()
     exposure = self.open_exposure_usd(event_ticker)
     open_pos = self.open_positions(event_ticker)
-    exit_count = int(row["exit_count"] or 0)
     realized = round(float(row["realized_pnl_usd"] or 0), 2)
-    if exit_count > 0 and realized == 0:
-      realized = self._realized_pnl_usd(event_ticker)
     return {
       "event_ticker": event_ticker,
       "realized_pnl_usd": realized,
       "enter_count": int(row["enter_count"] or 0),
-      "exit_count": exit_count,
+      "exit_count": int(row["exit_count"] or 0),
       "total_entered_usd": round(float(row["total_entered_usd"] or 0), 2),
       "open_exposure_usd": exposure,
       "open_position_count": len(open_pos),
@@ -353,20 +301,19 @@ class HourlyBotStore:
     settings = self.get_settings()
     exposure = self.open_exposure_usd(event_ticker) if event_ticker else 0.0
     remaining = (
-      max(0.0, settings.max_spend_per_hour_usd - exposure)
+      max(0.0, settings.max_spend_per_slot_usd - exposure)
       if event_ticker
-      else settings.max_spend_per_hour_usd
+      else settings.max_spend_per_slot_usd
     )
     open_pos = self.open_positions(event_ticker) if event_ticker else []
-    hour_summary = self.hour_interval_summary(event_ticker) if event_ticker else None
+    slot_summary = self.slot_interval_summary(event_ticker) if event_ticker else None
     return {
       "settings": settings.to_dict(),
       "event_ticker": event_ticker,
       "open_exposure_usd": round(exposure, 2),
       "remaining_usd": round(remaining, 2),
-      "max_spend_per_hour_usd": settings.max_spend_per_hour_usd,
+      "max_spend_per_slot_usd": settings.max_spend_per_slot_usd,
       "open_positions": open_pos,
       "open_position_count": len(open_pos),
-      "hour_summary": hour_summary,
-      "hourly_summary": hour_summary,
+      "slot_summary": slot_summary,
     }

@@ -584,6 +584,26 @@ def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
   return settings.to_dict()
 
 
+def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
+  from src.trading.slot15_bot_store import Slot15BotSettings
+
+  current = store.get_settings()
+  mode = str(body.get("mode", current.mode))
+  if mode not in ("paper", "live"):
+    raise HTTPException(400, "mode must be paper or live")
+  settings = Slot15BotSettings(
+    enabled=bool(body.get("enabled", current.enabled)),
+    mode=mode,
+    max_spend_per_slot_usd=float(body.get("max_spend_per_slot_usd", current.max_spend_per_slot_usd)),
+    allow_strong=bool(body.get("allow_strong", current.allow_strong)),
+    allow_actionable=bool(body.get("allow_actionable", current.allow_actionable)),
+  )
+  if settings.max_spend_per_slot_usd < 0:
+    raise HTTPException(400, "max_spend_per_slot_usd must be >= 0")
+  store.save_settings(settings)
+  return settings.to_dict()
+
+
 @app.get("/api/hourly/bot")
 def hourly_bot_status(_: None = Depends(require_session)):
   if _loop is None:
@@ -651,6 +671,82 @@ def eth_hourly_bot_trades(
   out: dict[str, Any] = {"trades": trades}
   if event_ticker:
     out["hour_summary"] = store.hour_interval_summary(event_ticker)
+  return out
+
+
+@app.get("/api/slot15/bot")
+def slot15_bot_status(_: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop._slot15_tab("btc")
+  return _loop.slot15_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/slot15/bot/settings")
+async def slot15_bot_settings(request: Request, _: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  body = await request.json()
+  store = _loop.slot15_bot_store("btc")
+  _apply_slot15_bot_settings(store, body)
+  tab = _loop._slot15_tab("btc")
+  return _loop.slot15_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.get("/api/slot15/bot/trades")
+def slot15_bot_trades(
+  limit: int = Query(default=100, le=200),
+  event_ticker: str | None = Query(default=None),
+  _: None = Depends(require_session),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.slot15_bot_store("btc")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["slot_summary"] = store.slot_interval_summary(event_ticker)
+  return out
+
+
+@app.get("/api/eth/15m/bot")
+def eth_slot15_bot_status(_: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  tab = _loop._slot15_tab("eth")
+  return _loop.slot15_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/15m/bot/settings")
+async def eth_slot15_bot_settings(request: Request, _: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  body = await request.json()
+  store = _loop.slot15_bot_store("eth")
+  _apply_slot15_bot_settings(store, body)
+  tab = _loop._slot15_tab("eth")
+  return _loop.slot15_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.get("/api/eth/15m/bot/trades")
+def eth_slot15_bot_trades(
+  limit: int = Query(default=100, le=200),
+  event_ticker: str | None = Query(default=None),
+  _: None = Depends(require_session),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  store = _loop.slot15_bot_store("eth")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["slot_summary"] = store.slot_interval_summary(event_ticker)
   return out
 
 

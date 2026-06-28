@@ -87,6 +87,8 @@ class PredictionLoop:
     self.eth_last_error: str | None = None
     self._hourly_bot_stores: dict[str, Any] = {}
     self._hourly_bots: dict[str, Any] = {}
+    self._slot15_bot_stores: dict[str, Any] = {}
+    self._slot15_bots: dict[str, Any] = {}
     if asset_enabled(self.cfg, "eth"):
       self._eth_cfg = asset_cfg(self.cfg, "eth")
       ensure_dirs(self._eth_cfg)
@@ -268,18 +270,18 @@ class PredictionLoop:
       acfg = self._acfg_15m(asset)
       open_pos = enrich_open_positions_live(open_pos, tab, acfg)
       status["open_positions"] = open_pos
+    hs = status.get("hourly_summary") or status.get("hour_summary")
+    if hs:
+      hs = dict(hs)
+      realized = float(hs.get("realized_pnl_usd") or 0)
       unrealized = round(
         sum(float(p.get("unrealized_pnl_usd") or 0) for p in open_pos),
         2,
       )
-      hs = status.get("hourly_summary") or status.get("hour_summary")
-      if hs:
-        hs = dict(hs)
-        realized = float(hs.get("realized_pnl_usd") or 0)
-        hs["unrealized_pnl_usd"] = unrealized
-        hs["total_pnl_usd"] = round(realized + unrealized, 2)
-        status["hourly_summary"] = hs
-        status["hour_summary"] = hs
+      hs["unrealized_pnl_usd"] = unrealized
+      hs["total_pnl_usd"] = round(realized + unrealized, 2)
+      status["hourly_summary"] = hs
+      status["hour_summary"] = hs
     kalshi = self._kalshi_for(asset)
     status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)
     return status
@@ -329,6 +331,146 @@ class PredictionLoop:
     if not asset_enabled(self.cfg, "eth"):
       return
     self._run_hourly_bot_continuous("eth")
+
+  def slot15_bot_store(self, asset: str):
+    asset = asset.lower()
+    if asset not in self._slot15_bot_stores:
+      from src.trading.slot15_bot_store import Slot15BotStore
+
+      acfg = self._acfg_15m(asset)
+      logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
+      self._slot15_bot_stores[asset] = Slot15BotStore(logs / "slot15_bot.db")
+    return self._slot15_bot_stores[asset]
+
+  def slot15_bot(self, asset: str):
+    asset = asset.lower()
+    if asset not in self._slot15_bots:
+      from src.trading.slot15_bot import Slot15Bot
+
+      store = self.slot15_bot_store(asset)
+      kalshi = self._kalshi_for(asset)
+      self._slot15_bots[asset] = Slot15Bot(store, kalshi_client=kalshi, asset=asset)
+    return self._slot15_bots[asset]
+
+  def _slot15_tab(self, asset: str, reference_override: float | None = None) -> dict[str, Any]:
+    """Live 15m tab payload for bot evaluation."""
+    asset = asset.lower()
+    if asset == "eth" and not self._slot15m_enabled("eth"):
+      return {"ok": False, "error": "ETH 15m disabled", "asset": asset}
+
+    acfg = self._acfg_15m(asset)
+    kalshi = self._kalshi_for(asset)
+    monitor = self._slot_monitor_for_asset(asset, reference_override).to_dict()
+    kalshi_summary = kalshi.active_market_summary()
+    slot_key = monitor.get("slot_start")
+
+    state = self._slot_state(asset)
+    pred_obj = state["latest_prediction"]
+    pred_dict: dict[str, Any] | None = None
+    bet_assessment: dict[str, Any] | None = None
+
+    if pred_obj is not None:
+      from src.trading.slot15_bet_assessment import assess_slot15_from_prediction
+
+      ref = pred_obj.reference_price or pred_obj.price
+      pred_dict = {
+        "signal": pred_obj.signal.value,
+        "model_signal": pred_obj.model_signal,
+        "prob_up": pred_obj.prob_up,
+        "regime_notes": pred_obj.regime_notes or [],
+        "reference_price": ref,
+        "price": pred_obj.price,
+        "expected_move": pred_obj.expected_move,
+      }
+      bet_assessment = assess_slot15_from_prediction(pred_obj, acfg)
+    else:
+      row = self._prediction_for_current_slot(asset=asset)
+      if row:
+        pred_dict = dict(row)
+        from src.trading.slot15_bet_assessment import assess_slot15_bet
+
+        ref = row.get("reference_price") or row.get("price")
+        expected_move_pct = None
+        bet_assessment = assess_slot15_bet(
+          signal=str(row.get("signal", "NO TRADE")),
+          model_signal=row.get("model_signal"),
+          regime_allow_trade=True,
+          prob_up=float(row.get("prob_up", 0.5)),
+          expected_move_pct=expected_move_pct,
+          min_confidence=float(acfg.get("min_edge_confidence", 0.57)),
+          min_expected_move_pct=float((acfg.get("intra_slot") or {}).get("fee_buffer_pct", 0.08)),
+        )
+
+    ok = bool(slot_key and kalshi_summary and kalshi_summary.get("market_ticker"))
+    return {
+      "ok": ok,
+      "asset": asset,
+      "slot_key": slot_key,
+      "slot_label": monitor.get("slot_label"),
+      "prediction": pred_dict,
+      "monitor": monitor,
+      "kalshi": kalshi_summary,
+      "bet_assessment": bet_assessment,
+    }
+
+  def slot15_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+    asset = asset.lower()
+    if asset == "eth" and not self._slot15m_enabled("eth"):
+      return {"ok": False, "error": "ETH 15m disabled"}
+    if tab is None:
+      tab = self._slot15_tab(asset)
+    slot_key = tab.get("slot_key") if tab.get("ok") else None
+    status = self.slot15_bot_store(asset).status(slot_key)
+    status["ok"] = True
+    status["asset"] = asset
+    status["slot_label"] = tab.get("slot_label") if tab else None
+    store = self.slot15_bot_store(asset)
+    status["recent_trades"] = store.list_trades(limit=100)
+    status["slot_trades"] = (
+      store.list_trades(limit=50, event_ticker=slot_key) if slot_key else []
+    )
+    open_pos = list(status.get("open_positions") or [])
+    if tab and tab.get("ok"):
+      from src.trading.slot15_bot import enrich_open_positions_live
+
+      open_pos = enrich_open_positions_live(open_pos, tab)
+      status["open_positions"] = open_pos
+      unrealized = round(
+        sum(float(p.get("unrealized_pnl_usd") or 0) for p in open_pos),
+        2,
+      )
+      ss = status.get("slot_summary")
+      if ss:
+        ss = dict(ss)
+        realized = float(ss.get("realized_pnl_usd") or 0)
+        ss["unrealized_pnl_usd"] = unrealized
+        ss["total_pnl_usd"] = round(realized + unrealized, 2)
+        status["slot_summary"] = ss
+    kalshi = self._kalshi_for(asset)
+    status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)
+    return status
+
+  def _run_slot15_bot_continuous(self, asset: str) -> None:
+    asset = asset.lower()
+    if asset == "eth" and not self._slot15m_enabled("eth"):
+      return
+    settings = self.slot15_bot_store(asset).get_settings()
+    if not settings.enabled or not settings.continuous:
+      return
+    try:
+      tab = self._slot15_tab(asset)
+      if tab.get("ok"):
+        self.slot15_bot(asset).run_continuous_cycle(tab)
+    except Exception as e:
+      log.exception("%s 15m bot continuous cycle failed: %s", asset.upper(), e)
+
+  def run_slot15_bot_continuous(self) -> None:
+    self._run_slot15_bot_continuous("btc")
+
+  def run_eth_slot15_bot_continuous(self) -> None:
+    if not self._slot15m_enabled("eth"):
+      return
+    self._run_slot15_bot_continuous("eth")
 
   def eth_hourly_prediction(self) -> dict[str, Any]:
     return self._hourly_tab_prediction("eth")
@@ -1640,6 +1782,31 @@ class PredictionLoop:
       max_instances=1,
     )
 
+  def _schedule_slot15_bot(self, scheduler) -> None:
+    acfg = self.cfg
+    bot_cfg = (acfg.get("intra_slot") or {}).get("bot") or {}
+    if bot_cfg.get("continuous_enabled", True):
+      poll_sec = int(bot_cfg.get("poll_seconds", 5))
+      scheduler.add_job(
+        self.run_slot15_bot_continuous,
+        "interval",
+        seconds=poll_sec,
+        id="slot15_bot_continuous",
+        max_instances=1,
+      )
+    if self._slot15m_enabled("eth"):
+      eth_cfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+      ebot_cfg = (eth_cfg.get("intra_slot") or {}).get("bot") or bot_cfg
+      if ebot_cfg.get("continuous_enabled", True):
+        poll_sec = int(ebot_cfg.get("poll_seconds", 5))
+        scheduler.add_job(
+          self.run_eth_slot15_bot_continuous,
+          "interval",
+          seconds=poll_sec,
+          id="eth_slot15_bot_continuous",
+          max_instances=1,
+        )
+
   def _schedule_predictions(self, scheduler) -> None:
     scheduler.add_job(
       self.run_prediction,
@@ -1662,6 +1829,7 @@ class PredictionLoop:
     self._schedule_predictions(scheduler)
     self._schedule_second_chance(scheduler)
     self._schedule_hourly(scheduler)
+    self._schedule_slot15_bot(scheduler)
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")
     if self._slot15m_enabled("eth"):

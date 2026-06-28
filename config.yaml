@@ -85,6 +85,9 @@ intra_slot:
   lock_profit_min_pct: 0.10   # min gain to lock when momentum reverses
   late_window_minutes: 3      # last N minutes — favor taking profit / cutting loss
   fee_buffer_pct: 0.13        # ~half round-trip cost — minimum "safe" net gain
+  bot:
+    continuous_enabled: true
+    poll_seconds: 5
 
 # Late entry — reassess NO-TRADE slots mid-window (conservative)
 late_entry:

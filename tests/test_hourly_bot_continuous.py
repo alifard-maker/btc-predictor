@@ -191,6 +191,34 @@ def test_hour_interval_summary_totals():
     assert status["hourly_summary"]["realized_pnl_usd"] == 2.25
 
 
+def test_hour_interval_summary_backfills_missing_exit_pnl():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "status": "filled",
+      "cost_usd": 4.0,
+      "entry_price_cents": 40,
+      "price_cents": 40,
+      "side": "yes",
+      "contracts": 10,
+    })
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "status": "filled",
+      "side": "yes",
+      "contracts": 10,
+      "entry_price_cents": 40,
+      "exit_price_cents": 55,
+      "price_cents": 55,
+    })
+    summary = store.hour_interval_summary("EV1")
+    assert summary["exit_count"] == 1
+    assert summary["realized_pnl_usd"] == 1.5
+
+
 def test_list_trades_without_event_filter_keeps_all_hours():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
