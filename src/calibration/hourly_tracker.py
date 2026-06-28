@@ -88,8 +88,17 @@ class HourlyCalibrationTracker:
   def log_prediction(self, row: dict[str, Any], *, force: bool = False) -> int:
     return self.store.log_prediction(row, force=force)
 
+  def log_late_call(self, row: dict[str, Any], *, force: bool = False) -> bool:
+    return self.store.log_late_call(row, force=force)
+
+  def log_open_snapshot(self, row: dict[str, Any]) -> int:
+    return self.store.log_open_snapshot(row)
+
   def get_logged(self, event_ticker: str) -> dict[str, Any] | None:
     return self.store.get_by_event_ticker(event_ticker)
+
+  def get_hour_open(self, event_ticker: str) -> dict[str, Any] | None:
+    return self.store.get_open_snapshot(event_ticker)
 
   def get_pending(self) -> list[dict[str, Any]]:
     return self.store.get_pending()

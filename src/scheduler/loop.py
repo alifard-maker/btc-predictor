@@ -248,16 +248,42 @@ class PredictionLoop:
     if not live.get("ok"):
       return live
 
-    from src.models.hourly_snapshot import locked_prediction_from_row
+    from src.models.hourly_snapshot import (
+      hour_open_prediction_from_row,
+      late_call_prediction_from_row,
+      locked_prediction_from_row,
+    )
 
     event_ticker = (live.get("event") or {}).get("event_ticker")
     locked = None
+    hour_open = None
+    late_call = None
     if event_ticker:
       row = tracker.get_logged(event_ticker)
       if row:
-        locked = locked_prediction_from_row(row)
+        locked = locked_prediction_from_row(row, acfg)
+        late_call = late_call_prediction_from_row(row, acfg)
+        if late_call:
+          from src.trading.hourly_position_alert import assess_late_call_position_alert_from_row
 
-    out = {**live, "live": live, "locked": locked, "has_locked": locked is not None, "asset": asset}
+          late_call["position_alert"] = assess_late_call_position_alert_from_row(
+            row, acfg, live_price=float(price) if price else None
+          )
+      open_row = tracker.get_hour_open(event_ticker)
+      if open_row:
+        hour_open = hour_open_prediction_from_row(open_row, acfg, index_label=index_label)
+
+    out = {
+      **live,
+      "live": live,
+      "locked": locked,
+      "has_locked": locked is not None,
+      "hour_open": hour_open,
+      "has_hour_open": hour_open is not None,
+      "late_call": late_call,
+      "has_late_call": late_call is not None,
+      "asset": asset,
+    }
     if quote:
       out["brti_live"] = round(quote.price, 2)
       out["brti_source"] = quote.source
@@ -282,9 +308,44 @@ class PredictionLoop:
       }
       live["live_vs_locked"] = out["live_vs_locked"]
 
-    from src.trading.hourly_guidance import build_hourly_guidance
+    if hour_open:
+      mu_shift = None
+      if hour_open.get("terminal_mu") is not None and live.get("terminal_mu") is not None:
+        mu_shift = round(float(live["terminal_mu"]) - float(hour_open["terminal_mu"]), 2)
+      out["live_vs_hour_open"] = {
+        "mu_shift": mu_shift,
+        "reference_at_log": hour_open.get("reference_price"),
+        "logged_at": hour_open.get("logged_at"),
+      }
+      live["live_vs_hour_open"] = out["live_vs_hour_open"]
 
-    out["guidance"] = build_hourly_guidance(live, locked, asset=asset, index_id=index_label)
+    if locked and hour_open:
+      mu_shift = None
+      if locked.get("terminal_mu") is not None and hour_open.get("terminal_mu") is not None:
+        mu_shift = round(float(locked["terminal_mu"]) - float(hour_open["terminal_mu"]), 2)
+      out["hour_open_vs_locked"] = {
+        "mu_shift": mu_shift,
+        "hour_open_at": hour_open.get("logged_at"),
+        "locked_at": locked.get("logged_at"),
+      }
+
+    from src.trading.hourly_guidance import build_hourly_guidance
+    from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
+
+    out["guidance"] = build_hourly_guidance(
+      live, locked, hour_open=hour_open, asset=asset, index_id=index_label, cfg=acfg
+    )
+
+    intrahour = assess_intrahour_opportunity(
+      live=live,
+      locked=locked,
+      hour_open=hour_open,
+      current_price=float(price) if price else None,
+      index_label=index_label,
+      cfg=acfg,
+    )
+    out["intrahour_opportunity"] = intrahour
+    out["has_intrahour_opportunity"] = bool(intrahour and intrahour.get("highlight"))
 
     if asset == "btc":
       self.latest_hourly_prediction = out
@@ -295,6 +356,17 @@ class PredictionLoop:
   def run_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
     return self._run_hourly_prediction_for_asset("btc", force=force)
 
+  def run_hourly_open_snapshot(self) -> dict[str, Any] | None:
+    return self._run_hourly_open_for_asset("btc")
+
+  def run_eth_hourly_open_snapshot(self) -> dict[str, Any] | None:
+    if not asset_enabled(self.cfg, "eth"):
+      return None
+    acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+    if not acfg.get("hourly", {}).get("enabled", True):
+      return None
+    return self._run_hourly_open_for_asset("eth")
+
   def run_eth_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
     if not asset_enabled(self.cfg, "eth"):
       return None
@@ -302,6 +374,52 @@ class PredictionLoop:
     if not acfg.get("hourly", {}).get("enabled", True):
       return None
     return self._run_hourly_prediction_for_asset("eth", force=force)
+
+  def run_hourly_late_call(self, *, force: bool = False) -> dict[str, Any] | None:
+    return self._run_hourly_late_call_for_asset("btc", force=force)
+
+  def run_eth_hourly_late_call(self, *, force: bool = False) -> dict[str, Any] | None:
+    if not asset_enabled(self.cfg, "eth"):
+      return None
+    acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+    if not acfg.get("hourly", {}).get("enabled", True):
+      return None
+    return self._run_hourly_late_call_for_asset("eth", force=force)
+
+  def _run_hourly_late_call_for_asset(self, asset: str, *, force: bool = False) -> dict[str, Any] | None:
+    """Log :45 ET late-call snapshot — trading guidance only, not calibration."""
+    from datetime import datetime, timezone
+
+    from src.models.hourly_late_call_log import prediction_to_late_call_row
+
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    if not acfg.get("hourly", {}).get("enabled", True):
+      return None
+    try:
+      out = self._hourly_tab_prediction(asset)
+      if not out.get("ok"):
+        return out
+      live = out.get("live") or out
+      event_ticker = (live.get("event") or {}).get("event_ticker")
+      if not event_ticker:
+        return out
+      now = datetime.now(timezone.utc).isoformat()
+      row = prediction_to_late_call_row(live, logged_at=now)
+      row["asset"] = asset
+      tracker = self._asset_hourly_calibration(asset)
+      if tracker.log_late_call(row, force=force):
+        log.info(
+          "%s hourly late call logged: %s %s %s",
+          asset.upper(),
+          event_ticker,
+          row.get("late_call_primary_signal"),
+          row.get("late_call_primary_label"),
+        )
+      return self._hourly_tab_prediction(asset)
+    except Exception as e:
+      log.exception("%s hourly late call failed: %s", asset.upper(), e)
+      self.last_error = str(e)
+      return None
 
   def _run_hourly_prediction_for_asset(self, asset: str, *, force: bool = False) -> dict[str, Any] | None:
     acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
@@ -327,6 +445,35 @@ class PredictionLoop:
       return out
     except Exception as e:
       log.exception("%s hourly prediction failed: %s", asset.upper(), e)
+      self.last_error = str(e)
+      return None
+
+  def _run_hourly_open_for_asset(self, asset: str) -> dict[str, Any] | None:
+    """Log hour-open snapshot at :00 ET — preview only, not used for calibration."""
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    if not acfg.get("hourly", {}).get("enabled", True):
+      return None
+    if not acfg.get("hourly", {}).get("hour_open_snapshot", True):
+      return None
+    try:
+      preview = self._hourly_tab_prediction(asset)
+      if not preview.get("ok"):
+        return preview
+      predictor = self.hourly_predictor() if asset == "btc" else self.eth_hourly_predictor()
+      row = predictor.to_log_row(preview.get("live") or preview)
+      tracker = self._asset_hourly_calibration(asset)
+      if row.get("event_ticker"):
+        tracker.log_open_snapshot(row)
+        log.info(
+          "%s hourly hour-open snapshot: %s %s %s",
+          asset.upper(),
+          row["event_ticker"],
+          row.get("primary_signal"),
+          row.get("primary_label"),
+        )
+      return self._hourly_tab_prediction(asset)
+    except Exception as e:
+      log.exception("%s hourly hour-open snapshot failed: %s", asset.upper(), e)
       self.last_error = str(e)
       return None
 
@@ -787,11 +934,27 @@ class PredictionLoop:
 
   def _schedule_hourly(self, scheduler) -> None:
     if self.cfg.get("hourly", {}).get("enabled", True):
-      minute = int(self.cfg.get("hourly", {}).get("log_minute", 5))
+      hcfg = self.cfg.get("hourly", {})
+      if hcfg.get("hour_open_snapshot", True):
+        open_minute = int(hcfg.get("open_log_minute", 0))
+        scheduler.add_job(
+          self.run_hourly_open_snapshot,
+          CronTrigger(minute=str(open_minute), timezone=self.tz),
+          id="hourly_open",
+          max_instances=1,
+        )
+      minute = int(hcfg.get("log_minute", 5))
       scheduler.add_job(
         self.run_hourly_prediction,
         CronTrigger(minute=str(minute), timezone=self.tz),
         id="hourly_predict",
+        max_instances=1,
+      )
+      late_minute = int(hcfg.get("late_call_minute", 45))
+      scheduler.add_job(
+        self.run_hourly_late_call,
+        CronTrigger(minute=str(late_minute), timezone=self.tz),
+        id="hourly_late_call",
         max_instances=1,
       )
       scheduler.add_job(
@@ -804,11 +967,27 @@ class PredictionLoop:
     if asset_enabled(self.cfg, "eth"):
       acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
       if acfg.get("hourly", {}).get("enabled", True):
-        minute = int(acfg.get("hourly", {}).get("log_minute", 5))
+        ehcfg = acfg.get("hourly", {})
+        if ehcfg.get("hour_open_snapshot", True):
+          open_minute = int(ehcfg.get("open_log_minute", 0))
+          scheduler.add_job(
+            self.run_eth_hourly_open_snapshot,
+            CronTrigger(minute=str(open_minute), timezone=self.tz),
+            id="eth_hourly_open",
+            max_instances=1,
+          )
+        minute = int(ehcfg.get("log_minute", 5))
         scheduler.add_job(
           self.run_eth_hourly_prediction,
           CronTrigger(minute=str(minute), timezone=self.tz),
           id="eth_hourly_predict",
+          max_instances=1,
+        )
+        late_minute = int(ehcfg.get("late_call_minute", 45))
+        scheduler.add_job(
+          self.run_eth_hourly_late_call,
+          CronTrigger(minute=str(late_minute), timezone=self.tz),
+          id="eth_hourly_late_call",
           max_instances=1,
         )
 
@@ -1356,8 +1535,15 @@ class PredictionLoop:
         run_date=datetime.now(timezone.utc) + timedelta(seconds=10),
         id="eth_predict_now",
       )
+    scheduler.add_job(self.run_hourly_open_snapshot, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=12), id="hourly_open_now")
     scheduler.add_job(self.run_hourly_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=15), id="hourly_now")
     if asset_enabled(self.cfg, "eth"):
+      scheduler.add_job(
+        self.run_eth_hourly_open_snapshot,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=14),
+        id="eth_hourly_open_now",
+      )
       scheduler.add_job(
         self.run_eth_hourly_prediction,
         "date",

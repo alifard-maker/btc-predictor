@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.trading.contract_signals import is_actionable_buy
+from src.trading.hourly_bet_assessment import assess_contract_bet
+
 
 def _index_id(live: dict[str, Any], index_id: str | None) -> str:
   return str(index_id or live.get("index_id") or live.get("settlement_reference") or "BRTI")
@@ -37,6 +40,31 @@ def _near_forecast(
   if strike is None:
     return False
   return abs(float(strike) - mu) <= window
+
+
+def _enrich_bet_assessment(
+  card: dict[str, Any] | None,
+  live: dict[str, Any],
+  locked: dict[str, Any] | None,
+  *,
+  use_live_regime: bool = False,
+  cfg: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+  if not card:
+    return card
+  sig = card.get("signal")
+  if not is_actionable_buy(sig):
+    return card
+  out = dict(card)
+  out["bet_assessment"] = assess_contract_bet(
+    signal=sig,
+    edge=out.get("edge"),
+    live=live,
+    locked=locked,
+    use_live_regime=use_live_regime,
+    cfg=cfg,
+  )
+  return out
 
 
 def _pick_safest(
@@ -88,6 +116,7 @@ def _pick_safest(
     "label": row.get("label"),
     "model_prob": prob,
     "signal": row.get("signal", "—"),
+    "edge": row.get("edge"),
     "reason": (
       "Highest model probability near forecast μ — "
       + (
@@ -99,13 +128,30 @@ def _pick_safest(
   }
 
 
-def _pick_locked(locked: dict[str, Any] | None, *, index_id: str) -> dict[str, Any] | None:
+def _pick_locked(locked: dict[str, Any] | None, *, index_id: str, hour_open: dict[str, Any] | None = None) -> dict[str, Any] | None:
   if not locked:
+    if hour_open:
+      zone = hour_open.get("most_likely") or {}
+      pick = hour_open.get("primary_pick") or {}
+      return {
+        "tier": "locked",
+        "title": "Official lock @ :05 (pending)",
+        "label": pick.get("label") or "—",
+        "reason": (
+          f"Hour-open snapshot logged at :00 — official forecast locks at :05 ET "
+          f"(scored against settle {index_id})."
+        ),
+        "settlement_zone": (
+          f"${zone.get('settlement_zone_low'):,.0f}–${zone.get('settlement_zone_high'):,.0f}"
+          if zone.get("settlement_zone_low") is not None
+          else None
+        ),
+      }
     return {
       "tier": "locked",
       "title": "Official prediction (not locked yet)",
       "label": "—",
-      "reason": f"Wait for :05 ET — this is the pick scored against actual settle {index_id}.",
+      "reason": f"Wait for :05 ET — hour-open snapshot at :00, official lock at :05 for settle {index_id}.",
     }
   zone = locked.get("most_likely") or {}
   mu, sigma = _forecast_mu_sigma(locked)
@@ -134,6 +180,7 @@ def _pick_locked(locked: dict[str, Any] | None, *, index_id: str) -> dict[str, A
     "label": pick.get("label") or "—",
     "signal": pick.get("signal", "NEUTRAL"),
     "model_prob": pick.get("model_prob"),
+    "edge": pick.get("edge"),
     "settlement_zone": (
       f"${zone.get('settlement_zone_low'):,.0f}–${zone.get('settlement_zone_high'):,.0f}"
       if zone.get("settlement_zone_low") is not None
@@ -182,14 +229,18 @@ def build_range_strategy_guidance(
   live: dict[str, Any],
   locked: dict[str, Any] | None = None,
   *,
+  hour_open: dict[str, Any] | None = None,
   index_id: str = "BRTI",
+  cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   live_sr = live.get("strategy_range") or {}
   locked_sr = (locked or {}).get("strategy_range") or {}
+  hour_open_sr = (hour_open or {}).get("strategy_range") or {}
   live_ml = live_sr.get("most_likely")
   live_be = live_sr.get("best_edge")
   locked_ml = locked_sr.get("most_likely")
   locked_be = locked_sr.get("best_edge")
+  hour_open_ml = hour_open_sr.get("most_likely")
 
   def _band_card(tier: str, title: str, row: dict[str, Any] | None, reason: str) -> dict[str, Any] | None:
     if not row:
@@ -212,21 +263,28 @@ def build_range_strategy_guidance(
       "Frozen at lock — use this band for honest range-band scoring (not the live table below).",
     )
     if locked
+    else _band_card(
+      "locked",
+      "Hour-open range @ :00",
+      hour_open_ml,
+      "Frozen at top of hour — preview until official :05 lock replaces it for scoring.",
+    )
+    if hour_open and not locked
     else {
       "tier": "locked",
       "title": "Locked range pick (not yet)",
       "label": "—",
-      "reason": "Range band locks at :05 ET with the threshold forecast.",
+      "reason": "Hour-open at :00 ET, official range lock at :05 ET with the threshold forecast.",
     }
   )
 
-  recs = [
+  raw_recs = [
     r
     for r in (
       _band_card(
         "safest",
         "Most predictable stall band",
-        locked_ml or live_ml,
+        locked_ml or hour_open_ml or live_ml,
         f"Highest model % that {index_id} finishes inside this band — best when price is consolidating.",
       ),
       locked_card,
@@ -239,6 +297,12 @@ def build_range_strategy_guidance(
     )
     if r
   ]
+  recs = []
+  for r in raw_recs:
+    use_live = r.get("tier") == "edge"
+    enriched = _enrich_bet_assessment(r, live, locked, use_live_regime=use_live, cfg=cfg)
+    if enriched:
+      recs.append(enriched)
 
   consolidation = (live.get("structure") or {}).get("consolidation")
   stall_note = None
@@ -260,7 +324,7 @@ def build_range_strategy_guidance(
     "recommendations": recs,
     "stall_note": stall_note,
     "locked_vs_live": {
-      "locked": "Most-likely band + best band edge at :05 ET.",
+      "locked": "Most-likely band + best band edge at :05 ET (or hour-open @ :00 before lock).",
       "live": f"Band odds refresh with {index_id} — compare to locked pick, do not confuse with scored forecast.",
     },
   }
@@ -270,8 +334,10 @@ def build_hourly_guidance(
   live: dict[str, Any],
   locked: dict[str, Any] | None = None,
   *,
+  hour_open: dict[str, Any] | None = None,
   asset: str = "btc",
   index_id: str | None = None,
+  cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   ev = live.get("event") or {}
   freq = str(ev.get("frequency") or "hourly").lower()
@@ -304,7 +370,7 @@ def build_hourly_guidance(
       "settles_in": f"{hours:.1f}h",
       "summary": (
         f"Kalshi hourly book ({series or default_hourly_series}) — settles at the top of each hour. "
-        "Official forecast locks at :05 ET; live section updates with the market."
+        "Hour-open snapshot at :00 ET; official forecast locks at :05 ET; live section updates with the market."
       ),
       "predictability": "moderate",
       "predictability_note": "Faster settle than daily — use locked range for scoring, live for monitoring.",
@@ -346,15 +412,21 @@ def build_hourly_guidance(
     },
   ]
 
-  recs = [
+  raw_recs = [
     r
     for r in (
       _pick_safest(live, locked, index_id=idx),
-      _pick_locked(locked, index_id=idx),
+      _pick_locked(locked, index_id=idx, hour_open=hour_open),
       _pick_edge(live),
     )
     if r
   ]
+  recs = []
+  for r in raw_recs:
+    use_live = r.get("tier") == "edge"
+    enriched = _enrich_bet_assessment(r, live, locked, use_live_regime=use_live, cfg=cfg)
+    if enriched:
+      recs.append(enriched)
 
   book_note = None
   if live.get("forecast_covers_book") is False:
@@ -376,6 +448,7 @@ def build_hourly_guidance(
       "use_this_tab": f"Kalshi {interval['badge']} threshold + range books for this event → this tab.",
     },
     "locked_vs_live": {
+      "hour_open": "Primary signal + settlement range at :00 ET — preview until :05 official lock.",
       "locked": "Primary signal + settlement range at :05 ET — used for accuracy stats.",
       "live": "Updates every refresh — for monitoring only until next hour's lock.",
     },
@@ -388,7 +461,9 @@ def build_hourly_guidance(
       "range_note": "Neighboring bands are separate contracts; BUY NO on a side band means fade that band, not “away from forecast.”",
     },
     "recommendations": recs,
-    "strategy_range": build_range_strategy_guidance(live, locked, index_id=idx),
+    "strategy_range": build_range_strategy_guidance(
+      live, locked, hour_open=hour_open, index_id=idx, cfg=cfg
+    ),
     "regime_blocked": not regime.get("allow_trade", True),
     "regime_note": (
       book_note

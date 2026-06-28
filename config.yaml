@@ -136,7 +136,10 @@ daily:
 # Hourly ML + stats (Phases 1–4)
 hourly:
   enabled: true
-  log_minute: 5                    # log active event at :05 ET each hour
+  hour_open_snapshot: true       # snapshot at :00 ET (preview, not scored)
+  open_log_minute: 0             # hour-open snapshot each hour
+  log_minute: 5                  # official lock at :05 ET (calibration)
+  late_call_minute: 45           # late-call trading snapshot at :45 ET (15 min before settle)
   min_train_samples: 500
   train_test_split: 0.2
   model_type: lightgbm
@@ -154,9 +157,14 @@ hourly:
     min_hours_to_settle: 0.25
     max_sigma_pct: 2.5
     min_reasons_to_block: 2
+  intrahour:
+    enabled: false
+    min_shock_pct: 0.8
+    min_edge_for_highlight: 0.08
+    min_edge_override_regime: 0.10
   sigma_calibration: true
 
-# Flip-to-opposite — after open LONG/SHORT is losing, one reverse bet per slot
+# Flip-to-opposite
 flip:
   enabled: true
   max_flips_per_slot: 1          # no flip-back; after flip only HOLD/TP/CUT on new side
@@ -223,6 +231,7 @@ eth:
   hourly:
     enabled: true
     log_minute: 5
+    late_call_minute: 45
     min_train_samples: 500
     fetch_candles_1h: 720
     blend:
@@ -235,6 +244,11 @@ eth:
       min_hours_to_settle: 0.25
       max_sigma_pct: 2.5
       min_reasons_to_block: 2
+    intrahour:
+      enabled: true
+      min_shock_pct: 0.8
+      min_edge_for_highlight: 0.08
+      min_edge_override_regime: 0.10
     sigma_calibration: true
 
 paths:

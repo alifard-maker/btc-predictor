@@ -26,6 +26,7 @@ from src.config import load_config
 from src.data.storage import CandleStorage, HistoricalCollector
 from src.models.predictor import Prediction
 from src.scheduler.loop import PredictionLoop
+from src.trading.slot15_bet_assessment import assess_slot15_from_prediction
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ def _prediction_to_dict(pred: Prediction, *, asset: str = "btc") -> dict[str, An
         out["current_price_as_of"] = quote.trade_time.isoformat()
       if quote.age_sec is not None:
         out["live_price_age_sec"] = round(quote.age_sec, 1)
+  out["bet_assessment"] = assess_slot15_from_prediction(pred, acfg)
   return out
 
 
@@ -503,6 +505,29 @@ def hourly_predict_now(
   return out
 
 
+@app.post("/api/admin/hourly/open-now")
+def hourly_open_now(_: None = Depends(_verify_admin)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  out = _loop.run_hourly_open_snapshot()
+  if not out or not out.get("ok"):
+    raise HTTPException(500, out.get("error") if out else "Hourly hour-open snapshot failed")
+  return out
+
+
+@app.post("/api/admin/hourly/late-call-now")
+def hourly_late_call_now(
+  force: bool = Query(default=False),
+  _: None = Depends(_verify_admin),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  out = _loop.run_hourly_late_call(force=force)
+  if not out or not out.get("ok"):
+    raise HTTPException(500, out.get("error") if out else "Hourly late call failed")
+  return out
+
+
 @app.post("/api/admin/eth/hourly/predict-now")
 def eth_hourly_predict_now(
   force: bool = Query(default=False),
@@ -513,6 +538,29 @@ def eth_hourly_predict_now(
   out = _loop.run_eth_hourly_prediction(force=force)
   if not out or not out.get("ok"):
     raise HTTPException(500, out.get("error") if out else "ETH hourly prediction failed")
+  return out
+
+
+@app.post("/api/admin/eth/hourly/open-now")
+def eth_hourly_open_now(_: None = Depends(_verify_admin)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  out = _loop.run_eth_hourly_open_snapshot()
+  if not out or not out.get("ok"):
+    raise HTTPException(500, out.get("error") if out else "ETH hourly hour-open snapshot failed")
+  return out
+
+
+@app.post("/api/admin/eth/hourly/late-call-now")
+def eth_hourly_late_call_now(
+  force: bool = Query(default=False),
+  _: None = Depends(_verify_admin),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  out = _loop.run_eth_hourly_late_call(force=force)
+  if not out or not out.get("ok"):
+    raise HTTPException(500, out.get("error") if out else "ETH hourly late call failed")
   return out
 
 

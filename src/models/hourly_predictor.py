@@ -24,6 +24,7 @@ from src.models.hourly_range_log import (
 )
 from src.models.prob_calibration import ProbabilityCalibrator
 from src.trading.contract_signals import BUY_NO, BUY_YES, VALUE_YES, is_actionable_buy
+from src.trading.hourly_bet_assessment import assess_hourly_bet
 from src.trading.hourly_regime import HourlyRegimeFilter
 
 log = logging.getLogger(__name__)
@@ -219,6 +220,16 @@ class HourlyPredictor:
     blended["prob_15m_avg"] = round(prob_15m_avg, 4) if prob_15m_avg is not None else None
     blended["regime"] = {"allow_trade": regime.allow_trade, "reasons": regime.reasons}
     blended["primary_pick"] = pick
+    hrcfg = self.hcfg.get("regime", {})
+    blended["bet_assessment"] = assess_hourly_bet(
+      signal=pick.get("signal") if pick else "NEUTRAL",
+      edge=edge,
+      regime_allow_trade=regime.allow_trade,
+      regime_reasons=regime.reasons,
+      expected_move_pct=expected_move_pct,
+      min_edge=float(hrcfg.get("min_edge", 0.05)),
+      min_expected_move_pct=float(hrcfg.get("min_expected_move_pct", 0.12)),
+    )
     return blended
 
   def to_log_row(self, pred: dict[str, Any]) -> dict[str, Any]:

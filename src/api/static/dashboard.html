@@ -78,6 +78,33 @@
     .slot-progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), #818cf8); border-radius: 99px; transition: width .5s; }
     .monitor-reasons { margin: 0.65rem 0 0; padding-left: 1.1rem; font-size: 0.78rem; color: var(--muted); }
     .monitor-reasons li { margin: 0.25rem 0; }
+    .bet-banner-wrap { margin: 0.85rem 0 1rem; }
+    .bet-actionable { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; padding: 0.65rem 0.85rem; border-radius: 8px; text-align: center; line-height: 1.25; }
+    .bet-actionable-strong { background: rgba(34,197,94,.18); color: var(--up); border: 1px solid rgba(34,197,94,.45); }
+    .bet-actionable-moderate { background: rgba(99,102,241,.15); color: #a5b4fc; border: 1px solid rgba(99,102,241,.4); }
+    .bet-actionable-weak { background: rgba(136,136,160,.12); color: var(--muted); border: 1px solid var(--border); }
+    .bet-quality { font-size: 0.95rem; font-weight: 700; margin-top: 0.5rem; padding: 0.45rem 0.75rem; border-radius: 6px; text-align: center; letter-spacing: 0.03em; }
+    .bet-quality-strong { color: var(--up); background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.2); }
+    .bet-quality-moderate { color: #a5b4fc; background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.2); }
+    .bet-quality-weak { color: #f59e0b; background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.25); }
+    .bet-detail { font-size: 0.72rem; margin-top: 0.35rem; text-align: center; }
+    .bet-banner-compact { margin: 0.5rem 0 0.35rem; }
+    .bet-banner-compact .bet-actionable { font-size: 0.78rem; padding: 0.4rem 0.55rem; }
+    .bet-banner-compact .bet-quality { font-size: 0.68rem; margin-top: 0.3rem; padding: 0.3rem 0.45rem; }
+    .bet-banner-compact .bet-detail { font-size: 0.65rem; margin-top: 0.25rem; }
+    .position-alert-wrap { margin: 0.65rem 0 0.85rem; }
+    .position-alert { font-size: 1.2rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; padding: 0.7rem 0.9rem; border-radius: 8px; text-align: center; line-height: 1.25; }
+    .position-alert-danger { background: rgba(239,68,68,.16); color: #f87171; border: 1px solid rgba(239,68,68,.45); }
+    .position-alert-success { background: rgba(34,197,94,.16); color: var(--up); border: 1px solid rgba(34,197,94,.45); }
+    .position-alert-neutral { background: rgba(136,136,160,.1); color: #c8c8d8; border: 1px solid var(--border); }
+    .position-alert-detail { font-size: 0.72rem; margin-top: 0.35rem; text-align: center; color: var(--muted); }
+    .intrahour-opportunity-wrap { margin: 0 0 1rem; animation: intrahour-pulse 2.5s ease-in-out infinite; }
+    .intrahour-opportunity { font-size: 1.15rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; padding: 0.75rem 0.9rem; border-radius: 8px; text-align: center; line-height: 1.25; }
+    .intrahour-opportunity-high { background: rgba(245,158,11,.2); color: #fbbf24; border: 2px solid rgba(245,158,11,.65); }
+    .intrahour-opportunity-moderate { background: rgba(251,146,60,.14); color: #fb923c; border: 1px solid rgba(251,146,60,.5); }
+    .intrahour-opportunity-detail { font-size: 0.78rem; margin-top: 0.45rem; text-align: center; color: #e8e8f0; }
+    .intrahour-opportunity-meta { font-size: 0.68rem; margin-top: 0.35rem; text-align: center; color: var(--muted); }
+    @keyframes intrahour-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(245,158,11,.35); } 50% { box-shadow: 0 0 12px 2px rgba(245,158,11,.25); } }
     .ref-override { margin-bottom: 0.85rem; padding: 0.85rem 1rem; background: var(--surface); border-radius: 10px; border: 1px solid var(--border); }
     .ref-override label { display: block; font-size: 0.72rem; color: var(--text); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.45rem; font-weight: 600; }
     .ref-override-row { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; }
@@ -196,13 +223,13 @@
           <div class="guide-tab-box">
             <h4>BTC Hourly</h4>
             <p><strong>KXBTCD</strong> thresholds (above/below strikes) + <strong>KXBTC</strong> range bands ($20 “stall” buckets). Settles each hour on <strong>BRTI</strong>.</p>
-            <p>Official pick <strong>locks at :05 ET</strong> each hour. <strong>Locked</strong> blocks are scored; <strong>Live</strong> updates with the market.</p>
+            <p>Hour-open snapshot at <strong>:00 ET</strong>; official pick <strong>locks at :05 ET</strong>. <strong>Locked @ :05</strong> is scored; <strong>Hour open @ :00</strong> is a frozen preview; <strong>Live</strong> updates with the market.</p>
             <p><strong>Strategy 1</strong> = threshold table. <strong>Strategy 2</strong> = range bands near forecast μ.</p>
           </div>
           <div class="guide-tab-box">
             <h4>ETH Hourly</h4>
             <p>Same layout as BTC Hourly for <strong>KXETHD</strong> / <strong>KXETH</strong>. Settlement index is <strong>ERTI</strong> (CF Benchmarks Ethereum RTI).</p>
-            <p>Also locks at <strong>:05 ET</strong>. Forecast is <strong>structure-only</strong> today (no ETH ML blend yet) — bands can look very peaked.</p>
+            <p>Hour-open at <strong>:00 ET</strong>, official lock at <strong>:05 ET</strong>. Forecast is <strong>structure-only</strong> today (no ETH ML blend yet) — bands can look very peaked.</p>
           </div>
         </div>
 
@@ -212,7 +239,8 @@
           <li><strong>Forecast μ (mu)</strong> — Blended expected settle price; drives which strikes/bands are shown.</li>
           <li><strong>Most likely band</strong> — Highest model probability among range bands near μ (not necessarily a BUY signal).</li>
           <li><strong>Best edge</strong> — Largest |model − Kalshi| gap among nearby contracts.</li>
-          <li><strong>Locked @ :05</strong> — Snapshot frozen for calibration; does not move when the market drifts.</li>
+          <li><strong>Hour open @ :00</strong> — Snapshot at top of hour; frozen preview until :05 official lock.</li>
+          <li><strong>Locked @ :05</strong> — Official snapshot for calibration; does not move when the market drifts.</li>
           <li><strong>Hourly calibration</strong> — After settle, compares locked picks to actual index (Brier, BUY YES/NO hit rate, in-band rate for range bands).</li>
         </ul>
 
@@ -421,7 +449,9 @@
       <div class="card" id="daily-summary-card">
         <h2>${(g.interval?.badge || 'Kalshi')} event <span id="daily-freq-badge"></span></h2>
         <p class="muted" id="daily-meta">Loading…</p>
+        <div id="intrahour-opportunity"></div>
         <div id="daily-primary-signal"></div>
+        <div id="daily-late-call"></div>
         <div id="daily-summary"></div>
       </div>
       <div class="card">
@@ -457,7 +487,9 @@
       <div class="card" id="eth-daily-summary-card">
         <h2>ETH Kalshi event <span id="eth-daily-freq-badge"></span></h2>
         <p class="muted" id="eth-daily-meta">Loading…</p>
+        <div id="eth-intrahour-opportunity"></div>
         <div id="eth-daily-primary-signal"></div>
+        <div id="eth-daily-late-call"></div>
         <div id="eth-daily-summary"></div>
       </div>
       <div class="card">
@@ -556,6 +588,7 @@
     const signedPrice = (n) => (Number(n) >= 0 ? '+' : '−') + price(Math.abs(Number(n)));
     const isBuyYes = (sig) => sig === 'BUY YES' || sig === 'LEAN YES';
     const isBuyNo = (sig) => sig === 'BUY NO' || sig === 'LEAN NO';
+    const isActionableBuy = (sig) => isBuyYes(sig) || isBuyNo(sig);
     const isYesLeg = (sig) => isBuyYes(sig) || sig === 'VALUE YES';
     const isNoLeg = (sig) => isBuyNo(sig) || sig === 'FADE YES';
     const signalEdgeCls = (sig) => isYesLeg(sig) ? 'edge-yes' : isNoLeg(sig) ? 'edge-no' : 'muted';
@@ -888,6 +921,46 @@
       updateRefOverrideHint(m);
     }
 
+    function renderIntrahourOpportunityBanner(opp) {
+      if (!opp || !opp.highlight) return '';
+      const sev = opp.severity || 'moderate';
+      const pick = opp.primary_pick || {};
+      const move = opp.move_pct_since_lock;
+      const moveTxt = move != null ? `${move >= 0 ? '+' : ''}${Number(move).toFixed(2)}% since lock` : '';
+      const betBanner = opp.bet_assessment ? renderBetAssessmentBanner(opp.bet_assessment, true) : '';
+      return `<div class="intrahour-opportunity-wrap">
+        <div class="intrahour-opportunity intrahour-opportunity-${sev}">${opp.headline || 'INTRAHOUR OPPORTUNITY'}</div>
+        ${betBanner}
+        <p class="intrahour-opportunity-detail">${opp.detail || ''}</p>
+        <p class="intrahour-opportunity-meta">${moveTxt}${pick.label ? ` · ${pick.signal || ''} ${pick.label}` : ''}</p>
+      </div>`;
+    }
+
+    function renderPositionAlertBanner(a) {
+      if (!a || !a.alert) return '';
+      const tone = a.alert_tone || 'neutral';
+      const detail = a.detail ? `<p class="position-alert-detail">${a.detail}</p>` : '';
+      return `<div class="position-alert-wrap">
+        <div class="position-alert position-alert-${tone}">${a.headline || a.alert}</div>
+        ${detail}
+      </div>`;
+    }
+
+    function renderBetAssessmentBanner(a, compact = false) {
+      if (!a) return '';
+      const tone = a.actionable_tone || 'weak';
+      const qKey = a.slot_quality || a.hour_quality || 'WEAK';
+      const qTone = String(qKey).toLowerCase();
+      const qualityLabel = a.slot_quality_label || a.hour_quality_label || '';
+      const detail = a.detail && !compact ? `<p class="bet-detail muted">${a.detail}</p>` : '';
+      const wrapCls = compact ? 'bet-banner-wrap bet-banner-compact' : 'bet-banner-wrap';
+      return `<div class="${wrapCls}">
+        <div class="bet-actionable bet-actionable-${tone}">${a.actionable_headline || ''}</div>
+        <div class="bet-quality bet-quality-${qTone}">${qualityLabel}</div>
+        ${detail}
+      </div>`;
+    }
+
     function renderPrediction(p) {
       const card = s15$('pred-card');
       if (!card) return;
@@ -911,6 +984,7 @@
       card.innerHTML = `
         <h2>Next 15-minute slot</h2>
         ${slot}
+        ${renderBetAssessmentBanner(p.bet_assessment)}
         <div class="ref-block">
           <div class="ref-label">${refLabel}</div>
           <div class="price">${price(ref)}</div>
@@ -1239,8 +1313,12 @@
         const prob = r.model_prob != null ? ` · ${pct(r.model_prob)} model` : '';
         const sig = r.signal && r.signal !== 'NEUTRAL' && r.signal !== '—' ? ` · ${r.signal}` : '';
         const edge = r.edge != null ? ` · ${r.edge >= 0 ? '+' : ''}${(r.edge * 100).toFixed(1)}¢ edge` : '';
+        const betBanner = isActionableBuy(r.signal) && r.bet_assessment
+          ? renderBetAssessmentBanner(r.bet_assessment, true)
+          : '';
         return `<div class="guide-tier ${r.tier}" style="margin-bottom:.5rem">
           <h4 style="font-size:.78rem;margin:0 0 .25rem">${r.title}</h4>
+          ${betBanner}
           <strong>${r.label || '—'}</strong>${prob}${sig}${edge}
           <p class="muted" style="font-size:.7rem;margin:.35rem 0 0">${r.reason || ''}</p>
         </div>`;
@@ -1286,26 +1364,46 @@
       </div>`;
     }
 
-    function renderStrategy2Panel(live, locked, g) {
+    function renderStrategy2Panel(live, locked, g, hourOpen) {
       const el = h$('daily-range-summary');
       if (!el) return;
       const liveSr = live.strategy_range || {};
       const lockedSr = locked?.strategy_range || {};
+      const hourOpenSr = hourOpen?.strategy_range || {};
       const liveMl = liveSr.most_likely;
       const lockedMl = lockedSr.most_likely;
+      const hourOpenMl = hourOpenSr.most_likely;
       const liveBe = liveSr.best_edge;
       const lockedBe = lockedSr.best_edge;
+      const hourOpenBe = hourOpenSr.best_edge;
       const lockedLean = lockedSr.lean_bands || [];
+      const hourOpenLean = hourOpenSr.lean_bands || [];
       const settleBrti = locked?.settle_brti;
       const rg = g.strategy_range || {};
       const idx = hourlyApi().indexLabel;
+      const liveEdgeRec = (rg.recommendations || []).find((r) => r.tier === 'edge');
+      const liveBeBanner = liveEdgeRec?.bet_assessment && isActionableBuy(liveEdgeRec.signal)
+        ? renderBetAssessmentBanner(liveEdgeRec.bet_assessment, true)
+        : '';
       const lockedNote = locked
         ? `Locked ${time(locked.logged_at)} · ${idx} ref ${price(locked.reference_price)}`
-        : 'Range band picks lock at :05 ET with the threshold forecast';
+        : hourOpen
+          ? `Hour open ${time(hourOpen.logged_at)} · awaiting :05 lock`
+          : 'Hour open @ :00 ET · official lock @ :05 ET';
 
       el.innerHTML = `
         <p class="muted" style="font-size:.72rem;margin-bottom:.5rem">${rg.summary || ''} ${rg.stall_note ? '· ' + rg.stall_note : ''}</p>
         <p class="muted" style="font-size:.68rem;margin-bottom:.65rem">${lockedNote}</p>
+        ${hourOpen && !locked ? `<div class="likely-card" style="border-color:rgba(234,179,8,.35);margin-bottom:.65rem">
+          <h3>Hour-open stall band @ :00</h3>
+          <div class="headline">${hourOpenMl?.label || '—'}${hourOpenMl?.model_prob != null ? ` · ${pct(hourOpenMl.model_prob)} model` : ''}</div>
+          <p class="muted" style="font-size:.8rem">${hourOpenSr.summary || ''}</p>
+          <div class="likely-grid">
+            ${renderLikelyPick('Most likely band', hourOpenMl)}
+            ${renderLikelyPick('Best band edge @ :00', hourOpenBe)}
+          </div>
+          ${renderLockedBuyBands(hourOpenLean, settleBrti)}
+        </div>` : ''}
         ${locked ? `<div class="likely-card" style="border-color:rgba(34,197,94,.35);margin-bottom:.65rem">
           <h3>Locked stall band @ :05</h3>
           <div class="headline">${lockedMl?.label || '—'}${lockedMl?.model_prob != null ? ` · ${pct(lockedMl.model_prob)} model` : ''}</div>
@@ -1316,12 +1414,13 @@
           </div>
           ${renderLockedBuyBands(lockedLean, settleBrti)}
           <p class="muted" style="font-size:.68rem;margin-top:.5rem">Most likely / best edge + all BUY signals above are frozen for scoring — contract table below is live only.</p>
-        </div>` : `<div class="likely-card" style="border-color:rgba(245,158,11,.35);margin-bottom:.65rem">
-          <h3>Awaiting range lock · :05 ET</h3>
+        </div>` : !hourOpen ? `<div class="likely-card" style="border-color:rgba(245,158,11,.35);margin-bottom:.65rem">
+          <h3>Awaiting hour open · :00 ET</h3>
           <p class="muted" style="font-size:.85rem">Preview: ${liveMl?.label || '—'}${liveMl?.model_prob != null ? ` (${pct(liveMl.model_prob)})` : ''}</p>
-        </div>`}
+        </div>` : ''}
         <div class="likely-card" style="border-color:rgba(99,102,241,.25);margin-bottom:.65rem">
           <h3>Live range reassessment <span class="muted" style="font-weight:400;font-size:.7rem">updates with market</span></h3>
+          ${liveBeBanner}
           <div class="headline">${liveMl?.label || '—'}${liveMl?.model_prob != null ? ` · ${pct(liveMl.model_prob)} model` : ''}</div>
           <p class="muted" style="font-size:.8rem">${liveSr.summary || ''}</p>
           <div class="likely-grid">
@@ -1349,8 +1448,12 @@
         const prob = r.model_prob != null ? ` · ${pct(r.model_prob)} model` : '';
         const sig = r.signal && r.signal !== '—' ? ` · ${r.signal}` : '';
         const zone = r.settlement_zone ? `<div class="muted" style="font-size:.72rem">Zone ${r.settlement_zone}</div>` : '';
+        const betBanner = isActionableBuy(r.signal) && r.bet_assessment
+          ? renderBetAssessmentBanner(r.bet_assessment, true)
+          : '';
         return `<div class="guide-tier ${r.tier}">
           <h4>${r.title}</h4>
+          ${betBanner}
           <strong>${r.label || '—'}</strong>${prob}${sig}
           ${zone}
           <p class="muted" style="font-size:.72rem;margin:.4rem 0 0">${r.reason || ''}</p>
@@ -1375,7 +1478,7 @@
         ${g.regime_note ? `<p class="muted" style="font-size:.75rem;margin:.65rem 0;padding:.5rem;border-left:3px solid #f59e0b">${g.regime_note}</p>` : ''}
         ${g.book_note && !g.regime_note ? `<p class="muted" style="font-size:.75rem;margin:.65rem 0;padding:.5rem;border-left:3px solid #ef4444">${g.book_note}</p>` : ''}
         <p class="muted" style="font-size:.72rem;margin:.75rem 0 .35rem"><strong>Which tab?</strong> ${g.which_tab?.use_15m || ''} · ${g.which_tab?.use_this_tab || ''}</p>
-        <p class="muted" style="font-size:.72rem;margin-bottom:.65rem"><strong>Locked vs live:</strong> ${g.locked_vs_live?.locked || ''} · ${g.locked_vs_live?.live || ''}</p>
+        <p class="muted" style="font-size:.72rem;margin-bottom:.65rem"><strong>Snapshots:</strong> ${g.locked_vs_live?.hour_open || ''} · ${g.locked_vs_live?.locked || ''} · ${g.locked_vs_live?.live || ''}</p>
         <details id="hourly-guide-cheat" style="font-size:.78rem"${hourlyGuideCheatOpen ? ' open' : ''}>
           <summary class="muted" style="cursor:pointer;margin-bottom:.35rem">Strategy cheat sheet (threshold vs range)</summary>
           <table style="width:100%;margin-top:.35rem">
@@ -1577,6 +1680,8 @@
       const pickCls = signalEdgeCls(pickSig);
       return `<div class="likely-card" style="border-color:rgba(99,102,241,.45)">
         <h3>${title}</h3>
+        ${renderPositionAlertBanner(data.position_alert)}
+        ${renderBetAssessmentBanner(data.bet_assessment)}
         <div class="headline ${pickCls}">${pickSig}${pick?.label ? ` · ${pick.label}` : ''}</div>
         <div class="likely-grid" style="margin-top:.65rem">
           <div><span class="muted">Model prob</span><strong>${pick?.model_prob != null ? pct(pick.model_prob) : '—'}</strong></div>
@@ -1597,6 +1702,8 @@
         h$('hourly-guide').innerHTML = '<p class="muted">—</p>';
         h$('daily-freq-badge').innerHTML = '';
         h$('daily-primary-signal').innerHTML = '';
+        h$('intrahour-opportunity').innerHTML = '';
+        h$('daily-late-call').innerHTML = '';
         h$('daily-summary').innerHTML = '';
         h$('daily-threshold').innerHTML = '<p class="muted">—</p>';
         h$('daily-range-summary').innerHTML = '';
@@ -1606,6 +1713,8 @@
       }
       const live = data.live || data;
       const locked = data.locked || null;
+      const hourOpen = data.hour_open || null;
+      const lateCall = data.late_call || null;
       const ev = live.event || data.event || {};
       const freq = (ev.frequency || 'hourly').toLowerCase();
       const freqCls = freq === 'daily' ? 'freq-daily' : 'freq-hourly';
@@ -1618,11 +1727,15 @@
       const idx = hourlyApi().indexLabel;
       const lockNote = locked
         ? `Locked ${time(locked.logged_at)} · ${idx} ref ${price(locked.reference_price)}`
-        : 'Official prediction locks at :05 ET';
+        : hourOpen
+          ? `Hour open ${time(hourOpen.logged_at)} · awaiting :05 lock`
+          : 'Hour open @ :00 ET · official lock @ :05 ET';
       const g = data.guidance || {};
       renderHourlyGuidance(g);
 
       h$('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · settles ${settle} · ${idx} now ${price(data.brti_live || live.current_price)} · ${live.hours_to_settle}h left · ${lockNote}`;
+
+      h$('intrahour-opportunity').innerHTML = renderIntrahourOpportunityBanner(data.intrahour_opportunity);
 
       if (locked) {
         const lpick = locked.primary_pick || {};
@@ -1633,24 +1746,66 @@
           locked.regime,
           `<p class="muted" style="font-size:.68rem;margin-top:.5rem">This pick is frozen for calibration — it will not move with the market.</p>`
         );
+      } else if (hourOpen) {
+        const hpick = hourOpen.primary_pick || {};
+        h$('daily-primary-signal').innerHTML = renderHourlySignalCard(
+          `Hour-open primary signal @ ${time(hourOpen.logged_at)}`,
+          hpick,
+          hourOpen,
+          hourOpen.regime,
+          `<p class="muted" style="font-size:.85rem;margin-bottom:.5rem">Frozen at :00 ET — preview until official :05 lock for scoring.</p>
+          <p class="muted" style="font-size:.75rem;margin-top:.35rem">Live zone ${price(liveMl.settlement_zone_low)} – ${price(liveMl.settlement_zone_high)} (updates until :05 lock)</p>`
+        );
       } else {
         const lpick = live.primary_pick || beT;
-        const pickSig = lpick?.signal || 'NEUTRAL';
-        const pickCls = signalEdgeCls(pickSig);
-        h$('daily-primary-signal').innerHTML = `<div class="likely-card" style="border-color:rgba(245,158,11,.35)">
-          <h3>Awaiting lock · :05 ET</h3>
-          <p class="muted" style="font-size:.85rem;margin-bottom:.5rem">Preview only — primary signal and settlement range freeze at :05 ET for scoring.</p>
-          <div class="headline ${pickCls}">${pickSig}${lpick?.label ? ` · ${lpick.label}` : ''}</div>
-          <p class="muted" style="font-size:.75rem;margin-top:.35rem">Live zone ${price(liveMl.settlement_zone_low)} – ${price(liveMl.settlement_zone_high)} (will not count until locked)</p>
+        h$('daily-primary-signal').innerHTML = renderHourlySignalCard(
+          'Awaiting hour open · :00 ET',
+          lpick,
+          live,
+          live.regime,
+          `<p class="muted" style="font-size:.85rem;margin-bottom:.5rem">Preview only — hour-open snapshot at :00 ET, official lock at :05 ET for scoring.</p>
+          <p class="muted" style="font-size:.75rem;margin-top:.35rem">Live zone ${price(liveMl.settlement_zone_low)} – ${price(liveMl.settlement_zone_high)} (will not count until locked)</p>`
+        );
+      }
+
+      if (lateCall) {
+        const lcpick = lateCall.primary_pick || {};
+        h$('daily-late-call').innerHTML = renderHourlySignalCard(
+          `Late call · ${lateCall.method || 'structure'} @ ${time(lateCall.logged_at)}`,
+          lcpick,
+          lateCall,
+          lateCall.regime,
+          `<p class="muted" style="font-size:.68rem;margin-top:.5rem">Frozen at :45 ET for this hour's trading decision — 15 min before settle. Not used for calibration scoring.</p>`
+        );
+      } else {
+        h$('daily-late-call').innerHTML = `<div class="likely-card" style="border-color:rgba(168,85,247,.3);margin-top:.75rem">
+          <h3 style="color:var(--muted)">Late call · awaiting :45 ET</h3>
+          <p class="muted" style="font-size:.8rem">Trading snapshot locks at :45 ET each hour — 15 minutes before hourly settle.</p>
         </div>`;
       }
 
       const muShift = data.live_vs_locked?.mu_shift;
+      const hourOpenShift = data.live_vs_hour_open?.mu_shift;
+      const lockVsOpenShift = data.hour_open_vs_locked?.mu_shift;
       const shiftTxt = muShift != null
         ? `<p class="muted" style="font-size:.75rem;margin-top:.35rem">μ shifted ${muShift >= 0 ? '+' : ''}${price(muShift)} vs locked forecast.</p>`
+        : hourOpenShift != null
+          ? `<p class="muted" style="font-size:.75rem;margin-top:.35rem">μ shifted ${hourOpenShift >= 0 ? '+' : ''}${price(hourOpenShift)} vs hour-open snapshot.</p>`
+          : '';
+      const lockVsOpenTxt = lockVsOpenShift != null
+        ? `<p class="muted" style="font-size:.75rem;margin-top:.35rem">Official lock μ ${lockVsOpenShift >= 0 ? '+' : ''}${price(lockVsOpenShift)} vs hour-open.</p>`
         : '';
 
       h$('daily-summary').innerHTML = `
+        ${hourOpen ? `<div class="likely-card" style="border-color:rgba(234,179,8,.35)">
+          <h3>Hour-open settlement range @ :00</h3>
+          <div class="headline">${idx} ${price(hourOpen.most_likely?.settlement_zone_low)} – ${price(hourOpen.most_likely?.settlement_zone_high)}</div>
+          <p class="muted" style="font-size:.8rem">${hourOpen.most_likely?.summary || ''}</p>
+          <div class="likely-grid">
+            ${renderLikelyPick('Threshold @ :00', hourOpen.most_likely?.threshold)}
+          </div>
+          <p class="muted" style="font-size:.68rem;margin-top:.5rem">Blended μ ${price(hourOpen.terminal_mu)} · σ ${price(hourOpen.terminal_sigma)} — preview until :05 official lock.</p>
+        </div>` : ''}
         ${locked ? `<div class="likely-card" style="border-color:rgba(34,197,94,.35)">
           <h3>Locked settlement range</h3>
           <div class="headline">${idx} ${price(lockedMl.settlement_zone_low)} – ${price(lockedMl.settlement_zone_high)} at settle</div>
@@ -1659,6 +1814,7 @@
             ${renderLikelyPick('Threshold @ lock', lockedMl.threshold)}
           </div>
           <p class="muted" style="font-size:.68rem;margin-top:.5rem">Blended μ ${price(locked.terminal_mu)} · σ ${price(locked.terminal_sigma)} — scored against actual settle ${idx}.</p>
+          ${lockVsOpenTxt}
         </div>` : ''}
         <div class="likely-card" style="border-color:rgba(99,102,241,.25)">
           <h3>Live reassessment <span class="muted" style="font-weight:400;font-size:.7rem">updates with market</span></h3>
@@ -1683,7 +1839,7 @@
         safest: live.strategy_threshold?.most_likely?.label,
         edge: live.strategy_threshold?.best_edge?.label,
       });
-      renderStrategy2Panel(live, locked, g);
+      renderStrategy2Panel(live, locked, g, hourOpen);
       const rangeRg = g.strategy_range || {};
       renderDailyContracts(live.strategy_range?.contracts || [], 'daily-range', {
         safest: live.strategy_range?.most_likely?.label,
