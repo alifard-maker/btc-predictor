@@ -1725,6 +1725,48 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/settings' : '/api/hourly/bot/settings';
     }
 
+    const botForceSettingsRender = { btc: true, eth: true };
+
+    function readBotSettingsFromDom(asset) {
+      const p = asset;
+      const enabledEl = $(`bot-enabled-${p}`);
+      if (!enabledEl) return null;
+      return {
+        enabled: !!enabledEl.checked,
+        mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
+        max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
+        allow_strong: !!$(`bot-strong-${p}`)?.checked,
+        allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
+      };
+    }
+
+    function botSettingsHtml(asset, s) {
+      const p = asset;
+      return `
+        <div class="bot-row">
+          <label class="bot-label">Auto-bet
+            <label class="switch"><input type="checkbox" id="bot-enabled-${p}" ${s.enabled ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label">Paper
+            <label class="switch"><input type="checkbox" id="bot-paper-${p}" ${s.mode === 'paper' ? 'checked' : ''} onchange="onBotModeToggle('${asset}', event)"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label">Live
+            <label class="switch"><input type="checkbox" id="bot-live-${p}" ${s.mode === 'live' ? 'checked' : ''} onchange="onBotModeToggle('${asset}', event)"><span class="slider"></span></label>
+          </label>
+        </div>
+        <div class="bot-row">
+          <label class="bot-label">Max $ / hour
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="saveHourlyBotSettings('${asset}')">
+          </label>
+          <label class="bot-label">STRONG bets
+            <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label">ACTIONABLE bets
+            <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+        </div>`;
+    }
+
     function botCents(c) {
       if (c == null || c === '') return '—';
       return Number(c) + '¢';
@@ -1744,10 +1786,28 @@
       if (activeTab !== tab) return;
       if (!bot || !bot.ok) {
         el.innerHTML = '<p class="muted">Bot status unavailable.</p>';
+        botForceSettingsRender[asset] = true;
         return;
       }
       const p = asset;
-      const s = bot.settings || {};
+      const serverSettings = bot.settings || {};
+      const settingsWrapId = `${asset}-hourly-bot-settings`;
+      const statusWrapId = `${asset}-hourly-bot-status`;
+      if (!$(settingsWrapId)) {
+        el.innerHTML = `<div class="bot-panel"><div id="${settingsWrapId}"></div><div id="${statusWrapId}"></div></div>`;
+      }
+      const settingsWrap = $(settingsWrapId);
+      const statusWrap = $(statusWrapId);
+      if (!settingsWrap || !statusWrap) return;
+
+      const domSettings = readBotSettingsFromDom(asset);
+      const shouldRenderSettings = botForceSettingsRender[asset] || !domSettings;
+      if (shouldRenderSettings) {
+        settingsWrap.innerHTML = botSettingsHtml(asset, serverSettings);
+        botForceSettingsRender[asset] = false;
+      }
+
+      const s = domSettings || serverSettings;
       const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
       const freeMode = !s.allow_strong && !s.allow_actionable;
       const exposure = bot.open_exposure_usd ?? bot.spent_usd ?? 0;
@@ -1774,29 +1834,7 @@
           <td style="font-size:.68rem">${t.detail || ''}</td>
         </tr>`;
       }).join('');
-      el.innerHTML = `<div class="bot-panel">
-        <div class="bot-row">
-          <label class="bot-label">Auto-bet
-            <label class="switch"><input type="checkbox" id="bot-enabled-${p}" ${s.enabled ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
-          </label>
-          <label class="bot-label">Paper
-            <label class="switch"><input type="checkbox" id="bot-paper-${p}" ${s.mode === 'paper' ? 'checked' : ''} onchange="onBotModeToggle('${asset}')"><span class="slider"></span></label>
-          </label>
-          <label class="bot-label">Live
-            <label class="switch"><input type="checkbox" id="bot-live-${p}" ${s.mode === 'live' ? 'checked' : ''} onchange="onBotModeToggle('${asset}')"><span class="slider"></span></label>
-          </label>
-        </div>
-        <div class="bot-row">
-          <label class="bot-label">Max $ / hour
-            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="saveHourlyBotSettings('${asset}')">
-          </label>
-          <label class="bot-label">STRONG bets
-            <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
-          </label>
-          <label class="bot-label">ACTIONABLE bets
-            <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
-          </label>
-        </div>
+      statusWrap.innerHTML = `
         <div class="bot-row" style="margin-top:.35rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Hour interval ${eventLabel}</span><strong class="${pnlCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)} realized</strong></div>
           <div class="bot-stat"><span class="muted">Enters / Exits</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
@@ -1810,36 +1848,43 @@
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
         ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~60s on the server (not on dashboard refresh).</p>`}
-      </div>`;
+      `;
     }
 
-    function onBotModeToggle(asset) {
+    function onBotModeToggle(asset, ev) {
       const p = asset;
       const paper = $(`bot-paper-${p}`);
       const live = $(`bot-live-${p}`);
       if (!paper || !live) return;
-      if (event.target.id === `bot-paper-${p}` && paper.checked) live.checked = false;
-      if (event.target.id === `bot-live-${p}` && live.checked) paper.checked = false;
+      const targetId = ev?.target?.id;
+      if (targetId === `bot-paper-${p}` && paper.checked) live.checked = false;
+      if (targetId === `bot-live-${p}` && live.checked) paper.checked = false;
       if (!paper.checked && !live.checked) paper.checked = true;
       saveHourlyBotSettings(asset);
     }
 
     async function saveHourlyBotSettings(asset) {
       const p = asset;
+      const enabledEl = $(`bot-enabled-${p}`);
+      if (!enabledEl) return;
       const body = {
-        enabled: !!$(`bot-enabled-${p}`)?.checked,
+        enabled: !!enabledEl.checked,
         mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
         max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
       };
       try {
-        await fetch(hourlyBotSettingsUrl(asset), {
+        const res = await fetch(hourlyBotSettingsUrl(asset), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if ((asset === 'eth' && activeTab === 'eth-hourly') || (asset === 'btc' && activeTab === 'daily')) loadDaily();
+        if (!res.ok) throw new Error(await res.text());
+        if ((asset === 'eth' && activeTab === 'eth-hourly') || (asset === 'btc' && activeTab === 'daily')) {
+          const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
+          if (activeTab === tab) loadDaily();
+        }
       } catch (e) {
         showError('Bot settings: ' + e.message);
       }
