@@ -589,17 +589,18 @@ def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
     auto_stopped = False
   else:
     auto_stopped = current.auto_stopped
-  settings = HourlyBotSettings(
-    enabled=new_enabled,
-    mode=mode,
-    max_spend_per_hour_usd=float(body.get("max_spend_per_hour_usd", current.max_spend_per_hour_usd)),
-    allow_strong=bool(body.get("allow_strong", current.allow_strong)),
-    allow_actionable=bool(body.get("allow_actionable", current.allow_actionable)),
-    auto_stop_on_budget_exhausted=bool(
+  settings = HourlyBotSettings.from_dict({
+    **current.to_dict(),
+    "enabled": new_enabled,
+    "mode": mode,
+    "max_spend_per_hour_usd": float(body.get("max_spend_per_hour_usd", current.max_spend_per_hour_usd)),
+    "allow_strong": bool(body.get("allow_strong", current.allow_strong)),
+    "allow_actionable": bool(body.get("allow_actionable", current.allow_actionable)),
+    "auto_stop_on_budget_exhausted": bool(
       body.get("auto_stop_on_budget_exhausted", current.auto_stop_on_budget_exhausted)
     ),
-    auto_stopped=auto_stopped,
-  )
+    "auto_stopped": auto_stopped,
+  })
   if settings.max_spend_per_hour_usd < 0:
     raise HTTPException(400, "max_spend_per_hour_usd must be >= 0")
   store.save_settings(settings)
@@ -620,17 +621,18 @@ def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
     auto_stopped = False
   else:
     auto_stopped = current.auto_stopped
-  settings = Slot15BotSettings(
-    enabled=new_enabled,
-    mode=mode,
-    max_spend_per_slot_usd=float(body.get("max_spend_per_slot_usd", current.max_spend_per_slot_usd)),
-    allow_strong=bool(body.get("allow_strong", current.allow_strong)),
-    allow_actionable=bool(body.get("allow_actionable", current.allow_actionable)),
-    auto_stop_on_budget_exhausted=bool(
+  settings = Slot15BotSettings.from_dict({
+    **current.to_dict(),
+    "enabled": new_enabled,
+    "mode": mode,
+    "max_spend_per_slot_usd": float(body.get("max_spend_per_slot_usd", current.max_spend_per_slot_usd)),
+    "allow_strong": bool(body.get("allow_strong", current.allow_strong)),
+    "allow_actionable": bool(body.get("allow_actionable", current.allow_actionable)),
+    "auto_stop_on_budget_exhausted": bool(
       body.get("auto_stop_on_budget_exhausted", current.auto_stop_on_budget_exhausted)
     ),
-    auto_stopped=auto_stopped,
-  )
+    "auto_stopped": auto_stopped,
+  })
   if settings.max_spend_per_slot_usd < 0:
     raise HTTPException(400, "max_spend_per_slot_usd must be >= 0")
   store.save_settings(settings)

@@ -279,27 +279,29 @@ def test_auto_stop_when_slot_bankroll_exhausted():
     tab = _live_tab(slot_key="SLOT1")
     actions = bot.run_continuous_cycle(tab)
     assert any(a.get("action") == "auto_stop" for a in actions)
-    assert not store.get_settings().enabled
+    assert store.get_settings().enabled
     assert store.get_settings().auto_stopped
     st = store.status("SLOT1")
     assert st["auto_stopped"] is True
+    assert st["last_skip_reason"] == "auto_stopped_budget_exhausted"
 
 
 def test_no_entries_after_slot_auto_stop():
   with tempfile.TemporaryDirectory() as tmp:
     store = Slot15BotStore(Path(tmp) / "bot.db")
     store.save_settings(Slot15BotSettings(
-      enabled=False, auto_stopped=True, max_spend_per_slot_usd=25.0,
+      enabled=True, auto_stopped=True, max_spend_per_slot_usd=25.0,
     ))
     bot = Slot15Bot(store, asset="btc")
     assert bot.run_continuous_cycle(_live_tab(slot_key="SLOT1")) == []
+    assert store.last_skip_reason() == "auto_stopped_budget_exhausted"
 
 
 def test_manual_reenable_after_slot_auto_stop():
   with tempfile.TemporaryDirectory() as tmp:
     store = Slot15BotStore(Path(tmp) / "bot.db")
     store.save_settings(Slot15BotSettings(
-      enabled=False, auto_stopped=True, max_spend_per_slot_usd=25.0,
+      enabled=True, auto_stopped=True, max_spend_per_slot_usd=25.0,
     ))
     store.log_trade({
       "event_ticker": "SLOT1",

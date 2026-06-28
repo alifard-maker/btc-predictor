@@ -229,7 +229,7 @@ class PredictionLoop:
 
       acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
       logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
-      self._hourly_bot_stores[asset] = HourlyBotStore(logs / "hourly_bot.db")
+      self._hourly_bot_stores[asset] = HourlyBotStore(logs / f"hourly_bot_{asset}.db")
     return self._hourly_bot_stores[asset]
 
   def hourly_bot(self, asset: str):
@@ -339,7 +339,7 @@ class PredictionLoop:
 
       acfg = self._acfg_15m(asset)
       logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
-      self._slot15_bot_stores[asset] = Slot15BotStore(logs / "slot15_bot.db")
+      self._slot15_bot_stores[asset] = Slot15BotStore(logs / f"slot15_bot_{asset}.db")
     return self._slot15_bot_stores[asset]
 
   def slot15_bot(self, asset: str):

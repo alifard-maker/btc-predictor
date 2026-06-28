@@ -407,10 +407,11 @@ def test_auto_stop_when_hour_bankroll_exhausted():
       tab, cfg={"hourly": {"regime": {"min_edge": 0.05, "min_expected_move_pct": 0.12}}}
     )
     assert any(a.get("action") == "auto_stop" for a in actions)
-    assert not store.get_settings().enabled
+    assert store.get_settings().enabled
     assert store.get_settings().auto_stopped
     st = store.status("EV1")
     assert st["auto_stopped"] is True
+    assert st["last_skip_reason"] == "auto_stopped_budget_exhausted"
     assert "exhausted" in (st["auto_stop_reason"] or "").lower()
 
 
@@ -418,18 +419,19 @@ def test_no_entries_after_auto_stop():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     store.save_settings(HourlyBotSettings(
-      enabled=False, auto_stopped=True, max_spend_per_hour_usd=25.0,
+      enabled=True, auto_stopped=True, max_spend_per_hour_usd=25.0,
     ))
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab(event="EV1")
     assert bot.run_continuous_cycle(tab) == []
+    assert store.last_skip_reason() == "auto_stopped_budget_exhausted"
 
 
 def test_manual_reenable_after_auto_stop():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     store.save_settings(HourlyBotSettings(
-      enabled=False, auto_stopped=True, max_spend_per_hour_usd=25.0,
+      enabled=True, auto_stopped=True, max_spend_per_hour_usd=25.0,
     ))
     store.log_trade({
       "event_ticker": "EV1",
@@ -447,3 +449,66 @@ def test_manual_reenable_after_auto_stop():
     )
     assert any(a.get("action") == "enter" for a in actions)
     assert store.get_settings().enabled
+
+
+def test_auto_stop_clears_on_new_hour():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(enabled=True, auto_stopped=True, max_spend_per_hour_usd=25.0))
+    store.sync_period("EV1", store.get_settings())
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(event="EV2")
+    actions = bot.run_continuous_cycle(
+      tab, cfg={"hourly": {"regime": {"min_edge": 0.05, "min_expected_move_pct": 0.12}}}
+    )
+    assert not store.get_settings().auto_stopped
+    assert any(a.get("action") == "enter" for a in actions)
+
+
+def test_free_mode_enters_from_range_contract_row():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(regime_allow=False)
+    tab["live"]["primary_pick"] = {"ticker": "NEUTRAL-T", "signal": "NEUTRAL", "kalshi_mid": 0.5, "edge": 0.0}
+    band = {
+      "ticker": "KXTEST-BAND",
+      "signal": "BUY YES",
+      "label": "$2,500–$2,519",
+      "kalshi_mid": 0.35,
+      "edge": 0.15,
+      "model_prob": 0.50,
+    }
+    tab["live"]["strategy_range"] = {
+      "best_edge": None,
+      "most_likely": None,
+      "contracts": [band],
+    }
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {}, "intrahour": {"enabled": False}}})
+    assert len(actions) == 1
+    assert actions[0]["action"] == "enter"
+    assert actions[0]["market_ticker"] == "KXTEST-BAND"
+
+
+def test_enters_with_model_prob_when_kalshi_mid_missing():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(regime_allow=False)
+    tab["live"]["primary_pick"] = {
+      "ticker": "KXTEST-T1",
+      "signal": "BUY YES",
+      "label": "$2,500+",
+      "edge": 0.12,
+      "model_prob": 0.65,
+    }
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {}, "intrahour": {"enabled": False}}})
+    assert len(actions) == 1
+    assert actions[0]["action"] == "enter"
+    assert actions[0]["entry_price_cents"] == 65

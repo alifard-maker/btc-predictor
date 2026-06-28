@@ -43,6 +43,10 @@ def bet_qualifies(
 def _price_cents_for_pick(pick: dict[str, Any], side: str) -> int | None:
   mid = pick.get("kalshi_mid")
   if mid is None:
+    prob = pick.get("model_prob")
+    if prob is not None:
+      mid = float(prob) if side == "yes" else 1.0 - float(prob)
+  if mid is None:
     return None
   yes_cents = int(round(float(mid) * 100))
   yes_cents = max(1, min(99, yes_cents))
@@ -132,9 +136,14 @@ def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[t
 
   for block_key in ("strategy_threshold", "strategy_range"):
     block = live.get(block_key) or {}
+    block_rows: list[dict[str, Any]] = []
     for row in (block.get("best_edge"), block.get("most_likely")):
-      if not row:
-        continue
+      if row:
+        block_rows.append(row)
+    for row in block.get("contracts") or []:
+      if row:
+        block_rows.append(row)
+    for row in block_rows:
       bet = assess_contract_bet(
         signal=row.get("signal"),
         edge=row.get("edge"),
@@ -231,12 +240,21 @@ class HourlyBot:
 
   def run_continuous_cycle(self, tab: dict[str, Any], *, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Evaluate exits then entries on live hourly data. Returns actions taken."""
-    settings = self.store.get_settings()
-    if not settings.enabled or not settings.continuous or not tab.get("ok"):
+    if not tab.get("ok"):
+      self.store.set_last_skip_reason("prediction_unavailable")
       return []
 
     event_ticker = (tab.get("event") or {}).get("event_ticker")
     if not event_ticker:
+      self.store.set_last_skip_reason("missing_event_ticker")
+      return []
+
+    settings = self.store.sync_period(str(event_ticker), self.store.get_settings())
+    if not settings.enabled:
+      self.store.set_last_skip_reason("auto_bet_off")
+      return []
+    if not settings.continuous:
+      self.store.set_last_skip_reason("continuous_mode_off")
       return []
 
     actions: list[dict[str, Any]] = []
@@ -245,8 +263,12 @@ class HourlyBot:
     stop_row = self._maybe_auto_stop_on_budget_exhausted(event_ticker, settings)
     if stop_row:
       actions.append(stop_row)
-      return actions
-    actions.extend(self._process_entries(tab, event_ticker, settings, cfg))
+      settings = self.store.get_settings()
+    entry_actions = self._process_entries(tab, event_ticker, settings, cfg)
+    actions.extend(entry_actions)
+    if not entry_actions and not any(a.get("action") == "enter" for a in actions):
+      if self.store.last_skip_reason() is None and not settings.auto_stopped:
+        self.store.set_last_skip_reason("no_entry_this_cycle")
     return actions
 
   def _maybe_auto_stop_on_budget_exhausted(
@@ -257,7 +279,8 @@ class HourlyBot:
     if not settings.enabled or not settings.auto_stop_on_budget_exhausted:
       return None
     max_cap = settings.max_spend_per_hour_usd
-    if self.store.remaining_budget_usd(event_ticker, max_cap) > 0:
+    bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap)
+    if bankroll > 0:
       return None
     realized = self.store.realized_pnl_usd(event_ticker)
     exposure = self.store.open_exposure_usd(event_ticker)
@@ -268,11 +291,11 @@ class HourlyBot:
     updated = HourlyBotSettings(
       **{
         **settings.to_dict(),
-        "enabled": False,
         "auto_stopped": True,
       }
     )
     self.store.save_settings(updated)
+    self.store.set_last_skip_reason("auto_stopped_budget_exhausted")
     row = self.store.log_trade({
       "event_ticker": event_ticker,
       "trigger": "continuous",
@@ -384,35 +407,60 @@ class HourlyBot:
   ) -> list[dict[str, Any]]:
     live = tab.get("live") or tab
     results: list[dict[str, Any]] = []
-    remaining = self.store.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd)
+    if settings.auto_stopped:
+      self.store.set_last_skip_reason("auto_stopped_budget_exhausted")
+      return results
 
-    for _score, pick, bet in _entry_candidates(tab, cfg):
+    max_cap = settings.max_spend_per_hour_usd
+    bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap)
+    remaining = self.store.remaining_budget_usd(event_ticker, max_cap)
+    if bankroll <= 0:
+      self.store.set_last_skip_reason("hour_budget_exhausted")
+      return results
+    if remaining <= 0:
+      self.store.set_last_skip_reason("fully_deployed")
+      return results
+
+    candidates = _entry_candidates(tab, cfg)
+    if not candidates:
+      self.store.set_last_skip_reason("no_buy_yes_no_candidates")
+      return results
+
+    last_reason = "no_entry_this_cycle"
+    for _score, pick, bet in candidates:
       if not bet_qualifies(pick, bet, settings):
+        last_reason = "signal_filtered_by_settings"
         continue
 
       market_ticker = str(pick["ticker"])
       if self.store.has_open_position(event_ticker, market_ticker):
+        last_reason = f"already_open:{market_ticker}"
         continue
 
       if self.store.is_in_cooldown(
         event_ticker, market_ticker, settings.reentry_cooldown_seconds
       ):
+        last_reason = f"reentry_cooldown:{market_ticker}"
         continue
 
       side = _side_from_signal(pick.get("signal"))
       if not side:
+        last_reason = "unrecognized_signal"
         continue
 
       price_cents = _price_cents_for_pick(pick, side)
       if price_cents is None:
+        last_reason = f"missing_price:{market_ticker}"
         continue
 
       remaining = self.store.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd)
       if remaining <= 0:
+        last_reason = "hour_budget_exhausted"
         break
 
       count = _contracts_for_budget(remaining, price_cents)
       if count <= 0:
+        last_reason = "budget_too_small_for_contract"
         continue
 
       cost_usd = round(count * price_cents / 100.0, 2)
@@ -461,9 +509,12 @@ class HourlyBot:
         })
         log.info("%s hourly bot [paper enter]: %s", self.asset.upper(), detail)
 
+      self.store.set_last_skip_reason(None)
       results.append(result)
       break  # one new entry per cycle; exits free budget next minute
 
+    if not results:
+      self.store.set_last_skip_reason(last_reason)
     return results
 
   def _place_live_enter(

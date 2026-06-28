@@ -234,12 +234,21 @@ class Slot15Bot:
 
   def run_continuous_cycle(self, tab: dict[str, Any]) -> list[dict[str, Any]]:
     """Evaluate exits then entries on live 15m data. Returns actions taken."""
-    settings = self.store.get_settings()
-    if not settings.enabled or not settings.continuous or not tab.get("ok"):
+    if not tab.get("ok"):
+      self.store.set_last_skip_reason("prediction_unavailable")
       return []
 
     slot_key = tab.get("slot_key")
     if not slot_key:
+      self.store.set_last_skip_reason("missing_slot_key")
+      return []
+
+    settings = self.store.sync_period(str(slot_key), self.store.get_settings())
+    if not settings.enabled:
+      self.store.set_last_skip_reason("auto_bet_off")
+      return []
+    if not settings.continuous:
+      self.store.set_last_skip_reason("continuous_mode_off")
       return []
 
     actions: list[dict[str, Any]] = []
@@ -248,8 +257,12 @@ class Slot15Bot:
     stop_row = self._maybe_auto_stop_on_budget_exhausted(slot_key, settings)
     if stop_row:
       actions.append(stop_row)
-      return actions
-    actions.extend(self._process_entries(tab, slot_key, settings))
+      settings = self.store.get_settings()
+    entry_actions = self._process_entries(tab, slot_key, settings)
+    actions.extend(entry_actions)
+    if not entry_actions and not any(a.get("action") == "enter" for a in actions):
+      if self.store.last_skip_reason() is None and not settings.auto_stopped:
+        self.store.set_last_skip_reason("no_entry_this_cycle")
     return actions
 
   def _maybe_auto_stop_on_budget_exhausted(
@@ -260,7 +273,8 @@ class Slot15Bot:
     if not settings.enabled or not settings.auto_stop_on_budget_exhausted:
       return None
     max_cap = settings.max_spend_per_slot_usd
-    if self.store.remaining_budget_usd(slot_key, max_cap) > 0:
+    bankroll = self.store.slot_bankroll_usd(slot_key, max_cap)
+    if bankroll > 0:
       return None
     realized = self.store.realized_pnl_usd(slot_key)
     exposure = self.store.open_exposure_usd(slot_key)
@@ -271,11 +285,11 @@ class Slot15Bot:
     updated = Slot15BotSettings(
       **{
         **settings.to_dict(),
-        "enabled": False,
         "auto_stopped": True,
       }
     )
     self.store.save_settings(updated)
+    self.store.set_last_skip_reason("auto_stopped_budget_exhausted")
     row = self.store.log_trade({
       "event_ticker": slot_key,
       "trigger": "continuous",
@@ -355,38 +369,64 @@ class Slot15Bot:
     slot_key: str,
     settings: Slot15BotSettings,
   ) -> list[dict[str, Any]]:
+    if settings.auto_stopped:
+      self.store.set_last_skip_reason("auto_stopped_budget_exhausted")
+      return []
+
     kalshi = tab.get("kalshi") or {}
     market_ticker = str(kalshi.get("market_ticker") or "")
     if not market_ticker:
+      self.store.set_last_skip_reason("missing_market_ticker")
+      return []
+
+    remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd)
+    bankroll = self.store.slot_bankroll_usd(slot_key, settings.max_spend_per_slot_usd)
+    if bankroll <= 0:
+      self.store.set_last_skip_reason("slot_budget_exhausted")
+      return []
+    if remaining <= 0:
+      self.store.set_last_skip_reason("fully_deployed")
       return []
 
     yes_cents = _yes_mid_cents(kalshi)
-    results: list[dict[str, Any]] = []
+    candidates = _entry_candidates(tab)
+    if not candidates:
+      self.store.set_last_skip_reason("no_long_short_candidates")
+      return []
 
-    for _score, signal, pick, bet in _entry_candidates(tab):
+    results: list[dict[str, Any]] = []
+    last_reason = "no_entry_this_cycle"
+    for _score, signal, pick, bet in candidates:
       if not bet_qualifies(signal, bet, settings):
+        last_reason = "signal_filtered_by_settings"
         continue
 
       if self.store.has_open_position(slot_key, market_ticker):
+        last_reason = f"already_open:{market_ticker}"
         continue
 
       if self.store.is_in_cooldown(slot_key, market_ticker, settings.reentry_cooldown_seconds):
+        last_reason = f"reentry_cooldown:{market_ticker}"
         continue
 
       side = _side_from_signal(signal)
       if not side:
+        last_reason = "unrecognized_signal"
         continue
 
       price_cents = _price_cents_for_side(yes_cents, side)
       if price_cents is None:
+        last_reason = "missing_kalshi_mid"
         continue
 
       remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd)
       if remaining <= 0:
+        last_reason = "fully_deployed"
         break
 
       count = _contracts_for_budget(remaining, price_cents)
       if count <= 0:
+        last_reason = "budget_too_small_for_contract"
         continue
 
       cost_usd = round(count * price_cents / 100.0, 2)
@@ -435,9 +475,12 @@ class Slot15Bot:
         })
         log.info("%s 15m bot [paper enter]: %s", self.asset.upper(), detail)
 
+      self.store.set_last_skip_reason(None)
       results.append(result)
       break
 
+    if not results:
+      self.store.set_last_skip_reason(last_reason)
     return results
 
   def _place_live_enter(

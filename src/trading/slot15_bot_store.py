@@ -101,7 +101,26 @@ class Slot15BotStore:
   def __init__(self, db_path: Path):
     self.db_path = Path(db_path)
     self.db_path.parent.mkdir(parents=True, exist_ok=True)
+    self._last_period_key: str | None = None
+    self._last_skip_reason: str | None = None
     self._init_db()
+
+  def set_last_skip_reason(self, reason: str | None) -> None:
+    self._last_skip_reason = reason
+
+  def last_skip_reason(self) -> str | None:
+    return self._last_skip_reason
+
+  def sync_period(self, slot_key: str, settings: Slot15BotSettings) -> Slot15BotSettings:
+    """Clear slot-scoped auto_stop when the active 15m slot changes."""
+    prev = self._last_period_key
+    self._last_period_key = slot_key
+    if settings.auto_stopped and prev and prev != slot_key:
+      updated = Slot15BotSettings(**{**settings.to_dict(), "auto_stopped": False})
+      self.save_settings(updated)
+      self.set_last_skip_reason(None)
+      return updated
+    return settings
 
   def _connect(self) -> sqlite3.Connection:
     conn = sqlite3.connect(self.db_path)
@@ -419,4 +438,5 @@ class Slot15BotStore:
       "slot_summary": slot_summary,
       "auto_stopped": settings.auto_stopped,
       "auto_stop_reason": auto_stop_row.get("detail") if auto_stop_row else None,
+      "last_skip_reason": self._last_skip_reason,
     }

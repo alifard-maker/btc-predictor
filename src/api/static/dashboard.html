@@ -1865,7 +1865,46 @@
       if (!bot || !bot.auto_stopped) return '';
       const reason = bot.auto_stop_reason
         || `Auto-stopped: ${periodLabel} budget exhausted. Increase max $/${periodLabel === 'hour' ? 'hour' : 'slot'} and re-enable Auto-bet to continue.`;
-      return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:8px;color:#fecaca;font-size:.75rem"><strong>Auto-stopped</strong> — ${reason}</div>`;
+      return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:8px;color:#fecaca;font-size:.75rem"><strong>Auto-stopped this ${periodLabel}</strong> — ${reason}</div>`;
+    }
+
+    function botSkipReasonLabel(raw) {
+      if (!raw) return '';
+      const labels = {
+        auto_bet_off: 'Auto-bet is off on the server (toggle may be out of sync — flip Auto-bet off then on).',
+        auto_stopped_budget_exhausted: 'Bankroll exhausted for this hour/slot — raise cap or wait for the next window.',
+        continuous_mode_off: 'Continuous mode is off in stored bot settings.',
+        prediction_unavailable: 'Live prediction unavailable.',
+        missing_event_ticker: 'No Kalshi hourly event ticker.',
+        missing_slot_key: 'No active 15m slot key.',
+        missing_market_ticker: 'Kalshi market ticker missing on 15m tab.',
+        hour_budget_exhausted: 'No deployable budget left this hour.',
+        slot_budget_exhausted: 'No deployable budget left this slot.',
+        fully_deployed: 'Max at-risk reached — waiting for an exit to free budget.',
+        no_buy_yes_no_candidates: 'No BUY YES/NO candidates in live picks.',
+        no_long_short_candidates: 'No LONG/SHORT entry signals on 15m tab.',
+        signal_filtered_by_settings: 'Signal blocked by STRONG/ACTIONABLE filters (both off = free mode).',
+        missing_kalshi_mid: 'Kalshi mid quote missing on active market.',
+        budget_too_small_for_contract: 'Remaining budget too small for one contract at current price.',
+        no_entry_this_cycle: 'Signals evaluated but no entry passed all checks this cycle.',
+      };
+      if (raw.startsWith('already_open:')) return `Already holding open position on ${raw.slice('already_open:'.length)}.`;
+      if (raw.startsWith('reentry_cooldown:')) return `Re-entry cooldown active for ${raw.slice('reentry_cooldown:'.length)}.`;
+      if (raw.startsWith('missing_price:')) return `No Kalshi/model price for ${raw.slice('missing_price:'.length)}.`;
+      return labels[raw] || raw;
+    }
+
+    function botSkipReasonHtml(bot) {
+      if (!bot || !bot.last_skip_reason) return '';
+      return `<p class="muted" style="font-size:.68rem;margin:.35rem 0 .45rem;padding:.45rem .55rem;background:rgba(148,163,184,.08);border-radius:6px"><strong>Last skip:</strong> ${botSkipReasonLabel(bot.last_skip_reason)}</p>`;
+    }
+
+    function botSettingsOutOfSync(serverSettings, domSettings, bot, maxKey) {
+      if (!domSettings || !serverSettings) return !!bot?.auto_stopped;
+      return !!serverSettings.enabled !== !!domSettings.enabled
+        || serverSettings.mode !== domSettings.mode
+        || Number(serverSettings[maxKey] ?? 25) !== Number(domSettings[maxKey] ?? 25)
+        || !!bot?.auto_stopped;
     }
 
     const BOT_TRADES_SCROLL_PIN = 5;
@@ -2027,13 +2066,14 @@
       if (!settingsWrap || !statusWrap) return;
 
       const domSettings = readSlot15BotSettingsFromDom(asset);
-      const shouldRenderSettings = slot15BotForceSettingsRender[asset] || !domSettings;
+      const settingsOutOfSync = botSettingsOutOfSync(serverSettings, domSettings, bot, 'max_spend_per_slot_usd');
+      const shouldRenderSettings = slot15BotForceSettingsRender[asset] || !domSettings || settingsOutOfSync;
       if (shouldRenderSettings) {
         settingsWrap.innerHTML = slot15BotSettingsHtml(asset, serverSettings);
         slot15BotForceSettingsRender[asset] = false;
       }
 
-      const s = domSettings || serverSettings;
+      const s = settingsOutOfSync ? serverSettings : (domSettings || serverSettings);
       const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
       const freeMode = !s.allow_strong && !s.allow_actionable;
       const exposure = bot.open_exposure_usd ?? 0;
@@ -2074,8 +2114,10 @@
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'slot');
+      const skipHtml = botSkipReasonHtml(bot);
       statusWrap.innerHTML = `
         ${autoStopHtml}
+        ${skipHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Slot total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
@@ -2167,13 +2209,14 @@
       if (!settingsWrap || !statusWrap) return;
 
       const domSettings = readBotSettingsFromDom(asset);
-      const shouldRenderSettings = botForceSettingsRender[asset] || !domSettings;
+      const settingsOutOfSync = botSettingsOutOfSync(serverSettings, domSettings, bot, 'max_spend_per_hour_usd');
+      const shouldRenderSettings = botForceSettingsRender[asset] || !domSettings || settingsOutOfSync;
       if (shouldRenderSettings) {
         settingsWrap.innerHTML = botSettingsHtml(asset, serverSettings);
         botForceSettingsRender[asset] = false;
       }
 
-      const s = domSettings || serverSettings;
+      const s = settingsOutOfSync ? serverSettings : (domSettings || serverSettings);
       const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
       const freeMode = !s.allow_strong && !s.allow_actionable;
       const exposure = bot.open_exposure_usd ?? bot.spent_usd ?? 0;
@@ -2214,8 +2257,10 @@
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'hour');
+      const skipHtml = botSkipReasonHtml(bot);
       statusWrap.innerHTML = `
         ${autoStopHtml}
+        ${skipHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Hour total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
