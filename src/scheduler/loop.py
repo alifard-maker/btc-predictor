@@ -65,6 +65,9 @@ class PredictionLoop:
     self.train_status: dict[str, Any] = {"state": "idle"}
     self.hourly_train_status: dict[str, Any] = {"state": "idle"}
     self.second_chance_train_status: dict[str, Any] = {"state": "idle"}
+    self.eth_train_status: dict[str, Any] = {"state": "idle"}
+    self.eth_hourly_train_status: dict[str, Any] = {"state": "idle"}
+    self.eth_second_chance_train_status: dict[str, Any] = {"state": "idle"}
     self._hourly_predictor = None
     self.latest_hourly_prediction: dict[str, Any] | None = None
     self._eth_cfg: dict[str, Any] | None = None
@@ -295,6 +298,7 @@ class PredictionLoop:
         "regime_allow_trade": regime.get("allow_trade"),
         "regime_reasons": list(regime.get("reasons") or [])[:3],
       }
+    status["auto_tuning"] = store.get_auto_tuning()
     return status
 
   def eth_hourly_bot_status(self, tab: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -499,6 +503,7 @@ class PredictionLoop:
         "monitor_action": monitor.get("action"),
         "last_entry_attempt": self.slot15_bot_store(asset).last_entry_attempt(),
       }
+    status["auto_tuning"] = store.get_auto_tuning()
     return status
 
   def _ensure_slot_prediction_current(self, asset: str) -> None:
@@ -565,14 +570,15 @@ class PredictionLoop:
     if price is None or price <= 0:
       return {"ok": False, "error": f"Live {index_label} unavailable"}
     df_1h = self._ohlc_1h(storage=storage)
-    df_15m = storage.load("15m") if asset == "btc" else pd.DataFrame()
+    df_15m = storage.load("15m")
     predictor = self.hourly_predictor() if asset == "btc" else self.eth_hourly_predictor()
     tracker = self._asset_hourly_calibration(asset)
+    cal_15m = self._calibration_for(asset) if asset == "eth" else self.calibration
     live = predictor.predict(
       current_price=float(price),
       df_1h=df_1h,
       df_15m=df_15m if not df_15m.empty else None,
-      calibration_tracker=self.calibration if asset == "btc" else None,
+      calibration_tracker=cal_15m,
     )
     if not live.get("ok"):
       return live
@@ -883,45 +889,67 @@ class PredictionLoop:
     if hp.calibrator is None:
       return False
     if self.eth_hourly_calibration and self.eth_hourly_calibration.fit_calibrator(hp.calibrator):
+      from src.models.hourly_trainer import HourlyModelTrainer
+
+      acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+      trainer = HourlyModelTrainer(acfg)
+      trainer.model = hp.model
+      trainer.feature_names = hp.feature_names
+      trainer.calibrator = hp.calibrator
+      path = Path(acfg["paths"]["models"]) / "model_hourly.joblib"
+      if path.exists() and hp.model is not None:
+        trainer.save(path)
       log.info("ETH hourly calibrator refit from resolved events")
       return True
     return False
 
-  def train_hourly_model(self, min_samples: int | None = None) -> None:
+  def train_hourly_model(self, min_samples: int | None = None, *, asset: str = "btc") -> None:
     from src.models.hourly_trainer import HourlyModelTrainer
 
-    self.hourly_train_status = {
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, "eth"))
+    storage = self.storage if asset == "btc" else self.eth_storage()
+    status_attr = "hourly_train_status" if asset == "btc" else "eth_hourly_train_status"
+    setattr(self, status_attr, {
       "state": "running",
       "started_at": datetime.now(timezone.utc).isoformat(),
-    }
+      "asset": asset,
+    })
     try:
-      cfg = self.cfg
+      cfg = acfg
       if min_samples is not None:
-        cfg = {**self.cfg, "hourly": {**self.cfg.get("hourly", {}), "min_train_samples": min_samples}}
-      df_1h = self._ohlc_1h()
-      df_15m = self.storage.load("15m")
+        cfg = {**acfg, "hourly": {**acfg.get("hourly", {}), "min_train_samples": min_samples}}
+      df_1h = self._ohlc_1h(storage=storage)
+      df_15m = storage.load("15m")
       if df_1h.empty:
-        raise ValueError("No 1h candle data — enable 1h fetch in config")
+        raise ValueError(f"No 1h candle data for {asset.upper()} — enable 1h fetch in config")
       trainer = HourlyModelTrainer(cfg)
       metrics = trainer.train(df_1h, df_15m if not df_15m.empty else None)
-      model_path = Path(self.cfg["paths"]["models"]) / "model_hourly.joblib"
+      model_path = Path(cfg["paths"]["models"]) / "model_hourly.joblib"
       trainer.save(model_path)
-      self._hourly_predictor = None
-      self.hourly_train_status = {
+      if asset == "btc":
+        self._hourly_predictor = None
+      else:
+        self._eth_hourly_predictor = None
+      setattr(self, status_attr, {
         "state": "done",
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
         "metrics": metrics,
         "candles_1h": len(df_1h),
-      }
-      log.info("Hourly model training complete: %s", metrics)
+        "asset": asset,
+      })
+      log.info("%s hourly model training complete: %s", asset.upper(), metrics)
     except Exception as e:
-      log.exception("Hourly model training failed")
-      self.hourly_train_status = {
+      log.exception("%s hourly model training failed", asset.upper())
+      setattr(self, status_attr, {
         "state": "error",
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "error": str(e),
-      }
+        "asset": asset,
+      })
+
+  def train_eth_hourly_model(self, min_samples: int | None = None) -> None:
+    self.train_hourly_model(min_samples, asset="eth")
 
 
   def _default_model_path(self) -> str | None:
@@ -1024,6 +1052,9 @@ class PredictionLoop:
       log.info("Resolved %d %s 15m predictions via Kalshi %s", resolved, asset.upper(), index_id)
       if asset == "btc":
         self._log_postmortems(price_lookup.keys())
+      else:
+        self.refit_eth_calibrator()
+        self.refit_eth_second_chance_calibrator()
 
   def _log_postmortems(self, timestamps: Any) -> None:
     try:
@@ -1039,6 +1070,54 @@ class PredictionLoop:
       self.refit_second_chance_calibrator()
     except Exception as e:
       log.warning("Postmortem logging failed: %s", e)
+
+  def refit_eth_calibrator(self) -> bool:
+    predictor = self._predictor_for("eth")
+    if predictor.model is None:
+      return False
+    from src.models.trainer import ModelTrainer
+
+    acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+    trainer = ModelTrainer(acfg)
+    trainer.model = predictor.model
+    trainer.feature_names = predictor.feature_names
+    if trainer.fit_calibrator_from_tracker(self.eth_calibration):
+      predictor.calibrator = trainer.calibrator
+      model_path = Path(acfg["paths"]["models"]) / "model.joblib"
+      if model_path.exists():
+        trainer.save(model_path)
+      self._eth_predictor = None
+      log.info(
+        "ETH 15m calibrator refit from %d resolved slots",
+        len(self.eth_calibration.load_resolved()) if self.eth_calibration else 0,
+      )
+      return True
+    return False
+
+  def refit_eth_second_chance_calibrator(self) -> bool:
+    if not asset_enabled(self.cfg, "eth"):
+      return False
+    acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+    scfg = acfg.get("second_chance", {})
+    if not scfg.get("enabled", True) or not scfg.get("calibrate", True):
+      return False
+    advisor = self.eth_second_chance_advisor()
+    if advisor.model is None or self.eth_calibration is None:
+      return False
+    if self.eth_calibration.fit_second_chance_calibrator(advisor.calibrator):
+      from src.models.second_chance_trainer import SecondChanceTrainer
+
+      trainer = SecondChanceTrainer(acfg)
+      trainer.model = advisor.model
+      trainer.feature_names = advisor.feature_names
+      trainer.calibrator = advisor.calibrator
+      path = Path(acfg["paths"]["models"]) / "model_second_chance.joblib"
+      if path.exists():
+        trainer.save(path)
+      self._eth_second_chance_advisor = None
+      log.info("ETH 2nd Chance calibrator refit from resolved slots")
+      return True
+    return False
 
   def refit_second_chance_calibrator(self) -> bool:
     scfg = self.cfg.get("second_chance", {})
@@ -1060,47 +1139,60 @@ class PredictionLoop:
       return True
     return False
 
-  def train_second_chance_model(self, min_samples: int | None = None) -> None:
+  def train_second_chance_model(self, min_samples: int | None = None, *, asset: str = "btc") -> None:
     from src.models.second_chance_trainer import SecondChanceTrainer
 
-    self.second_chance_train_status = {
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, "eth"))
+    storage = self.storage if asset == "btc" else self.eth_storage()
+    predictor = self.predictor if asset == "btc" else self._predictor_for("eth")
+    status_attr = "second_chance_train_status" if asset == "btc" else "eth_second_chance_train_status"
+    setattr(self, status_attr, {
       "state": "running",
       "started_at": datetime.now(timezone.utc).isoformat(),
-    }
+      "asset": asset,
+    })
     try:
-      cfg = self.cfg
+      cfg = acfg
       if min_samples is not None:
-        cfg = {**self.cfg, "second_chance": {**self.cfg.get("second_chance", {}), "min_train_samples": min_samples}}
-      df_1m = self.storage.load("1m")
-      df_15m = self.storage.load("15m")
+        cfg = {**acfg, "second_chance": {**acfg.get("second_chance", {}), "min_train_samples": min_samples}}
+      df_1m = storage.load("1m")
+      df_15m = storage.load("15m")
       if df_1m.empty:
-        raise ValueError("No 1m candle data for 2nd Chance training")
+        raise ValueError(f"No 1m candle data for {asset.upper()} 2nd Chance training")
       trainer = SecondChanceTrainer(cfg)
       metrics = trainer.train(
         df_1m,
         df_15m if not df_15m.empty else None,
-        main_model=self.predictor.model,
-        main_feature_names=self.predictor.feature_names,
-        main_calibrator=self.predictor.calibrator,
+        main_model=predictor.model,
+        main_feature_names=predictor.feature_names,
+        main_calibrator=predictor.calibrator,
       )
-      model_path = Path(self.cfg["paths"]["models"]) / "model_second_chance.joblib"
+      model_path = Path(cfg["paths"]["models"]) / "model_second_chance.joblib"
       trainer.save(model_path)
-      self._second_chance_advisor = None
-      self.second_chance_train_status = {
+      if asset == "btc":
+        self._second_chance_advisor = None
+      else:
+        self._eth_second_chance_advisor = None
+      setattr(self, status_attr, {
         "state": "done",
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
         "metrics": metrics,
         "candles_1m": len(df_1m),
-      }
-      log.info("2nd Chance model trained: %s", metrics)
+        "asset": asset,
+      })
+      log.info("%s 2nd Chance model trained: %s", asset.upper(), metrics)
     except Exception as e:
-      log.exception("2nd Chance model training failed")
-      self.second_chance_train_status = {
+      log.exception("%s 2nd Chance model training failed", asset.upper())
+      setattr(self, status_attr, {
         "state": "error",
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "error": str(e),
-      }
+        "asset": asset,
+      })
+
+  def train_eth_second_chance_model(self, min_samples: int | None = None) -> None:
+    self.train_second_chance_model(min_samples, asset="eth")
 
   def run_second_chance(self) -> dict[str, Any] | None:
     out = self._run_second_chance_for_asset("btc")
@@ -1209,46 +1301,57 @@ class PredictionLoop:
     except Exception as e:
       log.warning("Auxiliary collect failed: %s", e)
 
-  def train_model(self, min_samples: int | None = None) -> None:
-    """Train LightGBM in-process (intended for background thread)."""
+  def train_model(self, min_samples: int | None = None, *, asset: str = "btc") -> None:
+    """Train 15m LightGBM in-process (intended for background thread)."""
     from src.models.trainer import ModelTrainer
 
-    self.train_status = {
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, "eth"))
+    storage = self.storage if asset == "btc" else self.eth_storage()
+    status_attr = "train_status" if asset == "btc" else "eth_train_status"
+    setattr(self, status_attr, {
       "state": "running",
       "started_at": datetime.now(timezone.utc).isoformat(),
-    }
+      "asset": asset,
+    })
     try:
-      cfg = self.cfg
+      cfg = acfg
       if min_samples is not None:
-        cfg = {**self.cfg, "model": {**self.cfg.get("model", {}), "min_train_samples": min_samples}}
+        cfg = {**acfg, "model": {**acfg.get("model", {}), "min_train_samples": min_samples}}
 
-      storage = CandleStorage(self.cfg)
       df_15m = storage.load("15m")
       df_1m = storage.load("1m")
       if df_15m.empty:
-        raise ValueError("No 15m candle data — run collect first")
+        raise ValueError(f"No 15m candle data for {asset.upper()} — run collect first")
 
       trainer = ModelTrainer(cfg)
       metrics = trainer.train(df_15m, df_1m if not df_1m.empty else None)
-      model_path = Path(self.cfg["paths"]["models"]) / "model.joblib"
+      model_path = Path(cfg["paths"]["models"]) / "model.joblib"
       trainer.save(model_path)
-      self.predictor.load_model(str(model_path))
-      self.train_status = {
+      if asset == "btc":
+        self.predictor.load_model(str(model_path))
+      else:
+        self._eth_predictor = None
+      setattr(self, status_attr, {
         "state": "done",
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
         "metrics": metrics,
         "candles_15m": len(df_15m),
         "candles_1m": len(df_1m),
-      }
-      log.info("Model training complete: %s", metrics)
+        "asset": asset,
+      })
+      log.info("%s 15m model training complete: %s", asset.upper(), metrics)
     except Exception as e:
-      log.exception("Model training failed")
-      self.train_status = {
+      log.exception("%s 15m model training failed", asset.upper())
+      setattr(self, status_attr, {
         "state": "error",
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "error": str(e),
-      }
+        "asset": asset,
+      })
+
+  def train_eth_model(self, min_samples: int | None = None) -> None:
+    self.train_model(min_samples, asset="eth")
 
   def auto_retrain(self) -> None:
     """Daily scheduled retrain — runs in background."""
@@ -1259,11 +1362,55 @@ class PredictionLoop:
       log.warning("Auto-retrain skipped: training already in progress")
       return
     log.info("Daily auto-retrain starting")
-    threading.Thread(target=self.train_model, daemon=True).start()
+    threading.Thread(target=self.train_model, kwargs={"asset": "btc"}, daemon=True).start()
     if self.cfg.get("hourly", {}).get("enabled", True):
-      threading.Thread(target=self.train_hourly_model, daemon=True).start()
+      threading.Thread(target=self.train_hourly_model, kwargs={"asset": "btc"}, daemon=True).start()
     if self.cfg.get("second_chance", {}).get("enabled", True):
-      threading.Thread(target=self.train_second_chance_model, daemon=True).start()
+      threading.Thread(target=self.train_second_chance_model, kwargs={"asset": "btc"}, daemon=True).start()
+    if asset_enabled(self.cfg, "eth"):
+      threading.Thread(target=self.train_eth_model, daemon=True).start()
+      if (self._eth_cfg or {}).get("hourly", {}).get("enabled", True):
+        threading.Thread(target=self.train_eth_hourly_model, daemon=True).start()
+      if (self._eth_cfg or {}).get("second_chance", self.cfg.get("second_chance", {})).get("enabled", True):
+        threading.Thread(target=self.train_eth_second_chance_model, daemon=True).start()
+
+  def run_bot_auto_tuning(self) -> dict[str, Any]:
+    """Tune bot entry thresholds from paper trade logs when enough history exists."""
+    from src.trading.bot_auto_tuning import auto_tune_cfg, run_auto_tune_for_store
+
+    tune_cfg = auto_tune_cfg(self.cfg)
+    if not tune_cfg["enabled"]:
+      return {"ok": False, "reason": "auto_tune_disabled"}
+
+    results: list[dict[str, Any]] = []
+    specs = (
+      ("hourly", "btc", self.hourly_bot_store("btc"), self.cfg),
+      ("hourly", "eth", self.hourly_bot_store("eth"), self._eth_cfg or self.cfg),
+      ("slot15", "btc", self.slot15_bot_store("btc"), self._acfg_15m("btc")),
+      ("slot15", "eth", self.slot15_bot_store("eth"), self._acfg_15m("eth")),
+    )
+    for kind, asset, store, acfg in specs:
+      if asset == "eth" and kind == "slot15" and not self._slot15m_enabled("eth"):
+        continue
+      try:
+        out = run_auto_tune_for_store(store, cfg=acfg, kind=kind)
+        out["kind"] = kind
+        out["asset"] = asset
+        results.append(out)
+        if out.get("reason") == "tuned":
+          log.info(
+            "%s %s bot auto-tuned: ask-edge=%s¢ kelly=%s — %s",
+            asset.upper(),
+            kind,
+            out.get("min_ask_edge_cents"),
+            out.get("kelly_fraction"),
+            out.get("message"),
+          )
+      except Exception as e:
+        log.warning("%s %s bot auto-tune failed: %s", asset.upper(), kind, e)
+        results.append({"ok": False, "kind": kind, "asset": asset, "error": str(e)})
+
+    return {"ok": True, "bots": results, "tuned_at": datetime.now(timezone.utc).isoformat()}
 
   def _schedule_hourly(self, scheduler) -> None:
     if self.cfg.get("hourly", {}).get("enabled", True):
@@ -1950,6 +2097,17 @@ class PredictionLoop:
         max_instances=1,
       )
       log.info("Auto-train scheduled daily at %02d:%02d %s from %s", int(acfg.get("hour", 2)), int(acfg.get("minute", 0)), self.tz, first.isoformat())
+    tune_cfg = self.cfg.get("bot_auto_tune") or {}
+    if tune_cfg.get("enabled", True):
+      tune_hour = int(tune_cfg.get("hour", 3))
+      tune_minute = int(tune_cfg.get("minute", 0))
+      scheduler.add_job(
+        self.run_bot_auto_tuning,
+        CronTrigger(hour=str(tune_hour), minute=str(tune_minute), timezone=self.tz),
+        id="bot_auto_tune",
+        max_instances=1,
+      )
+      log.info("Bot auto-tune scheduled daily at %02d:%02d %s", tune_hour, tune_minute, self.tz)
     poll_sec = float(self.cfg.get("kalshi", {}).get("brti_poll_sec", 1))
     scheduler.add_job(self.poll_brti, "interval", seconds=poll_sec, id="brti_poll", max_instances=1)
     scheduler.add_job(self.poll_brti, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=1), id="brti_now")

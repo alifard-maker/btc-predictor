@@ -257,6 +257,20 @@ auto_train:
   hour: 2
   minute: 0
 
+# Paper bot threshold auto-tuning from trade logs (requires min_days history)
+bot_auto_tune:
+  enabled: true
+  hour: 3
+  minute: 0
+  min_days: 7
+  min_closed_trades: 15
+  min_ask_edge_floor: 3
+  min_ask_edge_ceiling: 15
+  kelly_floor: 0.05
+  kelly_ceiling: 0.25
+  ask_edge_step: 1
+  kelly_step: 0.02
+
 # Ethereum — 15m slots (KXETH15M) + hourly (KXETHD/KXETH), CF Benchmarks ERTI
 eth:
   enabled: true
@@ -293,6 +307,11 @@ eth:
     log_minute: 5
     late_call_minute: 45
     min_train_samples: 500
+    train_test_split: 0.2
+    model_type: lightgbm
+    calibrate: true
+    calibration_min_resolved: 30
+    use_15m_aggregate: true
     fetch_candles_1h: 720
     blend:
       ml_weight: 0.6

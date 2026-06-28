@@ -793,6 +793,13 @@ def bots_performance_report(_: None = Depends(_session_user)):
   return build_all_bots_performance_report(_loop)
 
 
+@app.post("/api/admin/bots/auto-tune")
+def admin_bots_auto_tune(_: None = Depends(_verify_admin)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.run_bot_auto_tuning()
+
+
 @app.get("/api/eth/hourly/bot")
 def eth_hourly_bot_status(_: None = Depends(_session_user)):
   if _loop is None:

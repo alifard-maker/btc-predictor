@@ -178,6 +178,9 @@ class HourlyBotStore:
 
     migrate_paper_state(conn)
     migrate_bot_runtime(conn)
+    from src.trading.bot_tuning_store import migrate_auto_tuning
+
+    migrate_auto_tuning(conn)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_trades)").fetchall()}
     if cols and "action" not in cols:
       conn.execute("ALTER TABLE bot_trades ADD COLUMN action TEXT NOT NULL DEFAULT 'enter'")
@@ -209,6 +212,18 @@ class HourlyBotStore:
           "INSERT INTO bot_settings (id, json) VALUES (1, ?)",
           (json.dumps(HourlyBotSettings().to_dict()),),
         )
+
+  def get_auto_tuning(self) -> dict[str, Any]:
+    from src.trading.bot_tuning_store import get_auto_tuning
+
+    with self._connect() as conn:
+      return get_auto_tuning(conn)
+
+  def save_auto_tuning(self, tuning: dict[str, Any]) -> dict[str, Any]:
+    from src.trading.bot_tuning_store import save_auto_tuning
+
+    with self._connect() as conn:
+      return save_auto_tuning(conn, tuning)
 
   def get_settings(self) -> HourlyBotSettings:
     with self._connect() as conn:

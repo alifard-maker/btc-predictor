@@ -224,7 +224,7 @@
 
     <details class="card" id="bot-performance-card" open>
       <summary style="cursor:pointer;font-weight:600">Paper bot performance · calibration report</summary>
-      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Win rate and avg P&amp;L from closed paper round-trips, bucketed by entry price and spread. Use this before loosening filters — entries now gate on <strong>ask-edge</strong> (model prob − ask implied).</p>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Win rate and avg P&amp;L from closed paper round-trips. After <strong>7+ days</strong> and <strong>15+ closed trades</strong>, bots auto-tune ask-edge and Kelly from this log (daily ~3 AM ET). Entries gate on <strong>ask-edge</strong> (model prob − ask implied).</p>
       <div id="bot-performance-report"><p class="muted">Loading…</p></div>
     </details>
 
@@ -255,7 +255,7 @@
           <div class="guide-tab-box">
             <h4>ETH Hourly</h4>
             <p>Same layout as BTC Hourly for <strong>KXETHD</strong> / <strong>KXETH</strong>. Settlement index is <strong>ERTI</strong> (CF Benchmarks Ethereum RTI).</p>
-            <p>Hour-open at <strong>:00 ET</strong>, official lock at <strong>:05 ET</strong>. Forecast is <strong>structure-only</strong> today (no ETH ML blend yet) — bands can look very peaked.</p>
+            <p>Hour-open at <strong>:00 ET</strong>, official lock at <strong>:05 ET</strong>. Same ML + structure blend as BTC hourly (trained on ETH candles nightly). Paper bot thresholds auto-tune after 7+ days of trades.</p>
           </div>
         </div>
 
@@ -2373,10 +2373,15 @@
         const sm = bot.summary || {};
         const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
         const gate = bot.gates?.min_ask_edge_cents;
+        const tune = bot.auto_tuning || {};
+        const tuneLine = tune.active
+          ? `<p class="muted" style="font-size:.68rem;margin:0 0 .35rem">Auto-tuned: ask-edge <strong>${tune.min_ask_edge_cents}¢</strong>, Kelly <strong>${tune.kelly_fraction}</strong>${tune.base_min_ask_edge_cents != null ? ` (config ${tune.base_min_ask_edge_cents}¢)` : ''} — ${tune.message || ''}</p>`
+          : (tune.message ? `<p class="muted" style="font-size:.68rem;margin:0 0 .35rem">${tune.message}</p>` : '');
         const recs = (bot.recommendations || []).map((t) => `<li>${t}</li>`).join('');
         html += `<div class="perf-bot-block">
           <p style="margin:0 0 .35rem;font-weight:600">${bot.label || `${bot.asset} ${bot.kind}`}
             <span class="muted" style="font-weight:400;font-size:.72rem"> · ask-edge gate ≥ ${gate ?? '—'}¢</span></p>
+          ${tuneLine}
           <div class="perf-grid">
             <div class="perf-stat muted">Closed<strong>${sm.closed_trades ?? 0}</strong></div>
             <div class="perf-stat muted">Win rate<strong>${wr}</strong></div>

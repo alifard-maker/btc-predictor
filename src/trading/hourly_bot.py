@@ -14,10 +14,10 @@ from src.trading.bot_profit_exit import (
   position_hold_seconds,
 )
 from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
+from src.trading.bot_auto_tuning import effective_entry_strategy
 from src.trading.entry_strategy import (
   correlation_block_reason,
   entry_budget_usd,
-  entry_strategy_from_cfg,
   passes_ask_edge_gate,
   rank_hourly_candidates,
 )
@@ -557,7 +557,7 @@ class HourlyBot:
       self.store.set_last_skip_reason("no_buy_yes_no_candidates")
       return results
 
-    estrat = entry_strategy_from_cfg(cfg, kind="hourly")
+    estrat = effective_entry_strategy(cfg, kind="hourly", tuning=self.store.get_auto_tuning())
     ranked = rank_hourly_candidates(candidates, estrat=estrat)
     if not ranked:
       self.store.set_last_skip_reason("no_buy_yes_no_candidates")

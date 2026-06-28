@@ -238,7 +238,7 @@ def build_combined_report(bot_reports: list[dict[str, Any]]) -> dict[str, Any]:
 
 def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
   """Collect all four paper bot stores from PredictionLoop."""
-  from src.trading.entry_strategy import entry_strategy_from_cfg
+  from src.trading.bot_auto_tuning import effective_entry_strategy
 
   reports: list[dict[str, Any]] = []
   specs = (
@@ -254,16 +254,17 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
           continue
       except Exception:
         pass
-    estrat = entry_strategy_from_cfg(acfg, kind=kind)
+    tuning = store.get_auto_tuning()
+    estrat = effective_entry_strategy(acfg, kind=kind, tuning=tuning)
     trades = store.list_trades(limit=5000)
-    reports.append(
-      build_bot_performance_report(
-        kind=kind,
-        asset=asset,
-        trades=trades,
-        min_ask_edge_cents=float(getattr(estrat, "min_ask_edge_cents", 8)),
-      )
+    report = build_bot_performance_report(
+      kind=kind,
+      asset=asset,
+      trades=trades,
+      min_ask_edge_cents=float(getattr(estrat, "min_ask_edge_cents", 8)),
     )
+    report["auto_tuning"] = tuning
+    reports.append(report)
 
   return {
     "ok": True,

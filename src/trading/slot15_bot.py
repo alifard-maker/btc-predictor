@@ -14,7 +14,8 @@ from src.trading.bot_profit_exit import (
   position_hold_seconds,
 )
 from src.trading.edge import Signal
-from src.trading.entry_strategy import entry_budget_usd, entry_strategy_from_cfg, passes_ask_edge_gate
+from src.trading.bot_auto_tuning import effective_entry_strategy
+from src.trading.entry_strategy import entry_budget_usd, passes_ask_edge_gate
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
@@ -573,7 +574,7 @@ class Slot15Bot:
       pred = tab.get("prediction") or {}
       prob_up = float(pred.get("prob_up", 0.5))
       pick_kelly = {**pick, "model_prob": prob_up}
-      estrat = entry_strategy_from_cfg(cfg, kind="slot15")
+      estrat = effective_entry_strategy(cfg, kind="slot15", tuning=self.store.get_auto_tuning())
       ok_edge, ask_edge = passes_ask_edge_gate(pick_kelly, side, estrat.min_ask_edge_cents)
       if not ok_edge:
         last_reason = f"ask_edge_too_low:{ask_edge:.0f}c"
