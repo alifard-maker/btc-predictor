@@ -15,6 +15,7 @@ PUBLIC_PATHS = frozenset({
   "/docs",
   "/openapi.json",
   "/redoc",
+  "/static/bot_settings_ui.js",
 })
 
 # Read-only dashboard APIs allowed with X-API-Key (same as /api/admin/*).
