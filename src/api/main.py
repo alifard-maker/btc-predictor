@@ -580,8 +580,6 @@ def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
   )
   if settings.max_spend_per_hour_usd < 0:
     raise HTTPException(400, "max_spend_per_hour_usd must be >= 0")
-  if not settings.allow_strong and not settings.allow_actionable:
-    raise HTTPException(400, "Enable at least one of STRONG or ACTIONABLE")
   store.save_settings(settings)
   return settings.to_dict()
 

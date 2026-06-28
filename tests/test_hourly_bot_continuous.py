@@ -94,7 +94,24 @@ def test_no_enter_when_regime_weak_and_not_actionable():
 
 
 def test_bet_qualifies_respects_toggles():
-  assert bet_qualifies(_strong_bet(), HourlyBotSettings(enabled=True, allow_strong=True, allow_actionable=False))
+  pick = {"signal": "BUY YES", "ticker": "T1", "kalshi_mid": 0.4, "edge": 0.02}
+  weak_bet = {"actionable_bet": False, "actionable_tone": "weak"}
+  assert bet_qualifies(pick, _strong_bet(), HourlyBotSettings(enabled=True, allow_strong=True, allow_actionable=False))
+  assert bet_qualifies(pick, weak_bet, HourlyBotSettings(enabled=True, allow_strong=False, allow_actionable=False))
+
+
+def test_free_mode_enters_without_actionable_assessment():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(regime_allow=False)
+    tab["live"]["regime"] = {"allow_trade": False, "reasons": ["compressed"]}
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {}, "intrahour": {"enabled": False}}})
+    assert len(actions) == 1
+    assert actions[0]["action"] == "enter"
 
 
 def test_trade_log_entry_and_exit_prices():

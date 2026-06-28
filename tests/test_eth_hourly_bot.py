@@ -18,12 +18,13 @@ def _strong_bet():
 
 
 def test_bet_qualifies_strong_and_actionable():
+  pick = {"signal": "BUY YES"}
   strong_only = HourlyBotSettings(enabled=True, allow_strong=True, allow_actionable=False)
-  assert bet_qualifies(_strong_bet(), strong_only)
+  assert bet_qualifies(pick, _strong_bet(), strong_only)
 
   actionable_only = HourlyBotSettings(enabled=True, allow_strong=False, allow_actionable=True)
   moderate = {**_strong_bet(), "actionable_tone": "moderate"}
-  assert bet_qualifies(moderate, actionable_only)
+  assert bet_qualifies(pick, moderate, actionable_only)
 
 
 def test_contracts_for_budget():

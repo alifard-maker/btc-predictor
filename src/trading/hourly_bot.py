@@ -15,9 +15,18 @@ from src.trading.hourly_position_alert import assess_hourly_position_alert
 log = logging.getLogger(__name__)
 
 
-def bet_qualifies(bet_assessment: dict[str, Any] | None, settings: HourlyBotSettings) -> bool:
+def bet_qualifies(
+  pick: dict[str, Any],
+  bet_assessment: dict[str, Any] | None,
+  settings: HourlyBotSettings,
+) -> bool:
   if not settings.enabled:
     return False
+  if not is_actionable_buy(pick.get("signal")):
+    return False
+  # Both filters off = free mode: trade any explicit BUY YES/NO within budget.
+  if not settings.allow_strong and not settings.allow_actionable:
+    return True
   if not bet_assessment or not bet_assessment.get("actionable_bet"):
     return False
   tone = bet_assessment.get("actionable_tone")
@@ -256,7 +265,7 @@ class HourlyBot:
     remaining = self.store.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd)
 
     for _score, pick, bet in _entry_candidates(tab, cfg):
-      if not bet_qualifies(bet, settings):
+      if not bet_qualifies(pick, bet, settings):
         continue
 
       market_ticker = str(pick["ticker"])
