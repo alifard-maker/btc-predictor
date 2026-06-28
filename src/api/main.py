@@ -605,7 +605,7 @@ async def hourly_bot_settings(request: Request, _: None = Depends(require_sessio
 
 @app.get("/api/hourly/bot/trades")
 def hourly_bot_trades(
-  limit: int = Query(default=30, le=100),
+  limit: int = Query(default=100, le=200),
   event_ticker: str | None = Query(default=None),
   _: None = Depends(require_session),
 ):
@@ -640,7 +640,7 @@ async def eth_hourly_bot_settings(request: Request, _: None = Depends(require_se
 
 @app.get("/api/eth/hourly/bot/trades")
 def eth_hourly_bot_trades(
-  limit: int = Query(default=30, le=100),
+  limit: int = Query(default=100, le=200),
   event_ticker: str | None = Query(default=None),
   _: None = Depends(require_session),
 ):

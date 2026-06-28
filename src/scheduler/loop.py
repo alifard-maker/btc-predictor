@@ -256,8 +256,10 @@ class PredictionLoop:
     status = self.hourly_bot_store(asset).status(event_ticker)
     status["ok"] = True
     status["asset"] = asset
-    status["recent_trades"] = self.hourly_bot_store(asset).list_trades(
-      limit=50, event_ticker=event_ticker
+    store = self.hourly_bot_store(asset)
+    status["recent_trades"] = store.list_trades(limit=100)
+    status["hour_trades"] = (
+      store.list_trades(limit=50, event_ticker=event_ticker) if event_ticker else []
     )
     kalshi = self._kalshi_for(asset)
     status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)

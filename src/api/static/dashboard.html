@@ -187,7 +187,7 @@
     .switch input:checked + .slider { background:#a855f7; }
     .switch input:checked + .slider:before { transform:translateX(20px); }
     .bot-label { font-size:.78rem; color:var(--muted); margin-right:.35rem; }
-    .bot-trades { font-size:.72rem; margin-top:.65rem; max-height:140px; overflow-y:auto; }
+    .bot-trades { font-size:.72rem; margin-top:.65rem; max-height:240px; overflow-y:auto; }
     .bot-trades tr td { padding:.25rem .35rem; border-bottom:1px solid var(--border); }
     .bot-mode-live { color:#f87171; font-weight:700; }
     .bot-mode-paper { color:#86efac; font-weight:700; }
@@ -1816,6 +1816,7 @@
       const realized = hs.realized_pnl_usd ?? 0;
       const pnlCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
       const eventLabel = bot.event_ticker ? `<span class="muted" style="font-size:.68rem">${bot.event_ticker}</span>` : '';
+      const currentEvent = bot.event_ticker || '';
       const trades = (bot.recent_trades || []).map((t) => {
         const st = t.status === 'filled' ? 'up' : t.status === 'skipped' ? 'muted' : 'down';
         const act = t.action || 'enter';
@@ -1823,8 +1824,11 @@
         const exitC = t.exit_price_cents;
         const pnlCell = act === 'exit' ? botPnlUsd(t.realized_pnl_usd ?? t.pnl_usd) : '—';
         const mkt = t.label || t.market_ticker || '—';
+        const evt = t.event_ticker || '—';
+        const evtCls = evt === currentEvent ? '' : 'muted';
         return `<tr>
           <td>${time(t.created_at)}</td>
+          <td class="${evtCls}" style="font-size:.65rem">${evt}</td>
           <td>${act}</td>
           <td class="${st}">${t.status}</td>
           <td style="font-size:.68rem">${mkt}</td>
@@ -1834,11 +1838,14 @@
           <td style="font-size:.68rem">${t.detail || ''}</td>
         </tr>`;
       }).join('');
+      const emptyLog = s.enabled
+        ? `No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~60s on the server.`
+        : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
       statusWrap.innerHTML = `
         <div class="bot-row" style="margin-top:.35rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
-          <div class="bot-stat"><span class="muted">Hour interval ${eventLabel}</span><strong class="${pnlCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)} realized</strong></div>
-          <div class="bot-stat"><span class="muted">Enters / Exits</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
-          <div class="bot-stat"><span class="muted">Capital deployed</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Current hour ${eventLabel}</span><strong class="${pnlCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)} realized</strong></div>
+          <div class="bot-stat"><span class="muted">Enters / Exits (hour)</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted">Capital deployed (hour)</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
@@ -1847,7 +1854,8 @@
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
-        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~60s on the server (not on dashboard refresh).</p>`}
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log is kept permanently — not cleared when Auto-bet or filters change.</p>
+        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Hour</th><th>Action</th><th>Status</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
       `;
     }
 

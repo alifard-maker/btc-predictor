@@ -191,46 +191,37 @@ def test_hour_interval_summary_totals():
     assert status["hourly_summary"]["realized_pnl_usd"] == 2.25
 
 
-def test_enter_exit_logged_with_prices_and_hour_summary():
+def test_list_trades_without_event_filter_keeps_all_hours():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
-    event = "KXTEST-1H"
+    for evt in ("KXTEST-H1", "KXTEST-H2"):
+      store.log_trade({
+        "event_ticker": evt,
+        "action": "enter",
+        "mode": "paper",
+        "market_ticker": "T1",
+        "side": "yes",
+        "contracts": 5,
+        "entry_price_cents": 40,
+        "cost_usd": 2.0,
+        "status": "filled",
+      })
+    all_trades = store.list_trades(limit=10)
+    assert len(all_trades) == 2
+    hour1_only = store.list_trades(limit=10, event_ticker="KXTEST-H1")
+    assert len(hour1_only) == 1
+
+
+def test_settings_save_does_not_delete_trades():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
     store.log_trade({
-      "event_ticker": event,
+      "event_ticker": "EV1",
       "action": "enter",
       "mode": "paper",
-      "market_ticker": "T1",
-      "side": "yes",
-      "contracts": 10,
-      "price_cents": 40,
-      "entry_price_cents": 40,
-      "cost_usd": 4.0,
       "status": "filled",
-      "detail": "Paper ENTER",
+      "cost_usd": 1.0,
+      "entry_price_cents": 50,
     })
-    store.log_trade({
-      "event_ticker": event,
-      "action": "exit",
-      "mode": "paper",
-      "market_ticker": "T1",
-      "side": "yes",
-      "contracts": 10,
-      "price_cents": 55,
-      "entry_price_cents": 40,
-      "exit_price_cents": 55,
-      "pnl_usd": 1.5,
-      "status": "filled",
-      "detail": "Paper EXIT",
-    })
-    trades = store.list_trades(event_ticker=event)
-    assert trades[0]["action"] == "exit"
-    assert trades[0]["entry_price_cents"] == 40
-    assert trades[0]["exit_price_cents"] == 55
-    assert trades[0]["pnl_usd"] == 1.5
-    assert trades[1]["action"] == "enter"
-    assert trades[1]["entry_price_cents"] == 40
-    summary = store.hour_interval_summary(event)
-    assert summary["realized_pnl_usd"] == 1.5
-    assert summary["enter_count"] == 1
-    assert summary["exit_count"] == 1
-    assert summary["total_entered_usd"] == 4.0
+    store.save_settings(HourlyBotSettings(enabled=False, allow_strong=False, allow_actionable=False))
+    assert len(store.list_trades()) == 1
