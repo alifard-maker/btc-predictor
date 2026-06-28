@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.trading.hourly_bot import HourlyBot, bet_qualifies
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
+
+
+def _opened_at_seconds_ago(seconds: float) -> str:
+  return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
 
 
 def _strong_bet():
@@ -512,3 +517,88 @@ def test_enters_with_model_prob_when_kalshi_mid_missing():
     assert len(actions) == 1
     assert actions[0]["action"] == "enter"
     assert actions[0]["entry_price_cents"] == 65
+
+
+def test_profit_target_exit_on_hold_alert():
+  """30% mark gain on $10 leg exits at 25% threshold even when alert is HOLD."""
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=25.0,
+      take_profit_pct=0.25,
+      min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 40,
+      "cost_usd": 10.0,
+      "signal": "BUY YES",
+      "entry_edge": 0.12,
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab()
+    tab["live"]["primary_pick"]["kalshi_mid"] = 0.52
+    tab["live"]["primary_pick"]["edge"] = 0.12
+    tab["live"]["regime"] = {"allow_trade": True, "reasons": []}
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "PROFIT TARGET" in exits[0]["detail"]
+    assert exits[0]["pnl_usd"] == 3.0
+    assert store.open_exposure_usd("KXTEST-1H") == 0.0
+
+
+def test_profit_target_increases_hour_bankroll():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=25.0, take_profit_pct=0.25, min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 40,
+      "cost_usd": 10.0,
+      "signal": "BUY YES",
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab()
+    tab["live"]["primary_pick"]["kalshi_mid"] = 0.52
+    bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
+    assert store.realized_pnl_usd("KXTEST-1H") == 3.0
+    assert store.hour_bankroll_usd("KXTEST-1H", 25.0) == 28.0
+
+
+def test_no_exit_when_profit_below_threshold():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=25.0, take_profit_pct=0.25, min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 40,
+      "cost_usd": 10.0,
+      "signal": "BUY YES",
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab()
+    tab["live"]["primary_pick"]["kalshi_mid"] = 0.44
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
+    assert not any(a.get("action") == "exit" for a in actions)
+    assert len(store.open_positions("KXTEST-1H")) == 1

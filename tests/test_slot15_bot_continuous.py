@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.trading.slot15_bot import Slot15Bot, bet_qualifies
 from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
+
+
+def _opened_at_seconds_ago(seconds: float) -> str:
+  return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
 
 
 def _strong_bet():
@@ -316,3 +321,86 @@ def test_manual_reenable_after_slot_auto_stop():
     actions = bot.run_continuous_cycle(_live_tab(slot_key="SLOT1"))
     assert any(a.get("action") == "enter" for a in actions)
     assert store.get_settings().enabled
+
+
+def test_profit_target_exit_on_hold_monitor():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    slot_key = "2025-06-28T14:00:00-04:00"
+    store.save_settings(Slot15BotSettings(
+      enabled=True, max_spend_per_slot_usd=25.0, take_profit_pct=0.25, min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": slot_key,
+      "market_ticker": "KXBTC15M-TEST",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 40,
+      "cost_usd": 10.0,
+      "signal": "LONG",
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab(slot_key=slot_key)
+    tab["monitor"]["action"] = "HOLD"
+    tab["kalshi"]["yes_mid"] = 0.52
+    actions = bot.run_continuous_cycle(tab)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "PROFIT TARGET" in exits[0]["detail"]
+    assert exits[0]["pnl_usd"] == 3.0
+
+
+def test_profit_target_increases_slot_bankroll():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    slot_key = "2025-06-28T14:00:00-04:00"
+    store.save_settings(Slot15BotSettings(
+      enabled=True, max_spend_per_slot_usd=25.0, take_profit_pct=0.25, min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": slot_key,
+      "market_ticker": "KXBTC15M-TEST",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 40,
+      "cost_usd": 10.0,
+      "signal": "LONG",
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab(slot_key=slot_key)
+    tab["monitor"]["action"] = "HOLD"
+    tab["kalshi"]["yes_mid"] = 0.52
+    bot.run_continuous_cycle(tab)
+    assert store.realized_pnl_usd(slot_key) == 3.0
+    assert store.slot_bankroll_usd(slot_key, 25.0) == 28.0
+
+
+def test_no_exit_when_profit_below_threshold_slot15():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    slot_key = "2025-06-28T14:00:00-04:00"
+    store.save_settings(Slot15BotSettings(
+      enabled=True, max_spend_per_slot_usd=25.0, take_profit_pct=0.25, min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": slot_key,
+      "market_ticker": "KXBTC15M-TEST",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 40,
+      "cost_usd": 10.0,
+      "signal": "LONG",
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab(slot_key=slot_key)
+    tab["monitor"]["action"] = "HOLD"
+    tab["kalshi"]["yes_mid"] = 0.44
+    actions = bot.run_continuous_cycle(tab)
+    assert not any(a.get("action") == "exit" for a in actions)
+    assert len(store.open_positions(slot_key)) == 1

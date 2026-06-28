@@ -596,6 +596,14 @@ def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
     "max_spend_per_hour_usd": float(body.get("max_spend_per_hour_usd", current.max_spend_per_hour_usd)),
     "allow_strong": bool(body.get("allow_strong", current.allow_strong)),
     "allow_actionable": bool(body.get("allow_actionable", current.allow_actionable)),
+    "take_profit_enabled": bool(body.get("take_profit_enabled", current.take_profit_enabled)),
+    "take_profit_pct": float(body.get("take_profit_pct", current.take_profit_pct)),
+    "take_profit_usd": float(body.get("take_profit_usd", current.take_profit_usd)),
+    "min_hold_seconds": int(body.get("min_hold_seconds", current.min_hold_seconds)),
+    "profit_exit_cooldown_seconds": int(
+      body.get("profit_exit_cooldown_seconds", current.profit_exit_cooldown_seconds)
+    ),
+    "reentry_cooldown_seconds": int(body.get("reentry_cooldown_seconds", current.reentry_cooldown_seconds)),
     "auto_stop_on_budget_exhausted": bool(
       body.get("auto_stop_on_budget_exhausted", current.auto_stop_on_budget_exhausted)
     ),
@@ -628,6 +636,14 @@ def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
     "max_spend_per_slot_usd": float(body.get("max_spend_per_slot_usd", current.max_spend_per_slot_usd)),
     "allow_strong": bool(body.get("allow_strong", current.allow_strong)),
     "allow_actionable": bool(body.get("allow_actionable", current.allow_actionable)),
+    "take_profit_enabled": bool(body.get("take_profit_enabled", current.take_profit_enabled)),
+    "take_profit_pct": float(body.get("take_profit_pct", current.take_profit_pct)),
+    "take_profit_usd": float(body.get("take_profit_usd", current.take_profit_usd)),
+    "min_hold_seconds": int(body.get("min_hold_seconds", current.min_hold_seconds)),
+    "profit_exit_cooldown_seconds": int(
+      body.get("profit_exit_cooldown_seconds", current.profit_exit_cooldown_seconds)
+    ),
+    "reentry_cooldown_seconds": int(body.get("reentry_cooldown_seconds", current.reentry_cooldown_seconds)),
     "auto_stop_on_budget_exhausted": bool(
       body.get("auto_stop_on_budget_exhausted", current.auto_stop_on_budget_exhausted)
     ),

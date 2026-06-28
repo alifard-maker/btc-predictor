@@ -6,6 +6,11 @@ import logging
 import uuid
 from typing import Any
 
+from src.trading.bot_profit_exit import (
+  position_hold_seconds,
+  profit_target_detail,
+  should_take_profit_target,
+)
 from src.trading.edge import Signal
 from src.trading.slot15_bet_assessment import assess_slot15_bet
 from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
@@ -24,9 +29,6 @@ _ACTIONABLE_SHORT = frozenset({
   "LATE SHORT",
   "FLIP SHORT",
 })
-_EXIT_ACTIONS = frozenset({"TAKE PROFIT", "CUT LOSS"})
-
-
 def is_actionable_long(signal: str | None) -> bool:
   return str(signal or "") in _ACTIONABLE_LONG
 
@@ -301,6 +303,31 @@ class Slot15Bot:
     log.warning("%s 15m bot auto-stopped: %s", self.asset.upper(), detail)
     return row
 
+  def _resolve_exit(
+    self,
+    pos: dict[str, Any],
+    monitor_action: str,
+    monitor_message: str,
+    unrealized: float | None,
+    settings: Slot15BotSettings,
+  ) -> tuple[str | None, str]:
+    if monitor_action == "TAKE PROFIT" and _should_paper_exit(monitor_action, unrealized):
+      return "TAKE PROFIT", monitor_message
+    if monitor_action in ("CUT LOSS", "CUT LOSSES") and _should_paper_exit(monitor_action, unrealized):
+      return "CUT LOSSES", monitor_message
+    if should_take_profit_target(
+      enabled=settings.take_profit_enabled,
+      unrealized_usd=unrealized,
+      cost_usd=float(pos.get("cost_usd") or 0),
+      take_profit_pct=settings.take_profit_pct,
+      take_profit_usd=settings.take_profit_usd,
+      min_hold_seconds=settings.min_hold_seconds,
+      hold_seconds=position_hold_seconds(pos),
+    ):
+      assert unrealized is not None
+      return "PROFIT TARGET", profit_target_detail(unrealized, float(pos.get("cost_usd") or 0))
+    return None, ""
+
   def _process_exits(
     self,
     tab: dict[str, Any],
@@ -310,9 +337,7 @@ class Slot15Bot:
     monitor = tab.get("monitor") or {}
     kalshi = tab.get("kalshi") or {}
     action = str(monitor.get("action") or "")
-    if action not in _EXIT_ACTIONS:
-      return []
-
+    message = str(monitor.get("message") or "")
     yes_cents = _yes_mid_cents(kalshi)
     results: list[dict[str, Any]] = []
 
@@ -322,7 +347,10 @@ class Slot15Bot:
         exit_price = pos["entry_price_cents"]
 
       unrealized = _unrealized_pnl_usd(pos, exit_price)
-      if not _should_paper_exit(action, unrealized):
+      exit_reason, detail_suffix = self._resolve_exit(
+        pos, action, message, unrealized, settings
+      )
+      if not exit_reason:
         continue
 
       entry_c = int(pos["entry_price_cents"])
@@ -333,10 +361,9 @@ class Slot15Bot:
         pnl = contracts * (entry_c - exit_price) / 100.0
 
       self.store.close_position(pos["id"])
-      alert_label = "TAKE PROFIT" if action == "TAKE PROFIT" else "CUT LOSSES"
       detail = (
-        f"Paper EXIT ({alert_label}): {pos['side'].upper()} ×{contracts} "
-        f"@ {exit_price}¢ (entry {entry_c}¢) — {monitor.get('message', '')}"
+        f"Paper EXIT ({exit_reason}): {pos['side'].upper()} ×{contracts} "
+        f"@ {exit_price}¢ (entry {entry_c}¢) — {detail_suffix}"
       )
       row = self.store.log_trade({
         "event_ticker": slot_key,
@@ -358,7 +385,14 @@ class Slot15Bot:
         "position_id": pos["id"],
       })
       log.info("%s 15m bot [paper exit]: %s", self.asset.upper(), detail)
-      self.store.record_exit_cooldown(slot_key, pos["market_ticker"])
+      cooldown = (
+        settings.profit_exit_cooldown_seconds
+        if exit_reason == "PROFIT TARGET"
+        else settings.reentry_cooldown_seconds
+      )
+      self.store.record_exit_cooldown(
+        slot_key, pos["market_ticker"], cooldown_seconds=cooldown
+      )
       results.append(row)
 
     return results

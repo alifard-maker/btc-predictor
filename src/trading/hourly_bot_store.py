@@ -20,6 +20,11 @@ class HourlyBotSettings:
   allow_actionable: bool = True
   continuous: bool = True
   reentry_cooldown_seconds: int = 120
+  take_profit_enabled: bool = True
+  take_profit_pct: float = 0.25
+  take_profit_usd: float = 0.0
+  min_hold_seconds: int = 30
+  profit_exit_cooldown_seconds: int = 60
   auto_stop_on_budget_exhausted: bool = True
   auto_stopped: bool = False
 
@@ -38,6 +43,11 @@ class HourlyBotSettings:
       allow_actionable=bool(raw.get("allow_actionable", True)),
       continuous=bool(raw.get("continuous", True)),
       reentry_cooldown_seconds=int(raw.get("reentry_cooldown_seconds", 120)),
+      take_profit_enabled=bool(raw.get("take_profit_enabled", True)),
+      take_profit_pct=float(raw.get("take_profit_pct", 0.25)),
+      take_profit_usd=float(raw.get("take_profit_usd", 0.0)),
+      min_hold_seconds=int(raw.get("min_hold_seconds", 30)),
+      profit_exit_cooldown_seconds=int(raw.get("profit_exit_cooldown_seconds", 60)),
       auto_stop_on_budget_exhausted=bool(raw.get("auto_stop_on_budget_exhausted", True)),
       auto_stopped=bool(raw.get("auto_stopped", False)),
     )
@@ -139,6 +149,9 @@ class HourlyBotStore:
       conn.execute("ALTER TABLE bot_trades ADD COLUMN entry_price_cents INTEGER")
     if cols and "exit_price_cents" not in cols:
       conn.execute("ALTER TABLE bot_trades ADD COLUMN exit_price_cents INTEGER")
+    cd_cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_cooldowns)").fetchall()}
+    if cd_cols and "cooldown_seconds" not in cd_cols:
+      conn.execute("ALTER TABLE bot_cooldowns ADD COLUMN cooldown_seconds INTEGER")
 
   def _init_db(self) -> None:
     with self._connect() as conn:
@@ -194,33 +207,39 @@ class HourlyBotStore:
     market_ticker: str,
     *,
     exited_at: str | None = None,
+    cooldown_seconds: int | None = None,
   ) -> None:
     now = exited_at or datetime.now(timezone.utc).isoformat()
     with self._connect() as conn:
       conn.execute(
         """
-        INSERT INTO bot_cooldowns (event_ticker, market_ticker, exited_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(event_ticker, market_ticker) DO UPDATE SET exited_at = excluded.exited_at
+        INSERT INTO bot_cooldowns (event_ticker, market_ticker, exited_at, cooldown_seconds)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(event_ticker, market_ticker) DO UPDATE SET
+          exited_at = excluded.exited_at,
+          cooldown_seconds = excluded.cooldown_seconds
         """,
-        (event_ticker, market_ticker, now),
+        (event_ticker, market_ticker, now, cooldown_seconds),
       )
 
   def is_in_cooldown(self, event_ticker: str, market_ticker: str, cooldown_seconds: int) -> bool:
-    if cooldown_seconds <= 0:
-      return False
     with self._connect() as conn:
       row = conn.execute(
-        "SELECT exited_at FROM bot_cooldowns WHERE event_ticker = ? AND market_ticker = ?",
+        "SELECT exited_at, cooldown_seconds FROM bot_cooldowns WHERE event_ticker = ? AND market_ticker = ?",
         (event_ticker, market_ticker),
       ).fetchone()
     if not row:
+      return False
+    effective = row["cooldown_seconds"]
+    if effective is None:
+      effective = cooldown_seconds
+    if int(effective) <= 0:
       return False
     exited_at = datetime.fromisoformat(str(row["exited_at"]).replace("Z", "+00:00"))
     if exited_at.tzinfo is None:
       exited_at = exited_at.replace(tzinfo=timezone.utc)
     elapsed = (datetime.now(timezone.utc) - exited_at).total_seconds()
-    return elapsed < float(cooldown_seconds)
+    return elapsed < float(effective)
 
   def has_open_position(self, event_ticker: str, market_ticker: str) -> bool:
     with self._connect() as conn:
