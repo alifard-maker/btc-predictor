@@ -33,6 +33,20 @@ def floor_to_15m(ts: datetime | pd.Timestamp, tz_name: str = DEFAULT_TZ) -> pd.T
   return floored.tz_convert("UTC")
 
 
+def slot_times_match(
+  pred_slot: datetime | pd.Timestamp | None,
+  monitor_slot_key: str | pd.Timestamp | None,
+  tz_name: str = DEFAULT_TZ,
+) -> bool:
+  """True when prediction slot_start aligns with monitor slot_start (ISO or Timestamp)."""
+  if pred_slot is None or not monitor_slot_key:
+    return False
+  try:
+    return floor_to_15m(pred_slot, tz_name) == floor_to_15m(pd.Timestamp(monitor_slot_key), tz_name)
+  except (TypeError, ValueError):
+    return False
+
+
 def slot_end(slot_start: datetime | pd.Timestamp, tz_name: str = DEFAULT_TZ) -> pd.Timestamp:
   return floor_to_15m(slot_start, tz_name) + FIFTEEN_MIN
 

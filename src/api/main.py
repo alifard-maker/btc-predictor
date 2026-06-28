@@ -211,6 +211,7 @@ def _serialize_records(df: pd.DataFrame) -> list[dict[str, Any]]:
 
 _DASHBOARD_HTML = Path(__file__).parent / "static" / "dashboard.html"
 _LOGIN_HTML = Path(__file__).parent / "static" / "login.html"
+_BOT_SETTINGS_UI_JS = Path(__file__).parent / "static" / "bot_settings_ui.js"
 
 
 @app.get("/")
@@ -241,6 +242,11 @@ async def auth_logout(request: Request):
 @app.get("/dashboard")
 def dashboard(request: Request, _: None = Depends(_session_user)):
   return FileResponse(_DASHBOARD_HTML, media_type="text/html")
+
+
+@app.get("/static/bot_settings_ui.js")
+def bot_settings_ui_js(_: None = Depends(_session_user)):
+  return FileResponse(_BOT_SETTINGS_UI_JS, media_type="application/javascript")
 
 
 def _volume_health_fields() -> dict[str, Any]:

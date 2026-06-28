@@ -117,3 +117,15 @@ def test_rejects_eth_hour_open_style_penny_yes_mispricing():
   assert fill["ok"] is True
   assert fill["price_cents"] == 99
   assert fill["contracts"] == 25
+
+
+def test_entry_accepts_wide_spread_with_custom_max():
+  fill = paper_entry_fill(
+    pick={"yes_bid": 0.01, "yes_ask": 0.40},
+    side="yes",
+    remaining_budget_usd=10.0,
+    max_spread_cents=40,
+  )
+  assert fill["ok"] is True
+  assert fill["skip_reason"] is None
+  assert fill["ask_cents"] - fill["bid_cents"] == 39

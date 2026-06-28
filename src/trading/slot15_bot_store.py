@@ -134,6 +134,7 @@ class Slot15BotStore:
     self.db_path.parent.mkdir(parents=True, exist_ok=True)
     self._last_period_key: str | None = None
     self._last_skip_reason: str | None = None
+    self._last_entry_attempt: dict[str, Any] | None = None
     self._position_peaks: dict[str, dict[str, float]] = {}
     self._init_db()
 
@@ -142,6 +143,12 @@ class Slot15BotStore:
 
   def last_skip_reason(self) -> str | None:
     return self._last_skip_reason
+
+  def set_last_entry_attempt(self, attempt: dict[str, Any] | None) -> None:
+    self._last_entry_attempt = attempt
+
+  def last_entry_attempt(self) -> dict[str, Any] | None:
+    return self._last_entry_attempt
 
   def record_cycle(self, *, active: bool) -> None:
     from src.trading.bot_runtime import record_bot_cycle
@@ -684,5 +691,6 @@ class Slot15BotStore:
       "auto_stopped": settings.auto_stopped,
       "auto_stop_reason": auto_stop_row.get("detail") if auto_stop_row else None,
       "last_skip_reason": self._last_skip_reason,
+      "last_entry_attempt": self._last_entry_attempt,
       "server_runtime": self.get_runtime(),
     }

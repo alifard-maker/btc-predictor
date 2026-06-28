@@ -88,6 +88,7 @@ intra_slot:
   bot:
     continuous_enabled: true
     poll_seconds: 5
+    paper_max_spread_cents: 40
     take_profit_enabled: true
     take_profit_mode: hybrid
     take_profit_pct: 0.25

@@ -23,7 +23,7 @@ from src.data.fetcher import DataFetcher
 from src.data.kalshi import KalshiClient, KalshiPriceQuote
 from src.data.storage import CandleStorage, HistoricalCollector
 from src.db.store import PredictionResolution
-from src.features.slots import current_slot_start, floor_to_15m, slot_end
+from src.features.slots import current_slot_start, floor_to_15m, slot_times_match, slot_end
 from src.logging.prediction_log import PredictionLogger
 from src.logging.postmortem_log import PostmortemLogger
 from src.models.predictor import Prediction, Predictor
@@ -369,6 +369,13 @@ class PredictionLoop:
       self._slot15_bots[asset] = Slot15Bot(store, kalshi_client=kalshi, asset=asset)
     return self._slot15_bots[asset]
 
+  def _slot_times_match(
+    self,
+    pred_slot: datetime | pd.Timestamp | None,
+    monitor_slot_key: str | pd.Timestamp | None,
+  ) -> bool:
+    return slot_times_match(pred_slot, monitor_slot_key, self.tz)
+
   def _slot15_tab(self, asset: str, reference_override: float | None = None) -> dict[str, Any]:
     """Live 15m tab payload for bot evaluation."""
     asset = asset.lower()
@@ -380,13 +387,20 @@ class PredictionLoop:
     monitor = self._slot_monitor_for_asset(asset, reference_override).to_dict()
     kalshi_summary = kalshi.active_market_summary()
     slot_key = monitor.get("slot_start")
+    bot_cfg = (acfg.get("intra_slot") or {}).get("bot") or {}
+    paper_max_spread_cents = int(bot_cfg.get("paper_max_spread_cents", 40))
 
     state = self._slot_state(asset)
     pred_obj = state["latest_prediction"]
     pred_dict: dict[str, Any] | None = None
     bet_assessment: dict[str, Any] | None = None
 
-    if pred_obj is not None:
+    pred_matches_slot = self._slot_times_match(
+      pred_obj.slot_start if pred_obj is not None else None,
+      slot_key,
+    )
+
+    if pred_obj is not None and pred_matches_slot:
       from src.trading.slot15_bet_assessment import assess_slot15_from_prediction
 
       ref = pred_obj.reference_price or pred_obj.price
@@ -428,6 +442,7 @@ class PredictionLoop:
       "monitor": monitor,
       "kalshi": kalshi_summary,
       "bet_assessment": bet_assessment,
+      "paper_max_spread_cents": paper_max_spread_cents,
     }
 
   def slot15_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -475,8 +490,25 @@ class PredictionLoop:
         "late_entry_action": monitor.get("late_entry_action") or "",
         "flip_action": monitor.get("flip_action") or "",
         "monitor_action": monitor.get("action"),
+        "last_entry_attempt": self.slot15_bot_store(asset).last_entry_attempt(),
       }
     return status
+
+  def _ensure_slot_prediction_current(self, asset: str) -> None:
+    """Refresh in-memory prediction when the active slot rolled but cron has not run yet."""
+    asset = asset.lower()
+    if asset == "eth" and not self._slot15m_enabled("eth"):
+      return
+    slot_key = floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz)
+    state = self._slot_state(asset)
+    pred = state["latest_prediction"]
+    if pred is not None and pred.slot_start is not None:
+      if floor_to_15m(pred.slot_start, self.tz) == slot_key:
+        return
+    try:
+      self._run_slot_prediction(asset)
+    except Exception as e:
+      log.warning("%s 15m: could not refresh slot prediction at rollover: %s", asset.upper(), e)
 
   def _run_slot15_bot_continuous(self, asset: str) -> None:
     asset = asset.lower()
@@ -490,6 +522,7 @@ class PredictionLoop:
         if not settings.enabled:
           store.set_last_skip_reason("auto_bet_off")
         return
+      self._ensure_slot_prediction_current(asset)
       tab = self._slot15_tab(asset)
       if tab.get("ok"):
         self.slot15_bot(asset).run_continuous_cycle(tab)

@@ -455,3 +455,66 @@ def test_profit_trail_exit_slot15():
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
     assert "PROFIT TRAIL" in exits[0]["detail"]
+
+
+def test_wide_spread_enters_with_tab_max_spread():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=10.0))
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab()
+    tab["kalshi"]["yes_bid"] = 0.01
+    tab["kalshi"]["yes_ask"] = 0.40
+    tab["paper_max_spread_cents"] = 40
+    actions = bot.run_continuous_cycle(tab)
+    assert len(actions) == 1
+    assert actions[0]["action"] == "enter"
+    assert actions[0]["entry_price_cents"] == 40
+
+
+def test_wide_spread_skipped_with_default_paper_max():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=10.0))
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab()
+    tab["kalshi"]["yes_bid"] = 0.01
+    tab["kalshi"]["yes_ask"] = 0.40
+    tab["paper_max_spread_cents"] = 15
+    actions = bot.run_continuous_cycle(tab)
+    assert actions == []
+    attempt = store.last_entry_attempt()
+    assert attempt is not None
+    assert attempt["skip_reason"] == "spread_too_wide"
+    assert attempt["bid_cents"] == 1
+    assert attempt["ask_cents"] == 40
+    assert attempt["spread_cents"] == 39
+    assert store.last_skip_reason() == "spread_too_wide"
+
+
+def test_slot_times_match_rejects_stale_prediction_slot():
+  import pandas as pd
+
+  from src.features.slots import slot_times_match
+
+  tz = "America/New_York"
+  stale_slot = pd.Timestamp("2025-06-28T13:45:00", tz=tz)
+  current_slot = "2025-06-28T14:00:00-04:00"
+  assert not slot_times_match(stale_slot, current_slot, tz)
+  assert slot_times_match(
+    pd.Timestamp("2025-06-28T14:00:00", tz=tz),
+    current_slot,
+    tz,
+  )
+
+
+def test_slot_prediction_refresh_needed_when_slots_differ():
+  import pandas as pd
+
+  from src.features.slots import current_slot_start, slot_times_match
+
+  tz = "America/New_York"
+  slot_s = current_slot_start(tz_name=tz)
+  stale_slot = slot_s - pd.Timedelta(minutes=15)
+  assert not slot_times_match(stale_slot, slot_s.isoformat(), tz)
+  assert slot_times_match(slot_s, slot_s.isoformat(), tz)

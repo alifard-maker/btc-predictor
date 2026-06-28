@@ -553,8 +553,14 @@
     </div>
   </div>
 
+  <script src="/static/bot_settings_ui.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
+    const {
+      botUiKey,
+      normalizeBotSettings,
+      shouldUpdateSettingsFromServer,
+    } = window.BotSettingsUi;
     let activeTab = '15m';
     let hourlyRenderTab = 'daily';
     let slot15RenderTab = '15m';
@@ -563,6 +569,9 @@
     let hourlyGuideCheatOpen = false;
     const lastBotStatus = { btc: null, eth: null };
     const lastSlot15BotStatus = { btc: null, eth: null };
+    const lastKnownBotSettings = {};
+    const pendingBotPatch = {};
+    const botAutoStoppedPrev = {};
 
     function slot15Prefix() {
       return activeTab === 'eth-15m' ? 'eth15-' : '';
@@ -1417,6 +1426,10 @@
       if (name === 'daily' || name === 'eth-hourly') {
         const asset = name === 'eth-hourly' ? 'eth' : 'btc';
         const cached = lastBotStatus[asset];
+        const key = botUiKey('hourly', asset);
+        if (cached?.settings && !pendingBotPatch[key]) {
+          lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_hour_usd');
+        }
         if (cached) renderHourlyBot(cached, asset);
         loadDaily();
         return;
@@ -1424,6 +1437,10 @@
       if (name === '15m' || name === 'eth-15m') {
         const asset = name === 'eth-15m' ? 'eth' : 'btc';
         const cached = lastSlot15BotStatus[asset];
+        const key = botUiKey('slot15', asset);
+        if (cached?.settings && !pendingBotPatch[key]) {
+          lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_slot_usd');
+        }
         if (cached) renderSlot15Bot(cached, asset);
         loadAll();
         return;
@@ -1866,6 +1883,7 @@
         ...prev,
         ...incoming,
         event_ticker: eventTicker,
+        settings: incoming.settings ?? prev.settings,
         hour_summary: mergedHs,
         hourly_summary: mergedHs,
         open_positions: incoming.open_positions ?? prev.open_positions,
@@ -2071,7 +2089,11 @@
       const prob = w.prob_up != null ? ` · ${(Number(w.prob_up) * 100).toFixed(0)}% UP` : '';
       const late = w.late_entry_action ? ` · late: ${w.late_entry_action}` : '';
       const flip = w.flip_action ? ` · flip: ${w.flip_action}` : '';
-      return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${model}${prob}${late}${flip} — free mode enters on LONG/SHORT (or late/flip).</p>`;
+      const attempt = w.last_entry_attempt;
+      const attemptLine = attempt && attempt.skip_reason
+        ? ` · last try: ${attempt.skip_reason}${attempt.bid_cents != null ? ` (bid ${attempt.bid_cents}¢ ask ${attempt.ask_cents}¢ spread ${attempt.spread_cents}¢)` : ''}`
+        : '';
+      return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${model}${prob}${late}${flip}${attemptLine} — free mode enters on LONG/SHORT (or late/flip).</p>`;
     }
 
     function botSkipReasonLabel(raw) {
@@ -2110,12 +2132,81 @@
       return `<p class="muted" style="font-size:.68rem;margin:.35rem 0 .45rem;padding:.45rem .55rem;background:rgba(148,163,184,.08);border-radius:6px"><strong>Last skip:</strong> ${botSkipReasonLabel(bot.last_skip_reason)}</p>`;
     }
 
-    function botSettingsOutOfSync(serverSettings, domSettings, bot, maxKey) {
-      if (!domSettings || !serverSettings) return !!bot?.auto_stopped;
-      return !!serverSettings.enabled !== !!domSettings.enabled
-        || serverSettings.mode !== domSettings.mode
-        || Number(serverSettings[maxKey] ?? 25) !== Number(domSettings[maxKey] ?? 25)
-        || !!bot?.auto_stopped;
+    function botDomPrefix(kind, asset) {
+      return kind === 'slot15' ? `slot15-${asset}` : asset;
+    }
+
+    function applyBotSettingsToDom(kind, asset, settings) {
+      const p = botDomPrefix(kind, asset);
+      const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+      const s = normalizeBotSettings(settings, maxKey);
+      if (!s) return;
+      const set = (id, checked) => {
+        const el = $(id);
+        if (el) el.checked = !!checked;
+      };
+      set(`bot-enabled-${p}`, s.enabled);
+      set(`bot-paper-${p}`, s.mode !== 'live');
+      set(`bot-live-${p}`, s.mode === 'live');
+      set(`bot-strong-${p}`, s.allow_strong);
+      set(`bot-actionable-${p}`, s.allow_actionable);
+      set(`bot-use-profits-${p}`, s.use_accumulated_profit);
+      set(`bot-auto-refill-${p}`, s.paper_auto_refill);
+      const maxEl = $(`bot-max-spend-${p}`);
+      if (maxEl) maxEl.value = s[maxKey];
+    }
+
+    function syncBotSettingsUi(kind, asset, serverSettings, forceFlags) {
+      const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+      const key = botUiKey(kind, asset);
+      const settingsWrapId = `${asset}-${kind === 'slot15' ? 'slot15' : 'hourly'}-bot-settings`;
+      const settingsWrap = $(settingsWrapId);
+      if (!settingsWrap) return normalizeBotSettings(serverSettings, maxKey) || serverSettings || {};
+
+      const pending = pendingBotPatch[key];
+      const domSettings = kind === 'slot15'
+        ? readSlot15BotSettingsFromDom(asset)
+        : readBotSettingsFromDom(asset);
+      const lastKnown = lastKnownBotSettings[key];
+      const needStructure = !domSettings || forceFlags[asset];
+
+      if (needStructure) {
+        settingsWrap.innerHTML = kind === 'slot15'
+          ? slot15BotSettingsHtml(asset, serverSettings)
+          : botSettingsHtml(asset, serverSettings);
+        forceFlags[asset] = false;
+        const norm = normalizeBotSettings(serverSettings, maxKey);
+        lastKnownBotSettings[key] = norm;
+        return norm || serverSettings;
+      }
+
+      if (pending) return pending;
+
+      if (shouldUpdateSettingsFromServer({
+        server: serverSettings,
+        dom: domSettings,
+        lastKnown,
+        pending: null,
+        maxKey,
+      })) {
+        applyBotSettingsToDom(kind, asset, serverSettings);
+        const norm = normalizeBotSettings(serverSettings, maxKey);
+        lastKnownBotSettings[key] = norm;
+        return norm;
+      }
+
+      return domSettings || normalizeBotSettings(serverSettings, maxKey);
+    }
+
+    function noteAutoStoppedTransition(kind, asset, autoStopped, serverSettings) {
+      const key = botUiKey(kind, asset);
+      const wasStopped = !!botAutoStoppedPrev[key];
+      botAutoStoppedPrev[key] = !!autoStopped;
+      if (autoStopped && !wasStopped) {
+        applyBotSettingsToDom(kind, asset, serverSettings);
+        const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+        lastKnownBotSettings[key] = normalizeBotSettings(serverSettings, maxKey);
+      }
     }
 
     const BOT_TRADES_SCROLL_PIN = 5;
@@ -2200,6 +2291,7 @@
         ...prev,
         ...incoming,
         event_ticker: eventTicker,
+        settings: incoming.settings ?? prev.settings,
         slot_summary: mergedSs,
         open_positions: incoming.open_positions ?? prev.open_positions,
         recent_trades: incoming.recent_trades ?? prev.recent_trades,
@@ -2276,13 +2368,18 @@
       if (bot && bot.asset && bot.asset !== asset) return;
       if (bot && bot.ok) bot = mergeSlot15BotStatus(asset, bot) || bot;
       if (!bot || !bot.ok) {
-        el.innerHTML = `<p class="muted">Bot status unavailable${bot?.error ? `: ${bot.error}` : ''}.</p>`;
-        slot15BotForceSettingsRender[asset] = true;
+        const statusWrap = $(`${asset}-slot15-bot-status`);
+        const msg = `<p class="muted">Bot status unavailable${bot?.error ? `: ${bot.error}` : ''}.</p>`;
+        if (statusWrap) {
+          statusWrap.innerHTML = msg;
+        } else {
+          el.innerHTML = msg;
+          slot15BotForceSettingsRender[asset] = true;
+        }
         return;
       }
-      if (bot.auto_stopped) slot15BotForceSettingsRender[asset] = true;
-      const p = `slot15-${asset}`;
       const serverSettings = bot.settings || {};
+      noteAutoStoppedTransition('slot15', asset, bot.auto_stopped, serverSettings);
       const settingsWrapId = `${asset}-slot15-bot-settings`;
       const statusWrapId = `${asset}-slot15-bot-status`;
       if (!$(settingsWrapId)) {
@@ -2292,15 +2389,7 @@
       const statusWrap = $(statusWrapId);
       if (!settingsWrap || !statusWrap) return;
 
-      const domSettings = readSlot15BotSettingsFromDom(asset);
-      const settingsOutOfSync = botSettingsOutOfSync(serverSettings, domSettings, bot, 'max_spend_per_slot_usd');
-      const shouldRenderSettings = slot15BotForceSettingsRender[asset] || !domSettings || settingsOutOfSync;
-      if (shouldRenderSettings) {
-        settingsWrap.innerHTML = slot15BotSettingsHtml(asset, serverSettings);
-        slot15BotForceSettingsRender[asset] = false;
-      }
-
-      const s = settingsOutOfSync ? serverSettings : (domSettings || serverSettings);
+      const s = syncBotSettingsUi('slot15', asset, serverSettings, slot15BotForceSettingsRender);
       const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
       const freeMode = !s.allow_strong && !s.allow_actionable;
       const exposure = bot.open_exposure_usd ?? 0;
@@ -2404,6 +2493,9 @@
     }
 
     async function saveSlot15BotSettings(asset, livePassword) {
+      const kind = 'slot15';
+      const maxKey = 'max_spend_per_slot_usd';
+      const key = botUiKey(kind, asset);
       const p = `slot15-${asset}`;
       const enabledEl = $(`bot-enabled-${p}`);
       if (!enabledEl) return false;
@@ -2417,6 +2509,8 @@
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
       if (body.mode === 'live' && livePassword) body.live_password = livePassword;
+      const previousKnown = lastKnownBotSettings[key];
+      pendingBotPatch[key] = normalizeBotSettings(body, maxKey);
       try {
         const res = await fetch(slot15BotSettingsUrl(asset), {
           method: 'POST',
@@ -2425,22 +2519,28 @@
         });
         if (!res.ok) {
           const msg = await parseSettingsError(res);
+          pendingBotPatch[key] = null;
+          if (previousKnown) applyBotSettingsToDom(kind, asset, previousKnown);
           if (res.status === 403) {
             showError('Wrong Password - Denied Access');
             revertBotModeToPaper(p);
-            botForceSettingsRender[asset] = true;
+            slot15BotForceSettingsRender[asset] = true;
             return false;
           }
           showError('15m bot settings: ' + msg);
           return false;
         }
         const tab = asset === 'eth' ? 'eth-15m' : '15m';
+        pendingBotPatch[key] = null;
         if (activeTab === tab) {
           const bot = await res.json();
+          lastKnownBotSettings[key] = normalizeBotSettings(bot.settings || body, maxKey);
           renderSlot15Bot(bot, asset);
         }
         return true;
       } catch (e) {
+        pendingBotPatch[key] = null;
+        if (previousKnown) applyBotSettingsToDom(kind, asset, previousKnown);
         showError('15m bot settings: ' + e.message);
         return false;
       }
@@ -2454,13 +2554,18 @@
       if (bot && bot.asset && bot.asset !== asset) return;
       if (bot && bot.ok) bot = mergeBotStatus(asset, bot) || bot;
       if (!bot || !bot.ok) {
-        el.innerHTML = '<p class="muted">Bot status unavailable.</p>';
-        botForceSettingsRender[asset] = true;
+        const statusWrap = $(`${asset}-hourly-bot-status`);
+        const msg = `<p class="muted">Bot status unavailable${bot?.error ? `: ${bot.error}` : ''}.</p>`;
+        if (statusWrap) {
+          statusWrap.innerHTML = msg;
+        } else {
+          el.innerHTML = msg;
+          botForceSettingsRender[asset] = true;
+        }
         return;
       }
-      if (bot.auto_stopped) botForceSettingsRender[asset] = true;
-      const p = asset;
       const serverSettings = bot.settings || {};
+      noteAutoStoppedTransition('hourly', asset, bot.auto_stopped, serverSettings);
       const settingsWrapId = `${asset}-hourly-bot-settings`;
       const statusWrapId = `${asset}-hourly-bot-status`;
       if (!$(settingsWrapId)) {
@@ -2470,15 +2575,7 @@
       const statusWrap = $(statusWrapId);
       if (!settingsWrap || !statusWrap) return;
 
-      const domSettings = readBotSettingsFromDom(asset);
-      const settingsOutOfSync = botSettingsOutOfSync(serverSettings, domSettings, bot, 'max_spend_per_hour_usd');
-      const shouldRenderSettings = botForceSettingsRender[asset] || !domSettings || settingsOutOfSync;
-      if (shouldRenderSettings) {
-        settingsWrap.innerHTML = botSettingsHtml(asset, serverSettings);
-        botForceSettingsRender[asset] = false;
-      }
-
-      const s = settingsOutOfSync ? serverSettings : (domSettings || serverSettings);
+      const s = syncBotSettingsUi('hourly', asset, serverSettings, botForceSettingsRender);
       const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
       const freeMode = !s.allow_strong && !s.allow_actionable;
       const exposure = bot.open_exposure_usd ?? bot.spent_usd ?? 0;
@@ -2582,6 +2679,9 @@
     }
 
     async function saveHourlyBotSettings(asset, livePassword) {
+      const kind = 'hourly';
+      const maxKey = 'max_spend_per_hour_usd';
+      const key = botUiKey(kind, asset);
       const p = asset;
       const enabledEl = $(`bot-enabled-${p}`);
       if (!enabledEl) return false;
@@ -2595,6 +2695,8 @@
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
       if (body.mode === 'live' && livePassword) body.live_password = livePassword;
+      const previousKnown = lastKnownBotSettings[key];
+      pendingBotPatch[key] = normalizeBotSettings(body, maxKey);
       try {
         const res = await fetch(hourlyBotSettingsUrl(asset), {
           method: 'POST',
@@ -2603,6 +2705,8 @@
         });
         if (!res.ok) {
           const msg = await parseSettingsError(res);
+          pendingBotPatch[key] = null;
+          if (previousKnown) applyBotSettingsToDom(kind, asset, previousKnown);
           if (res.status === 403) {
             showError('Wrong Password - Denied Access');
             revertBotModeToPaper(p);
@@ -2612,12 +2716,17 @@
           showError('Bot settings: ' + msg);
           return false;
         }
-        if ((asset === 'eth' && activeTab === 'eth-hourly') || (asset === 'btc' && activeTab === 'daily')) {
-          const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
-          if (activeTab === tab) loadDaily();
+        pendingBotPatch[key] = null;
+        const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
+        if (activeTab === tab) {
+          const bot = await res.json();
+          lastKnownBotSettings[key] = normalizeBotSettings(bot.settings || body, maxKey);
+          renderHourlyBot(bot, asset);
         }
         return true;
       } catch (e) {
+        pendingBotPatch[key] = null;
+        if (previousKnown) applyBotSettingsToDom(kind, asset, previousKnown);
         showError('Bot settings: ' + e.message);
         return false;
       }
@@ -2782,9 +2891,11 @@
     async function loadSlot15Bot(predictionBot) {
       const tabAtStart = activeTab;
       if (tabAtStart !== '15m' && tabAtStart !== 'eth-15m') return;
+      const gen = ++slot15FetchGen;
       const asset = tabAtStart === 'eth-15m' ? 'eth' : 'btc';
       try {
         const botDirect = await get(slot15BotStatusUrl(asset));
+        if (gen !== slot15FetchGen || activeTab !== tabAtStart) return;
         let bot = botDirect || predictionBot;
         if (botDirect && predictionBot) {
           const evt = botDirect.event_ticker || predictionBot.event_ticker;
@@ -2798,6 +2909,7 @@
         bot = mergeSlot15BotStatus(asset, bot);
         if (bot) renderSlot15Bot(bot, asset);
       } catch (_) {
+        if (gen !== slot15FetchGen || activeTab !== tabAtStart) return;
         const cached = lastSlot15BotStatus[asset];
         if (cached) renderSlot15Bot(cached, asset);
         else if (predictionBot) renderSlot15Bot(mergeSlot15BotStatus(asset, predictionBot), asset);

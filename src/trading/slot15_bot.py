@@ -556,9 +556,28 @@ class Slot15Bot:
         break
 
       if settings.mode == "paper":
-        entry_fill = paper_entry_fill(pick=pick, side=side, remaining_budget_usd=remaining)
+        max_spread = int(tab.get("paper_max_spread_cents") or 40)
+        entry_fill = paper_entry_fill(
+          pick=pick,
+          side=side,
+          remaining_budget_usd=remaining,
+          max_spread_cents=max_spread,
+        )
         if not entry_fill.get("ok"):
           last_reason = str(entry_fill.get("skip_reason") or "no_liquidity")
+          bid = entry_fill.get("bid_cents")
+          ask = entry_fill.get("ask_cents")
+          spread = int(ask) - int(bid) if bid is not None and ask is not None else None
+          self.store.set_last_entry_attempt({
+            "signal": signal,
+            "side": side,
+            "market_ticker": market_ticker,
+            "skip_reason": last_reason,
+            "bid_cents": bid,
+            "ask_cents": ask,
+            "spread_cents": spread,
+            "max_spread_cents": max_spread,
+          })
           continue
         price_cents = int(entry_fill["price_cents"])
         count = int(entry_fill["contracts"])
@@ -620,6 +639,7 @@ class Slot15Bot:
         })
         log.info("%s 15m bot [paper enter]: %s", self.asset.upper(), detail)
 
+      self.store.set_last_entry_attempt(None)
       self.store.set_last_skip_reason(None)
       results.append(result)
       break
