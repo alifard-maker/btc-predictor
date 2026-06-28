@@ -2156,6 +2156,9 @@
         missing_kalshi_mid: 'Kalshi mid quote missing on active market.',
         budget_too_small_for_contract: 'Remaining budget too small for one contract at current price.',
         no_entry_this_cycle: 'Signals evaluated but no entry passed all checks this cycle.',
+        correlated_same_side_strikes: 'Skipped — too close to an open strike on the same side.',
+        opposing_threshold_hedge: 'Skipped — would partially hedge an open threshold leg (enable barbell in config to allow).',
+        max_concurrent_positions: 'Max concurrent open positions reached.',
       };
       if (raw.startsWith('already_open:')) return `Already holding open position on ${raw.slice('already_open:'.length)}.`;
       if (raw.startsWith('reentry_cooldown:')) return `Re-entry cooldown active for ${raw.slice('reentry_cooldown:'.length)}.`;

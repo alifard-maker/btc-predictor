@@ -525,7 +525,8 @@ class PredictionLoop:
       self._ensure_slot_prediction_current(asset)
       tab = self._slot15_tab(asset)
       if tab.get("ok"):
-        self.slot15_bot(asset).run_continuous_cycle(tab)
+        acfg = self._acfg_15m(asset)
+        self.slot15_bot(asset).run_continuous_cycle(tab, cfg=acfg)
     except Exception as e:
       log.exception("%s 15m bot continuous cycle failed: %s", asset.upper(), e)
     finally:

@@ -14,6 +14,12 @@ from src.trading.bot_profit_exit import (
   position_hold_seconds,
 )
 from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
+from src.trading.entry_strategy import (
+  correlation_block_reason,
+  entry_budget_usd,
+  entry_strategy_from_cfg,
+  rank_hourly_candidates,
+)
 from src.trading.hourly_bet_assessment import assess_contract_bet
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
@@ -548,8 +554,34 @@ class HourlyBot:
       self.store.set_last_skip_reason("no_buy_yes_no_candidates")
       return results
 
+    estrat = entry_strategy_from_cfg(cfg, kind="hourly")
+    ranked = rank_hourly_candidates(candidates, estrat=estrat)
+    if not ranked:
+      self.store.set_last_skip_reason("no_buy_yes_no_candidates")
+      return results
+
+    open_pos = self.store.open_positions(event_ticker)
+    ref_price = live.get("current_price") or tab.get("brti_live")
+    try:
+      ref_f = float(ref_price) if ref_price is not None else None
+    except (TypeError, ValueError):
+      ref_f = None
+
+    def _resolve_pick(ticker: str) -> dict[str, Any] | None:
+      return _find_contract_in_live(live, ticker)
+
     last_reason = "no_entry_this_cycle"
-    for _score, pick, bet in candidates:
+    entries_this_cycle = 0
+    max_entries = estrat.max_entries_per_cycle if estrat.enabled else 1
+
+    for _composite, _edge, _saf, pick, bet in ranked:
+      if entries_this_cycle >= max_entries:
+        break
+      if len(self.store.open_positions(event_ticker)) >= (
+        estrat.max_concurrent_positions if estrat.enabled else 99
+      ):
+        last_reason = "max_concurrent_positions"
+        break
       if not bet_qualifies(pick, bet, settings):
         last_reason = "signal_filtered_by_settings"
         continue
@@ -570,13 +602,36 @@ class HourlyBot:
         last_reason = "unrecognized_signal"
         continue
 
+      block = correlation_block_reason(
+        open_pos,
+        pick,
+        side,
+        resolve_pick=_resolve_pick,
+        ref_price=ref_f,
+        estrat=estrat,
+      )
+      if block:
+        last_reason = block
+        continue
+
       remaining = self.store.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd, settings)
       if remaining <= 0:
         last_reason = "hour_budget_exhausted"
         break
 
+      bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap, settings)
+      entries_left = max_entries - entries_this_cycle
+      stake = entry_budget_usd(
+        estrat=estrat,
+        bankroll_usd=bankroll,
+        remaining_usd=remaining,
+        pick=pick,
+        side=side,
+        entries_left=entries_left,
+      )
+
       if settings.mode == "paper":
-        entry_fill = paper_entry_fill(pick=pick, side=side, remaining_budget_usd=remaining)
+        entry_fill = paper_entry_fill(pick=pick, side=side, remaining_budget_usd=stake)
         if not entry_fill.get("ok"):
           last_reason = str(entry_fill.get("skip_reason") or "no_liquidity")
           continue
@@ -587,7 +642,7 @@ class HourlyBot:
         if price_cents is None:
           last_reason = f"missing_price:{market_ticker}"
           continue
-        count = _contracts_for_budget(remaining, price_cents)
+        count = _contracts_for_budget(stake, price_cents)
         if count <= 0:
           last_reason = "budget_too_small_for_contract"
           continue
@@ -642,7 +697,8 @@ class HourlyBot:
 
       self.store.set_last_skip_reason(None)
       results.append(result)
-      break  # one new entry per cycle; exits free budget next minute
+      entries_this_cycle += 1
+      open_pos = self.store.open_positions(event_ticker)
 
     if not results:
       self.store.set_last_skip_reason(last_reason)

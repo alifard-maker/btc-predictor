@@ -14,6 +14,7 @@ from src.trading.bot_profit_exit import (
   position_hold_seconds,
 )
 from src.trading.edge import Signal
+from src.trading.entry_strategy import entry_budget_usd, entry_strategy_from_cfg
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
@@ -251,7 +252,7 @@ class Slot15Bot:
     self.kalshi = kalshi_client
     self.asset = asset.lower()
 
-  def run_continuous_cycle(self, tab: dict[str, Any]) -> list[dict[str, Any]]:
+  def run_continuous_cycle(self, tab: dict[str, Any], *, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Evaluate exits then entries on live 15m data. Returns actions taken."""
     if not tab.get("ok"):
       self.store.set_last_skip_reason("prediction_unavailable")
@@ -306,7 +307,7 @@ class Slot15Bot:
     if stop_row:
       actions.append(stop_row)
       settings = self.store.get_settings()
-    entry_actions = self._process_entries(tab, slot_key, settings)
+    entry_actions = self._process_entries(tab, slot_key, settings, cfg=cfg)
     actions.extend(entry_actions)
     if not entry_actions and not any(a.get("action") == "enter" for a in actions):
       if self.store.last_skip_reason() is None and not settings.auto_stopped:
@@ -504,6 +505,8 @@ class Slot15Bot:
     tab: dict[str, Any],
     slot_key: str,
     settings: Slot15BotSettings,
+    *,
+    cfg: dict[str, Any] | None = None,
   ) -> list[dict[str, Any]]:
     if settings.auto_stopped:
       self.store.set_last_skip_reason("auto_stopped_budget_exhausted")
@@ -555,12 +558,25 @@ class Slot15Bot:
         last_reason = "fully_deployed"
         break
 
+      pred = tab.get("prediction") or {}
+      prob_up = float(pred.get("prob_up", 0.5))
+      pick_kelly = {**pick, "model_prob": prob_up}
+      estrat = entry_strategy_from_cfg(cfg, kind="slot15")
+      bankroll = self.store.slot_bankroll_usd(slot_key, settings.max_spend_per_slot_usd, settings)
+      stake = entry_budget_usd(
+        estrat=estrat,
+        bankroll_usd=bankroll,
+        remaining_usd=remaining,
+        pick=pick_kelly,
+        side=side,
+      )
+
       if settings.mode == "paper":
         max_spread = int(tab.get("paper_max_spread_cents") or 40)
         entry_fill = paper_entry_fill(
           pick=pick,
           side=side,
-          remaining_budget_usd=remaining,
+          remaining_budget_usd=stake,
           max_spread_cents=max_spread,
         )
         if not entry_fill.get("ok"):
@@ -586,7 +602,7 @@ class Slot15Bot:
         if price_cents is None:
           last_reason = "missing_kalshi_mid"
           continue
-        count = _contracts_for_budget(remaining, price_cents)
+        count = _contracts_for_budget(stake, price_cents)
         if count <= 0:
           last_reason = "budget_too_small_for_contract"
           continue

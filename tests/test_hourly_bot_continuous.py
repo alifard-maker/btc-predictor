@@ -410,7 +410,12 @@ def test_entries_never_exceed_max_at_risk():
     max_cap = 10.0
     store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=max_cap))
     bot = HourlyBot(store, asset="btc")
-    cfg = {"hourly": {"regime": {"min_edge": 0.05, "min_expected_move_pct": 0.12}}}
+    cfg = {
+      "hourly": {
+        "regime": {"min_edge": 0.05, "min_expected_move_pct": 0.12},
+        "bot": {"entry_strategy": {"enabled": False}},
+      }
+    }
     tab = _live_tab(event="EV1")
     cumulative = 0.0
 
@@ -534,6 +539,7 @@ def test_free_mode_enters_from_range_contract_row():
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab(regime_allow=False)
     tab["live"]["primary_pick"] = {"ticker": "NEUTRAL-T", "signal": "NEUTRAL", "kalshi_mid": 0.5, "edge": 0.0}
+    tab["live"]["strategy_threshold"] = {"best_edge": None, "most_likely": None, "contracts": []}
     band = {
       "ticker": "KXTEST-BAND",
       "signal": "BUY YES",

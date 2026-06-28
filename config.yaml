@@ -100,6 +100,14 @@ intra_slot:
     max_take_profit_pct: 0.40
     min_hold_seconds: 30
     profit_exit_cooldown_seconds: 60
+    entry_strategy:
+      enabled: true
+      kelly_enabled: true
+      kelly_fraction: 0.25
+      max_entries_per_cycle: 1
+      max_concurrent_positions: 1
+      max_budget_fraction_per_entry: 0.55
+      correlation_guard: false
 
 # Late entry — reassess NO-TRADE slots mid-window (conservative)
 late_entry:
@@ -196,7 +204,19 @@ hourly:
     max_take_profit_pct: 0.40
     min_hold_seconds: 30
     profit_exit_cooldown_seconds: 60
-  sigma_calibration: true
+    entry_strategy:
+      enabled: true
+      risk_adjusted_ranking: true
+      edge_tie_threshold: 0.03
+      safety_weight: 0.40
+      kelly_enabled: true
+      kelly_fraction: 0.25
+      max_entries_per_cycle: 2
+      max_concurrent_positions: 3
+      max_budget_fraction_per_entry: 0.55
+      correlation_guard: true
+      allow_barbell: true
+      barbell_min_strike_gap_pct: 0.20
 
 # Flip-to-opposite
 flip:
@@ -302,6 +322,19 @@ eth:
       max_take_profit_pct: 0.40
       min_hold_seconds: 30
       profit_exit_cooldown_seconds: 60
+      entry_strategy:
+        enabled: true
+        risk_adjusted_ranking: true
+        edge_tie_threshold: 0.03
+        safety_weight: 0.40
+        kelly_enabled: true
+        kelly_fraction: 0.25
+        max_entries_per_cycle: 2
+        max_concurrent_positions: 3
+        max_budget_fraction_per_entry: 0.55
+        correlation_guard: true
+        allow_barbell: true
+        barbell_min_strike_gap_pct: 0.20
     sigma_calibration: true
 
 paths:
