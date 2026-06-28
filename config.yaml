@@ -169,7 +169,7 @@ hourly:
     allow_strong: true
     allow_actionable: true
     continuous_enabled: true
-    poll_seconds: 60
+    poll_seconds: 5
   sigma_calibration: true
 
 # Flip-to-opposite
@@ -264,7 +264,7 @@ eth:
       allow_strong: true
       allow_actionable: true
       continuous_enabled: true
-      poll_seconds: 60
+      poll_seconds: 5
     sigma_calibration: true
 
 paths:

@@ -1082,7 +1082,7 @@ class PredictionLoop:
       )
       bot_cfg = hcfg.get("bot") or {}
       if bot_cfg.get("continuous_enabled", True):
-        poll_sec = int(bot_cfg.get("poll_seconds", 60))
+        poll_sec = int(bot_cfg.get("poll_seconds", 5))
         scheduler.add_job(
           self.run_hourly_bot_continuous,
           "interval",
@@ -1118,7 +1118,7 @@ class PredictionLoop:
         )
         bot_cfg = ehcfg.get("bot") or {}
         if bot_cfg.get("continuous_enabled", True):
-          poll_sec = int(bot_cfg.get("poll_seconds", 60))
+          poll_sec = int(bot_cfg.get("poll_seconds", 5))
           scheduler.add_job(
             self.run_eth_hourly_bot_continuous,
             "interval",

@@ -459,7 +459,7 @@
     <div id="panel-daily" style="display:none">
       <div class="card" id="btc-hourly-bot-card">
         <h2>BTC hourly auto-bet</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~60s</strong> while enabled — enters and exits paper/live positions from live signals. <strong>Max $/hour</strong> = total capital <em>at risk</em> at once. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any BUY YES/NO pick).</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s</strong> while enabled — enters and exits paper/live positions from live signals. <strong>Max $/hour</strong> = total capital <em>at risk</em> at once. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any BUY YES/NO pick).</p>
         <div id="btc-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="hourly-guide-card">
@@ -502,7 +502,7 @@
     <div id="panel-eth-hourly" style="display:none">
       <div class="card" id="eth-hourly-bot-card">
         <h2>ETH hourly auto-bet</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~60s</strong> — same as BTC: continuous enter/exit within your hourly exposure cap. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s</strong> — same as BTC: continuous enter/exit within your hourly exposure cap. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
         <div id="eth-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="eth-hourly-guide-card">
@@ -1882,7 +1882,7 @@
         </tr>`;
       }).join('');
       const emptyLog = s.enabled
-        ? `No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~60s on the server.`
+        ? `No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
       statusWrap.innerHTML = `
