@@ -784,6 +784,15 @@ def hourly_bot_trades(
   return out
 
 
+@app.get("/api/bots/performance-report")
+def bots_performance_report(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.bot_performance_report import build_all_bots_performance_report
+
+  return build_all_bots_performance_report(_loop)
+
+
 @app.get("/api/eth/hourly/bot")
 def eth_hourly_bot_status(_: None = Depends(_session_user)):
   if _loop is None:

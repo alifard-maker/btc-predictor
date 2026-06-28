@@ -177,6 +177,11 @@
     .guide-tier h4 { margin:0 0 .35rem; font-size:.72rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
     .risk-low { color:#86efac } .risk-medium { color:#fbbf24 } .risk-high { color:#f87171 }
     .bot-panel { border:1px solid rgba(168,85,247,.35); border-radius:10px; padding:.85rem 1rem; background:rgba(168,85,247,.06); }
+    .perf-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(11rem,1fr)); gap:.5rem; margin:.5rem 0 .75rem; }
+    .perf-stat { padding:.45rem .55rem; background:var(--surface); border:1px solid var(--border); border-radius:8px; font-size:.78rem; }
+    .perf-stat strong { display:block; font-size:1rem; margin-top:.15rem; }
+    .perf-bot-block { margin:.85rem 0; padding:.65rem .75rem; border:1px solid var(--border); border-radius:8px; background:rgba(15,23,42,.35); }
+    .perf-rec { font-size:.72rem; margin:.35rem 0 0; padding:.4rem .55rem; background:rgba(59,130,246,.08); border-radius:6px; }
     .bot-row { display:flex; flex-wrap:wrap; align-items:center; gap:1rem; margin:.5rem 0; }
     .bot-stat { font-size:.8rem; }
     .bot-stat strong { display:block; font-size:1rem; }
@@ -216,6 +221,12 @@
       <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">BTC Hourly</button>
       <button type="button" class="tab" id="tab-eth-hourly" data-panel="panel-eth-hourly" onclick="switchTab('eth-hourly')">ETH Hourly</button>
     </nav>
+
+    <details class="card" id="bot-performance-card" open>
+      <summary style="cursor:pointer;font-weight:600">Paper bot performance · calibration report</summary>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Win rate and avg P&amp;L from closed paper round-trips, bucketed by entry price and spread. Use this before loosening filters — entries now gate on <strong>ask-edge</strong> (model prob − ask implied).</p>
+      <div id="bot-performance-report"><p class="muted">Loading…</p></div>
+    </details>
 
     <details class="card guide-card" id="app-guide">
       <summary>Guide · tabs, predictions &amp; terminology</summary>
@@ -2196,6 +2207,7 @@
         price_ceiling: 'Ask above maximum price ceiling for paper entry.',
         contract_cap_exceeded: 'Position size would exceed paper contract cap.',
         signal_filtered_by_settings: 'Signal blocked by STRONG/ACTIONABLE filters (both off = free mode).',
+        ask_edge_too_low: 'Model edge vs ask-implied prob too thin — raise min_ask_edge_cents or wait for better book.',
         missing_kalshi_mid: 'Kalshi mid quote missing on active market.',
         budget_too_small_for_contract: 'Remaining budget too small for one contract at current price.',
         no_entry_this_cycle: 'Signals evaluated but no entry passed all checks this cycle.',
@@ -2205,6 +2217,10 @@
       };
       if (raw.startsWith('already_open:')) return `Already holding open position on ${raw.slice('already_open:'.length)}.`;
       if (raw.startsWith('reentry_cooldown:')) return `Re-entry cooldown active for ${raw.slice('reentry_cooldown:'.length)}.`;
+      if (raw.startsWith('ask_edge_too_low:')) {
+        const cents = raw.slice('ask_edge_too_low:'.length);
+        return `Ask-edge ${cents} below min_ask_edge_cents — model prob minus ask-implied too thin.`;
+      }
       if (raw.startsWith('missing_price:')) return `No Kalshi/model price for ${raw.slice('missing_price:'.length)}.`;
       return labels[raw] || raw;
     }
@@ -2323,6 +2339,66 @@
       } else {
         const delta = logEl.scrollHeight - saved.scrollHeight;
         logEl.scrollTop = saved.scrollTop + Math.max(0, delta);
+      }
+    }
+
+    function renderBotPerformanceReport(report) {
+      const el = $('bot-performance-report');
+      if (!el) return;
+      if (!report || !report.ok) {
+        el.innerHTML = `<p class="muted">Performance report unavailable${report?.error ? `: ${report.error}` : ''}.</p>`;
+        return;
+      }
+      const combined = report.combined || {};
+      const combWr = combined.win_rate != null ? `${(combined.win_rate * 100).toFixed(0)}%` : '—';
+      const combPnl = combined.total_pnl_usd != null ? botPnlUsd(combined.total_pnl_usd) : '—';
+      let html = `<div class="perf-grid">
+        <div class="perf-stat muted">All bots closed trades<strong>${combined.closed_trades ?? 0}</strong></div>
+        <div class="perf-stat muted">Combined win rate<strong>${combWr}</strong></div>
+        <div class="perf-stat muted">Combined realized P&amp;L<strong>${combPnl}</strong></div>
+      </div>`;
+
+      const bucketTable = (title, rows) => {
+        if (!rows || !rows.length) return '';
+        const body = rows.map((r) => {
+          const wr = r.win_rate != null ? `${(r.win_rate * 100).toFixed(0)}%` : '—';
+          const avg = r.avg_pnl_usd != null ? botPnlUsd(r.avg_pnl_usd) : '—';
+          return `<tr><td>${r.bucket}</td><td>${r.trades}</td><td>${wr}</td><td>${avg}</td><td>${botPnlUsd(r.total_pnl_usd)}</td></tr>`;
+        }).join('');
+        return `<p class="muted" style="font-size:.68rem;margin:.45rem 0 .25rem;text-transform:uppercase;letter-spacing:.04em">${title}</p>
+          <table style="width:100%;font-size:.72rem;margin-bottom:.5rem"><thead><tr><th>Bucket</th><th>n</th><th>Win%</th><th>Avg P&amp;L</th><th>Total</th></tr></thead><tbody>${body}</tbody></table>`;
+      };
+
+      for (const bot of report.bots || []) {
+        const sm = bot.summary || {};
+        const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
+        const gate = bot.gates?.min_ask_edge_cents;
+        const recs = (bot.recommendations || []).map((t) => `<li>${t}</li>`).join('');
+        html += `<div class="perf-bot-block">
+          <p style="margin:0 0 .35rem;font-weight:600">${bot.label || `${bot.asset} ${bot.kind}`}
+            <span class="muted" style="font-weight:400;font-size:.72rem"> · ask-edge gate ≥ ${gate ?? '—'}¢</span></p>
+          <div class="perf-grid">
+            <div class="perf-stat muted">Closed<strong>${sm.closed_trades ?? 0}</strong></div>
+            <div class="perf-stat muted">Win rate<strong>${wr}</strong></div>
+            <div class="perf-stat muted">Realized P&amp;L<strong>${botPnlUsd(sm.total_pnl_usd)}</strong></div>
+            <div class="perf-stat muted">Avg / trade<strong>${sm.avg_pnl_usd != null ? botPnlUsd(sm.avg_pnl_usd) : '—'}</strong></div>
+          </div>
+          ${bucketTable('By entry price', bot.by_entry_price)}
+          ${bucketTable('By spread at entry', bot.by_spread)}
+          ${recs ? `<ul class="perf-rec" style="margin:.35rem 0 0;padding-left:1.1rem">${recs}</ul>` : ''}
+        </div>`;
+      }
+      const gen = report.generated_at ? time(report.generated_at) : '—';
+      html += `<p class="muted" style="font-size:.65rem;margin:.35rem 0 0">Generated ${gen}</p>`;
+      el.innerHTML = html;
+    }
+
+    async function loadBotPerformanceReport() {
+      try {
+        const report = await get('/api/bots/performance-report');
+        renderBotPerformanceReport(report);
+      } catch (e) {
+        renderBotPerformanceReport({ ok: false, error: e.message });
       }
     }
 
@@ -3070,6 +3146,7 @@
 
       const tasks = [
         get('/health').then(renderStatus).catch(e => showError('Health: ' + e.message)),
+        loadBotPerformanceReport(),
       ];
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();

@@ -7,11 +7,13 @@ from pathlib import Path
 
 from src.trading.entry_strategy import (
   EntryStrategyConfig,
+  ask_edge_cents_for_pick,
   composite_entry_score,
   correlation_block_reason,
   entry_budget_usd,
   is_barbell_pair,
   kelly_stake_usd,
+  passes_ask_edge_gate,
   rank_hourly_candidates,
 )
 from src.trading.hourly_bot import HourlyBot
@@ -104,6 +106,7 @@ def test_hourly_multi_entry_two_strikes():
           "max_concurrent_positions": 3,
           "kelly_enabled": False,
           "correlation_guard": False,
+          "min_ask_edge_cents": 0,
         }
       }
     }
@@ -162,3 +165,23 @@ def test_entry_budget_falls_back_when_kelly_disabled():
     side="yes",
   )
   assert stake == 18.0
+
+
+def test_ask_edge_gate_blocks_thin_edge():
+  pick = _pick("T", model_prob=0.55, ask=0.52)
+  edge = ask_edge_cents_for_pick(pick, "yes")
+  assert edge is not None
+  assert edge < 5
+  ok, _ = passes_ask_edge_gate(pick, "yes", 8.0)
+  assert not ok
+  ok2, _ = passes_ask_edge_gate(pick, "yes", 2.0)
+  assert ok2
+
+
+def test_ask_edge_gate_passes_strong_edge():
+  pick = _pick("T", model_prob=0.70, ask=0.45)
+  edge = ask_edge_cents_for_pick(pick, "yes")
+  assert edge is not None
+  assert edge >= 20
+  ok, _ = passes_ask_edge_gate(pick, "yes", 8.0)
+  assert ok

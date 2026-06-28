@@ -502,6 +502,9 @@ def test_probe_long_during_no_trade_window():
     tab["prediction"]["prob_up"] = 0.62
     tab["monitor"]["elapsed_pct"] = 10.0
     tab["probe_no_trade"] = {"enabled": True, "min_prob": 0.58, "min_elapsed_pct": 7.0}
+    tab["kalshi"]["yes_bid"] = 0.48
+    tab["kalshi"]["yes_ask"] = 0.50
+    tab["kalshi"]["yes_mid"] = 0.49
     actions = bot.run_continuous_cycle(tab)
     assert len(actions) == 1
     assert actions[0]["action"] == "enter"

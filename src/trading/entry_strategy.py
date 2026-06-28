@@ -24,6 +24,7 @@ class EntryStrategyConfig:
   correlation_guard: bool = True
   allow_barbell: bool = True
   barbell_min_strike_gap_pct: float = 0.20
+  min_ask_edge_cents: float = 8.0
 
   @classmethod
   def from_bot_cfg(cls, bot_cfg: dict[str, Any] | None) -> EntryStrategyConfig:
@@ -44,6 +45,7 @@ class EntryStrategyConfig:
       correlation_guard=bool(raw.get("correlation_guard", True)),
       allow_barbell=bool(raw.get("allow_barbell", True)),
       barbell_min_strike_gap_pct=float(raw.get("barbell_min_strike_gap_pct", 0.20)),
+      min_ask_edge_cents=float(raw.get("min_ask_edge_cents", 8.0)),
     )
 
 
@@ -95,6 +97,32 @@ def ask_cents_for_side(pick: dict[str, Any], side: str) -> int | None:
       yes_c = max(1, min(99, int(round(float(mid) * 100))))
       ask = yes_c if side == "yes" else max(1, min(99, 100 - yes_c))
   return int(ask) if ask is not None else None
+
+
+def ask_implied_prob(ask_cents: int) -> float:
+  return ask_cents / 100.0
+
+
+def ask_edge_cents_for_pick(pick: dict[str, Any], side: str) -> float | None:
+  """Model win prob minus ask-implied prob, in percentage points (¢)."""
+  p = win_prob_for_side(pick, side)
+  ask = ask_cents_for_side(pick, side)
+  if p is None or ask is None:
+    return None
+  return round((p - ask_implied_prob(ask)) * 100, 1)
+
+
+def passes_ask_edge_gate(
+  pick: dict[str, Any],
+  side: str,
+  min_ask_edge_cents: float,
+) -> tuple[bool, float | None]:
+  if min_ask_edge_cents <= 0:
+    return True, None
+  edge = ask_edge_cents_for_pick(pick, side)
+  if edge is None:
+    return True, None
+  return edge >= min_ask_edge_cents, edge
 
 
 def expected_value_per_contract_usd(p_win: float, ask_cents: int) -> float:

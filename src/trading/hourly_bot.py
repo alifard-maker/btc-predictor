@@ -18,6 +18,7 @@ from src.trading.entry_strategy import (
   correlation_block_reason,
   entry_budget_usd,
   entry_strategy_from_cfg,
+  passes_ask_edge_gate,
   rank_hourly_candidates,
 )
 from src.trading.hourly_bet_assessment import assess_contract_bet
@@ -602,6 +603,11 @@ class HourlyBot:
       side = _side_from_signal(pick.get("signal"))
       if not side:
         last_reason = "unrecognized_signal"
+        continue
+
+      ok_edge, ask_edge = passes_ask_edge_gate(pick, side, estrat.min_ask_edge_cents)
+      if not ok_edge:
+        last_reason = f"ask_edge_too_low:{ask_edge:.0f}c"
         continue
 
       block = correlation_block_reason(

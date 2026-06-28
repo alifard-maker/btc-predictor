@@ -103,13 +103,14 @@ intra_slot:
     entry_strategy:
       enabled: true
       kelly_enabled: true
-      kelly_fraction: 0.25
+      kelly_fraction: 0.15
+      min_ask_edge_cents: 5
       max_entries_per_cycle: 1
       max_concurrent_positions: 1
       max_budget_fraction_per_entry: 0.55
       correlation_guard: false
     probe_no_trade:
-      enabled: true
+      enabled: false
       min_prob: 0.58
       min_elapsed_pct: 7.0
 
@@ -180,7 +181,7 @@ hourly:
   regime:
     enabled: true
     min_expected_move_pct: 0.12
-    min_edge: 0.05
+    min_edge: 0.08
     min_hours_to_settle: 0.25
     max_sigma_pct: 2.5
     min_reasons_to_block: 2
@@ -214,7 +215,8 @@ hourly:
       edge_tie_threshold: 0.03
       safety_weight: 0.40
       kelly_enabled: true
-      kelly_fraction: 0.25
+      kelly_fraction: 0.15
+      min_ask_edge_cents: 8
       max_entries_per_cycle: 2
       max_concurrent_positions: 3
       max_budget_fraction_per_entry: 0.55
@@ -332,7 +334,8 @@ eth:
         edge_tie_threshold: 0.03
         safety_weight: 0.40
         kelly_enabled: true
-        kelly_fraction: 0.25
+        kelly_fraction: 0.15
+        min_ask_edge_cents: 8
         max_entries_per_cycle: 2
         max_concurrent_positions: 3
         max_budget_fraction_per_entry: 0.55
