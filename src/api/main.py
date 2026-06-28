@@ -597,8 +597,15 @@ def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
     "allow_strong": bool(body.get("allow_strong", current.allow_strong)),
     "allow_actionable": bool(body.get("allow_actionable", current.allow_actionable)),
     "take_profit_enabled": bool(body.get("take_profit_enabled", current.take_profit_enabled)),
+    "take_profit_mode": str(body.get("take_profit_mode", current.take_profit_mode)),
     "take_profit_pct": float(body.get("take_profit_pct", current.take_profit_pct)),
     "take_profit_usd": float(body.get("take_profit_usd", current.take_profit_usd)),
+    "trail_arm_profit_pct": float(body.get("trail_arm_profit_pct", current.trail_arm_profit_pct)),
+    "trail_giveback_pct": float(body.get("trail_giveback_pct", current.trail_giveback_pct)),
+    "trail_arm_profit_usd": float(body.get("trail_arm_profit_usd", current.trail_arm_profit_usd)),
+    "trail_giveback_usd": float(body.get("trail_giveback_usd", current.trail_giveback_usd)),
+    "min_take_profit_pct": float(body.get("min_take_profit_pct", current.min_take_profit_pct)),
+    "max_take_profit_pct": float(body.get("max_take_profit_pct", current.max_take_profit_pct)),
     "min_hold_seconds": int(body.get("min_hold_seconds", current.min_hold_seconds)),
     "profit_exit_cooldown_seconds": int(
       body.get("profit_exit_cooldown_seconds", current.profit_exit_cooldown_seconds)
@@ -637,8 +644,15 @@ def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
     "allow_strong": bool(body.get("allow_strong", current.allow_strong)),
     "allow_actionable": bool(body.get("allow_actionable", current.allow_actionable)),
     "take_profit_enabled": bool(body.get("take_profit_enabled", current.take_profit_enabled)),
+    "take_profit_mode": str(body.get("take_profit_mode", current.take_profit_mode)),
     "take_profit_pct": float(body.get("take_profit_pct", current.take_profit_pct)),
     "take_profit_usd": float(body.get("take_profit_usd", current.take_profit_usd)),
+    "trail_arm_profit_pct": float(body.get("trail_arm_profit_pct", current.trail_arm_profit_pct)),
+    "trail_giveback_pct": float(body.get("trail_giveback_pct", current.trail_giveback_pct)),
+    "trail_arm_profit_usd": float(body.get("trail_arm_profit_usd", current.trail_arm_profit_usd)),
+    "trail_giveback_usd": float(body.get("trail_giveback_usd", current.trail_giveback_usd)),
+    "min_take_profit_pct": float(body.get("min_take_profit_pct", current.min_take_profit_pct)),
+    "max_take_profit_pct": float(body.get("max_take_profit_pct", current.max_take_profit_pct)),
     "min_hold_seconds": int(body.get("min_hold_seconds", current.min_hold_seconds)),
     "profit_exit_cooldown_seconds": int(
       body.get("profit_exit_cooldown_seconds", current.profit_exit_cooldown_seconds)

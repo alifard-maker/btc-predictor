@@ -602,3 +602,66 @@ def test_no_exit_when_profit_below_threshold():
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
     assert not any(a.get("action") == "exit" for a in actions)
     assert len(store.open_positions("KXTEST-1H")) == 1
+
+
+def test_profit_trail_exit_on_giveback_from_peak():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=25.0,
+      take_profit_mode="hybrid",
+      trail_giveback_pct=0.40,
+      min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 40,
+      "cost_usd": 10.0,
+      "signal": "BUY YES",
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    store.update_position_peaks("p1", 5.0, 10.0)
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab()
+    tab["live"]["primary_pick"]["kalshi_mid"] = 0.50
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "PROFIT TRAIL" in exits[0]["detail"]
+    assert "peak +$5.00" in exits[0]["detail"]
+
+
+def test_profit_trail_exits_without_hitting_fixed_target():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=25.0,
+      take_profit_mode="trailing",
+      trail_giveback_pct=0.35,
+      min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 40,
+      "cost_usd": 10.0,
+      "signal": "BUY YES",
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    store.update_position_peaks("p1", 1.2, 10.0)
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab()
+    tab["live"]["primary_pick"]["kalshi_mid"] = 0.42
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "PROFIT TRAIL" in exits[0]["detail"]

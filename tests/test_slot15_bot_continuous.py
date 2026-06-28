@@ -404,3 +404,36 @@ def test_no_exit_when_profit_below_threshold_slot15():
     actions = bot.run_continuous_cycle(tab)
     assert not any(a.get("action") == "exit" for a in actions)
     assert len(store.open_positions(slot_key)) == 1
+
+
+def test_profit_trail_exit_slot15():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    slot_key = "2025-06-28T14:00:00-04:00"
+    store.save_settings(Slot15BotSettings(
+      enabled=True,
+      max_spend_per_slot_usd=25.0,
+      take_profit_mode="hybrid",
+      trail_giveback_pct=0.40,
+      min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": slot_key,
+      "market_ticker": "KXBTC15M-TEST",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 40,
+      "cost_usd": 10.0,
+      "signal": "LONG",
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    store.update_position_peaks("p1", 5.0, 10.0)
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab(slot_key=slot_key)
+    tab["monitor"]["action"] = "HOLD"
+    tab["kalshi"]["yes_mid"] = 0.50
+    actions = bot.run_continuous_cycle(tab)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "PROFIT TRAIL" in exits[0]["detail"]

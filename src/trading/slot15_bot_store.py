@@ -21,8 +21,15 @@ class Slot15BotSettings:
   continuous: bool = True
   reentry_cooldown_seconds: int = 120
   take_profit_enabled: bool = True
+  take_profit_mode: str = "hybrid"  # fixed | adaptive | trailing | hybrid
   take_profit_pct: float = 0.25
   take_profit_usd: float = 0.0
+  trail_arm_profit_pct: float = 0.08
+  trail_giveback_pct: float = 0.35
+  trail_arm_profit_usd: float = 0.50
+  trail_giveback_usd: float = 0.0
+  min_take_profit_pct: float = 0.10
+  max_take_profit_pct: float = 0.40
   min_hold_seconds: int = 30
   profit_exit_cooldown_seconds: int = 60
   auto_stop_on_budget_exhausted: bool = True
@@ -44,8 +51,15 @@ class Slot15BotSettings:
       continuous=bool(raw.get("continuous", True)),
       reentry_cooldown_seconds=int(raw.get("reentry_cooldown_seconds", 120)),
       take_profit_enabled=bool(raw.get("take_profit_enabled", True)),
+      take_profit_mode=str(raw.get("take_profit_mode", "hybrid")),
       take_profit_pct=float(raw.get("take_profit_pct", 0.25)),
       take_profit_usd=float(raw.get("take_profit_usd", 0.0)),
+      trail_arm_profit_pct=float(raw.get("trail_arm_profit_pct", 0.08)),
+      trail_giveback_pct=float(raw.get("trail_giveback_pct", 0.35)),
+      trail_arm_profit_usd=float(raw.get("trail_arm_profit_usd", 0.50)),
+      trail_giveback_usd=float(raw.get("trail_giveback_usd", 0.0)),
+      min_take_profit_pct=float(raw.get("min_take_profit_pct", 0.10)),
+      max_take_profit_pct=float(raw.get("max_take_profit_pct", 0.40)),
       min_hold_seconds=int(raw.get("min_hold_seconds", 30)),
       profit_exit_cooldown_seconds=int(raw.get("profit_exit_cooldown_seconds", 60)),
       auto_stop_on_budget_exhausted=bool(raw.get("auto_stop_on_budget_exhausted", True)),
@@ -113,6 +127,7 @@ class Slot15BotStore:
     self.db_path.parent.mkdir(parents=True, exist_ok=True)
     self._last_period_key: str | None = None
     self._last_skip_reason: str | None = None
+    self._position_peaks: dict[str, dict[str, float]] = {}
     self._init_db()
 
   def set_last_skip_reason(self, reason: str | None) -> None:
@@ -302,12 +317,32 @@ class Slot15BotStore:
       )
     return row
 
+  def update_position_peaks(
+    self,
+    position_id: str,
+    unrealized_usd: float,
+    cost_usd: float,
+  ) -> dict[str, float]:
+    from src.trading.bot_profit_exit import update_position_peaks
+
+    peaks = self._position_peaks.get(
+      position_id,
+      {"peak_unrealized_usd": 0.0, "peak_profit_pct": 0.0},
+    )
+    updated = update_position_peaks(peaks, unrealized_usd, cost_usd)
+    self._position_peaks[position_id] = updated
+    return updated
+
+  def clear_position_peaks(self, position_id: str) -> None:
+    self._position_peaks.pop(position_id, None)
+
   def close_position(self, position_id: str) -> dict[str, Any] | None:
     with self._connect() as conn:
       row = conn.execute("SELECT * FROM bot_positions WHERE id = ?", (position_id,)).fetchone()
       if not row:
         return None
       conn.execute("UPDATE bot_positions SET status = 'closed' WHERE id = ?", (position_id,))
+    self.clear_position_peaks(position_id)
     return dict(row)
 
   def _enrich_trade(self, row: dict[str, Any]) -> dict[str, Any]:

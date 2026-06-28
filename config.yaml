@@ -89,8 +89,14 @@ intra_slot:
     continuous_enabled: true
     poll_seconds: 5
     take_profit_enabled: true
+    take_profit_mode: hybrid
     take_profit_pct: 0.25
     take_profit_usd: 0.0
+    trail_arm_profit_pct: 0.08
+    trail_giveback_pct: 0.35
+    trail_arm_profit_usd: 0.50
+    min_take_profit_pct: 0.10
+    max_take_profit_pct: 0.40
     min_hold_seconds: 30
     profit_exit_cooldown_seconds: 60
 
@@ -179,8 +185,14 @@ hourly:
     continuous_enabled: true
     poll_seconds: 5
     take_profit_enabled: true
+    take_profit_mode: hybrid
     take_profit_pct: 0.25
     take_profit_usd: 0.0
+    trail_arm_profit_pct: 0.08
+    trail_giveback_pct: 0.35
+    trail_arm_profit_usd: 0.50
+    min_take_profit_pct: 0.10
+    max_take_profit_pct: 0.40
     min_hold_seconds: 30
     profit_exit_cooldown_seconds: 60
   sigma_calibration: true
@@ -279,8 +291,14 @@ eth:
       continuous_enabled: true
       poll_seconds: 5
       take_profit_enabled: true
+      take_profit_mode: hybrid
       take_profit_pct: 0.25
       take_profit_usd: 0.0
+      trail_arm_profit_pct: 0.08
+      trail_giveback_pct: 0.35
+      trail_arm_profit_usd: 0.50
+      min_take_profit_pct: 0.10
+      max_take_profit_pct: 0.40
       min_hold_seconds: 30
       profit_exit_cooldown_seconds: 60
     sigma_calibration: true

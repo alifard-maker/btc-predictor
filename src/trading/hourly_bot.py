@@ -7,9 +7,10 @@ import uuid
 from typing import Any
 
 from src.trading.bot_profit_exit import (
+  AdaptiveExitContext,
+  evaluate_adaptive_profit_exit,
+  is_profit_exit_reason,
   position_hold_seconds,
-  profit_target_detail,
-  should_take_profit_target,
 )
 from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
 from src.trading.hourly_bet_assessment import assess_contract_bet
@@ -318,6 +319,9 @@ class HourlyBot:
     alert: dict[str, Any],
     unrealized: float | None,
     settings: HourlyBotSettings,
+    *,
+    peaks: dict[str, float],
+    exit_ctx: AdaptiveExitContext,
   ) -> tuple[str | None, str]:
     """Return (exit_reason, detail_suffix) or (None, '') if position should stay open."""
     kind = alert.get("alert")
@@ -325,17 +329,16 @@ class HourlyBot:
       return "TAKE PROFIT", str(alert.get("detail", ""))
     if kind == "CUT LOSSES" and _should_paper_exit(alert, unrealized):
       return "CUT LOSSES", str(alert.get("detail", ""))
-    if should_take_profit_target(
-      enabled=settings.take_profit_enabled,
+    reason, detail = evaluate_adaptive_profit_exit(
+      settings=settings,
       unrealized_usd=unrealized,
       cost_usd=float(pos.get("cost_usd") or 0),
-      take_profit_pct=settings.take_profit_pct,
-      take_profit_usd=settings.take_profit_usd,
-      min_hold_seconds=settings.min_hold_seconds,
+      peaks=peaks,
       hold_seconds=position_hold_seconds(pos),
-    ):
-      assert unrealized is not None
-      return "PROFIT TARGET", profit_target_detail(unrealized, float(pos.get("cost_usd") or 0))
+      ctx=exit_ctx,
+    )
+    if reason:
+      return reason, detail
     return None, ""
 
   def _process_exits(
@@ -348,6 +351,8 @@ class HourlyBot:
     live = tab.get("live") or tab
     locked = tab.get("locked")
     price = tab.get("brti_live") or live.get("current_price")
+    hours_left = live.get("hours_to_settle")
+    seconds_remaining = float(hours_left) * 3600.0 if hours_left is not None else None
     results: list[dict[str, Any]] = []
 
     for pos in self.store.open_positions(event_ticker):
@@ -386,7 +391,22 @@ class HourlyBot:
         exit_price = pos["entry_price_cents"]
 
       unrealized = _unrealized_pnl_usd(pos, exit_price)
-      exit_reason, detail_suffix = self._resolve_exit(pos, alert, unrealized, settings)
+      cost_usd = float(pos.get("cost_usd") or 0)
+      peaks = self.store.update_position_peaks(
+        pos["id"],
+        float(unrealized or 0),
+        cost_usd,
+      )
+      exit_ctx = AdaptiveExitContext(
+        seconds_remaining=seconds_remaining,
+        period_seconds=3600.0,
+        current_edge=pick.get("edge"),
+        entry_edge=pos.get("entry_edge"),
+        regime_allow_trade=bool(regime.get("allow_trade", True)),
+      )
+      exit_reason, detail_suffix = self._resolve_exit(
+        pos, alert, unrealized, settings, peaks=peaks, exit_ctx=exit_ctx,
+      )
       if not exit_reason:
         continue
 
@@ -424,7 +444,7 @@ class HourlyBot:
       log.info("%s hourly bot [paper exit]: %s", self.asset.upper(), detail)
       cooldown = (
         settings.profit_exit_cooldown_seconds
-        if exit_reason == "PROFIT TARGET"
+        if is_profit_exit_reason(exit_reason)
         else settings.reentry_cooldown_seconds
       )
       self.store.record_exit_cooldown(
