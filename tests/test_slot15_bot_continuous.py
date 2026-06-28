@@ -261,3 +261,56 @@ def test_entries_never_exceed_max_at_risk():
         })
 
     assert store.open_exposure_usd("SLOT1") == 0.0
+
+
+def test_auto_stop_when_slot_bankroll_exhausted():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    max_cap = 25.0
+    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=max_cap))
+    store.log_trade({
+      "event_ticker": "SLOT1",
+      "action": "exit",
+      "status": "filled",
+      "pnl_usd": -25.0,
+    })
+    assert store.remaining_budget_usd("SLOT1", max_cap) == 0.0
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab(slot_key="SLOT1")
+    actions = bot.run_continuous_cycle(tab)
+    assert any(a.get("action") == "auto_stop" for a in actions)
+    assert not store.get_settings().enabled
+    assert store.get_settings().auto_stopped
+    st = store.status("SLOT1")
+    assert st["auto_stopped"] is True
+
+
+def test_no_entries_after_slot_auto_stop():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.save_settings(Slot15BotSettings(
+      enabled=False, auto_stopped=True, max_spend_per_slot_usd=25.0,
+    ))
+    bot = Slot15Bot(store, asset="btc")
+    assert bot.run_continuous_cycle(_live_tab(slot_key="SLOT1")) == []
+
+
+def test_manual_reenable_after_slot_auto_stop():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.save_settings(Slot15BotSettings(
+      enabled=False, auto_stopped=True, max_spend_per_slot_usd=25.0,
+    ))
+    store.log_trade({
+      "event_ticker": "SLOT1",
+      "action": "exit",
+      "status": "filled",
+      "pnl_usd": -25.0,
+    })
+    store.save_settings(Slot15BotSettings(
+      enabled=True, auto_stopped=False, max_spend_per_slot_usd=50.0,
+    ))
+    bot = Slot15Bot(store, asset="btc")
+    actions = bot.run_continuous_cycle(_live_tab(slot_key="SLOT1"))
+    assert any(a.get("action") == "enter" for a in actions)
+    assert store.get_settings().enabled

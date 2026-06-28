@@ -241,8 +241,48 @@ class HourlyBot:
 
     actions: list[dict[str, Any]] = []
     actions.extend(self._process_exits(tab, event_ticker, settings, cfg))
+    settings = self.store.get_settings()
+    stop_row = self._maybe_auto_stop_on_budget_exhausted(event_ticker, settings)
+    if stop_row:
+      actions.append(stop_row)
+      return actions
     actions.extend(self._process_entries(tab, event_ticker, settings, cfg))
     return actions
+
+  def _maybe_auto_stop_on_budget_exhausted(
+    self,
+    event_ticker: str,
+    settings: HourlyBotSettings,
+  ) -> dict[str, Any] | None:
+    if not settings.enabled or not settings.auto_stop_on_budget_exhausted:
+      return None
+    max_cap = settings.max_spend_per_hour_usd
+    if self.store.remaining_budget_usd(event_ticker, max_cap) > 0:
+      return None
+    realized = self.store.realized_pnl_usd(event_ticker)
+    exposure = self.store.open_exposure_usd(event_ticker)
+    detail = (
+      f"Hour bankroll exhausted (${realized:.2f} realized, "
+      f"${exposure:.2f} at risk, max ${max_cap:.2f})"
+    )
+    updated = HourlyBotSettings(
+      **{
+        **settings.to_dict(),
+        "enabled": False,
+        "auto_stopped": True,
+      }
+    )
+    self.store.save_settings(updated)
+    row = self.store.log_trade({
+      "event_ticker": event_ticker,
+      "trigger": "continuous",
+      "action": "auto_stop",
+      "mode": settings.mode,
+      "status": "filled",
+      "detail": detail,
+    })
+    log.warning("%s hourly bot auto-stopped: %s", self.asset.upper(), detail)
+    return row
 
   def _process_exits(
     self,

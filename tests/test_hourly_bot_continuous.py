@@ -387,3 +387,63 @@ def test_entries_never_exceed_max_at_risk():
     assert summary["total_entered_usd"] >= cumulative
     if summary["enter_count"] >= 2:
       assert summary["total_entered_usd"] > max_cap
+
+
+def test_auto_stop_when_hour_bankroll_exhausted():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    max_cap = 25.0
+    store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=max_cap))
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "status": "filled",
+      "pnl_usd": -25.0,
+    })
+    assert store.remaining_budget_usd("EV1", max_cap) == 0.0
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(event="EV1")
+    actions = bot.run_continuous_cycle(
+      tab, cfg={"hourly": {"regime": {"min_edge": 0.05, "min_expected_move_pct": 0.12}}}
+    )
+    assert any(a.get("action") == "auto_stop" for a in actions)
+    assert not store.get_settings().enabled
+    assert store.get_settings().auto_stopped
+    st = store.status("EV1")
+    assert st["auto_stopped"] is True
+    assert "exhausted" in (st["auto_stop_reason"] or "").lower()
+
+
+def test_no_entries_after_auto_stop():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=False, auto_stopped=True, max_spend_per_hour_usd=25.0,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(event="EV1")
+    assert bot.run_continuous_cycle(tab) == []
+
+
+def test_manual_reenable_after_auto_stop():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=False, auto_stopped=True, max_spend_per_hour_usd=25.0,
+    ))
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "status": "filled",
+      "pnl_usd": -25.0,
+    })
+    store.save_settings(HourlyBotSettings(
+      enabled=True, auto_stopped=False, max_spend_per_hour_usd=50.0,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(event="EV1")
+    actions = bot.run_continuous_cycle(
+      tab, cfg={"hourly": {"regime": {"min_edge": 0.05, "min_expected_move_pct": 0.12}}}
+    )
+    assert any(a.get("action") == "enter" for a in actions)
+    assert store.get_settings().enabled

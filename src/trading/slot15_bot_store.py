@@ -20,6 +20,8 @@ class Slot15BotSettings:
   allow_actionable: bool = True
   continuous: bool = True
   reentry_cooldown_seconds: int = 120
+  auto_stop_on_budget_exhausted: bool = True
+  auto_stopped: bool = False
 
   def to_dict(self) -> dict[str, Any]:
     return asdict(self)
@@ -36,6 +38,8 @@ class Slot15BotSettings:
       allow_actionable=bool(raw.get("allow_actionable", True)),
       continuous=bool(raw.get("continuous", True)),
       reentry_cooldown_seconds=int(raw.get("reentry_cooldown_seconds", 120)),
+      auto_stop_on_budget_exhausted=bool(raw.get("auto_stop_on_budget_exhausted", True)),
+      auto_stopped=bool(raw.get("auto_stopped", False)),
     )
 
 
@@ -380,6 +384,13 @@ class Slot15BotStore:
         ).fetchall()
     return [self._enrich_trade(dict(r)) for r in rows]
 
+  def last_auto_stop_trade(self) -> dict[str, Any] | None:
+    with self._connect() as conn:
+      row = conn.execute(
+        "SELECT * FROM bot_trades WHERE action = 'auto_stop' ORDER BY created_at DESC LIMIT 1",
+      ).fetchone()
+    return self._enrich_trade(dict(row)) if row else None
+
   def status(self, event_ticker: str | None = None) -> dict[str, Any]:
     settings = self.get_settings()
     exposure = self.open_exposure_usd(event_ticker) if event_ticker else 0.0
@@ -395,6 +406,7 @@ class Slot15BotStore:
     )
     open_pos = self.open_positions(event_ticker) if event_ticker else []
     slot_summary = self.slot_interval_summary(event_ticker) if event_ticker else None
+    auto_stop_row = self.last_auto_stop_trade() if settings.auto_stopped else None
     return {
       "settings": settings.to_dict(),
       "event_ticker": event_ticker,
@@ -405,4 +417,6 @@ class Slot15BotStore:
       "open_positions": open_pos,
       "open_position_count": len(open_pos),
       "slot_summary": slot_summary,
+      "auto_stopped": settings.auto_stopped,
+      "auto_stop_reason": auto_stop_row.get("detail") if auto_stop_row else None,
     }

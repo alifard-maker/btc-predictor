@@ -244,8 +244,48 @@ class Slot15Bot:
 
     actions: list[dict[str, Any]] = []
     actions.extend(self._process_exits(tab, slot_key, settings))
+    settings = self.store.get_settings()
+    stop_row = self._maybe_auto_stop_on_budget_exhausted(slot_key, settings)
+    if stop_row:
+      actions.append(stop_row)
+      return actions
     actions.extend(self._process_entries(tab, slot_key, settings))
     return actions
+
+  def _maybe_auto_stop_on_budget_exhausted(
+    self,
+    slot_key: str,
+    settings: Slot15BotSettings,
+  ) -> dict[str, Any] | None:
+    if not settings.enabled or not settings.auto_stop_on_budget_exhausted:
+      return None
+    max_cap = settings.max_spend_per_slot_usd
+    if self.store.remaining_budget_usd(slot_key, max_cap) > 0:
+      return None
+    realized = self.store.realized_pnl_usd(slot_key)
+    exposure = self.store.open_exposure_usd(slot_key)
+    detail = (
+      f"Slot bankroll exhausted (${realized:.2f} realized, "
+      f"${exposure:.2f} at risk, max ${max_cap:.2f})"
+    )
+    updated = Slot15BotSettings(
+      **{
+        **settings.to_dict(),
+        "enabled": False,
+        "auto_stopped": True,
+      }
+    )
+    self.store.save_settings(updated)
+    row = self.store.log_trade({
+      "event_ticker": slot_key,
+      "trigger": "continuous",
+      "action": "auto_stop",
+      "mode": settings.mode,
+      "status": "filled",
+      "detail": detail,
+    })
+    log.warning("%s 15m bot auto-stopped: %s", self.asset.upper(), detail)
+    return row
 
   def _process_exits(
     self,

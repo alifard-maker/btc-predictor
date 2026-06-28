@@ -1861,6 +1861,13 @@
       return `<span class="${cls}">${n >= 0 ? '+' : ''}$${n.toFixed(2)}</span>`;
     }
 
+    function botAutoStopBanner(bot, periodLabel) {
+      if (!bot || !bot.auto_stopped) return '';
+      const reason = bot.auto_stop_reason
+        || `Auto-stopped: ${periodLabel} budget exhausted. Increase max $/${periodLabel === 'hour' ? 'hour' : 'slot'} and re-enable Auto-bet to continue.`;
+      return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:8px;color:#fecaca;font-size:.75rem"><strong>Auto-stopped</strong> — ${reason}</div>`;
+    }
+
     const BOT_TRADES_SCROLL_PIN = 5;
 
     function captureBotTradesScroll(statusWrap) {
@@ -2001,11 +2008,13 @@
       const tab = asset === 'eth' ? 'eth-15m' : '15m';
       if (activeTab !== tab) return;
       if (bot && bot.asset && bot.asset !== asset) return;
+      if (bot && bot.ok) bot = mergeSlot15BotStatus(asset, bot) || bot;
       if (!bot || !bot.ok) {
         el.innerHTML = `<p class="muted">Bot status unavailable${bot?.error ? `: ${bot.error}` : ''}.</p>`;
         slot15BotForceSettingsRender[asset] = true;
         return;
       }
+      if (bot.auto_stopped) slot15BotForceSettingsRender[asset] = true;
       const p = `slot15-${asset}`;
       const serverSettings = bot.settings || {};
       const settingsWrapId = `${asset}-slot15-bot-settings`;
@@ -2064,7 +2073,9 @@
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
       const tradesScroll = captureBotTradesScroll(statusWrap);
+      const autoStopHtml = botAutoStopBanner(bot, 'slot');
       statusWrap.innerHTML = `
+        ${autoStopHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Slot total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
@@ -2143,6 +2154,7 @@
         botForceSettingsRender[asset] = true;
         return;
       }
+      if (bot.auto_stopped) botForceSettingsRender[asset] = true;
       const p = asset;
       const serverSettings = bot.settings || {};
       const settingsWrapId = `${asset}-hourly-bot-settings`;
@@ -2201,7 +2213,9 @@
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
       const tradesScroll = captureBotTradesScroll(statusWrap);
+      const autoStopHtml = botAutoStopBanner(bot, 'hour');
       statusWrap.innerHTML = `
+        ${autoStopHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Hour total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
@@ -2421,6 +2435,31 @@
       renderDailyStructure(live.structure);
       const botAsset = hourlyRenderTab === 'eth-hourly' ? 'eth' : 'btc';
       if (activeTab === hourlyRenderTab) renderHourlyBot(data.bot, botAsset);
+    }
+
+    async function loadSlot15Bot(predictionBot) {
+      const tabAtStart = activeTab;
+      if (tabAtStart !== '15m' && tabAtStart !== 'eth-15m') return;
+      const asset = tabAtStart === 'eth-15m' ? 'eth' : 'btc';
+      try {
+        const botDirect = await get(slot15BotStatusUrl(asset));
+        let bot = botDirect || predictionBot;
+        if (botDirect && predictionBot) {
+          const evt = botDirect.event_ticker || predictionBot.event_ticker;
+          const ss = mergeSlot15Summary(
+            predictionBot.slot_summary || {},
+            botDirect.slot_summary || {},
+            evt,
+          );
+          bot = { ...predictionBot, ...botDirect, event_ticker: evt, slot_summary: ss };
+        }
+        bot = mergeSlot15BotStatus(asset, bot);
+        if (bot) renderSlot15Bot(bot, asset);
+      } catch (_) {
+        const cached = lastSlot15BotStatus[asset];
+        if (cached) renderSlot15Bot(cached, asset);
+        else if (predictionBot) renderSlot15Bot(mergeSlot15BotStatus(asset, predictionBot), asset);
+      }
     }
 
     async function loadDaily() {
