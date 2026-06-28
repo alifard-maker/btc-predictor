@@ -136,6 +136,18 @@ class Slot15BotStore:
   def last_skip_reason(self) -> str | None:
     return self._last_skip_reason
 
+  def record_cycle(self, *, active: bool) -> None:
+    from src.trading.bot_runtime import record_bot_cycle
+
+    with self._connect() as conn:
+      record_bot_cycle(conn, active=active)
+
+  def get_runtime(self) -> dict[str, Any]:
+    from src.trading.bot_runtime import bot_runtime_dict
+
+    with self._connect() as conn:
+      return bot_runtime_dict(conn)
+
   def sync_period(self, slot_key: str, settings: Slot15BotSettings) -> Slot15BotSettings:
     """Clear slot-scoped auto_stop when the active 15m slot changes (live mode only)."""
     prev = self._last_period_key
@@ -158,9 +170,11 @@ class Slot15BotStore:
     return conn
 
   def _migrate(self, conn: sqlite3.Connection) -> None:
+    from src.trading.bot_runtime import migrate_bot_runtime
     from src.trading.paper_bankroll import migrate_paper_state
 
     migrate_paper_state(conn)
+    migrate_bot_runtime(conn)
     cd_cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_cooldowns)").fetchall()}
     if cd_cols and "cooldown_seconds" not in cd_cols:
       conn.execute("ALTER TABLE bot_cooldowns ADD COLUMN cooldown_seconds INTEGER")
@@ -586,4 +600,5 @@ class Slot15BotStore:
       "auto_stopped": settings.auto_stopped,
       "auto_stop_reason": auto_stop_row.get("detail") if auto_stop_row else None,
       "last_skip_reason": self._last_skip_reason,
+      "server_runtime": self.get_runtime(),
     }

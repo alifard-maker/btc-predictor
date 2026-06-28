@@ -302,16 +302,22 @@ class PredictionLoop:
 
   def _run_hourly_bot_continuous(self, asset: str) -> None:
     asset = asset.lower()
-    settings = self.hourly_bot_store(asset).get_settings()
-    if not settings.enabled or not settings.continuous:
-      return
+    store = self.hourly_bot_store(asset)
+    settings = store.get_settings()
+    active = settings.enabled and settings.continuous
     try:
+      if not active:
+        if not settings.enabled:
+          store.set_last_skip_reason("auto_bet_off")
+        return
       acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
       tab = self._hourly_tab_prediction(asset)
       if tab.get("ok"):
         self.hourly_bot(asset).run_continuous_cycle(tab, cfg=acfg)
     except Exception as e:
       log.exception("%s hourly bot continuous cycle failed: %s", asset.upper(), e)
+    finally:
+      store.record_cycle(active=active)
 
   def run_hourly_bot_continuous(self) -> None:
     self._run_hourly_bot_continuous("btc")
@@ -454,15 +460,21 @@ class PredictionLoop:
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):
       return
-    settings = self.slot15_bot_store(asset).get_settings()
-    if not settings.enabled or not settings.continuous:
-      return
+    store = self.slot15_bot_store(asset)
+    settings = store.get_settings()
+    active = settings.enabled and settings.continuous
     try:
+      if not active:
+        if not settings.enabled:
+          store.set_last_skip_reason("auto_bet_off")
+        return
       tab = self._slot15_tab(asset)
       if tab.get("ok"):
         self.slot15_bot(asset).run_continuous_cycle(tab)
     except Exception as e:
       log.exception("%s 15m bot continuous cycle failed: %s", asset.upper(), e)
+    finally:
+      store.record_cycle(active=active)
 
   def run_slot15_bot_continuous(self) -> None:
     self._run_slot15_bot_continuous("btc")
@@ -1738,6 +1750,7 @@ class PredictionLoop:
     series = kalshi.series_ticker
     index_id = index_id_for_cfg(acfg)
     last_err = self.last_error if asset == "btc" else self.eth_last_error
+    logs_path = Path(self._acfg_15m(asset).get("paths", {}).get("logs", "data/logs"))
     return {
       "asset": asset,
       "symbol": acfg["symbol"],
@@ -1762,6 +1775,7 @@ class PredictionLoop:
       "prediction_schedule": "every :00, :15, :30, :45 ET",
       "last_error": last_err,
       "scheduler_running": self._scheduler is not None and getattr(self._scheduler, "running", False),
+      "data_dir": str(logs_path.parent),
       "series_ticker": series,
     }
 
@@ -1878,6 +1892,14 @@ class PredictionLoop:
     scheduler.add_job(self.poll_brti, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=1), id="brti_now")
     scheduler.start()
     self._scheduler = scheduler
+    try:
+      from src.trading.bot_bootstrap import bootstrap_paper_bots
+
+      activated = bootstrap_paper_bots(self)
+      if activated:
+        log.info("Paper bots auto-enabled from PAPER_BOT_AUTO_ENABLE: %s", ", ".join(activated))
+    except Exception as e:
+      log.warning("Paper bot bootstrap skipped: %s", e)
     log.info("Scheduler started: 15m slots at :00/:15/:30/:45 ET (%s)", self.tz)
     return scheduler
 

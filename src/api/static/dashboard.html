@@ -306,7 +306,7 @@
     <div id="panel-15m">
     <div class="card" id="btc-slot15-bot-card">
       <h2>BTC 15m auto-bet</h2>
-      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s</strong> while enabled — enters and exits paper/live positions from live 15m signals (open LONG/SHORT, late entry, flip). <strong>Max at-risk $/slot</strong> caps open exposure; exits free budget for re-entry. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any LONG/SHORT).</p>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON — enters and exits paper/live positions from live 15m signals (browser not required). <strong>Max at-risk $/slot</strong> caps open exposure; exits free budget for re-entry. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any LONG/SHORT).</p>
       <div id="btc-slot15-bot"><p class="muted">Loading…</p></div>
     </div>
     <details class="card guide-card" id="dashboard-guide">
@@ -426,7 +426,7 @@
     <div id="panel-eth-15m" style="display:none">
     <div class="card" id="eth-slot15-bot-card">
       <h2>ETH 15m auto-bet</h2>
-      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s</strong> — same as BTC: continuous enter/exit within your <strong>max at-risk $/slot</strong>. Uses LONG/SHORT, late entry, and flip signals from the monitor. <strong>Both filters off</strong> = free mode.</p>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> (browser not required when Auto-bet is ON) — continuous enter/exit within your <strong>max at-risk $/slot</strong>. Uses LONG/SHORT, late entry, and flip signals from the monitor. <strong>Both filters off</strong> = free mode.</p>
       <div id="eth-slot15-bot"><p class="muted">Loading…</p></div>
     </div>
     <div class="card ref-override" id="eth15-ref-override-panel">
@@ -469,7 +469,7 @@
     <div id="panel-daily" style="display:none">
       <div class="card" id="btc-hourly-bot-card">
         <h2>BTC hourly auto-bet</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s</strong> while enabled — enters and exits paper/live positions from live signals. <strong>Max at-risk $/hour</strong> caps open exposure at once; exits free budget for re-entry (many round-trips per hour are OK). <strong>Cumulative $ entered</strong> below can exceed your cap — that is normal churn, not overspend. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any BUY YES/NO pick).</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON — enters and exits paper/live positions from live signals (no browser required). <strong>Max at-risk $/hour</strong> caps open exposure at once; exits free budget for re-entry (many round-trips per hour are OK). <strong>Cumulative $ entered</strong> below can exceed your cap — that is normal churn, not overspend. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any BUY YES/NO pick).</p>
         <div id="btc-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="hourly-guide-card">
@@ -512,7 +512,7 @@
     <div id="panel-eth-hourly" style="display:none">
       <div class="card" id="eth-hourly-bot-card">
         <h2>ETH hourly auto-bet</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s</strong> — same as BTC: continuous enter/exit within your <strong>max at-risk $/hour</strong> (open exposure only; exits free budget). <strong>Cumulative $ entered</strong> can exceed your cap when the bot rotates through many round-trips. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON (browser not required) — continuous enter/exit within your <strong>max at-risk $/hour</strong> (open exposure only; exits free budget). <strong>Cumulative $ entered</strong> can exceed your cap when the bot rotates through many round-trips. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
         <div id="eth-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="eth-hourly-guide-card">
@@ -1055,8 +1055,48 @@
       if (p.slot_monitor) renderSlotMonitor(p.slot_monitor);
     }
 
+    let schedulerRunning = false;
+    let serverDataDir = '';
+
+    function formatCycleAge(iso) {
+      if (!iso) return 'never';
+      const sec = (Date.now() - new Date(iso).getTime()) / 1000;
+      if (!Number.isFinite(sec) || sec < 0) return time(iso);
+      if (sec < 60) return `${Math.round(sec)}s ago`;
+      if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+      return time(iso);
+    }
+
+    function botServerBanner(bot, s) {
+      const rt = bot.server_runtime || {};
+      const cycleAt = rt.last_cycle_at;
+      const cycleFresh = cycleAt && (Date.now() - new Date(cycleAt).getTime()) < 30000;
+      const serverOk = schedulerRunning && cycleFresh;
+      const autoOn = !!(s && s.enabled);
+      const statusLabel = serverOk
+        ? '● Server running'
+        : schedulerRunning
+          ? '○ Scheduler up — waiting for bot cycle'
+          : '● Scheduler stopped';
+      const statusCls = serverOk ? 'up' : schedulerRunning ? 'muted' : 'down';
+      const autoHint = autoOn
+        ? 'Auto-bet is ON on the server (runs without this browser tab).'
+        : 'Auto-bet is OFF — toggle once; setting persists on the server volume.';
+      const dataHint = serverDataDir
+        ? ` Data: <code>${serverDataDir}</code>`
+        : '';
+      return `<div style="margin-bottom:.55rem;padding:.5rem .65rem;background:rgba(34,197,94,${serverOk ? '.12' : '.06'});border:1px solid rgba(34,197,94,.35);border-radius:8px;font-size:.72rem">
+        <strong class="${statusCls}">${statusLabel}</strong>
+        · Last bot cycle: <strong>${formatCycleAge(cycleAt)}</strong>
+        · ${autoHint}
+        <div class="muted" style="margin-top:.25rem;font-size:.65rem">Bots poll every ~5s on the server when Auto-bet is ON. Paper bankroll and trade logs survive redeploys only with a Railway volume mounted at <code>/data</code>.${dataHint}</div>
+      </div>`;
+    }
+
     function renderStatus(h) {
       if (h.version) $('app-version').textContent = h.version;
+      schedulerRunning = !!h.scheduler_running;
+      serverDataDir = h.data_dir || '';
       const api = slot15Api();
       const data = activeTab === 'eth-15m' ? (h.eth_15m || h) : h;
       const series = data.series_ticker || api.series;
@@ -2154,7 +2194,9 @@
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'slot');
       const skipHtml = botSkipReasonHtml(bot);
+      const serverBanner = botServerBanner(bot, s);
       statusWrap.innerHTML = `
+        ${serverBanner}
         ${autoStopHtml}
         ${skipHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
@@ -2298,7 +2340,9 @@
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'hour');
       const skipHtml = botSkipReasonHtml(bot);
+      const serverBanner = botServerBanner(bot, s);
       statusWrap.innerHTML = `
+        ${serverBanner}
         ${autoStopHtml}
         ${skipHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>

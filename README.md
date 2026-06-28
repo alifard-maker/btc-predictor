@@ -57,7 +57,11 @@ git init && git add . && git commit -m "BTC predictor backend"
 
 `DATABASE_URL` is set automatically when you add Postgres.
 
-### 6. Deploy
+### 6. Attach persistent volume (required for paper bots)
+
+Bot bankroll, trade logs, and Auto-bet settings live in SQLite under `DATA_DIR` (default `/data`). **Attach a Railway volume at `/data`** or redeploys wipe paper state. See **[RAILWAY.md](RAILWAY.md)** for 24/7 paper bot setup.
+
+### 7. Deploy
 
 Railway builds the Docker image and starts the API. Health check: `GET /health`
 
