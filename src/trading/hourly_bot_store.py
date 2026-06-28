@@ -146,6 +146,7 @@ class HourlyBotStore:
     return round(sum(float(p.get("cost_usd") or 0) for p in positions), 2)
 
   def remaining_budget_usd(self, event_ticker: str, max_hourly: float) -> float:
+    """Room for new entries: max at-risk cap minus current open exposure (exits free budget)."""
     return max(0.0, float(max_hourly) - self.open_exposure_usd(event_ticker))
 
   def has_open_position(self, event_ticker: str, market_ticker: str) -> bool:
@@ -214,6 +215,7 @@ class HourlyBotStore:
     return out
 
   def hour_interval_summary(self, event_ticker: str) -> dict[str, Any]:
+    """Per-hour stats. total_entered_usd sums all enter fills (can exceed max at-risk with churn)."""
     with self._connect() as conn:
       row = conn.execute(
         """

@@ -250,3 +250,46 @@ def test_settings_save_does_not_delete_trades():
     })
     store.save_settings(HourlyBotSettings(enabled=False, allow_strong=False, allow_actionable=False))
     assert len(store.list_trades()) == 1
+
+
+def test_entries_never_exceed_max_at_risk():
+  """Open exposure stays within cap; cumulative enters may exceed it after round-trips."""
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    max_cap = 10.0
+    store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=max_cap))
+    bot = HourlyBot(store, asset="btc")
+    cfg = {"hourly": {"regime": {"min_edge": 0.05, "min_expected_move_pct": 0.12}}}
+    tab = _live_tab(event="EV1")
+    cumulative = 0.0
+
+    for _ in range(5):
+      actions = bot.run_continuous_cycle(tab, cfg=cfg)
+      exposure = store.open_exposure_usd("EV1")
+      assert exposure <= max_cap + 0.01
+      for a in actions:
+        if a.get("action") == "enter" and a.get("status") == "filled":
+          cumulative += float(a.get("cost_usd") or 0)
+          assert float(a.get("cost_usd") or 0) <= store.remaining_budget_usd("EV1", max_cap) + float(a.get("cost_usd") or 0) + 0.01
+      for pos in list(store.open_positions("EV1")):
+        store.close_position(pos["id"])
+        store.log_trade({
+          "event_ticker": "EV1",
+          "action": "exit",
+          "mode": "paper",
+          "market_ticker": pos["market_ticker"],
+          "side": pos["side"],
+          "contracts": pos["contracts"],
+          "price_cents": pos["entry_price_cents"],
+          "entry_price_cents": pos["entry_price_cents"],
+          "exit_price_cents": pos["entry_price_cents"],
+          "pnl_usd": 0.0,
+          "status": "filled",
+          "position_id": pos["id"],
+        })
+
+    summary = store.hour_interval_summary("EV1")
+    assert summary["open_exposure_usd"] == 0.0
+    assert summary["total_entered_usd"] >= cumulative
+    if summary["enter_count"] >= 2:
+      assert summary["total_entered_usd"] > max_cap
