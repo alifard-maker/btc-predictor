@@ -166,6 +166,13 @@ def _session_user(request: Request) -> None:
   require_session(request, _cfg)
 
 
+def _slot15_bot_payload(asset: str, reference_override: float | None = None) -> dict[str, Any]:
+  if _loop is None:
+    return {"ok": False, "error": "Service starting"}
+  tab = _loop._slot15_tab(asset, reference_override)
+  return _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+
+
 def _sanitize_json(obj: Any) -> Any:
   """Recursively make nested summary/bin payloads JSON-safe."""
   if obj is None:
@@ -306,11 +313,13 @@ def latest_prediction(reference_override: float | None = Query(default=None, gt=
     out = _prediction_to_dict(_loop.latest_prediction)
     out["slot_monitor"] = monitor
     _apply_ref_override_fields(out, monitor)
+    out["bot"] = _slot15_bot_payload("btc", reference_override)
     return out
   row = _loop.calibration.latest()
   if row:
     row["slot_monitor"] = monitor
     _apply_ref_override_fields(row, monitor)
+    row["bot"] = _slot15_bot_payload("btc", reference_override)
     return row
   raise HTTPException(404, "No predictions yet")
 
@@ -379,12 +388,14 @@ def eth_latest_prediction(reference_override: float | None = Query(default=None,
     out = _prediction_to_dict(_loop.latest_eth_prediction, asset="eth")
     out["slot_monitor"] = monitor
     _apply_ref_override_fields(out, monitor)
+    out["bot"] = _slot15_bot_payload("eth", reference_override)
     return out
   row = _loop.eth_calibration.latest()
   if row:
     row["slot_monitor"] = monitor
     row["asset"] = "eth"
     _apply_ref_override_fields(row, monitor)
+    row["bot"] = _slot15_bot_payload("eth", reference_override)
     return row
   raise HTTPException(404, "No ETH 15m predictions yet")
 
@@ -605,7 +616,7 @@ def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/api/hourly/bot")
-def hourly_bot_status(_: None = Depends(require_session)):
+def hourly_bot_status(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   tab = _loop.daily_prediction()
@@ -613,7 +624,7 @@ def hourly_bot_status(_: None = Depends(require_session)):
 
 
 @app.post("/api/hourly/bot/settings")
-async def hourly_bot_settings(request: Request, _: None = Depends(require_session)):
+async def hourly_bot_settings(request: Request, _: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   body = await request.json()
@@ -627,7 +638,7 @@ async def hourly_bot_settings(request: Request, _: None = Depends(require_sessio
 def hourly_bot_trades(
   limit: int = Query(default=100, le=200),
   event_ticker: str | None = Query(default=None),
-  _: None = Depends(require_session),
+  _: None = Depends(_session_user),
 ):
   if _loop is None:
     raise HTTPException(503, "Service starting")
@@ -640,7 +651,7 @@ def hourly_bot_trades(
 
 
 @app.get("/api/eth/hourly/bot")
-def eth_hourly_bot_status(_: None = Depends(require_session)):
+def eth_hourly_bot_status(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   tab = _loop.eth_hourly_prediction()
@@ -648,7 +659,7 @@ def eth_hourly_bot_status(_: None = Depends(require_session)):
 
 
 @app.post("/api/eth/hourly/bot/settings")
-async def eth_hourly_bot_settings(request: Request, _: None = Depends(require_session)):
+async def eth_hourly_bot_settings(request: Request, _: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   body = await request.json()
@@ -662,7 +673,7 @@ async def eth_hourly_bot_settings(request: Request, _: None = Depends(require_se
 def eth_hourly_bot_trades(
   limit: int = Query(default=100, le=200),
   event_ticker: str | None = Query(default=None),
-  _: None = Depends(require_session),
+  _: None = Depends(_session_user),
 ):
   if _loop is None:
     raise HTTPException(503, "Service starting")
@@ -675,7 +686,7 @@ def eth_hourly_bot_trades(
 
 
 @app.get("/api/slot15/bot")
-def slot15_bot_status(_: None = Depends(require_session)):
+def slot15_bot_status(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   tab = _loop._slot15_tab("btc")
@@ -683,7 +694,7 @@ def slot15_bot_status(_: None = Depends(require_session)):
 
 
 @app.post("/api/slot15/bot/settings")
-async def slot15_bot_settings(request: Request, _: None = Depends(require_session)):
+async def slot15_bot_settings(request: Request, _: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   body = await request.json()
@@ -697,7 +708,7 @@ async def slot15_bot_settings(request: Request, _: None = Depends(require_sessio
 def slot15_bot_trades(
   limit: int = Query(default=100, le=200),
   event_ticker: str | None = Query(default=None),
-  _: None = Depends(require_session),
+  _: None = Depends(_session_user),
 ):
   if _loop is None:
     raise HTTPException(503, "Service starting")
@@ -710,7 +721,7 @@ def slot15_bot_trades(
 
 
 @app.get("/api/eth/15m/bot")
-def eth_slot15_bot_status(_: None = Depends(require_session)):
+def eth_slot15_bot_status(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   if _loop.eth_calibration is None:
@@ -720,7 +731,7 @@ def eth_slot15_bot_status(_: None = Depends(require_session)):
 
 
 @app.post("/api/eth/15m/bot/settings")
-async def eth_slot15_bot_settings(request: Request, _: None = Depends(require_session)):
+async def eth_slot15_bot_settings(request: Request, _: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   if _loop.eth_calibration is None:
@@ -736,7 +747,7 @@ async def eth_slot15_bot_settings(request: Request, _: None = Depends(require_se
 def eth_slot15_bot_trades(
   limit: int = Query(default=100, le=200),
   event_ticker: str | None = Query(default=None),
-  _: None = Depends(require_session),
+  _: None = Depends(_session_user),
 ):
   if _loop is None:
     raise HTTPException(503, "Service starting")

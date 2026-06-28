@@ -27,6 +27,11 @@ ADMIN_KEY_PATHS = frozenset({
   "/api/daily/prediction",
   "/api/hourly/calibration",
   "/api/hourly/predictions",
+  "/api/hourly/bot",
+  "/api/eth/hourly/bot",
+  "/api/slot15/bot",
+  "/api/eth/15m/bot",
+  "/api/eth/15m/prediction/latest",
 })
 
 

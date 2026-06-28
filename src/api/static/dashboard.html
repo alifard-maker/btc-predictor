@@ -557,9 +557,12 @@
     const $ = (id) => document.getElementById(id);
     let activeTab = '15m';
     let hourlyRenderTab = 'daily';
+    let slot15RenderTab = '15m';
     let dailyFetchGen = 0;
+    let slot15FetchGen = 0;
     let hourlyGuideCheatOpen = false;
     const lastBotStatus = { btc: null, eth: null };
+    const lastSlot15BotStatus = { btc: null, eth: null };
 
     function slot15Prefix() {
       return activeTab === 'eth-15m' ? 'eth15-' : '';
@@ -1357,7 +1360,13 @@
         loadDaily();
         return;
       }
-      if (name === '15m' || name === 'eth-15m') loadAll();
+      if (name === '15m' || name === 'eth-15m') {
+        const asset = name === 'eth-15m' ? 'eth' : 'btc';
+        const cached = lastSlot15BotStatus[asset];
+        if (cached) renderSlot15Bot(cached, asset);
+        loadAll();
+        return;
+      }
     }
 
     function renderRangeTierCards(recs) {
@@ -1876,6 +1885,48 @@
       </div>      `;
     }
 
+    function slot15BotStatusUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m/bot' : '/api/slot15/bot';
+    }
+
+    function mergeSlot15Summary(prev, next, eventTicker) {
+      if (!next) return prev || {};
+      if (!prev) return next;
+      const prevEvt = prev.event_ticker || eventTicker;
+      const nextEvt = next.event_ticker || eventTicker;
+      if (prevEvt && nextEvt && prevEvt !== nextEvt) return next;
+      const merged = { ...prev, ...next };
+      for (const k of ['realized_pnl_usd', 'unrealized_pnl_usd', 'total_pnl_usd']) {
+        if (next[k] == null && prev[k] != null) merged[k] = prev[k];
+      }
+      return merged;
+    }
+
+    function mergeSlot15BotStatus(asset, incoming) {
+      if (!incoming || !incoming.ok || (incoming.asset && incoming.asset !== asset)) {
+        return lastSlot15BotStatus[asset];
+      }
+      const prev = lastSlot15BotStatus[asset];
+      if (!prev) {
+        lastSlot15BotStatus[asset] = incoming;
+        return incoming;
+      }
+      const eventTicker = incoming.event_ticker
+        || (incoming.slot_summary || {}).event_ticker
+        || prev.event_ticker;
+      const mergedSs = mergeSlot15Summary(prev.slot_summary || {}, incoming.slot_summary || {}, eventTicker);
+      const merged = {
+        ...prev,
+        ...incoming,
+        event_ticker: eventTicker,
+        slot_summary: mergedSs,
+        open_positions: incoming.open_positions ?? prev.open_positions,
+        recent_trades: incoming.recent_trades ?? prev.recent_trades,
+      };
+      lastSlot15BotStatus[asset] = merged;
+      return merged;
+    }
+
     function slot15BotSettingsUrl(asset) {
       return asset === 'eth' ? '/api/eth/15m/bot/settings' : '/api/slot15/bot/settings';
     }
@@ -1927,7 +1978,7 @@
       if (activeTab !== tab) return;
       if (bot && bot.asset && bot.asset !== asset) return;
       if (!bot || !bot.ok) {
-        el.innerHTML = '<p class="muted">Bot status unavailable.</p>';
+        el.innerHTML = `<p class="muted">Bot status unavailable${bot?.error ? `: ${bot.error}` : ''}.</p>`;
         slot15BotForceSettingsRender[asset] = true;
         return;
       }
@@ -1999,12 +2050,13 @@
           <div class="bot-stat"><span class="muted">Enters / Exits this slot</span><strong>${ss.enter_count ?? 0} / ${ss.exit_count ?? 0}</strong></div>
           <div class="bot-stat"><span class="muted" title="Sum of all enter fills this slot — can exceed max at-risk when positions rotate">Cumulative $ entered (slot)</span><strong>$${Number(ss.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
-        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Budget cap applies to <strong>at risk now</strong> only. Cumulative entered tracks total buy volume across round-trips and may be much higher than your cap.</p>
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Slot bankroll = max cap + realized P&amp;L. <strong>Available to enter</strong> = bankroll minus at-risk now (losses shrink deployable capital).</p>
         ${openPosHtml}
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Max cap + realized P&amp;L this slot">Slot bankroll</span><strong>$${Number(bot.slot_bankroll_usd ?? (Number(s.max_spend_per_slot_usd || 25) + realized)).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">At risk now</span><strong>$${Number(exposure).toFixed(2)}</strong></div>
-          <div class="bot-stat"><span class="muted">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
@@ -2133,12 +2185,13 @@
           <div class="bot-stat"><span class="muted">Enters / Exits this hour</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
           <div class="bot-stat"><span class="muted" title="Sum of all enter fills this hour — can exceed max at-risk when positions rotate">Cumulative $ entered (hour)</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
-        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Budget cap applies to <strong>at risk now</strong> only. Cumulative entered tracks total buy volume across round-trips and may be much higher than your cap.</p>
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Hour bankroll = max cap + realized P&amp;L. <strong>Available to enter</strong> = bankroll minus at-risk now (losses shrink deployable capital).</p>
         ${openPosHtml}
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Max cap + realized P&amp;L this hour">Hour bankroll</span><strong>$${Number(bot.hour_bankroll_usd ?? (Number(s.max_spend_per_hour_usd || 25) + realized)).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">At risk now</span><strong>$${Number(exposure).toFixed(2)}</strong></div>
-          <div class="bot-stat"><span class="muted">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
@@ -2401,10 +2454,14 @@
         get(api.prediction + refQ).then((p) => {
           if (stored?.slot_start && p?.slot_start && stored.slot_start !== p.slot_start) {
             clearStoredRefOverride();
-            return get(api.prediction).then(renderPrediction);
+            return get(api.prediction).then((p2) => {
+              renderPrediction(p2);
+              loadSlot15Bot(p2?.bot);
+            });
           }
           renderPrediction(p);
-        }).catch(() => { renderPrediction(null); renderSlotMonitor(null); }),
+          loadSlot15Bot(p?.bot);
+        }).catch(() => { renderPrediction(null); renderSlotMonitor(null); loadSlot15Bot(null); }),
         get(api.monitor + refQ).then((m) => {
           if (stored?.slot_start && m?.slot_start && stored.slot_start !== m.slot_start) {
             clearStoredRefOverride();
@@ -2417,7 +2474,6 @@
           const calEl = s15$('calibration');
           if (calEl) calEl.innerHTML = `<p class="muted">Calibration unavailable: ${e.message || 'API error'}</p>`;
         }),
-        get(api.bot).then((b) => renderSlot15Bot(b, activeTab === 'eth-15m' ? 'eth' : 'btc')).catch(() => {}),
         );
         if (activeTab === '15m') {
           tasks.push(get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])));
