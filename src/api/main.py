@@ -564,6 +564,52 @@ def eth_hourly_late_call_now(
   return out
 
 
+@app.get("/api/eth/hourly/bot")
+def eth_hourly_bot_status(_: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop.eth_hourly_prediction()
+  return _loop.eth_hourly_bot_status(tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/hourly/bot/settings")
+async def eth_hourly_bot_settings(request: Request, _: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.eth_hourly_bot_store import EthHourlyBotSettings
+
+  body = await request.json()
+  store = _loop.eth_hourly_bot_store()
+  current = store.get_settings()
+  mode = str(body.get("mode", current.mode))
+  if mode not in ("paper", "live"):
+    raise HTTPException(400, "mode must be paper or live")
+  settings = EthHourlyBotSettings(
+    enabled=bool(body.get("enabled", current.enabled)),
+    mode=mode,
+    max_spend_per_hour_usd=float(body.get("max_spend_per_hour_usd", current.max_spend_per_hour_usd)),
+    allow_strong=bool(body.get("allow_strong", current.allow_strong)),
+    allow_actionable=bool(body.get("allow_actionable", current.allow_actionable)),
+  )
+  if settings.max_spend_per_hour_usd < 0:
+    raise HTTPException(400, "max_spend_per_hour_usd must be >= 0")
+  if not settings.allow_strong and not settings.allow_actionable:
+    raise HTTPException(400, "Enable at least one of STRONG or ACTIONABLE")
+  store.save_settings(settings)
+  tab = _loop.eth_hourly_prediction()
+  return _loop.eth_hourly_bot_status(tab if tab.get("ok") else None)
+
+
+@app.get("/api/eth/hourly/bot/trades")
+def eth_hourly_bot_trades(
+  limit: int = Query(default=30, le=100),
+  _: None = Depends(require_session),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.eth_hourly_bot_store().list_trades(limit=limit)
+
+
 @app.post("/api/admin/train-hourly")
 def admin_train_hourly(
   min_samples: int = Query(default=500, ge=100),

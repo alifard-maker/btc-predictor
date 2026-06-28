@@ -85,6 +85,8 @@ class PredictionLoop:
     self._eth_second_chance_logged: set[str] = set()
     self._eth_second_chance_advisor: SecondChanceAdvisor | None = None
     self.eth_last_error: str | None = None
+    self._eth_hourly_bot = None
+    self._eth_hourly_bot_store = None
     if asset_enabled(self.cfg, "eth"):
       self._eth_cfg = asset_cfg(self.cfg, "eth")
       ensure_dirs(self._eth_cfg)
@@ -217,6 +219,56 @@ class PredictionLoop:
 
   def daily_prediction(self) -> dict[str, Any]:
     return self._hourly_tab_prediction("btc")
+
+  def eth_hourly_bot(self):
+    if self._eth_hourly_bot is None:
+      from src.trading.eth_hourly_bot import EthHourlyBot
+      from src.trading.eth_hourly_bot_store import EthHourlyBotStore
+
+      store = self.eth_hourly_bot_store()
+      kalshi = self._kalshi_for("eth")
+      self._eth_hourly_bot = EthHourlyBot(store, kalshi_client=kalshi)
+    return self._eth_hourly_bot
+
+  def eth_hourly_bot_store(self):
+    if self._eth_hourly_bot_store is None:
+      from src.trading.eth_hourly_bot_store import EthHourlyBotStore
+
+      acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+      logs = Path(acfg.get("paths", {}).get("logs", "data/eth/logs"))
+      self._eth_hourly_bot_store = EthHourlyBotStore(logs / "eth_hourly_bot.db")
+    return self._eth_hourly_bot_store
+
+  def eth_hourly_bot_status(self, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not asset_enabled(self.cfg, "eth"):
+      return {"ok": False, "error": "ETH disabled"}
+    event_ticker = None
+    if tab:
+      event_ticker = (tab.get("event") or {}).get("event_ticker")
+    status = self.eth_hourly_bot_store().status(event_ticker)
+    status["ok"] = True
+    status["recent_trades"] = self.eth_hourly_bot_store().list_trades(limit=10, event_ticker=event_ticker)
+    kalshi = self._kalshi_for("eth")
+    status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)
+    return status
+
+  def _maybe_run_eth_hourly_bot(self, tab: dict[str, Any], trigger: str) -> None:
+    if not asset_enabled(self.cfg, "eth") or not tab.get("ok"):
+      return
+    try:
+      self.eth_hourly_bot().evaluate_from_tab(tab, trigger=trigger)
+    except Exception as e:
+      log.exception("ETH hourly bot %s failed: %s", trigger, e)
+
+  def run_eth_hourly_bot_intrahour(self) -> None:
+    if not asset_enabled(self.cfg, "eth"):
+      return
+    settings = self.eth_hourly_bot_store().get_settings()
+    if not settings.enabled:
+      return
+    tab = self.eth_hourly_prediction()
+    if tab.get("ok"):
+      self._maybe_run_eth_hourly_bot(tab, "intrahour")
 
   def eth_hourly_prediction(self) -> dict[str, Any]:
     return self._hourly_tab_prediction("eth")
@@ -351,6 +403,7 @@ class PredictionLoop:
       self.latest_hourly_prediction = out
     else:
       self.latest_eth_hourly_prediction = out
+      out["bot"] = self.eth_hourly_bot_status(out)
     return out
 
   def run_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
@@ -415,7 +468,10 @@ class PredictionLoop:
           row.get("late_call_primary_signal"),
           row.get("late_call_primary_label"),
         )
-      return self._hourly_tab_prediction(asset)
+      out = self._hourly_tab_prediction(asset)
+      if asset == "eth" and out.get("ok"):
+        self._maybe_run_eth_hourly_bot(out, "late_45")
+      return out
     except Exception as e:
       log.exception("%s hourly late call failed: %s", asset.upper(), e)
       self.last_error = str(e)
@@ -442,6 +498,9 @@ class PredictionLoop:
           row.get("primary_signal"),
           row.get("primary_label"),
         )
+        out = self._hourly_tab_prediction(asset)
+        if asset == "eth" and out.get("ok"):
+          self._maybe_run_eth_hourly_bot(out, "lock_05")
       return out
     except Exception as e:
       log.exception("%s hourly prediction failed: %s", asset.upper(), e)
@@ -990,6 +1049,16 @@ class PredictionLoop:
           id="eth_hourly_late_call",
           max_instances=1,
         )
+        bot_cfg = ehcfg.get("bot") or {}
+        if bot_cfg.get("intrahour_poll_enabled", True):
+          poll_min = int(bot_cfg.get("intrahour_poll_minutes", 5))
+          scheduler.add_job(
+            self.run_eth_hourly_bot_intrahour,
+            "interval",
+            minutes=poll_min,
+            id="eth_hourly_bot_intrahour",
+            max_instances=1,
+          )
 
   def _auto_train_first_run(self) -> datetime:
     """Next calendar day at configured hour (default 2:00 AM ET)."""

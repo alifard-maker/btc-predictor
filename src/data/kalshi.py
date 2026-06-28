@@ -178,11 +178,14 @@ class KalshiClient:
     path: str,
     *,
     params: dict[str, Any] | None = None,
+    json_body: dict[str, Any] | None = None,
     auth: bool = False,
     timeout: float = 15,
   ) -> dict[str, Any]:
     url = f"{self.base_url}{path}"
     headers: dict[str, str] = {"Accept": "application/json"}
+    if json_body is not None:
+      headers["Content-Type"] = "application/json"
     if auth:
       if not self.authenticated:
         raise RuntimeError("Kalshi API key ID and private key required for this endpoint")
@@ -195,12 +198,48 @@ class KalshiClient:
         "KALSHI-ACCESS-TIMESTAMP": ts,
         "KALSHI-ACCESS-SIGNATURE": self._sign(ts, method, sign_path),
       })
-    resp = requests.request(method, url, params=params, headers=headers, timeout=timeout)
+    resp = requests.request(
+      method, url, params=params, json=json_body, headers=headers, timeout=timeout
+    )
     resp.raise_for_status()
     return resp.json()
 
   def get(self, path: str, *, params: dict[str, Any] | None = None, auth: bool = False) -> dict[str, Any]:
     return self._request("GET", path, params=params, auth=auth)
+
+  def post(
+    self,
+    path: str,
+    *,
+    json_body: dict[str, Any] | None = None,
+    auth: bool = False,
+  ) -> dict[str, Any]:
+    return self._request("POST", path, json_body=json_body, auth=auth)
+
+  def create_order(
+    self,
+    *,
+    ticker: str,
+    side: str,
+    count: int,
+    yes_price: int | None = None,
+    no_price: int | None = None,
+    order_type: str = "limit",
+    action: str = "buy",
+  ) -> dict[str, Any]:
+    """Place a limit order on Kalshi (requires authenticated client)."""
+    body: dict[str, Any] = {
+      "ticker": ticker,
+      "action": action,
+      "side": side,
+      "count": int(count),
+      "type": order_type,
+    }
+    if side == "yes" and yes_price is not None:
+      body["yes_price"] = int(yes_price)
+    if side == "no" and no_price is not None:
+      body["no_price"] = int(no_price)
+    return self.post("/portfolio/orders", json_body=body, auth=True)
 
   def portfolio_balance(self) -> dict[str, Any] | None:
     """Verify API credentials; returns balance dict or None if not configured."""
