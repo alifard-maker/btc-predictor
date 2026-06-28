@@ -2055,6 +2055,25 @@
       return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:8px;color:#fecaca;font-size:.75rem"><strong>Auto-stopped this ${periodLabel}</strong> — ${reason}</div>`;
     }
 
+    function botEntryWatchHtml(bot, periodLabel) {
+      const w = bot.entry_watch;
+      if (!w) return '';
+      if (periodLabel === 'hour') {
+        const sig = w.signal || '—';
+        const label = w.label ? ` · ${w.label}` : '';
+        const regime = w.regime_allow_trade === false
+          ? ' · regime blocked'
+          : '';
+        return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${label}${regime} — bot enters on BUY YES/NO when signal + book pass checks.</p>`;
+      }
+      const sig = w.signal || '—';
+      const model = w.model_signal && w.model_signal !== sig ? ` (model ${w.model_signal})` : '';
+      const prob = w.prob_up != null ? ` · ${(Number(w.prob_up) * 100).toFixed(0)}% UP` : '';
+      const late = w.late_entry_action ? ` · late: ${w.late_entry_action}` : '';
+      const flip = w.flip_action ? ` · flip: ${w.flip_action}` : '';
+      return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${model}${prob}${late}${flip} — free mode enters on LONG/SHORT (or late/flip).</p>`;
+    }
+
     function botSkipReasonLabel(raw) {
       if (!raw) return '';
       const labels = {
@@ -2324,10 +2343,12 @@
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'slot');
       const skipHtml = botSkipReasonHtml(bot);
+      const watchHtml = botEntryWatchHtml(bot, 'slot');
       const serverBanner = botServerBanner(bot, s);
       statusWrap.innerHTML = `
         ${serverBanner}
         ${autoStopHtml}
+        ${watchHtml}
         ${skipHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
@@ -2500,10 +2521,12 @@
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'hour');
       const skipHtml = botSkipReasonHtml(bot);
+      const watchHtml = botEntryWatchHtml(bot, 'hour');
       const serverBanner = botServerBanner(bot, s);
       statusWrap.innerHTML = `
         ${serverBanner}
         ${autoStopHtml}
+        ${watchHtml}
         ${skipHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">

@@ -284,6 +284,17 @@ class PredictionLoop:
       status["hour_summary"] = hs
     kalshi = self._kalshi_for(asset)
     status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)
+    if tab and tab.get("ok"):
+      live = tab.get("live") or tab
+      primary = live.get("primary_pick") or {}
+      regime = live.get("regime") or {}
+      status["entry_watch"] = {
+        "signal": primary.get("signal"),
+        "label": primary.get("label"),
+        "edge": primary.get("edge"),
+        "regime_allow_trade": regime.get("allow_trade"),
+        "regime_reasons": list(regime.get("reasons") or [])[:3],
+      }
     return status
 
   def eth_hourly_bot_status(self, tab: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -454,6 +465,17 @@ class PredictionLoop:
         status["slot_summary"] = ss
     kalshi = self._kalshi_for(asset)
     status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)
+    if tab and tab.get("ok"):
+      pred = tab.get("prediction") or {}
+      monitor = tab.get("monitor") or {}
+      status["entry_watch"] = {
+        "signal": pred.get("signal"),
+        "model_signal": pred.get("model_signal"),
+        "prob_up": pred.get("prob_up"),
+        "late_entry_action": monitor.get("late_entry_action") or "",
+        "flip_action": monitor.get("flip_action") or "",
+        "monitor_action": monitor.get("action"),
+      }
     return status
 
   def _run_slot15_bot_continuous(self, asset: str) -> None:
