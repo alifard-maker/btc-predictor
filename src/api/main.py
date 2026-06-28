@@ -608,11 +608,17 @@ async def hourly_bot_settings(request: Request, _: None = Depends(require_sessio
 @app.get("/api/hourly/bot/trades")
 def hourly_bot_trades(
   limit: int = Query(default=30, le=100),
+  event_ticker: str | None = Query(default=None),
   _: None = Depends(require_session),
 ):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  return _loop.hourly_bot_store("btc").list_trades(limit=limit)
+  store = _loop.hourly_bot_store("btc")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["hour_summary"] = store.hour_interval_summary(event_ticker)
+  return out
 
 
 @app.get("/api/eth/hourly/bot")
@@ -637,11 +643,17 @@ async def eth_hourly_bot_settings(request: Request, _: None = Depends(require_se
 @app.get("/api/eth/hourly/bot/trades")
 def eth_hourly_bot_trades(
   limit: int = Query(default=30, le=100),
+  event_ticker: str | None = Query(default=None),
   _: None = Depends(require_session),
 ):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  return _loop.hourly_bot_store("eth").list_trades(limit=limit)
+  store = _loop.hourly_bot_store("eth")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["hour_summary"] = store.hour_interval_summary(event_ticker)
+  return out
 
 
 @app.post("/api/admin/train-hourly")

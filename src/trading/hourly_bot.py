@@ -1,16 +1,18 @@
-"""Hourly auto-bet bot — paper-first, optional live Kalshi orders (BTC + ETH)."""
+"""Hourly auto-bet bot — continuous paper/live trading within hourly exposure cap."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+import uuid
+from typing import Any
 
-from src.trading.contract_signals import is_buy_no, is_buy_yes
+from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
+from src.trading.hourly_bet_assessment import assess_contract_bet
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
+from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
+from src.trading.hourly_position_alert import assess_hourly_position_alert
 
 log = logging.getLogger(__name__)
-
-Trigger = Literal["lock_05", "late_45", "intrahour"]
 
 
 def bet_qualifies(bet_assessment: dict[str, Any] | None, settings: HourlyBotSettings) -> bool:
@@ -24,12 +26,6 @@ def bet_qualifies(bet_assessment: dict[str, Any] | None, settings: HourlyBotSett
   if tone == "moderate" and settings.allow_actionable:
     return True
   return False
-
-
-def _entry_blocked_by_position_alert(position_alert: dict[str, Any] | None) -> bool:
-  if not position_alert:
-    return False
-  return position_alert.get("alert") == "CUT LOSSES"
 
 
 def _price_cents_for_pick(pick: dict[str, Any], side: str) -> int | None:
@@ -50,10 +46,95 @@ def _contracts_for_budget(remaining_usd: float, price_cents: int) -> int:
   return max(0, int(remaining_usd // cost_per))
 
 
-def _pick_from_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
-  if not snapshot:
-    return None
-  return snapshot.get("primary_pick")
+def _side_from_signal(signal: str | None) -> str | None:
+  if is_buy_yes(signal):
+    return "yes"
+  if is_buy_no(signal):
+    return "no"
+  return None
+
+
+def _find_contract_in_live(live: dict[str, Any], market_ticker: str) -> dict[str, Any] | None:
+  ticker = str(market_ticker)
+  primary = live.get("primary_pick")
+  if primary and str(primary.get("ticker")) == ticker:
+    return primary
+  for key in ("strategy_threshold", "strategy_range"):
+    block = live.get(key) or {}
+    for field in ("contracts",):
+      for row in block.get(field) or []:
+        if str(row.get("ticker")) == ticker:
+          return row
+    for field in ("most_likely", "best_edge"):
+      row = block.get(field)
+      if row and str(row.get("ticker")) == ticker:
+        return row
+  return None
+
+
+def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[tuple[float, dict[str, Any], dict[str, Any]]]:
+  """Ranked (score, pick, bet_assessment) entry opportunities."""
+  live = tab.get("live") or tab
+  locked = tab.get("locked")
+  acfg = cfg or {}
+  index_label = live.get("index_id") or "BRTI"
+  price = tab.get("brti_live") or live.get("current_price")
+  out: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+  seen: set[str] = set()
+
+  def add(pick: dict[str, Any] | None, bet: dict[str, Any] | None, score_boost: float = 0.0) -> None:
+    if not pick or not pick.get("ticker"):
+      return
+    t = str(pick["ticker"])
+    if t in seen or not is_actionable_buy(pick.get("signal")):
+      return
+    seen.add(t)
+    edge = abs(float(pick.get("edge") or 0))
+    score = edge + score_boost
+    if bet and bet.get("actionable_tone") == "strong":
+      score += 0.05
+    out.append((score, pick, bet or {}))
+
+  intrahour = tab.get("intrahour_opportunity") or assess_intrahour_opportunity(
+    live=live,
+    locked=locked,
+    hour_open=tab.get("hour_open"),
+    current_price=float(price) if price else None,
+    index_label=index_label,
+    cfg=acfg,
+  )
+  if intrahour and intrahour.get("highlight"):
+    add(intrahour.get("primary_pick"), intrahour.get("bet_assessment"), score_boost=0.12)
+
+  primary = live.get("primary_pick")
+  if primary:
+    bet = assess_contract_bet(
+      signal=primary.get("signal"),
+      edge=primary.get("edge"),
+      live=live,
+      locked=locked,
+      use_live_regime=True,
+      cfg=acfg,
+    )
+    add(primary, bet)
+
+  for block_key in ("strategy_threshold", "strategy_range"):
+    block = live.get(block_key) or {}
+    for row in (block.get("best_edge"), block.get("most_likely")):
+      if not row:
+        continue
+      bet = assess_contract_bet(
+        signal=row.get("signal"),
+        edge=row.get("edge"),
+        live=live,
+        locked=locked,
+        use_live_regime=True,
+        cfg=acfg,
+      )
+      add(row, bet)
+
+  out.sort(key=lambda x: x[0], reverse=True)
+  return out
 
 
 class HourlyBot:
@@ -62,164 +143,270 @@ class HourlyBot:
     self.kalshi = kalshi_client
     self.asset = asset.lower()
 
-  def evaluate_from_tab(
-    self,
-    tab: dict[str, Any],
-    *,
-    trigger: Trigger,
-  ) -> dict[str, Any] | None:
-    """Evaluate and optionally place a bet from hourly tab payload."""
+  def run_continuous_cycle(self, tab: dict[str, Any], *, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Evaluate exits then entries on live hourly data. Returns actions taken."""
     settings = self.store.get_settings()
-    if not settings.enabled:
-      return None
+    if not settings.enabled or not settings.continuous or not tab.get("ok"):
+      return []
 
     event_ticker = (tab.get("event") or {}).get("event_ticker")
     if not event_ticker:
-      return None
+      return []
 
-    if trigger == "lock_05":
-      snap = tab.get("locked")
-    elif trigger == "late_45":
-      snap = tab.get("late_call")
-    else:
-      opp = tab.get("intrahour_opportunity")
-      if not opp or not opp.get("highlight"):
-        return None
-      snap = {
-        "primary_pick": opp.get("primary_pick"),
-        "bet_assessment": opp.get("bet_assessment"),
-        "position_alert": None,
-      }
+    actions: list[dict[str, Any]] = []
+    actions.extend(self._process_exits(tab, event_ticker, settings, cfg))
+    actions.extend(self._process_entries(tab, event_ticker, settings, cfg))
+    return actions
 
-    if not snap:
-      return None
+  def _process_exits(
+    self,
+    tab: dict[str, Any],
+    event_ticker: str,
+    settings: HourlyBotSettings,
+    cfg: dict[str, Any] | None,
+  ) -> list[dict[str, Any]]:
+    live = tab.get("live") or tab
+    locked = tab.get("locked")
+    price = tab.get("brti_live") or live.get("current_price")
+    results: list[dict[str, Any]] = []
 
-    pick = _pick_from_snapshot(snap) if trigger != "intrahour" else snap.get("primary_pick")
-    bet = snap.get("bet_assessment")
-    pos_alert = snap.get("position_alert")
+    for pos in self.store.open_positions(event_ticker):
+      pick = _find_contract_in_live(live, pos["market_ticker"])
+      if not pick:
+        continue
 
-    if trigger in ("lock_05", "late_45") and _entry_blocked_by_position_alert(pos_alert):
-      return self._log_skip(
-        event_ticker, trigger, settings, pick, "Position alert: CUT LOSSES — no entry"
+      regime = live.get("regime") or {}
+      alert = assess_hourly_position_alert(
+        snapshot_kind="late_call",
+        signal=pick.get("signal"),
+        edge=pick.get("edge"),
+        regime_allow_trade=bool(regime.get("allow_trade", True)),
+        regime_reasons=list(regime.get("reasons") or []),
+        bet_assessment=assess_contract_bet(
+          signal=pick.get("signal"),
+          edge=pick.get("edge"),
+          live=live,
+          locked=locked,
+          use_live_regime=True,
+          cfg=cfg,
+        ),
+        locked_signal=pos.get("signal"),
+        locked_edge=pos.get("entry_edge"),
+        locked_regime_allow_trade=True,
+        locked_reference_price=pos.get("reference_price"),
+        reference_price=live.get("current_price"),
+        locked_terminal_mu=(locked or {}).get("terminal_mu"),
+        terminal_mu=live.get("terminal_mu"),
+        live_price=float(price) if price else None,
+        cfg=cfg,
       )
 
-    if not bet_qualifies(bet, settings):
-      return None
+      if alert.get("alert") not in ("CUT LOSSES", "TAKE PROFIT"):
+        continue
 
-    if not pick or not pick.get("ticker"):
-      return self._log_skip(event_ticker, trigger, settings, pick, "No market ticker on pick")
+      exit_price = _price_cents_for_pick(pick, pos["side"])
+      if exit_price is None:
+        exit_price = pos["entry_price_cents"]
 
-    market_ticker = str(pick["ticker"])
-    if self.store.already_placed(event_ticker, trigger, market_ticker):
-      return None
+      entry_c = int(pos["entry_price_cents"])
+      contracts = int(pos["contracts"])
+      if pos["side"] == "yes":
+        pnl = contracts * (exit_price - entry_c) / 100.0
+      else:
+        pnl = contracts * (entry_c - exit_price) / 100.0
 
-    signal = pick.get("signal")
-    if is_buy_yes(signal):
-      side = "yes"
-    elif is_buy_no(signal):
-      side = "no"
-    else:
-      return self._log_skip(event_ticker, trigger, settings, pick, f"Non-actionable signal: {signal}")
-
-    price_cents = _price_cents_for_pick(pick, side)
-    if price_cents is None:
-      return self._log_skip(event_ticker, trigger, settings, pick, "No Kalshi price on pick")
-
-    spent = self.store.spent_usd(event_ticker)
-    remaining = settings.max_spend_per_hour_usd - spent
-    if remaining <= 0:
-      return self._log_skip(event_ticker, trigger, settings, pick, "Hourly budget exhausted")
-
-    count = _contracts_for_budget(remaining, price_cents)
-    if count <= 0:
-      return self._log_skip(
-        event_ticker, trigger, settings, pick,
-        f"Remaining ${remaining:.2f} below 1 contract @ {price_cents}¢",
+      self.store.close_position(pos["id"])
+      detail = (
+        f"Paper EXIT ({alert['alert']}): {pos['side'].upper()} ×{contracts} "
+        f"@ {exit_price}¢ (entry {entry_c}¢) — {alert.get('detail', '')}"
       )
+      row = self.store.log_trade({
+        "event_ticker": event_ticker,
+        "trigger": "continuous",
+        "action": "exit",
+        "mode": settings.mode,
+        "market_ticker": pos["market_ticker"],
+        "side": pos["side"],
+        "contracts": contracts,
+        "price_cents": exit_price,
+        "entry_price_cents": entry_c,
+        "exit_price_cents": exit_price,
+        "cost_usd": 0,
+        "pnl_usd": round(pnl, 2),
+        "signal": pick.get("signal"),
+        "label": pos.get("label"),
+        "status": "filled",
+        "detail": detail,
+        "position_id": pos["id"],
+      })
+      log.info("%s hourly bot [paper exit]: %s", self.asset.upper(), detail)
+      results.append(row)
 
-    cost_usd = round(count * price_cents / 100.0, 2)
-    trade_base = {
-      "event_ticker": event_ticker,
-      "trigger": trigger,
-      "mode": settings.mode,
-      "market_ticker": market_ticker,
-      "side": side,
-      "contracts": count,
-      "price_cents": price_cents,
-      "cost_usd": cost_usd,
-      "signal": signal,
-      "label": pick.get("label"),
-      "actionable_headline": (bet or {}).get("actionable_headline"),
-    }
+    return results
 
-    if settings.mode == "live":
-      result = self._place_live(trade_base)
-    else:
-      result = self._place_paper(trade_base)
+  def _process_entries(
+    self,
+    tab: dict[str, Any],
+    event_ticker: str,
+    settings: HourlyBotSettings,
+    cfg: dict[str, Any] | None,
+  ) -> list[dict[str, Any]]:
+    live = tab.get("live") or tab
+    results: list[dict[str, Any]] = []
+    remaining = self.store.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd)
 
-    if result.get("status") == "filled":
-      self.store.mark_placed(event_ticker, trigger, market_ticker)
-      self.store.add_spent(event_ticker, cost_usd)
+    for _score, pick, bet in _entry_candidates(tab, cfg):
+      if not bet_qualifies(bet, settings):
+        continue
 
-    return result
+      market_ticker = str(pick["ticker"])
+      if self.store.has_open_position(event_ticker, market_ticker):
+        continue
 
-  def _place_paper(self, trade: dict[str, Any]) -> dict[str, Any]:
-    detail = (
-      f"Paper {trade['side'].upper()} ×{trade['contracts']} @ {trade['price_cents']}¢ "
-      f"on {trade['market_ticker']} ({trade['signal']})"
-    )
-    row = self.store.log_trade({**trade, "status": "filled", "detail": detail})
-    log.info("%s hourly bot [paper]: %s", self.asset.upper(), detail)
-    return row
+      side = _side_from_signal(pick.get("signal"))
+      if not side:
+        continue
 
-  def _place_live(self, trade: dict[str, Any]) -> dict[str, Any]:
+      price_cents = _price_cents_for_pick(pick, side)
+      if price_cents is None:
+        continue
+
+      remaining = self.store.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd)
+      if remaining <= 0:
+        break
+
+      count = _contracts_for_budget(remaining, price_cents)
+      if count <= 0:
+        continue
+
+      cost_usd = round(count * price_cents / 100.0, 2)
+      pid = str(uuid.uuid4())
+      ref = live.get("current_price") or tab.get("brti_live")
+
+      if settings.mode == "live":
+        result = self._place_live_enter(
+          event_ticker, pick, side, count, price_cents, cost_usd, bet, settings, pid
+        )
+      else:
+        self.store.open_position({
+          "id": pid,
+          "event_ticker": event_ticker,
+          "market_ticker": market_ticker,
+          "side": side,
+          "contracts": count,
+          "entry_price_cents": price_cents,
+          "cost_usd": cost_usd,
+          "signal": pick.get("signal"),
+          "label": pick.get("label"),
+          "entry_edge": pick.get("edge"),
+          "reference_price": ref,
+        })
+        detail = (
+          f"Paper ENTER: {side.upper()} ×{count} @ {price_cents}¢ "
+          f"on {market_ticker} ({pick.get('signal')})"
+        )
+        result = self.store.log_trade({
+          "event_ticker": event_ticker,
+          "trigger": "continuous",
+          "action": "enter",
+          "mode": "paper",
+          "market_ticker": market_ticker,
+          "side": side,
+          "contracts": count,
+          "price_cents": price_cents,
+          "entry_price_cents": price_cents,
+          "cost_usd": cost_usd,
+          "signal": pick.get("signal"),
+          "label": pick.get("label"),
+          "actionable_headline": bet.get("actionable_headline"),
+          "status": "filled",
+          "detail": detail,
+          "position_id": pid,
+        })
+        log.info("%s hourly bot [paper enter]: %s", self.asset.upper(), detail)
+
+      results.append(result)
+      break  # one new entry per cycle; exits free budget next minute
+
+    return results
+
+  def _place_live_enter(
+    self,
+    event_ticker: str,
+    pick: dict[str, Any],
+    side: str,
+    count: int,
+    price_cents: int,
+    cost_usd: float,
+    bet: dict[str, Any],
+    settings: HourlyBotSettings,
+    pid: str,
+  ) -> dict[str, Any]:
     if not self.kalshi or not getattr(self.kalshi, "authenticated", False):
       return self.store.log_trade({
-        **trade,
+        "event_ticker": event_ticker,
+        "trigger": "continuous",
+        "action": "enter",
+        "mode": "live",
+        "market_ticker": pick.get("ticker"),
         "status": "failed",
         "detail": "Live mode requires Kalshi API credentials",
       })
     try:
       order = self.kalshi.create_order(
-        ticker=trade["market_ticker"],
-        side=trade["side"],
-        count=int(trade["contracts"]),
-        yes_price=trade["price_cents"] if trade["side"] == "yes" else None,
-        no_price=trade["price_cents"] if trade["side"] == "no" else None,
+        ticker=str(pick["ticker"]),
+        side=side,
+        count=count,
+        yes_price=price_cents if side == "yes" else None,
+        no_price=price_cents if side == "no" else None,
       )
       oid = (order.get("order") or order).get("order_id") or order.get("order_id")
-      detail = f"Live order {oid}: {trade['side'].upper()} ×{trade['contracts']} @ {trade['price_cents']}¢"
+      self.store.open_position({
+        "id": pid,
+        "event_ticker": event_ticker,
+        "market_ticker": str(pick["ticker"]),
+        "side": side,
+        "contracts": count,
+        "entry_price_cents": price_cents,
+        "cost_usd": cost_usd,
+        "signal": pick.get("signal"),
+        "label": pick.get("label"),
+        "entry_edge": pick.get("edge"),
+      })
       return self.store.log_trade({
-        **trade,
+        "event_ticker": event_ticker,
+        "trigger": "continuous",
+        "action": "enter",
+        "mode": "live",
+        "market_ticker": pick.get("ticker"),
+        "side": side,
+        "contracts": count,
+        "price_cents": price_cents,
+        "entry_price_cents": price_cents,
+        "cost_usd": cost_usd,
+        "signal": pick.get("signal"),
+        "label": pick.get("label"),
+        "actionable_headline": bet.get("actionable_headline"),
         "status": "filled",
         "kalshi_order_id": oid,
-        "detail": detail,
+        "position_id": pid,
+        "detail": f"Live ENTER order {oid}",
       })
     except Exception as e:
-      log.exception("%s hourly bot live order failed: %s", self.asset.upper(), e)
+      log.exception("%s hourly bot live enter failed: %s", self.asset.upper(), e)
       return self.store.log_trade({
-        **trade,
+        "event_ticker": event_ticker,
+        "trigger": "continuous",
+        "action": "enter",
+        "mode": "live",
         "status": "failed",
         "detail": str(e),
       })
 
-  def _log_skip(
-    self,
-    event_ticker: str,
-    trigger: str,
-    settings: HourlyBotSettings,
-    pick: dict[str, Any] | None,
-    reason: str,
-  ) -> dict[str, Any]:
-    return self.store.log_trade({
-      "event_ticker": event_ticker,
-      "trigger": trigger,
-      "mode": settings.mode,
-      "market_ticker": (pick or {}).get("ticker"),
-      "signal": (pick or {}).get("signal"),
-      "label": (pick or {}).get("label"),
-      "status": "skipped",
-      "detail": reason,
-      "cost_usd": 0,
-      "contracts": 0,
-    })
+  # Legacy trigger-based path (delegates to continuous when enabled)
+  def evaluate_from_tab(self, tab: dict[str, Any], *, trigger: str) -> dict[str, Any] | None:
+    settings = self.store.get_settings()
+    if settings.continuous:
+      actions = self.run_continuous_cycle(tab)
+      return actions[-1] if actions else None
+    return None

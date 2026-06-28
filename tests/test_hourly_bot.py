@@ -27,7 +27,7 @@ def test_btc_and_eth_use_separate_stores():
     assert eth_store.get_settings().enabled is False
 
 
-def test_paper_bet_btc_at_lock_05():
+def test_evaluate_from_tab_delegates_to_continuous():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=10.0))
@@ -35,16 +35,23 @@ def test_paper_bet_btc_at_lock_05():
     tab = {
       "ok": True,
       "event": {"event_ticker": "KXBTCD-TEST"},
-      "locked": {
+      "live": {
         "primary_pick": {
           "ticker": "KXBTCD-T1",
           "signal": "BUY YES",
           "kalshi_mid": 0.40,
+          "edge": 0.12,
         },
-        "bet_assessment": _strong_bet(),
-        "position_alert": {"alert": "HOLD"},
+        "current_price": 2500.0,
+        "terminal_mu": 2510.0,
+        "regime": {"allow_trade": True, "reasons": []},
+        "strategy_threshold": {"contracts": []},
+        "strategy_range": {"contracts": []},
       },
+      "locked": {"reference_price": 2495.0},
     }
     trade = bot.evaluate_from_tab(tab, trigger="lock_05")
+    assert trade is not None
     assert trade["status"] == "filled"
-    assert trade["trigger"] == "lock_05"
+    assert trade["action"] == "enter"
+    assert trade["trigger"] == "continuous"

@@ -459,7 +459,7 @@
     <div id="panel-daily" style="display:none">
       <div class="card" id="btc-hourly-bot-card">
         <h2>BTC hourly auto-bet</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper mode logs simulated fills. Live mode places real Kalshi orders when credentials are configured. Bets fire at <strong>:05</strong>, <strong>:45</strong>, and on <strong>intrahour opportunities</strong> when signals match your filters.</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~60s</strong> while enabled — enters and exits paper/live positions from live signals. <strong>Max $/hour</strong> = total capital <em>at risk</em> at once (exits free budget for new trades).</p>
         <div id="btc-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="hourly-guide-card">
@@ -502,7 +502,7 @@
     <div id="panel-eth-hourly" style="display:none">
       <div class="card" id="eth-hourly-bot-card">
         <h2>ETH hourly auto-bet</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same controls as BTC hourly — paper/live, max $ per hour, STRONG/ACTIONABLE filters. Bets at <strong>:05</strong>, <strong>:45</strong>, and <strong>intrahour</strong> opportunities.</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~60s</strong> — same as BTC: continuous enter/exit within your hourly exposure cap (not per-bet).</p>
         <div id="eth-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="eth-hourly-guide-card">
@@ -1725,6 +1725,18 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/settings' : '/api/hourly/bot/settings';
     }
 
+    function botCents(c) {
+      if (c == null || c === '') return '—';
+      return Number(c) + '¢';
+    }
+
+    function botPnlUsd(v) {
+      if (v == null || v === '') return '—';
+      const n = Number(v);
+      const cls = n > 0 ? 'up' : n < 0 ? 'down' : 'muted';
+      return `<span class="${cls}">${n >= 0 ? '+' : ''}$${n.toFixed(2)}</span>`;
+    }
+
     function renderHourlyBot(bot, asset) {
       const el = $(`${asset}-hourly-bot`);
       if (!el) return;
@@ -1737,9 +1749,29 @@
       const p = asset;
       const s = bot.settings || {};
       const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
+      const exposure = bot.open_exposure_usd ?? bot.spent_usd ?? 0;
+      const openN = bot.open_position_count ?? 0;
+      const hs = bot.hourly_summary || bot.hour_summary || {};
+      const realized = hs.realized_pnl_usd ?? 0;
+      const pnlCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
+      const eventLabel = bot.event_ticker ? `<span class="muted" style="font-size:.68rem">${bot.event_ticker}</span>` : '';
       const trades = (bot.recent_trades || []).map((t) => {
         const st = t.status === 'filled' ? 'up' : t.status === 'skipped' ? 'muted' : 'down';
-        return `<tr><td>${time(t.created_at)}</td><td>${t.trigger}</td><td class="${st}">${t.status}</td><td>${t.signal || '—'}</td><td>${t.cost_usd != null ? '$' + Number(t.cost_usd).toFixed(2) : '—'}</td><td style="font-size:.68rem">${t.detail || ''}</td></tr>`;
+        const act = t.action || 'enter';
+        const entryC = t.entry_price_cents;
+        const exitC = t.exit_price_cents;
+        const pnlCell = act === 'exit' ? botPnlUsd(t.realized_pnl_usd ?? t.pnl_usd) : '—';
+        const mkt = t.label || t.market_ticker || '—';
+        return `<tr>
+          <td>${time(t.created_at)}</td>
+          <td>${act}</td>
+          <td class="${st}">${t.status}</td>
+          <td style="font-size:.68rem">${mkt}</td>
+          <td>${botCents(entryC)}</td>
+          <td>${botCents(exitC)}</td>
+          <td>${pnlCell}</td>
+          <td style="font-size:.68rem">${t.detail || ''}</td>
+        </tr>`;
       }).join('');
       el.innerHTML = `<div class="bot-panel">
         <div class="bot-row">
@@ -1764,13 +1796,19 @@
             <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
           </label>
         </div>
+        <div class="bot-row" style="margin-top:.35rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
+          <div class="bot-stat"><span class="muted">Hour interval ${eventLabel}</span><strong class="${pnlCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)} realized</strong></div>
+          <div class="bot-stat"><span class="muted">Enters / Exits</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted">Capital deployed</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
+        </div>
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}</strong></div>
-          <div class="bot-stat"><span class="muted">Spent this hour</span><strong>$${Number(bot.spent_usd || 0).toFixed(2)}</strong></div>
-          <div class="bot-stat"><span class="muted">Remaining</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">At risk</span><strong>$${Number(exposure).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Available</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
-        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Trigger</th><th>Status</th><th>Signal</th><th>Cost</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No bot activity yet this session.</p>'}
+        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No bot activity yet — waiting for actionable live signal within your filters.</p>'}
       </div>`;
     }
 

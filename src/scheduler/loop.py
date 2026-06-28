@@ -257,7 +257,7 @@ class PredictionLoop:
     status["ok"] = True
     status["asset"] = asset
     status["recent_trades"] = self.hourly_bot_store(asset).list_trades(
-      limit=10, event_ticker=event_ticker
+      limit=50, event_ticker=event_ticker
     )
     kalshi = self._kalshi_for(asset)
     status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)
@@ -277,22 +277,37 @@ class PredictionLoop:
   def _maybe_run_eth_hourly_bot(self, tab: dict[str, Any], trigger: str) -> None:
     self._maybe_run_hourly_bot("eth", tab, trigger)
 
-  def _run_hourly_bot_intrahour(self, asset: str) -> None:
+  def _run_hourly_bot_continuous(self, asset: str) -> None:
     asset = asset.lower()
     settings = self.hourly_bot_store(asset).get_settings()
-    if not settings.enabled:
+    if not settings.enabled or not settings.continuous:
       return
-    tab = self._hourly_tab_prediction(asset)
-    if tab.get("ok"):
-      self._maybe_run_hourly_bot(asset, tab, "intrahour")
+    try:
+      acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+      tab = self._hourly_tab_prediction(asset)
+      if tab.get("ok"):
+        self.hourly_bot(asset).run_continuous_cycle(tab, cfg=acfg)
+    except Exception as e:
+      log.exception("%s hourly bot continuous cycle failed: %s", asset.upper(), e)
+
+  def run_hourly_bot_continuous(self) -> None:
+    self._run_hourly_bot_continuous("btc")
+
+  def run_eth_hourly_bot_continuous(self) -> None:
+    if not asset_enabled(self.cfg, "eth"):
+      return
+    self._run_hourly_bot_continuous("eth")
+
+  def _run_hourly_bot_intrahour(self, asset: str) -> None:
+    self._run_hourly_bot_continuous(asset)
 
   def run_hourly_bot_intrahour(self) -> None:
-    self._run_hourly_bot_intrahour("btc")
+    self._run_hourly_bot_continuous("btc")
 
   def run_eth_hourly_bot_intrahour(self) -> None:
     if not asset_enabled(self.cfg, "eth"):
       return
-    self._run_hourly_bot_intrahour("eth")
+    self._run_hourly_bot_continuous("eth")
 
   def eth_hourly_prediction(self) -> dict[str, Any]:
     return self._hourly_tab_prediction("eth")
@@ -494,8 +509,6 @@ class PredictionLoop:
           row.get("late_call_primary_label"),
         )
       out = self._hourly_tab_prediction(asset)
-      if asset in ("btc", "eth") and out.get("ok"):
-        self._maybe_run_hourly_bot(asset, out, "late_45")
       return out
     except Exception as e:
       log.exception("%s hourly late call failed: %s", asset.upper(), e)
@@ -524,8 +537,6 @@ class PredictionLoop:
           row.get("primary_label"),
         )
         out = self._hourly_tab_prediction(asset)
-        if asset in ("btc", "eth") and out.get("ok"):
-          self._maybe_run_hourly_bot(asset, out, "lock_05")
       return out
     except Exception as e:
       log.exception("%s hourly prediction failed: %s", asset.upper(), e)
@@ -1049,13 +1060,13 @@ class PredictionLoop:
         max_instances=1,
       )
       bot_cfg = hcfg.get("bot") or {}
-      if bot_cfg.get("intrahour_poll_enabled", True):
-        poll_min = int(bot_cfg.get("intrahour_poll_minutes", 5))
+      if bot_cfg.get("continuous_enabled", True):
+        poll_sec = int(bot_cfg.get("poll_seconds", 60))
         scheduler.add_job(
-          self.run_hourly_bot_intrahour,
+          self.run_hourly_bot_continuous,
           "interval",
-          minutes=poll_min,
-          id="hourly_bot_intrahour",
+          seconds=poll_sec,
+          id="hourly_bot_continuous",
           max_instances=1,
         )
     if asset_enabled(self.cfg, "eth"):
@@ -1085,13 +1096,13 @@ class PredictionLoop:
           max_instances=1,
         )
         bot_cfg = ehcfg.get("bot") or {}
-        if bot_cfg.get("intrahour_poll_enabled", True):
-          poll_min = int(bot_cfg.get("intrahour_poll_minutes", 5))
+        if bot_cfg.get("continuous_enabled", True):
+          poll_sec = int(bot_cfg.get("poll_seconds", 60))
           scheduler.add_job(
-            self.run_eth_hourly_bot_intrahour,
+            self.run_eth_hourly_bot_continuous,
             "interval",
-            minutes=poll_min,
-            id="eth_hourly_bot_intrahour",
+            seconds=poll_sec,
+            id="eth_hourly_bot_continuous",
             max_instances=1,
           )
 

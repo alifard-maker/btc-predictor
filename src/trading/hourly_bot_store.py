@@ -1,4 +1,4 @@
-"""Persist hourly auto-bet bot settings and paper/live trade log (per asset)."""
+"""Persist hourly auto-bet bot settings, open positions, and trade log (per asset)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ class HourlyBotSettings:
   max_spend_per_hour_usd: float = 25.0
   allow_strong: bool = True
   allow_actionable: bool = True
+  continuous: bool = True
 
   def to_dict(self) -> dict[str, Any]:
     return asdict(self)
@@ -32,6 +33,7 @@ class HourlyBotSettings:
       max_spend_per_hour_usd=float(raw.get("max_spend_per_hour_usd", 25.0)),
       allow_strong=bool(raw.get("allow_strong", True)),
       allow_actionable=bool(raw.get("allow_actionable", True)),
+      continuous=bool(raw.get("continuous", True)),
     )
 
 
@@ -44,33 +46,42 @@ CREATE TABLE IF NOT EXISTS bot_trades (
   id TEXT PRIMARY KEY,
   event_ticker TEXT NOT NULL,
   trigger TEXT NOT NULL,
+  action TEXT NOT NULL DEFAULT 'enter',
   mode TEXT NOT NULL,
   market_ticker TEXT,
   side TEXT,
   contracts INTEGER,
   price_cents INTEGER,
+  entry_price_cents INTEGER,
+  exit_price_cents INTEGER,
   cost_usd REAL,
+  pnl_usd REAL,
   signal TEXT,
   label TEXT,
   actionable_headline TEXT,
   status TEXT NOT NULL,
   detail TEXT,
   kalshi_order_id TEXT,
+  position_id TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bot_trades_event ON bot_trades(event_ticker, created_at);
-CREATE TABLE IF NOT EXISTS bot_dedup (
+CREATE TABLE IF NOT EXISTS bot_positions (
+  id TEXT PRIMARY KEY,
   event_ticker TEXT NOT NULL,
-  trigger TEXT NOT NULL,
   market_ticker TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (event_ticker, trigger, market_ticker)
+  side TEXT NOT NULL,
+  contracts INTEGER NOT NULL,
+  entry_price_cents INTEGER NOT NULL,
+  cost_usd REAL NOT NULL,
+  signal TEXT,
+  label TEXT,
+  entry_edge REAL,
+  reference_price REAL,
+  opened_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open'
 );
-CREATE TABLE IF NOT EXISTS bot_spent (
-  event_ticker TEXT PRIMARY KEY,
-  spent_usd REAL NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL
-);
+CREATE INDEX IF NOT EXISTS idx_bot_positions_open ON bot_positions(event_ticker, status);
 """
 
 
@@ -85,9 +96,23 @@ class HourlyBotStore:
     conn.row_factory = sqlite3.Row
     return conn
 
+  def _migrate(self, conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_trades)").fetchall()}
+    if cols and "action" not in cols:
+      conn.execute("ALTER TABLE bot_trades ADD COLUMN action TEXT NOT NULL DEFAULT 'enter'")
+    if cols and "pnl_usd" not in cols:
+      conn.execute("ALTER TABLE bot_trades ADD COLUMN pnl_usd REAL")
+    if cols and "position_id" not in cols:
+      conn.execute("ALTER TABLE bot_trades ADD COLUMN position_id TEXT")
+    if cols and "entry_price_cents" not in cols:
+      conn.execute("ALTER TABLE bot_trades ADD COLUMN entry_price_cents INTEGER")
+    if cols and "exit_price_cents" not in cols:
+      conn.execute("ALTER TABLE bot_trades ADD COLUMN exit_price_cents INTEGER")
+
   def _init_db(self) -> None:
     with self._connect() as conn:
       conn.executescript(_SCHEMA)
+      self._migrate(conn)
       row = conn.execute("SELECT json FROM bot_settings WHERE id = 1").fetchone()
       if row is None:
         conn.execute(
@@ -108,97 +133,173 @@ class HourlyBotStore:
       )
     return settings
 
-  def spent_usd(self, event_ticker: str) -> float:
+  def open_positions(self, event_ticker: str) -> list[dict[str, Any]]:
     with self._connect() as conn:
-      row = conn.execute(
-        "SELECT spent_usd FROM bot_spent WHERE event_ticker = ?",
+      rows = conn.execute(
+        "SELECT * FROM bot_positions WHERE event_ticker = ? AND status = 'open' ORDER BY opened_at",
         (event_ticker,),
-      ).fetchone()
-    return float(row["spent_usd"]) if row else 0.0
+      ).fetchall()
+    return [dict(r) for r in rows]
 
-  def add_spent(self, event_ticker: str, amount: float) -> float:
-    now = datetime.now(timezone.utc).isoformat()
+  def open_exposure_usd(self, event_ticker: str) -> float:
+    positions = self.open_positions(event_ticker)
+    return round(sum(float(p.get("cost_usd") or 0) for p in positions), 2)
+
+  def remaining_budget_usd(self, event_ticker: str, max_hourly: float) -> float:
+    return max(0.0, float(max_hourly) - self.open_exposure_usd(event_ticker))
+
+  def has_open_position(self, event_ticker: str, market_ticker: str) -> bool:
     with self._connect() as conn:
       row = conn.execute(
-        "SELECT spent_usd FROM bot_spent WHERE event_ticker = ?",
-        (event_ticker,),
-      ).fetchone()
-      total = (float(row["spent_usd"]) if row else 0.0) + amount
-      conn.execute(
-        """
-        INSERT INTO bot_spent (event_ticker, spent_usd, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(event_ticker) DO UPDATE SET spent_usd = excluded.spent_usd, updated_at = excluded.updated_at
-        """,
-        (event_ticker, total, now),
-      )
-    return total
-
-  def already_placed(self, event_ticker: str, trigger: str, market_ticker: str) -> bool:
-    with self._connect() as conn:
-      row = conn.execute(
-        "SELECT 1 FROM bot_dedup WHERE event_ticker = ? AND trigger = ? AND market_ticker = ?",
-        (event_ticker, trigger, market_ticker),
+        "SELECT 1 FROM bot_positions WHERE event_ticker = ? AND market_ticker = ? AND status = 'open'",
+        (event_ticker, market_ticker),
       ).fetchone()
     return row is not None
 
-  def mark_placed(self, event_ticker: str, trigger: str, market_ticker: str) -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    with self._connect() as conn:
-      conn.execute(
-        """
-        INSERT OR IGNORE INTO bot_dedup (event_ticker, trigger, market_ticker, created_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        (event_ticker, trigger, market_ticker, now),
-      )
-
-  def log_trade(self, trade: dict[str, Any]) -> dict[str, Any]:
-    tid = trade.get("id") or str(uuid.uuid4())
-    now = trade.get("created_at") or datetime.now(timezone.utc).isoformat()
+  def open_position(self, pos: dict[str, Any]) -> dict[str, Any]:
+    pid = pos.get("id") or str(uuid.uuid4())
+    now = pos.get("opened_at") or datetime.now(timezone.utc).isoformat()
     row = {
-      "id": tid,
-      "event_ticker": trade["event_ticker"],
-      "trigger": trade["trigger"],
-      "mode": trade.get("mode", "paper"),
-      "market_ticker": trade.get("market_ticker"),
-      "side": trade.get("side"),
-      "contracts": trade.get("contracts"),
-      "price_cents": trade.get("price_cents"),
-      "cost_usd": trade.get("cost_usd"),
-      "signal": trade.get("signal"),
-      "label": trade.get("label"),
-      "actionable_headline": trade.get("actionable_headline"),
-      "status": trade.get("status", "filled"),
-      "detail": trade.get("detail"),
-      "kalshi_order_id": trade.get("kalshi_order_id"),
-      "created_at": now,
+      "id": pid,
+      "event_ticker": pos["event_ticker"],
+      "market_ticker": pos["market_ticker"],
+      "side": pos["side"],
+      "contracts": int(pos["contracts"]),
+      "entry_price_cents": int(pos["entry_price_cents"]),
+      "cost_usd": float(pos["cost_usd"]),
+      "signal": pos.get("signal"),
+      "label": pos.get("label"),
+      "entry_edge": pos.get("entry_edge"),
+      "reference_price": pos.get("reference_price"),
+      "opened_at": now,
+      "status": "open",
     }
     with self._connect() as conn:
       conn.execute(
         """
-        INSERT INTO bot_trades (
-          id, event_ticker, trigger, mode, market_ticker, side, contracts,
-          price_cents, cost_usd, signal, label, actionable_headline,
-          status, detail, kalshi_order_id, created_at
+        INSERT INTO bot_positions (
+          id, event_ticker, market_ticker, side, contracts, entry_price_cents,
+          cost_usd, signal, label, entry_edge, reference_price, opened_at, status
         ) VALUES (
-          :id, :event_ticker, :trigger, :mode, :market_ticker, :side, :contracts,
-          :price_cents, :cost_usd, :signal, :label, :actionable_headline,
-          :status, :detail, :kalshi_order_id, :created_at
+          :id, :event_ticker, :market_ticker, :side, :contracts, :entry_price_cents,
+          :cost_usd, :signal, :label, :entry_edge, :reference_price, :opened_at, :status
         )
         """,
         row,
       )
     return row
 
+  def close_position(self, position_id: str) -> dict[str, Any] | None:
+    with self._connect() as conn:
+      row = conn.execute("SELECT * FROM bot_positions WHERE id = ?", (position_id,)).fetchone()
+      if not row:
+        return None
+      conn.execute("UPDATE bot_positions SET status = 'closed' WHERE id = ?", (position_id,))
+    return dict(row)
+
+  def _enrich_trade(self, row: dict[str, Any]) -> dict[str, Any]:
+    action = row.get("action") or "enter"
+    entry_c = row.get("entry_price_cents")
+    exit_c = row.get("exit_price_cents")
+    price_c = row.get("price_cents")
+    if entry_c is None and action == "enter" and price_c is not None:
+      entry_c = price_c
+    if exit_c is None and action == "exit" and price_c is not None:
+      exit_c = price_c
+    out = dict(row)
+    out["entry_price_cents"] = entry_c
+    out["exit_price_cents"] = exit_c
+    if action == "exit" and out.get("pnl_usd") is not None:
+      out["realized_pnl_usd"] = out["pnl_usd"]
+    return out
+
+  def hour_interval_summary(self, event_ticker: str) -> dict[str, Any]:
+    with self._connect() as conn:
+      row = conn.execute(
+        """
+        SELECT
+          COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN COALESCE(pnl_usd, 0) ELSE 0 END), 0) AS realized_pnl_usd,
+          COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
+          COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS exit_count,
+          COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN COALESCE(cost_usd, 0) ELSE 0 END), 0) AS total_entered_usd
+        FROM bot_trades
+        WHERE event_ticker = ?
+        """,
+        (event_ticker,),
+      ).fetchone()
+    exposure = self.open_exposure_usd(event_ticker)
+    open_pos = self.open_positions(event_ticker)
+    realized = round(float(row["realized_pnl_usd"] or 0), 2)
+    return {
+      "event_ticker": event_ticker,
+      "realized_pnl_usd": realized,
+      "enter_count": int(row["enter_count"] or 0),
+      "exit_count": int(row["exit_count"] or 0),
+      "total_entered_usd": round(float(row["total_entered_usd"] or 0), 2),
+      "open_exposure_usd": exposure,
+      "open_position_count": len(open_pos),
+      "net_result_usd": realized,
+    }
+
+  def log_trade(self, trade: dict[str, Any]) -> dict[str, Any]:
+    tid = trade.get("id") or str(uuid.uuid4())
+    now = trade.get("created_at") or datetime.now(timezone.utc).isoformat()
+    action = trade.get("action", "enter")
+    entry_cents = trade.get("entry_price_cents")
+    exit_cents = trade.get("exit_price_cents")
+    price_cents = trade.get("price_cents")
+    if action == "enter" and entry_cents is None:
+      entry_cents = price_cents
+    elif action == "exit":
+      if exit_cents is None:
+        exit_cents = price_cents
+      if price_cents is None:
+        price_cents = exit_cents
+    row = {
+      "id": tid,
+      "event_ticker": trade["event_ticker"],
+      "trigger": trade.get("trigger", "continuous"),
+      "action": action,
+      "mode": trade.get("mode", "paper"),
+      "market_ticker": trade.get("market_ticker"),
+      "side": trade.get("side"),
+      "contracts": trade.get("contracts"),
+      "price_cents": price_cents,
+      "entry_price_cents": entry_cents,
+      "exit_price_cents": exit_cents,
+      "cost_usd": trade.get("cost_usd"),
+      "pnl_usd": trade.get("pnl_usd"),
+      "signal": trade.get("signal"),
+      "label": trade.get("label"),
+      "actionable_headline": trade.get("actionable_headline"),
+      "status": trade.get("status", "filled"),
+      "detail": trade.get("detail"),
+      "kalshi_order_id": trade.get("kalshi_order_id"),
+      "position_id": trade.get("position_id"),
+      "created_at": now,
+    }
+    with self._connect() as conn:
+      conn.execute(
+        """
+        INSERT INTO bot_trades (
+          id, event_ticker, trigger, action, mode, market_ticker, side, contracts,
+          price_cents, entry_price_cents, exit_price_cents, cost_usd, pnl_usd, signal, label, actionable_headline,
+          status, detail, kalshi_order_id, position_id, created_at
+        ) VALUES (
+          :id, :event_ticker, :trigger, :action, :mode, :market_ticker, :side, :contracts,
+          :price_cents, :entry_price_cents, :exit_price_cents, :cost_usd, :pnl_usd, :signal, :label, :actionable_headline,
+          :status, :detail, :kalshi_order_id, :position_id, :created_at
+        )
+        """,
+        row,
+      )
+    return self._enrich_trade(row)
+
   def list_trades(self, *, limit: int = 30, event_ticker: str | None = None) -> list[dict[str, Any]]:
     with self._connect() as conn:
       if event_ticker:
         rows = conn.execute(
-          """
-          SELECT * FROM bot_trades WHERE event_ticker = ?
-          ORDER BY created_at DESC LIMIT ?
-          """,
+          "SELECT * FROM bot_trades WHERE event_ticker = ? ORDER BY created_at DESC LIMIT ?",
           (event_ticker, limit),
         ).fetchall()
       else:
@@ -206,16 +307,26 @@ class HourlyBotStore:
           "SELECT * FROM bot_trades ORDER BY created_at DESC LIMIT ?",
           (limit,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [self._enrich_trade(dict(r)) for r in rows]
 
   def status(self, event_ticker: str | None = None) -> dict[str, Any]:
     settings = self.get_settings()
-    spent = self.spent_usd(event_ticker) if event_ticker else 0.0
-    remaining = max(0.0, settings.max_spend_per_hour_usd - spent) if event_ticker else settings.max_spend_per_hour_usd
+    exposure = self.open_exposure_usd(event_ticker) if event_ticker else 0.0
+    remaining = (
+      max(0.0, settings.max_spend_per_hour_usd - exposure)
+      if event_ticker
+      else settings.max_spend_per_hour_usd
+    )
+    open_pos = self.open_positions(event_ticker) if event_ticker else []
+    hour_summary = self.hour_interval_summary(event_ticker) if event_ticker else None
     return {
       "settings": settings.to_dict(),
       "event_ticker": event_ticker,
-      "spent_usd": round(spent, 2),
+      "open_exposure_usd": round(exposure, 2),
       "remaining_usd": round(remaining, 2),
       "max_spend_per_hour_usd": settings.max_spend_per_hour_usd,
+      "open_positions": open_pos,
+      "open_position_count": len(open_pos),
+      "hour_summary": hour_summary,
+      "hourly_summary": hour_summary,
     }

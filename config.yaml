@@ -168,8 +168,8 @@ hourly:
     max_spend_per_hour_usd: 25
     allow_strong: true
     allow_actionable: true
-    intrahour_poll_enabled: true
-    intrahour_poll_minutes: 5
+    continuous_enabled: true
+    poll_seconds: 60
   sigma_calibration: true
 
 # Flip-to-opposite
@@ -263,8 +263,8 @@ eth:
       max_spend_per_hour_usd: 25
       allow_strong: true
       allow_actionable: true
-      intrahour_poll_enabled: true
-      intrahour_poll_minutes: 5
+      continuous_enabled: true
+      poll_seconds: 60
     sigma_calibration: true
 
 paths:
