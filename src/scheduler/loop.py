@@ -389,6 +389,12 @@ class PredictionLoop:
     slot_key = monitor.get("slot_start")
     bot_cfg = (acfg.get("intra_slot") or {}).get("bot") or {}
     paper_max_spread_cents = int(bot_cfg.get("paper_max_spread_cents", 40))
+    probe_raw = bot_cfg.get("probe_no_trade") or {}
+    probe_no_trade = {
+      "enabled": bool(probe_raw.get("enabled", True)),
+      "min_prob": float(probe_raw.get("min_prob", 0.58)),
+      "min_elapsed_pct": float(probe_raw.get("min_elapsed_pct", 7.0)),
+    }
 
     state = self._slot_state(asset)
     pred_obj = state["latest_prediction"]
@@ -443,6 +449,7 @@ class PredictionLoop:
       "kalshi": kalshi_summary,
       "bet_assessment": bet_assessment,
       "paper_max_spread_cents": paper_max_spread_cents,
+      "probe_no_trade": probe_no_trade,
     }
 
   def slot15_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:

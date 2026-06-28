@@ -492,6 +492,22 @@ def test_wide_spread_skipped_with_default_paper_max():
     assert store.last_skip_reason() == "spread_too_wide"
 
 
+def test_probe_long_during_no_trade_window():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=10.0))
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab()
+    tab["prediction"]["signal"] = "NO TRADE"
+    tab["prediction"]["prob_up"] = 0.62
+    tab["monitor"]["elapsed_pct"] = 10.0
+    tab["probe_no_trade"] = {"enabled": True, "min_prob": 0.58, "min_elapsed_pct": 7.0}
+    actions = bot.run_continuous_cycle(tab)
+    assert len(actions) == 1
+    assert actions[0]["action"] == "enter"
+    assert actions[0]["signal"] == "LONG"
+
+
 def test_slot_times_match_rejects_stale_prediction_slot():
   import pandas as pd
 

@@ -142,6 +142,7 @@ def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[t
     add(intrahour.get("primary_pick"), intrahour.get("bet_assessment"), score_boost=0.12)
 
   primary = live.get("primary_pick")
+  primary_actionable = primary and is_actionable_buy(primary.get("signal"))
   if primary:
     bet = assess_contract_bet(
       signal=primary.get("signal"),
@@ -153,6 +154,7 @@ def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[t
     )
     add(primary, bet)
 
+  alt_boost = 0.14 if not primary_actionable else 0.0
   for block_key in ("strategy_threshold", "strategy_range"):
     block = live.get(block_key) or {}
     block_rows: list[dict[str, Any]] = []
@@ -171,7 +173,7 @@ def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[t
         use_live_regime=True,
         cfg=acfg,
       )
-      add(row, bet)
+      add(row, bet, score_boost=alt_boost)
 
   out.sort(key=lambda x: x[0], reverse=True)
   return out

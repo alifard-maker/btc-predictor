@@ -12,6 +12,8 @@ const BOT_SETTING_FIELDS = [
   'paper_auto_refill',
 ];
 
+const PATCH_CONFIRM_MS = 120000;
+
 function botUiKey(kind, asset) {
   return `${kind}-${asset}`;
 }
@@ -39,14 +41,45 @@ function botSettingsEqual(a, b, maxKey) {
   return na[maxKey] === nb[maxKey];
 }
 
+function mergeBotSettings(server, prev) {
+  if (!server && !prev) return null;
+  if (!server) return prev ? { ...prev } : null;
+  if (!prev) return { ...server };
+  return { ...prev, ...server };
+}
+
 /** True when server settings should replace DOM (not during an in-flight PATCH). */
-function shouldUpdateSettingsFromServer({ server, dom, lastKnown, pending, maxKey }) {
+function shouldUpdateSettingsFromServer({
+  server,
+  dom,
+  lastKnown,
+  pending,
+  patchConfirmed,
+  maxKey,
+}) {
   if (pending) return false;
   const srv = normalizeBotSettings(server, maxKey);
   if (!srv) return false;
   if (!dom) return true;
-  if (!lastKnown || !botSettingsEqual(srv, lastKnown, maxKey)) return true;
-  return !botSettingsEqual(srv, dom, maxKey);
+
+  const domNorm = normalizeBotSettings(dom, maxKey);
+  const known = lastKnown ? normalizeBotSettings(lastKnown, maxKey) : domNorm;
+
+  if (patchConfirmed && patchConfirmed.at && patchConfirmed.settings) {
+    const age = Date.now() - patchConfirmed.at;
+    if (age >= 0 && age < PATCH_CONFIRM_MS) {
+      const conf = normalizeBotSettings(patchConfirmed.settings, maxKey);
+      if (conf && srv.enabled !== conf.enabled) return false;
+    }
+  }
+
+  // Never let a stale poll turn auto-bet OFF while UI and last-known both say ON.
+  if (domNorm && known && domNorm.enabled && known.enabled && !srv.enabled) {
+    return false;
+  }
+
+  if (!known || !botSettingsEqual(srv, known, maxKey)) return true;
+  return !botSettingsEqual(srv, domNorm, maxKey);
 }
 
 function settingsForDisplay(server, dom, pending, maxKey) {
@@ -60,9 +93,11 @@ function settingsForDisplay(server, dom, pending, maxKey) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     BOT_SETTING_FIELDS,
+    PATCH_CONFIRM_MS,
     botUiKey,
     normalizeBotSettings,
     botSettingsEqual,
+    mergeBotSettings,
     shouldUpdateSettingsFromServer,
     settingsForDisplay,
   };
@@ -71,9 +106,11 @@ if (typeof module !== 'undefined' && module.exports) {
 if (typeof window !== 'undefined') {
   window.BotSettingsUi = {
     BOT_SETTING_FIELDS,
+    PATCH_CONFIRM_MS,
     botUiKey,
     normalizeBotSettings,
     botSettingsEqual,
+    mergeBotSettings,
     shouldUpdateSettingsFromServer,
     settingsForDisplay,
   };

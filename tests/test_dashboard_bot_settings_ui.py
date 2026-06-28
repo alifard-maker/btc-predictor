@@ -47,6 +47,7 @@ def should_update_settings_from_server(
   dom: dict,
   last_known: dict | None,
   pending,
+  patch_confirmed: dict | None = None,
   max_key: str,
 ) -> bool:
   if pending:
@@ -56,9 +57,19 @@ def should_update_settings_from_server(
     return False
   if not dom:
     return True
-  if not last_known or not bot_settings_equal(srv, last_known, max_key):
+  dom_norm = normalize_bot_settings(dom, max_key)
+  known = normalize_bot_settings(last_known, max_key) if last_known else dom_norm
+  if patch_confirmed and patch_confirmed.get("at") and patch_confirmed.get("settings"):
+    age = __import__("time").time() * 1000 - patch_confirmed["at"]
+    if 0 <= age < 120000:
+      conf = normalize_bot_settings(patch_confirmed["settings"], max_key)
+      if conf and srv["enabled"] != conf["enabled"]:
+        return False
+  if dom_norm and known and dom_norm["enabled"] and known["enabled"] and not srv["enabled"]:
+    return False
+  if not known or not bot_settings_equal(srv, known, max_key):
     return True
-  return not bot_settings_equal(srv, dom, max_key)
+  return not bot_settings_equal(srv, dom_norm, max_key)
 
 
 def test_normalize_defaults():

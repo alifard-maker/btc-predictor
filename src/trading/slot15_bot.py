@@ -149,6 +149,7 @@ def _entry_candidates(tab: dict[str, Any]) -> list[tuple[float, str, dict[str, A
   bet = tab.get("bet_assessment")
   kalshi = tab.get("kalshi") or {}
   market_ticker = str(kalshi.get("market_ticker") or "")
+  probe_cfg = tab.get("probe_no_trade") or {}
   out: list[tuple[float, str, dict[str, Any], dict[str, Any]]] = []
   seen: set[str] = set()
 
@@ -176,6 +177,17 @@ def _entry_candidates(tab: dict[str, Any]) -> list[tuple[float, str, dict[str, A
   primary_sig = pred.get("signal")
   if primary_sig in (Signal.LONG.value, Signal.SHORT.value):
     add(primary_sig, score_boost=0.08, label=f"Open {primary_sig}")
+
+  if probe_cfg.get("enabled") and primary_sig == Signal.NO_TRADE.value:
+    prob = float(pred.get("prob_up", 0.5))
+    min_prob = float(probe_cfg.get("min_prob", 0.58))
+    min_elapsed_pct = float(probe_cfg.get("min_elapsed_pct", 7.0))
+    elapsed_pct = float(monitor.get("elapsed_pct") or 0)
+    if elapsed_pct >= min_elapsed_pct:
+      if prob >= min_prob:
+        add(Signal.LONG.value, score_boost=0.06, label="Probe LONG (NO TRADE window)")
+      elif prob <= (1.0 - min_prob):
+        add(Signal.SHORT.value, score_boost=0.06, label="Probe SHORT (NO TRADE window)")
 
   late = monitor.get("late_entry_action") or ""
   if late in ("LATE LONG", "LATE SHORT"):

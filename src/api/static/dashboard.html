@@ -557,6 +557,7 @@
     /* Inlined from bot_settings_ui.js — must load before dashboard init (external script 404 broke all UI). */
     (function () {
       const BOT_SETTING_FIELDS = ['enabled', 'mode', 'allow_strong', 'allow_actionable', 'use_accumulated_profit', 'paper_auto_refill'];
+      const PATCH_CONFIRM_MS = 120000;
       function botUiKey(kind, asset) { return `${kind}-${asset}`; }
       function normalizeBotSettings(raw, maxKey) {
         if (!raw) return null;
@@ -579,15 +580,38 @@
         }
         return na[maxKey] === nb[maxKey];
       }
-      function shouldUpdateSettingsFromServer({ server, dom, lastKnown, pending, maxKey }) {
+      function mergeBotSettings(server, prev) {
+        if (!server && !prev) return null;
+        if (!server) return prev ? { ...prev } : null;
+        if (!prev) return { ...server };
+        return { ...prev, ...server };
+      }
+      function shouldUpdateSettingsFromServer({ server, dom, lastKnown, pending, patchConfirmed, maxKey }) {
         if (pending) return false;
         const srv = normalizeBotSettings(server, maxKey);
         if (!srv) return false;
         if (!dom) return true;
-        if (!lastKnown || !botSettingsEqual(srv, lastKnown, maxKey)) return true;
-        return !botSettingsEqual(srv, dom, maxKey);
+        const domNorm = normalizeBotSettings(dom, maxKey);
+        const known = lastKnown ? normalizeBotSettings(lastKnown, maxKey) : domNorm;
+        if (patchConfirmed && patchConfirmed.at && patchConfirmed.settings) {
+          const age = Date.now() - patchConfirmed.at;
+          if (age >= 0 && age < PATCH_CONFIRM_MS) {
+            const conf = normalizeBotSettings(patchConfirmed.settings, maxKey);
+            if (conf && srv.enabled !== conf.enabled) return false;
+          }
+        }
+        if (domNorm && known && domNorm.enabled && known.enabled && !srv.enabled) return false;
+        if (!known || !botSettingsEqual(srv, known, maxKey)) return true;
+        return !botSettingsEqual(srv, domNorm, maxKey);
       }
-      window.BotSettingsUi = { botUiKey, normalizeBotSettings, botSettingsEqual, shouldUpdateSettingsFromServer };
+      window.BotSettingsUi = {
+        PATCH_CONFIRM_MS,
+        botUiKey,
+        normalizeBotSettings,
+        botSettingsEqual,
+        mergeBotSettings,
+        shouldUpdateSettingsFromServer,
+      };
     })();
   </script>
   <script>
@@ -595,6 +619,7 @@
     const {
       botUiKey,
       normalizeBotSettings,
+      mergeBotSettings,
       shouldUpdateSettingsFromServer,
     } = window.BotSettingsUi || {};
     let activeTab = '15m';
@@ -608,6 +633,8 @@
     const lastKnownBotSettings = {};
     const pendingBotPatch = {};
     const botAutoStoppedPrev = {};
+    const settingsPatchConfirmed = {};
+    const botSettingsDomReady = {};
 
     function slot15Prefix() {
       return activeTab === 'eth-15m' ? 'eth15-' : '';
@@ -1900,6 +1927,22 @@
       return merged;
     }
 
+    function mergeBotSettingsForCache(kind, asset, serverSettings, prevSettings) {
+      if (!serverSettings && !prevSettings) return undefined;
+      if (!serverSettings) return prevSettings;
+      if (!prevSettings) return serverSettings;
+      const merged = { ...prevSettings, ...serverSettings };
+      const key = botUiKey(kind, asset);
+      if (prevSettings.enabled && !serverSettings.enabled) {
+        const known = lastKnownBotSettings[key];
+        const confirmed = settingsPatchConfirmed[key];
+        if (known?.enabled || confirmed?.settings?.enabled) {
+          merged.enabled = true;
+        }
+      }
+      return merged;
+    }
+
     function mergeBotStatus(asset, incoming) {
       if (!incoming || !incoming.ok || (incoming.asset && incoming.asset !== asset)) {
         return lastBotStatus[asset];
@@ -1919,7 +1962,7 @@
         ...prev,
         ...incoming,
         event_ticker: eventTicker,
-        settings: incoming.settings ?? prev.settings,
+        settings: mergeBotSettingsForCache('hourly', asset, incoming.settings, prev.settings),
         hour_summary: mergedHs,
         hourly_summary: mergedHs,
         open_positions: incoming.open_positions ?? prev.open_positions,
@@ -2207,13 +2250,15 @@
         ? readSlot15BotSettingsFromDom(asset)
         : readBotSettingsFromDom(asset);
       const lastKnown = lastKnownBotSettings[key];
-      const needStructure = !domSettings || forceFlags[asset];
+      const patchConfirmed = settingsPatchConfirmed[key];
+      const needStructure = !botSettingsDomReady[key] && (!domSettings || forceFlags[asset]);
 
       if (needStructure) {
         settingsWrap.innerHTML = kind === 'slot15'
           ? slot15BotSettingsHtml(asset, serverSettings)
           : botSettingsHtml(asset, serverSettings);
         forceFlags[asset] = false;
+        botSettingsDomReady[key] = true;
         const norm = normalizeBotSettings(serverSettings, maxKey);
         lastKnownBotSettings[key] = norm;
         return norm || serverSettings;
@@ -2226,6 +2271,7 @@
         dom: domSettings,
         lastKnown,
         pending: null,
+        patchConfirmed,
         maxKey,
       })) {
         applyBotSettingsToDom(kind, asset, serverSettings);
@@ -2235,6 +2281,14 @@
       }
 
       return domSettings || normalizeBotSettings(serverSettings, maxKey);
+    }
+
+    function recordSettingsPatchConfirm(kind, asset, settings, maxKey) {
+      const key = botUiKey(kind, asset);
+      const norm = normalizeBotSettings(settings, maxKey);
+      if (!norm) return;
+      settingsPatchConfirmed[key] = { settings: norm, at: Date.now() };
+      lastKnownBotSettings[key] = norm;
     }
 
     function noteAutoStoppedTransition(kind, asset, autoStopped, serverSettings) {
@@ -2330,7 +2384,7 @@
         ...prev,
         ...incoming,
         event_ticker: eventTicker,
-        settings: incoming.settings ?? prev.settings,
+        settings: mergeBotSettingsForCache('slot15', asset, incoming.settings, prev.settings),
         slot_summary: mergedSs,
         open_positions: incoming.open_positions ?? prev.open_positions,
         recent_trades: incoming.recent_trades ?? prev.recent_trades,
@@ -2573,7 +2627,7 @@
         pendingBotPatch[key] = null;
         if (activeTab === tab) {
           const bot = await res.json();
-          lastKnownBotSettings[key] = normalizeBotSettings(bot.settings || body, maxKey);
+          recordSettingsPatchConfirm(kind, asset, bot.settings || body, maxKey);
           renderSlot15Bot(bot, asset);
         }
         return true;
@@ -2759,7 +2813,7 @@
         const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
         if (activeTab === tab) {
           const bot = await res.json();
-          lastKnownBotSettings[key] = normalizeBotSettings(bot.settings || body, maxKey);
+          recordSettingsPatchConfirm(kind, asset, bot.settings || body, maxKey);
           renderHourlyBot(bot, asset);
         }
         return true;
@@ -2978,7 +3032,16 @@
             botDirect.hour_summary || botDirect.hourly_summary || {},
             evt,
           );
-          bot = { ...d.bot, ...botDirect, event_ticker: evt, hour_summary: hs, hourly_summary: hs };
+          bot = {
+            ...d.bot,
+            ...botDirect,
+            event_ticker: evt,
+            hour_summary: hs,
+            hourly_summary: hs,
+            settings: botDirect.settings || d.bot.settings,
+          };
+        } else if (botDirect) {
+          bot = botDirect;
         }
         bot = mergeBotStatus(asset, bot);
         if (bot) d.bot = bot;

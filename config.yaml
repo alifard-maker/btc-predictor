@@ -108,6 +108,10 @@ intra_slot:
       max_concurrent_positions: 1
       max_budget_fraction_per_entry: 0.55
       correlation_guard: false
+    probe_no_trade:
+      enabled: true
+      min_prob: 0.58
+      min_elapsed_pct: 7.0
 
 # Late entry — reassess NO-TRADE slots mid-window (conservative)
 late_entry:

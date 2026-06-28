@@ -18,7 +18,7 @@ class EntryStrategyConfig:
   kelly_enabled: bool = True
   kelly_fraction: float = 0.25
   min_kelly_stake_usd: float = 1.0
-  max_entries_per_cycle: int = 1
+  max_entries_per_cycle: int = 2
   max_concurrent_positions: int = 3
   max_budget_fraction_per_entry: float = 0.55
   correlation_guard: bool = True
