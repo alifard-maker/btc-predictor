@@ -14,6 +14,9 @@ from src.trading.hourly_position_alert import assess_hourly_position_alert
 
 log = logging.getLogger(__name__)
 
+# Skip CUT LOSSES paper-exit when mark-to-market loss is below this (avoids regime churn at ~0 P&L).
+CUT_LOSS_EXIT_MIN_LOSS_USD = 0.05
+
 
 def bet_qualifies(
   pick: dict[str, Any],
@@ -144,6 +147,18 @@ def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[t
 
   out.sort(key=lambda x: x[0], reverse=True)
   return out
+
+
+def _should_paper_exit(alert: dict[str, Any], unrealized_pnl: float | None) -> bool:
+  """TAKE PROFIT always exits; CUT LOSSES only when position is meaningfully underwater."""
+  kind = alert.get("alert")
+  if kind == "TAKE PROFIT":
+    return True
+  if kind == "CUT LOSSES":
+    if unrealized_pnl is None:
+      return False
+    return unrealized_pnl < -CUT_LOSS_EXIT_MIN_LOSS_USD
+  return False
 
 
 def _unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | None:
@@ -279,6 +294,10 @@ class HourlyBot:
       if exit_price is None:
         exit_price = pos["entry_price_cents"]
 
+      unrealized = _unrealized_pnl_usd(pos, exit_price)
+      if not _should_paper_exit(alert, unrealized):
+        continue
+
       entry_c = int(pos["entry_price_cents"])
       contracts = int(pos["contracts"])
       if pos["side"] == "yes":
@@ -311,6 +330,7 @@ class HourlyBot:
         "position_id": pos["id"],
       })
       log.info("%s hourly bot [paper exit]: %s", self.asset.upper(), detail)
+      self.store.record_exit_cooldown(event_ticker, pos["market_ticker"])
       results.append(row)
 
     return results
@@ -332,6 +352,11 @@ class HourlyBot:
 
       market_ticker = str(pick["ticker"])
       if self.store.has_open_position(event_ticker, market_ticker):
+        continue
+
+      if self.store.is_in_cooldown(
+        event_ticker, market_ticker, settings.reentry_cooldown_seconds
+      ):
         continue
 
       side = _side_from_signal(pick.get("signal"))

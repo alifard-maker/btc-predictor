@@ -46,6 +46,70 @@ def _live_tab(slot_key="2025-06-28T14:00:00-04:00", signal="LONG"):
   }
 
 
+def test_remaining_budget_accounts_for_realized_losses():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "SLOT1",
+      "action": "exit",
+      "status": "filled",
+      "pnl_usd": -3.0,
+    })
+    assert store.remaining_budget_usd("SLOT1", 25.0) == 22.0
+    assert store.slot_bankroll_usd("SLOT1", 25.0) == 22.0
+
+
+def test_remaining_budget_increases_after_win():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "SLOT1",
+      "action": "exit",
+      "status": "filled",
+      "pnl_usd": 5.0,
+    })
+    assert store.remaining_budget_usd("SLOT1", 25.0) == 30.0
+
+
+def test_no_exit_on_cut_loss_when_flat_pnl():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=25.0))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "2025-06-28T14:00:00-04:00",
+      "market_ticker": "KXBTC15M-TEST",
+      "side": "yes",
+      "contracts": 30,
+      "entry_price_cents": 55,
+      "cost_usd": 16.5,
+      "signal": "LONG",
+    })
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab()
+    tab["monitor"]["action"] = "CUT LOSS"
+    tab["monitor"]["message"] = "Signal weakened — cut loss"
+    tab["kalshi"]["yes_mid"] = 0.55
+    actions = bot.run_continuous_cycle(tab)
+    assert actions == []
+    assert len(store.open_positions(tab["slot_key"])) == 1
+
+
+def test_reentry_cooldown_blocks_immediate_reentry():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.save_settings(Slot15BotSettings(
+      enabled=True, max_spend_per_slot_usd=25.0,
+      allow_strong=False, allow_actionable=False,
+      reentry_cooldown_seconds=120,
+    ))
+    store.record_exit_cooldown("2025-06-28T14:00:00-04:00", "KXBTC15M-TEST")
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab()
+    actions = bot.run_continuous_cycle(tab)
+    assert actions == []
+
+
 def test_exposure_budget_frees_on_exit():
   with tempfile.TemporaryDirectory() as tmp:
     store = Slot15BotStore(Path(tmp) / "bot.db")

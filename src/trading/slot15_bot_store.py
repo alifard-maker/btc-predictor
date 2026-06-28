@@ -19,6 +19,7 @@ class Slot15BotSettings:
   allow_strong: bool = True
   allow_actionable: bool = True
   continuous: bool = True
+  reentry_cooldown_seconds: int = 120
 
   def to_dict(self) -> dict[str, Any]:
     return asdict(self)
@@ -34,6 +35,7 @@ class Slot15BotSettings:
       allow_strong=bool(raw.get("allow_strong", True)),
       allow_actionable=bool(raw.get("allow_actionable", True)),
       continuous=bool(raw.get("continuous", True)),
+      reentry_cooldown_seconds=int(raw.get("reentry_cooldown_seconds", 120)),
     )
 
 
@@ -82,6 +84,12 @@ CREATE TABLE IF NOT EXISTS bot_positions (
   status TEXT NOT NULL DEFAULT 'open'
 );
 CREATE INDEX IF NOT EXISTS idx_bot_positions_open ON bot_positions(event_ticker, status);
+CREATE TABLE IF NOT EXISTS bot_cooldowns (
+  event_ticker TEXT NOT NULL,
+  market_ticker TEXT NOT NULL,
+  exited_at TEXT NOT NULL,
+  PRIMARY KEY (event_ticker, market_ticker)
+);
 """
 
 
@@ -131,9 +139,82 @@ class Slot15BotStore:
     positions = self.open_positions(event_ticker)
     return round(sum(float(p.get("cost_usd") or 0) for p in positions), 2)
 
+  def _exit_pnl_from_prices(row: dict[str, Any]) -> float | None:
+    entry_c = row.get("entry_price_cents")
+    exit_c = row.get("exit_price_cents")
+    contracts = row.get("contracts")
+    side = (row.get("side") or "").lower()
+    if entry_c is None or exit_c is None or contracts is None:
+      return None
+    entry_c, exit_c, contracts = int(entry_c), int(exit_c), int(contracts)
+    if side == "yes":
+      return round(contracts * (exit_c - entry_c) / 100.0, 2)
+    if side == "no":
+      return round(contracts * (entry_c - exit_c) / 100.0, 2)
+    return None
+
+  def _realized_pnl_usd(self, event_ticker: str) -> float:
+    with self._connect() as conn:
+      exits = conn.execute(
+        """
+        SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
+        FROM bot_trades
+        WHERE event_ticker = ? AND action = 'exit' AND status = 'filled'
+        """,
+        (event_ticker,),
+      ).fetchall()
+    total = 0.0
+    for r in exits:
+      row = dict(r)
+      pnl = row.get("pnl_usd")
+      if pnl is None:
+        pnl = self._exit_pnl_from_prices(row)
+      total += float(pnl or 0)
+    return round(total, 2)
+
+  def realized_pnl_usd(self, event_ticker: str) -> float:
+    return self._realized_pnl_usd(event_ticker)
+
+  def slot_bankroll_usd(self, event_ticker: str, max_slot: float) -> float:
+    return max(0.0, float(max_slot) + self.realized_pnl_usd(event_ticker))
+
   def remaining_budget_usd(self, event_ticker: str, max_slot: float) -> float:
-    """Room for new entries: max at-risk cap minus current open exposure (exits free budget)."""
-    return max(0.0, float(max_slot) - self.open_exposure_usd(event_ticker))
+    """Room for new entries: slot bankroll minus current open exposure (floor at 0)."""
+    return max(0.0, self.slot_bankroll_usd(event_ticker, max_slot) - self.open_exposure_usd(event_ticker))
+
+  def record_exit_cooldown(
+    self,
+    event_ticker: str,
+    market_ticker: str,
+    *,
+    exited_at: str | None = None,
+  ) -> None:
+    now = exited_at or datetime.now(timezone.utc).isoformat()
+    with self._connect() as conn:
+      conn.execute(
+        """
+        INSERT INTO bot_cooldowns (event_ticker, market_ticker, exited_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(event_ticker, market_ticker) DO UPDATE SET exited_at = excluded.exited_at
+        """,
+        (event_ticker, market_ticker, now),
+      )
+
+  def is_in_cooldown(self, event_ticker: str, market_ticker: str, cooldown_seconds: int) -> bool:
+    if cooldown_seconds <= 0:
+      return False
+    with self._connect() as conn:
+      row = conn.execute(
+        "SELECT exited_at FROM bot_cooldowns WHERE event_ticker = ? AND market_ticker = ?",
+        (event_ticker, market_ticker),
+      ).fetchone()
+    if not row:
+      return False
+    exited_at = datetime.fromisoformat(str(row["exited_at"]).replace("Z", "+00:00"))
+    if exited_at.tzinfo is None:
+      exited_at = exited_at.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - exited_at).total_seconds()
+    return elapsed < float(cooldown_seconds)
 
   def has_open_position(self, event_ticker: str, market_ticker: str) -> bool:
     with self._connect() as conn:
@@ -218,6 +299,8 @@ class Slot15BotStore:
     exposure = self.open_exposure_usd(event_ticker)
     open_pos = self.open_positions(event_ticker)
     realized = round(float(row["realized_pnl_usd"] or 0), 2)
+    if int(row["exit_count"] or 0) > 0 and realized == 0:
+      realized = self._realized_pnl_usd(event_ticker)
     return {
       "event_ticker": event_ticker,
       "realized_pnl_usd": realized,
@@ -300,8 +383,13 @@ class Slot15BotStore:
   def status(self, event_ticker: str | None = None) -> dict[str, Any]:
     settings = self.get_settings()
     exposure = self.open_exposure_usd(event_ticker) if event_ticker else 0.0
+    bankroll = (
+      self.slot_bankroll_usd(event_ticker, settings.max_spend_per_slot_usd)
+      if event_ticker
+      else settings.max_spend_per_slot_usd
+    )
     remaining = (
-      max(0.0, settings.max_spend_per_slot_usd - exposure)
+      self.remaining_budget_usd(event_ticker, settings.max_spend_per_slot_usd)
       if event_ticker
       else settings.max_spend_per_slot_usd
     )
@@ -311,6 +399,7 @@ class Slot15BotStore:
       "settings": settings.to_dict(),
       "event_ticker": event_ticker,
       "open_exposure_usd": round(exposure, 2),
+      "slot_bankroll_usd": round(bankroll, 2),
       "remaining_usd": round(remaining, 2),
       "max_spend_per_slot_usd": settings.max_spend_per_slot_usd,
       "open_positions": open_pos,

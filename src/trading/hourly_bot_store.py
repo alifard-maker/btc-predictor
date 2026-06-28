@@ -19,6 +19,7 @@ class HourlyBotSettings:
   allow_strong: bool = True
   allow_actionable: bool = True
   continuous: bool = True
+  reentry_cooldown_seconds: int = 120
 
   def to_dict(self) -> dict[str, Any]:
     return asdict(self)
@@ -34,6 +35,7 @@ class HourlyBotSettings:
       allow_strong=bool(raw.get("allow_strong", True)),
       allow_actionable=bool(raw.get("allow_actionable", True)),
       continuous=bool(raw.get("continuous", True)),
+      reentry_cooldown_seconds=int(raw.get("reentry_cooldown_seconds", 120)),
     )
 
 
@@ -82,6 +84,12 @@ CREATE TABLE IF NOT EXISTS bot_positions (
   status TEXT NOT NULL DEFAULT 'open'
 );
 CREATE INDEX IF NOT EXISTS idx_bot_positions_open ON bot_positions(event_ticker, status);
+CREATE TABLE IF NOT EXISTS bot_cooldowns (
+  event_ticker TEXT NOT NULL,
+  market_ticker TEXT NOT NULL,
+  exited_at TEXT NOT NULL,
+  PRIMARY KEY (event_ticker, market_ticker)
+);
 """
 
 
@@ -145,9 +153,51 @@ class HourlyBotStore:
     positions = self.open_positions(event_ticker)
     return round(sum(float(p.get("cost_usd") or 0) for p in positions), 2)
 
+  def realized_pnl_usd(self, event_ticker: str) -> float:
+    """Sum of filled exit P&L for this hour (wins add, losses subtract from bankroll)."""
+    return self._realized_pnl_usd(event_ticker)
+
+  def hour_bankroll_usd(self, event_ticker: str, max_hourly: float) -> float:
+    """Deployable hour cap after realized P&L (floor at 0)."""
+    return max(0.0, float(max_hourly) + self.realized_pnl_usd(event_ticker))
+
   def remaining_budget_usd(self, event_ticker: str, max_hourly: float) -> float:
-    """Room for new entries: max at-risk cap minus current open exposure (exits free budget)."""
-    return max(0.0, float(max_hourly) - self.open_exposure_usd(event_ticker))
+    """Room for new entries: hour bankroll minus current open exposure (floor at 0)."""
+    return max(0.0, self.hour_bankroll_usd(event_ticker, max_hourly) - self.open_exposure_usd(event_ticker))
+
+  def record_exit_cooldown(
+    self,
+    event_ticker: str,
+    market_ticker: str,
+    *,
+    exited_at: str | None = None,
+  ) -> None:
+    now = exited_at or datetime.now(timezone.utc).isoformat()
+    with self._connect() as conn:
+      conn.execute(
+        """
+        INSERT INTO bot_cooldowns (event_ticker, market_ticker, exited_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(event_ticker, market_ticker) DO UPDATE SET exited_at = excluded.exited_at
+        """,
+        (event_ticker, market_ticker, now),
+      )
+
+  def is_in_cooldown(self, event_ticker: str, market_ticker: str, cooldown_seconds: int) -> bool:
+    if cooldown_seconds <= 0:
+      return False
+    with self._connect() as conn:
+      row = conn.execute(
+        "SELECT exited_at FROM bot_cooldowns WHERE event_ticker = ? AND market_ticker = ?",
+        (event_ticker, market_ticker),
+      ).fetchone()
+    if not row:
+      return False
+    exited_at = datetime.fromisoformat(str(row["exited_at"]).replace("Z", "+00:00"))
+    if exited_at.tzinfo is None:
+      exited_at = exited_at.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - exited_at).total_seconds()
+    return elapsed < float(cooldown_seconds)
 
   def has_open_position(self, event_ticker: str, market_ticker: str) -> bool:
     with self._connect() as conn:
@@ -352,8 +402,13 @@ class HourlyBotStore:
   def status(self, event_ticker: str | None = None) -> dict[str, Any]:
     settings = self.get_settings()
     exposure = self.open_exposure_usd(event_ticker) if event_ticker else 0.0
+    bankroll = (
+      self.hour_bankroll_usd(event_ticker, settings.max_spend_per_hour_usd)
+      if event_ticker
+      else settings.max_spend_per_hour_usd
+    )
     remaining = (
-      max(0.0, settings.max_spend_per_hour_usd - exposure)
+      self.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd)
       if event_ticker
       else settings.max_spend_per_hour_usd
     )
@@ -363,6 +418,7 @@ class HourlyBotStore:
       "settings": settings.to_dict(),
       "event_ticker": event_ticker,
       "open_exposure_usd": round(exposure, 2),
+      "hour_bankroll_usd": round(bankroll, 2),
       "remaining_usd": round(remaining, 2),
       "max_spend_per_hour_usd": settings.max_spend_per_hour_usd,
       "open_positions": open_pos,

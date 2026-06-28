@@ -12,6 +12,8 @@ from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
 
 log = logging.getLogger(__name__)
 
+CUT_LOSS_EXIT_MIN_LOSS_USD = 0.05
+
 _ACTIONABLE_LONG = frozenset({
   Signal.LONG.value,
   "LATE LONG",
@@ -173,6 +175,16 @@ def _entry_candidates(tab: dict[str, Any]) -> list[tuple[float, str, dict[str, A
   return out
 
 
+def _should_paper_exit(alert_label: str, unrealized_pnl: float | None) -> bool:
+  if alert_label == "TAKE PROFIT":
+    return True
+  if alert_label in ("CUT LOSS", "CUT LOSSES"):
+    if unrealized_pnl is None:
+      return False
+    return unrealized_pnl < -CUT_LOSS_EXIT_MIN_LOSS_USD
+  return False
+
+
 def _unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | None:
   if mark_cents is None:
     return None
@@ -255,6 +267,10 @@ class Slot15Bot:
       if exit_price is None:
         exit_price = pos["entry_price_cents"]
 
+      unrealized = _unrealized_pnl_usd(pos, exit_price)
+      if not _should_paper_exit(action, unrealized):
+        continue
+
       entry_c = int(pos["entry_price_cents"])
       contracts = int(pos["contracts"])
       if pos["side"] == "yes":
@@ -288,6 +304,7 @@ class Slot15Bot:
         "position_id": pos["id"],
       })
       log.info("%s 15m bot [paper exit]: %s", self.asset.upper(), detail)
+      self.store.record_exit_cooldown(slot_key, pos["market_ticker"])
       results.append(row)
 
     return results
@@ -311,6 +328,9 @@ class Slot15Bot:
         continue
 
       if self.store.has_open_position(slot_key, market_ticker):
+        continue
+
+      if self.store.is_in_cooldown(slot_key, market_ticker, settings.reentry_cooldown_seconds):
         continue
 
       side = _side_from_signal(signal)

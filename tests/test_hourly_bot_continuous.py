@@ -280,6 +280,72 @@ def test_settings_save_does_not_delete_trades():
     assert len(store.list_trades()) == 1
 
 
+def test_remaining_budget_accounts_for_realized_losses():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "status": "filled",
+      "pnl_usd": -3.0,
+    })
+    assert store.remaining_budget_usd("EV1", 25.0) == 22.0
+    assert store.hour_bankroll_usd("EV1", 25.0) == 22.0
+
+
+def test_remaining_budget_increases_after_win():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "status": "filled",
+      "pnl_usd": 5.0,
+    })
+    assert store.remaining_budget_usd("EV1", 25.0) == 30.0
+    assert store.hour_bankroll_usd("EV1", 25.0) == 30.0
+
+
+def test_no_exit_on_cut_losses_when_flat_pnl():
+  """Regime-block CUT LOSSES at same mark should not churn paper-exit."""
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=25.0))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 30,
+      "entry_price_cents": 80,
+      "cost_usd": 24.0,
+      "signal": "BUY YES",
+      "entry_edge": 0.12,
+    })
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(regime_allow=False)
+    tab["live"]["primary_pick"]["kalshi_mid"] = 0.80
+    tab["live"]["regime"] = {"allow_trade": False, "reasons": ["compressed"]}
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
+    assert actions == []
+    assert len(store.open_positions("KXTEST-1H")) == 1
+
+
+def test_reentry_cooldown_blocks_immediate_reentry():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=25.0,
+      allow_strong=False, allow_actionable=False,
+      reentry_cooldown_seconds=120,
+    ))
+    store.record_exit_cooldown("KXTEST-1H", "KXTEST-T1")
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab()
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {}, "intrahour": {"enabled": False}}})
+    assert actions == []
+
+
 def test_entries_never_exceed_max_at_risk():
   """Open exposure stays within cap; cumulative enters may exceed it after round-trips."""
   with tempfile.TemporaryDirectory() as tmp:
