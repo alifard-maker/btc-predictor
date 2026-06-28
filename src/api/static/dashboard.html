@@ -546,6 +546,8 @@
   <script>
     const $ = (id) => document.getElementById(id);
     let activeTab = '15m';
+    let hourlyRenderTab = 'daily';
+    let dailyFetchGen = 0;
     let hourlyGuideCheatOpen = false;
 
     function slot15Prefix() {
@@ -584,15 +586,15 @@
     }
 
     function hourlyPrefix() {
-      return activeTab === 'eth-hourly' ? 'eth-' : '';
+      return hourlyRenderTab === 'eth-hourly' ? 'eth-' : '';
     }
 
     function h$(id) {
       return $(hourlyPrefix() + id);
     }
 
-    function hourlyApi() {
-      if (activeTab === 'eth-hourly') {
+    function hourlyApiFor(tab) {
+      if (tab === 'eth-hourly') {
         return {
           prediction: '/api/eth/hourly/prediction',
           calibration: '/api/eth/hourly/calibration',
@@ -606,6 +608,10 @@
         history: '/api/hourly/predictions?limit=20',
         indexLabel: 'BRTI',
       };
+    }
+
+    function hourlyApi() {
+      return hourlyApiFor(activeTab === 'eth-hourly' ? 'eth-hourly' : 'daily');
     }
     const TZ = 'America/New_York';
     const pct = (n) => (n * 100).toFixed(1) + '%';
@@ -1329,6 +1335,14 @@
       $('tab-eth-15m').classList.toggle('active', name === 'eth-15m');
       $('tab-daily').classList.toggle('active', name === 'daily');
       $('tab-eth-hourly').classList.toggle('active', name === 'eth-hourly');
+      if (name === 'daily') {
+        const st = $('btc-hourly-bot-status');
+        if (st) st.innerHTML = '<p class="muted" style="font-size:.72rem">Loading BTC bot…</p>';
+      }
+      if (name === 'eth-hourly') {
+        const st = $('eth-hourly-bot-status');
+        if (st) st.innerHTML = '<p class="muted" style="font-size:.72rem">Loading ETH bot…</p>';
+      }
       if (name === 'daily' || name === 'eth-hourly') loadDaily();
       else if (name === '15m' || name === 'eth-15m') loadAll();
     }
@@ -1779,11 +1793,36 @@
       return `<span class="${cls}">${n >= 0 ? '+' : ''}$${n.toFixed(2)}</span>`;
     }
 
+    function renderOpenPositionsPanel(openPos) {
+      if (!openPos || !openPos.length) return '';
+      const rows = openPos.map((p) => {
+        const alert = (p.position_alert && p.position_alert.alert) || 'HOLD';
+        const alertCls = alert === 'TAKE PROFIT' ? 'up' : alert === 'CUT LOSSES' ? 'down' : 'muted';
+        const upnl = p.unrealized_pnl_usd;
+        return `<tr>
+          <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
+          <td>${(p.side || '').toUpperCase()} ×${p.contracts ?? '—'}</td>
+          <td>${botCents(p.entry_price_cents)}</td>
+          <td>${botCents(p.mark_price_cents)}</td>
+          <td>${upnl != null ? botPnlUsd(upnl) : '—'}</td>
+          <td class="${alertCls}">${alert}</td>
+        </tr>`;
+      }).join('');
+      return `<div style="margin:.55rem 0;padding:.55rem .65rem;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:8px">
+        <p class="muted" style="font-size:.68rem;margin:0 0 .4rem;text-transform:uppercase;letter-spacing:.05em">Open positions · live mark-to-market</p>
+        <table style="width:100%;font-size:.72rem">
+          <thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    }
+
     function renderHourlyBot(bot, asset) {
       const el = $(`${asset}-hourly-bot`);
       if (!el) return;
       const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
       if (activeTab !== tab) return;
+      if (bot && bot.asset && bot.asset !== asset) return;
       if (!bot || !bot.ok) {
         el.innerHTML = '<p class="muted">Bot status unavailable.</p>';
         botForceSettingsRender[asset] = true;
@@ -1814,9 +1853,13 @@
       const openN = bot.open_position_count ?? 0;
       const hs = bot.hourly_summary || bot.hour_summary || {};
       const realized = hs.realized_pnl_usd ?? 0;
-      const pnlCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
-      const eventLabel = bot.event_ticker ? `<span class="muted" style="font-size:.68rem">${bot.event_ticker}</span>` : '';
-      const currentEvent = bot.event_ticker || '';
+      const unrealized = hs.unrealized_pnl_usd ?? 0;
+      const totalPnl = hs.total_pnl_usd ?? (realized + unrealized);
+      const totalCls = totalPnl > 0 ? 'up' : totalPnl < 0 ? 'down' : 'muted';
+      const realizedCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
+      const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
+      const hourId = hs.event_ticker || bot.event_ticker || '—';
+      const assetLabel = asset === 'eth' ? 'ETH' : 'BTC';
       const trades = (bot.recent_trades || []).map((t) => {
         const st = t.status === 'filled' ? 'up' : t.status === 'skipped' ? 'muted' : 'down';
         const act = t.action || 'enter';
@@ -1825,7 +1868,7 @@
         const pnlCell = act === 'exit' ? botPnlUsd(t.realized_pnl_usd ?? t.pnl_usd) : '—';
         const mkt = t.label || t.market_ticker || '—';
         const evt = t.event_ticker || '—';
-        const evtCls = evt === currentEvent ? '' : 'muted';
+        const evtCls = evt === hourId ? '' : 'muted';
         return `<tr>
           <td>${time(t.created_at)}</td>
           <td class="${evtCls}" style="font-size:.65rem">${evt}</td>
@@ -1841,12 +1884,19 @@
       const emptyLog = s.enabled
         ? `No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~60s on the server.`
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
+      const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
       statusWrap.innerHTML = `
-        <div class="bot-row" style="margin-top:.35rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
-          <div class="bot-stat"><span class="muted">Current hour ${eventLabel}</span><strong class="${pnlCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)} realized</strong></div>
-          <div class="bot-stat"><span class="muted">Enters / Exits (hour)</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
-          <div class="bot-stat"><span class="muted">Capital deployed (hour)</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
+        <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
+        <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
+          <div class="bot-stat"><span class="muted">Hour total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Realized (closed)</span><strong class="${realizedCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Unrealized (open)</span><strong class="${unrealCls}">${unrealized >= 0 ? '+' : ''}$${Number(unrealized).toFixed(2)}</strong></div>
         </div>
+        <div class="bot-row" style="padding:0 .15rem .35rem">
+          <div class="bot-stat"><span class="muted">Enters / Exits this hour</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted">Capital deployed this hour</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
+        </div>
+        ${openPosHtml}
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
           <div class="bot-stat"><span class="muted">At risk</span><strong>$${Number(exposure).toFixed(2)}</strong></div>
@@ -1899,6 +1949,7 @@
     }
 
     function renderDaily(data) {
+      if (activeTab !== hourlyRenderTab) return;
       if (!data || !data.ok) {
         h$('daily-meta').textContent = data?.error || 'Hourly prediction unavailable';
         h$('hourly-guide').innerHTML = '<p class="muted">—</p>';
@@ -2049,22 +2100,29 @@
         locked: (rangeRg.recommendations || []).find(r => r.tier === 'locked')?.label,
       });
       renderDailyStructure(live.structure);
-      if (activeTab === 'eth-hourly') renderHourlyBot(data.bot, 'eth');
-      if (activeTab === 'daily') renderHourlyBot(data.bot, 'btc');
+      const botAsset = hourlyRenderTab === 'eth-hourly' ? 'eth' : 'btc';
+      if (activeTab === hourlyRenderTab) renderHourlyBot(data.bot, botAsset);
     }
 
     async function loadDaily() {
+      const tabAtStart = activeTab;
+      if (tabAtStart !== 'daily' && tabAtStart !== 'eth-hourly') return;
+      const gen = ++dailyFetchGen;
+      const api = hourlyApiFor(tabAtStart);
       try {
-        const api = hourlyApi();
         const [d, cal, hist] = await Promise.all([
           get(api.prediction),
           get(api.calibration).catch(() => ({ summary: {} })),
           get(api.history).catch(() => []),
         ]);
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        hourlyRenderTab = tabAtStart;
         renderDaily(d);
         renderHourlyCalibration(cal);
         renderHourlyHistory(hist);
       } catch (e) {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        hourlyRenderTab = tabAtStart;
         renderDaily({ ok: false, error: e.message });
         renderHourlyCalibration({});
         renderHourlyHistory([]);

@@ -146,6 +146,68 @@ def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[t
   return out
 
 
+def _unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | None:
+  if mark_cents is None:
+    return None
+  entry_c = int(pos["entry_price_cents"])
+  contracts = int(pos["contracts"])
+  if pos["side"] == "yes":
+    return round(contracts * (mark_cents - entry_c) / 100.0, 2)
+  return round(contracts * (entry_c - mark_cents) / 100.0, 2)
+
+
+def enrich_open_positions_live(
+  positions: list[dict[str, Any]],
+  tab: dict[str, Any],
+  cfg: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+  """Attach live mark, unrealized P&L, and position alert to open bot legs."""
+  live = tab.get("live") or tab
+  locked = tab.get("locked")
+  price = tab.get("brti_live") or live.get("current_price")
+  out: list[dict[str, Any]] = []
+
+  for pos in positions:
+    row = dict(pos)
+    pick = _find_contract_in_live(live, pos["market_ticker"])
+    mark = _price_cents_for_pick(pick, pos["side"]) if pick else None
+    row["mark_price_cents"] = mark
+    row["unrealized_pnl_usd"] = _unrealized_pnl_usd(pos, mark)
+    row["current_signal"] = pick.get("signal") if pick else None
+
+    if pick:
+      regime = live.get("regime") or {}
+      row["position_alert"] = assess_hourly_position_alert(
+        snapshot_kind="late_call",
+        signal=pick.get("signal"),
+        edge=pick.get("edge"),
+        regime_allow_trade=bool(regime.get("allow_trade", True)),
+        regime_reasons=list(regime.get("reasons") or []),
+        bet_assessment=assess_contract_bet(
+          signal=pick.get("signal"),
+          edge=pick.get("edge"),
+          live=live,
+          locked=locked,
+          use_live_regime=True,
+          cfg=cfg,
+        ),
+        locked_signal=pos.get("signal"),
+        locked_edge=pos.get("entry_edge"),
+        locked_regime_allow_trade=True,
+        locked_reference_price=pos.get("reference_price"),
+        reference_price=live.get("current_price"),
+        locked_terminal_mu=(locked or {}).get("terminal_mu"),
+        terminal_mu=live.get("terminal_mu"),
+        live_price=float(price) if price else None,
+        cfg=cfg,
+      )
+    else:
+      row["position_alert"] = {"alert": "HOLD", "detail": "Awaiting live quote"}
+
+    out.append(row)
+  return out
+
+
 class HourlyBot:
   def __init__(self, store: HourlyBotStore, kalshi_client: Any | None = None, *, asset: str = "btc"):
     self.store = store

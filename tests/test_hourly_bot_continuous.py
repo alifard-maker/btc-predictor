@@ -212,6 +212,31 @@ def test_list_trades_without_event_filter_keeps_all_hours():
     assert len(hour1_only) == 1
 
 
+def test_enrich_open_positions_live_mark_to_market():
+  tab = _live_tab(pick={
+    "ticker": "KXTEST-T1",
+    "signal": "BUY YES",
+    "label": "$2,500+",
+    "kalshi_mid": 0.55,
+    "edge": 0.08,
+  })
+  positions = [{
+    "id": "p1",
+    "market_ticker": "KXTEST-T1",
+    "side": "yes",
+    "contracts": 10,
+    "entry_price_cents": 40,
+    "cost_usd": 4.0,
+    "signal": "BUY YES",
+  }]
+  from src.trading.hourly_bot import enrich_open_positions_live
+  enriched = enrich_open_positions_live(positions, tab, cfg={"hourly": {"regime": {}}})
+  assert len(enriched) == 1
+  assert enriched[0]["mark_price_cents"] == 55
+  assert enriched[0]["unrealized_pnl_usd"] == 1.5
+  assert enriched[0]["position_alert"]["alert"] in ("HOLD", "TAKE PROFIT", "CUT LOSSES")
+
+
 def test_settings_save_does_not_delete_trades():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")

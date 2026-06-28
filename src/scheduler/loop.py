@@ -261,6 +261,25 @@ class PredictionLoop:
     status["hour_trades"] = (
       store.list_trades(limit=50, event_ticker=event_ticker) if event_ticker else []
     )
+    open_pos = list(status.get("open_positions") or [])
+    if tab and tab.get("ok"):
+      from src.trading.hourly_bot import enrich_open_positions_live
+
+      acfg = self._acfg_15m(asset)
+      open_pos = enrich_open_positions_live(open_pos, tab, acfg)
+      status["open_positions"] = open_pos
+      unrealized = round(
+        sum(float(p.get("unrealized_pnl_usd") or 0) for p in open_pos),
+        2,
+      )
+      hs = status.get("hourly_summary") or status.get("hour_summary")
+      if hs:
+        hs = dict(hs)
+        realized = float(hs.get("realized_pnl_usd") or 0)
+        hs["unrealized_pnl_usd"] = unrealized
+        hs["total_pnl_usd"] = round(realized + unrealized, 2)
+        status["hourly_summary"] = hs
+        status["hour_summary"] = hs
     kalshi = self._kalshi_for(asset)
     status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)
     return status
