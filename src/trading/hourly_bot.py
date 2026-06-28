@@ -285,15 +285,24 @@ class HourlyBot:
     if not settings.enabled or not settings.auto_stop_on_budget_exhausted:
       return None
     max_cap = settings.max_spend_per_hour_usd
-    bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap)
-    if bankroll > 0:
-      return None
-    realized = self.store.realized_pnl_usd(event_ticker)
+    bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap, settings)
     exposure = self.store.open_exposure_usd(event_ticker)
-    detail = (
-      f"Hour bankroll exhausted (${realized:.2f} realized, "
-      f"${exposure:.2f} at risk, max ${max_cap:.2f})"
-    )
+    if settings.mode == "paper":
+      if bankroll - exposure > 0:
+        return None
+      realized = self.store.get_paper_state_dict(max_cap).get("paper_realized_all_time_usd", 0)
+      detail = (
+        f"Paper bankroll exhausted (${realized:.2f} all-time since reset, "
+        f"${exposure:.2f} at risk, bankroll ${bankroll:.2f})"
+      )
+    else:
+      if bankroll > 0:
+        return None
+      realized = self.store.realized_pnl_usd(event_ticker)
+      detail = (
+        f"Hour bankroll exhausted (${realized:.2f} realized, "
+        f"${exposure:.2f} at risk, max ${max_cap:.2f})"
+      )
     updated = HourlyBotSettings(
       **{
         **settings.to_dict(),
@@ -468,8 +477,8 @@ class HourlyBot:
       return results
 
     max_cap = settings.max_spend_per_hour_usd
-    bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap)
-    remaining = self.store.remaining_budget_usd(event_ticker, max_cap)
+    bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap, settings)
+    remaining = self.store.remaining_budget_usd(event_ticker, max_cap, settings)
     if bankroll <= 0:
       self.store.set_last_skip_reason("hour_budget_exhausted")
       return results
@@ -509,7 +518,7 @@ class HourlyBot:
         last_reason = f"missing_price:{market_ticker}"
         continue
 
-      remaining = self.store.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd)
+      remaining = self.store.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd, settings)
       if remaining <= 0:
         last_reason = "hour_budget_exhausted"
         break

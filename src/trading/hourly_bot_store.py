@@ -137,10 +137,15 @@ class HourlyBotStore:
     return self._last_skip_reason
 
   def sync_period(self, event_ticker: str, settings: HourlyBotSettings) -> HourlyBotSettings:
-    """Clear hour-scoped auto_stop when Kalshi rolls to a new hourly event."""
+    """Clear hour-scoped auto_stop when Kalshi rolls to a new hourly event (live mode only)."""
     prev = self._last_period_key
     self._last_period_key = event_ticker
-    if settings.auto_stopped and prev and prev != event_ticker:
+    if (
+      settings.mode != "paper"
+      and settings.auto_stopped
+      and prev
+      and prev != event_ticker
+    ):
       updated = HourlyBotSettings(**{**settings.to_dict(), "auto_stopped": False})
       self.save_settings(updated)
       self.set_last_skip_reason(None)
@@ -153,6 +158,9 @@ class HourlyBotStore:
     return conn
 
   def _migrate(self, conn: sqlite3.Connection) -> None:
+    from src.trading.paper_bankroll import migrate_paper_state
+
+    migrate_paper_state(conn)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_trades)").fetchall()}
     if cols and "action" not in cols:
       conn.execute("ALTER TABLE bot_trades ADD COLUMN action TEXT NOT NULL DEFAULT 'enter'")
@@ -208,13 +216,81 @@ class HourlyBotStore:
     """Sum of filled exit P&L for this hour (wins add, losses subtract from bankroll)."""
     return self._realized_pnl_usd(event_ticker)
 
-  def hour_bankroll_usd(self, event_ticker: str, max_hourly: float) -> float:
-    """Deployable hour cap after realized P&L (floor at 0)."""
+  def _all_paper_realized_pnl(self) -> float:
+    with self._connect() as conn:
+      exits = conn.execute(
+        """
+        SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
+        FROM bot_trades
+        WHERE action = 'exit' AND status = 'filled' AND mode = 'paper'
+        """,
+      ).fetchall()
+    total = 0.0
+    for r in exits:
+      row = dict(r)
+      pnl = row.get("pnl_usd")
+      if pnl is None:
+        pnl = self._exit_pnl_from_prices(row)
+      total += float(pnl or 0)
+    return round(total, 2)
+
+  def ensure_paper_state(self, default_cap: float):
+    from src.trading.paper_bankroll import ensure_paper_state
+
+    with self._connect() as conn:
+      return ensure_paper_state(
+        conn,
+        default_cap,
+        backfill_pnl_fn=self._all_paper_realized_pnl,
+      )
+
+  def get_paper_state_dict(self, default_cap: float) -> dict[str, Any]:
+    return self.ensure_paper_state(default_cap).to_dict()
+
+  def reset_paper_bankroll(self, max_cap: float) -> dict[str, Any]:
+    from src.trading.paper_bankroll import reset_paper_bankroll
+
+    with self._connect() as conn:
+      state = reset_paper_bankroll(conn, max_cap)
+    settings = self.get_settings()
+    if settings.auto_stopped:
+      self.save_settings(HourlyBotSettings(**{**settings.to_dict(), "auto_stopped": False}))
+    self.set_last_skip_reason(None)
+    return state.to_dict()
+
+  def _apply_paper_exit_pnl(self, pnl: float, default_cap: float) -> None:
+    from src.trading.paper_bankroll import apply_paper_exit_pnl, get_paper_state
+
+    with self._connect() as conn:
+      if get_paper_state(conn) is None:
+        self.ensure_paper_state(default_cap)
+      else:
+        apply_paper_exit_pnl(conn, pnl, default_cap)
+
+  def hour_bankroll_usd(
+    self,
+    event_ticker: str,
+    max_hourly: float,
+    settings: HourlyBotSettings | None = None,
+  ) -> float:
+    """Deployable capital: persistent paper bankroll or live hour cap + interval P&L."""
+    if settings and settings.mode == "paper":
+      return max(0.0, self.ensure_paper_state(max_hourly).paper_bankroll_usd)
     return max(0.0, float(max_hourly) + self.realized_pnl_usd(event_ticker))
 
-  def remaining_budget_usd(self, event_ticker: str, max_hourly: float) -> float:
-    """Room for new entries: hour bankroll minus current open exposure (floor at 0)."""
-    return max(0.0, self.hour_bankroll_usd(event_ticker, max_hourly) - self.open_exposure_usd(event_ticker))
+  def remaining_budget_usd(
+    self,
+    event_ticker: str,
+    max_hourly: float,
+    settings: HourlyBotSettings | None = None,
+  ) -> float:
+    """Room for new entries after open exposure (floor at 0)."""
+    exposure = self.open_exposure_usd(event_ticker)
+    if settings and settings.mode == "paper":
+      bankroll = self.ensure_paper_state(max_hourly).paper_bankroll_usd
+      deploy_cap = min(bankroll, float(max_hourly))
+      return max(0.0, deploy_cap - exposure)
+    return max(0.0, self.hour_bankroll_usd(event_ticker, max_hourly) - exposure)
 
   def record_exit_cooldown(
     self,
@@ -460,6 +536,16 @@ class HourlyBotStore:
         """,
         row,
       )
+    if (
+      action == "exit"
+      and row.get("mode") == "paper"
+      and row.get("status") == "filled"
+    ):
+      pnl = row.get("pnl_usd")
+      if pnl is None:
+        pnl = self._exit_pnl_from_prices(row)
+      settings = self.get_settings()
+      self._apply_paper_exit_pnl(float(pnl or 0), settings.max_spend_per_hour_usd)
     return self._enrich_trade(row)
 
   def list_trades(self, *, limit: int = 30, event_ticker: str | None = None) -> list[dict[str, Any]]:
@@ -486,30 +572,35 @@ class HourlyBotStore:
   def status(self, event_ticker: str | None = None) -> dict[str, Any]:
     settings = self.get_settings()
     exposure = self.open_exposure_usd(event_ticker) if event_ticker else 0.0
+    max_cap = settings.max_spend_per_hour_usd
     bankroll = (
-      self.hour_bankroll_usd(event_ticker, settings.max_spend_per_hour_usd)
+      self.hour_bankroll_usd(event_ticker, max_cap, settings)
       if event_ticker
-      else settings.max_spend_per_hour_usd
+      else max_cap
     )
     remaining = (
-      self.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd)
+      self.remaining_budget_usd(event_ticker, max_cap, settings)
       if event_ticker
-      else settings.max_spend_per_hour_usd
+      else max_cap
     )
     open_pos = self.open_positions(event_ticker) if event_ticker else []
     hour_summary = self.hour_interval_summary(event_ticker) if event_ticker else None
     auto_stop_row = self.last_auto_stop_trade() if settings.auto_stopped else None
+    paper_state = (
+      self.get_paper_state_dict(max_cap) if settings.mode == "paper" else None
+    )
     return {
       "settings": settings.to_dict(),
       "event_ticker": event_ticker,
       "open_exposure_usd": round(exposure, 2),
       "hour_bankroll_usd": round(bankroll, 2),
       "remaining_usd": round(remaining, 2),
-      "max_spend_per_hour_usd": settings.max_spend_per_hour_usd,
+      "max_spend_per_hour_usd": max_cap,
       "open_positions": open_pos,
       "open_position_count": len(open_pos),
       "hour_summary": hour_summary,
       "hourly_summary": hour_summary,
+      "paper_bankroll": paper_state,
       "auto_stopped": settings.auto_stopped,
       "auto_stop_reason": auto_stop_row.get("detail") if auto_stop_row else None,
       "last_skip_reason": self._last_skip_reason,

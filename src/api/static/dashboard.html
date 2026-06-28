@@ -1761,6 +1761,10 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/settings' : '/api/hourly/bot/settings';
     }
 
+    function hourlyBotResetBankrollUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly/bot/reset-bankroll' : '/api/hourly/bot/reset-bankroll';
+    }
+
     function hourlyBotStatusUrl(asset) {
       return asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
     }
@@ -1847,6 +1851,37 @@
             <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
           </label>
         </div>`;
+    }
+
+    function botPaperBankrollHtml(bot, s, periodLabel) {
+      if ((s.mode || 'paper') !== 'paper') return '';
+      const pb = bot.paper_bankroll || {};
+      const bankroll = Number(bot.hour_bankroll_usd ?? bot.slot_bankroll_usd ?? pb.paper_bankroll_usd ?? s.max_spend_per_hour_usd ?? s.max_spend_per_slot_usd ?? 25);
+      const since = Number(pb.paper_bankroll_since_reset_usd ?? 0);
+      const pct = Number(pb.paper_bankroll_since_reset_pct ?? 0);
+      const sinceCls = since > 0 ? 'up' : since < 0 ? 'down' : 'muted';
+      const resetBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.35rem" onclick="resetPaperBankroll('${periodLabel}', '${bot.asset || 'btc'}')">Reset paper bankroll</button>`;
+      return `
+        <div class="bot-row" style="padding:.35rem .15rem .15rem">
+          <div class="bot-stat"><span class="muted" title="Accumulated paper capital across all ${periodLabel === 'hour' ? 'hours' : 'slots'}">Paper bankroll</span><strong>$${bankroll.toFixed(2)}</strong>${resetBtn}</div>
+          <div class="bot-stat"><span class="muted">Since reset</span><strong class="${sinceCls}">${since >= 0 ? '+' : ''}$${since.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)</strong></div>
+        </div>`;
+    }
+
+    async function resetPaperBankroll(period, asset) {
+      const url = period === 'hour'
+        ? hourlyBotResetBankrollUrl(asset)
+        : slot15BotResetBankrollUrl(asset);
+      if (!confirm(`Reset ${asset.toUpperCase()} ${period === 'hour' ? 'hourly' : '15m'} paper bankroll to max at-risk cap? Trade log is kept.`)) return;
+      try {
+        const res = await fetch(url, { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        const bot = await res.json();
+        if (period === 'hour') renderHourlyBot(bot, asset);
+        else renderSlot15Bot(bot, asset);
+      } catch (e) {
+        showError('Reset bankroll: ' + e.message);
+      }
     }
 
     function botCents(c) {
@@ -2001,6 +2036,10 @@
       return asset === 'eth' ? '/api/eth/15m/bot/settings' : '/api/slot15/bot/settings';
     }
 
+    function slot15BotResetBankrollUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m/bot/reset-bankroll' : '/api/slot15/bot/reset-bankroll';
+    }
+
     function readSlot15BotSettingsFromDom(asset) {
       const p = `slot15-${asset}`;
       const enabledEl = $(`bot-enabled-${p}`);
@@ -2128,11 +2167,12 @@
           <div class="bot-stat"><span class="muted">Enters / Exits this slot</span><strong>${ss.enter_count ?? 0} / ${ss.exit_count ?? 0}</strong></div>
           <div class="bot-stat"><span class="muted" title="Sum of all enter fills this slot — can exceed max at-risk when positions rotate">Cumulative $ entered (slot)</span><strong>$${Number(ss.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
-        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Slot bankroll = max cap + realized P&amp;L. <strong>Available to enter</strong> = bankroll minus at-risk now (losses shrink deployable capital).</p>
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across slots. Max at-risk caps concurrent open exposure.' : 'Slot bankroll = max cap + realized P&amp;L this slot.'} <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
+        ${botPaperBankrollHtml(bot, s, 'slot')}
         ${openPosHtml}
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
-          <div class="bot-stat"><span class="muted" title="Max cap + realized P&amp;L this slot">Slot bankroll</span><strong>$${Number(bot.slot_bankroll_usd ?? (Number(s.max_spend_per_slot_usd || 25) + realized)).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="${s.mode === 'paper' ? 'Persistent paper capital' : 'Max cap + realized P&amp;L this slot'}">${s.mode === 'paper' ? 'Paper bankroll' : 'Slot bankroll'}</span><strong>$${Number(bot.slot_bankroll_usd ?? (Number(s.max_spend_per_slot_usd || 25) + realized)).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">At risk now</span><strong>$${Number(exposure).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
@@ -2271,11 +2311,12 @@
           <div class="bot-stat"><span class="muted">Enters / Exits this hour</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
           <div class="bot-stat"><span class="muted" title="Sum of all enter fills this hour — can exceed max at-risk when positions rotate">Cumulative $ entered (hour)</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
-        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Hour bankroll = max cap + realized P&amp;L. <strong>Available to enter</strong> = bankroll minus at-risk now (losses shrink deployable capital).</p>
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across hours. Max at-risk caps concurrent open exposure.' : 'Hour bankroll = max cap + realized P&amp;L this hour.'} <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
+        ${botPaperBankrollHtml(bot, s, 'hour')}
         ${openPosHtml}
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
-          <div class="bot-stat"><span class="muted" title="Max cap + realized P&amp;L this hour">Hour bankroll</span><strong>$${Number(bot.hour_bankroll_usd ?? (Number(s.max_spend_per_hour_usd || 25) + realized)).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="${s.mode === 'paper' ? 'Persistent paper capital' : 'Max cap + realized P&amp;L this hour'}">${s.mode === 'paper' ? 'Paper bankroll' : 'Hour bankroll'}</span><strong>$${Number(bot.hour_bankroll_usd ?? (Number(s.max_spend_per_hour_usd || 25) + realized)).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">At risk now</span><strong>$${Number(exposure).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>

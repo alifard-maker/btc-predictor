@@ -688,6 +688,19 @@ async def hourly_bot_settings(request: Request, _: None = Depends(_session_user)
   return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
 
 
+@app.post("/api/hourly/bot/reset-bankroll")
+def hourly_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_bot_store("btc")
+  settings = store.get_settings()
+  if settings.mode != "paper":
+    raise HTTPException(400, "Reset bankroll is only available in paper mode")
+  store.reset_paper_bankroll(settings.max_spend_per_hour_usd)
+  tab = _loop.daily_prediction()
+  return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
+
+
 @app.get("/api/hourly/bot/trades")
 def hourly_bot_trades(
   limit: int = Query(default=100, le=200),
@@ -719,6 +732,19 @@ async def eth_hourly_bot_settings(request: Request, _: None = Depends(_session_u
   body = await request.json()
   store = _loop.hourly_bot_store("eth")
   _apply_hourly_bot_settings(store, body)
+  tab = _loop.eth_hourly_prediction()
+  return _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/hourly/bot/reset-bankroll")
+def eth_hourly_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_bot_store("eth")
+  settings = store.get_settings()
+  if settings.mode != "paper":
+    raise HTTPException(400, "Reset bankroll is only available in paper mode")
+  store.reset_paper_bankroll(settings.max_spend_per_hour_usd)
   tab = _loop.eth_hourly_prediction()
   return _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
 
@@ -758,6 +784,19 @@ async def slot15_bot_settings(request: Request, _: None = Depends(_session_user)
   return _loop.slot15_bot_status("btc", tab if tab.get("ok") else None)
 
 
+@app.post("/api/slot15/bot/reset-bankroll")
+def slot15_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.slot15_bot_store("btc")
+  settings = store.get_settings()
+  if settings.mode != "paper":
+    raise HTTPException(400, "Reset bankroll is only available in paper mode")
+  store.reset_paper_bankroll(settings.max_spend_per_slot_usd)
+  tab = _loop._slot15_tab("btc")
+  return _loop.slot15_bot_status("btc", tab if tab.get("ok") else None)
+
+
 @app.get("/api/slot15/bot/trades")
 def slot15_bot_trades(
   limit: int = Query(default=100, le=200),
@@ -793,6 +832,21 @@ async def eth_slot15_bot_settings(request: Request, _: None = Depends(_session_u
   body = await request.json()
   store = _loop.slot15_bot_store("eth")
   _apply_slot15_bot_settings(store, body)
+  tab = _loop._slot15_tab("eth")
+  return _loop.slot15_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/15m/bot/reset-bankroll")
+def eth_slot15_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  store = _loop.slot15_bot_store("eth")
+  settings = store.get_settings()
+  if settings.mode != "paper":
+    raise HTTPException(400, "Reset bankroll is only available in paper mode")
+  store.reset_paper_bankroll(settings.max_spend_per_slot_usd)
   tab = _loop._slot15_tab("eth")
   return _loop.slot15_bot_status("eth", tab if tab.get("ok") else None)
 

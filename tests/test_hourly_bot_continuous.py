@@ -447,6 +447,7 @@ def test_manual_reenable_after_auto_stop():
     store.save_settings(HourlyBotSettings(
       enabled=True, auto_stopped=False, max_spend_per_hour_usd=50.0,
     ))
+    store.reset_paper_bankroll(50.0)
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab(event="EV1")
     actions = bot.run_continuous_cycle(
@@ -459,7 +460,9 @@ def test_manual_reenable_after_auto_stop():
 def test_auto_stop_clears_on_new_hour():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
-    store.save_settings(HourlyBotSettings(enabled=True, auto_stopped=True, max_spend_per_hour_usd=25.0))
+    store.save_settings(HourlyBotSettings(
+      enabled=True, auto_stopped=True, max_spend_per_hour_usd=25.0, mode="live",
+    ))
     store.sync_period("EV1", store.get_settings())
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab(event="EV2")
@@ -576,7 +579,8 @@ def test_profit_target_increases_hour_bankroll():
     tab["live"]["primary_pick"]["kalshi_mid"] = 0.52
     bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
     assert store.realized_pnl_usd("KXTEST-1H") == 3.0
-    assert store.hour_bankroll_usd("KXTEST-1H", 25.0) == 28.0
+    settings = store.get_settings()
+    assert store.hour_bankroll_usd("KXTEST-1H", 25.0, settings) == 28.0
 
 
 def test_no_exit_when_profit_below_threshold():

@@ -276,15 +276,24 @@ class Slot15Bot:
     if not settings.enabled or not settings.auto_stop_on_budget_exhausted:
       return None
     max_cap = settings.max_spend_per_slot_usd
-    bankroll = self.store.slot_bankroll_usd(slot_key, max_cap)
-    if bankroll > 0:
-      return None
-    realized = self.store.realized_pnl_usd(slot_key)
+    bankroll = self.store.slot_bankroll_usd(slot_key, max_cap, settings)
     exposure = self.store.open_exposure_usd(slot_key)
-    detail = (
-      f"Slot bankroll exhausted (${realized:.2f} realized, "
-      f"${exposure:.2f} at risk, max ${max_cap:.2f})"
-    )
+    if settings.mode == "paper":
+      if bankroll - exposure > 0:
+        return None
+      realized = self.store.get_paper_state_dict(max_cap).get("paper_realized_all_time_usd", 0)
+      detail = (
+        f"Paper bankroll exhausted (${realized:.2f} all-time since reset, "
+        f"${exposure:.2f} at risk, bankroll ${bankroll:.2f})"
+      )
+    else:
+      if bankroll > 0:
+        return None
+      realized = self.store.realized_pnl_usd(slot_key)
+      detail = (
+        f"Slot bankroll exhausted (${realized:.2f} realized, "
+        f"${exposure:.2f} at risk, max ${max_cap:.2f})"
+      )
     updated = Slot15BotSettings(
       **{
         **settings.to_dict(),
@@ -432,8 +441,8 @@ class Slot15Bot:
       self.store.set_last_skip_reason("missing_market_ticker")
       return []
 
-    remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd)
-    bankroll = self.store.slot_bankroll_usd(slot_key, settings.max_spend_per_slot_usd)
+    remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd, settings)
+    bankroll = self.store.slot_bankroll_usd(slot_key, settings.max_spend_per_slot_usd, settings)
     if bankroll <= 0:
       self.store.set_last_skip_reason("slot_budget_exhausted")
       return []
@@ -472,7 +481,7 @@ class Slot15Bot:
         last_reason = "missing_kalshi_mid"
         continue
 
-      remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd)
+      remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd, settings)
       if remaining <= 0:
         last_reason = "fully_deployed"
         break

@@ -317,6 +317,7 @@ def test_manual_reenable_after_slot_auto_stop():
     store.save_settings(Slot15BotSettings(
       enabled=True, auto_stopped=False, max_spend_per_slot_usd=50.0,
     ))
+    store.reset_paper_bankroll(50.0)
     bot = Slot15Bot(store, asset="btc")
     actions = bot.run_continuous_cycle(_live_tab(slot_key="SLOT1"))
     assert any(a.get("action") == "enter" for a in actions)
@@ -376,7 +377,8 @@ def test_profit_target_increases_slot_bankroll():
     tab["kalshi"]["yes_mid"] = 0.52
     bot.run_continuous_cycle(tab)
     assert store.realized_pnl_usd(slot_key) == 3.0
-    assert store.slot_bankroll_usd(slot_key, 25.0) == 28.0
+    settings = store.get_settings()
+    assert store.slot_bankroll_usd(slot_key, 25.0, settings) == 28.0
 
 
 def test_no_exit_when_profit_below_threshold_slot15():
