@@ -1861,6 +1861,30 @@
       return `<span class="${cls}">${n >= 0 ? '+' : ''}$${n.toFixed(2)}</span>`;
     }
 
+    const BOT_TRADES_SCROLL_PIN = 5;
+
+    function captureBotTradesScroll(statusWrap) {
+      const logEl = statusWrap?.querySelector('.bot-trades');
+      if (!logEl) return null;
+      return {
+        scrollTop: logEl.scrollTop,
+        scrollHeight: logEl.scrollHeight,
+        wasAtTop: logEl.scrollTop <= BOT_TRADES_SCROLL_PIN,
+      };
+    }
+
+    function restoreBotTradesScroll(statusWrap, saved) {
+      if (!saved) return;
+      const logEl = statusWrap?.querySelector('.bot-trades');
+      if (!logEl) return;
+      if (saved.wasAtTop) {
+        logEl.scrollTop = 0;
+      } else {
+        const delta = logEl.scrollHeight - saved.scrollHeight;
+        logEl.scrollTop = saved.scrollTop + Math.max(0, delta);
+      }
+    }
+
     function renderOpenPositionsPanel(openPos) {
       if (!openPos || !openPos.length) return '';
       const rows = openPos.map((p) => {
@@ -2039,6 +2063,7 @@
         ? `No bot activity yet${freeMode ? ' — free mode waits for any live LONG/SHORT on the 15m tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
+      const tradesScroll = captureBotTradesScroll(statusWrap);
       statusWrap.innerHTML = `
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
@@ -2063,6 +2088,7 @@
         <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log is kept permanently — not cleared when Auto-bet or filters change.</p>
         ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Slot</th><th>Action</th><th>Status</th><th>Signal</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
       `;
+      restoreBotTradesScroll(statusWrap, tradesScroll);
     }
 
     function onSlot15BotModeToggle(asset, ev) {
@@ -2174,6 +2200,7 @@
         ? `No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
+      const tradesScroll = captureBotTradesScroll(statusWrap);
       statusWrap.innerHTML = `
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
@@ -2198,6 +2225,7 @@
         <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log is kept permanently — not cleared when Auto-bet or filters change.</p>
         ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Hour</th><th>Action</th><th>Status</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
       `;
+      restoreBotTradesScroll(statusWrap, tradesScroll);
     }
 
     function onBotModeToggle(asset, ev) {
