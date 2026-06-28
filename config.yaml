@@ -158,10 +158,18 @@ hourly:
     max_sigma_pct: 2.5
     min_reasons_to_block: 2
   intrahour:
-    enabled: false
+    enabled: true
     min_shock_pct: 0.8
     min_edge_for_highlight: 0.08
     min_edge_override_regime: 0.10
+  bot:
+    enabled: false
+    mode: paper
+    max_spend_per_hour_usd: 25
+    allow_strong: true
+    allow_actionable: true
+    intrahour_poll_enabled: true
+    intrahour_poll_minutes: 5
   sigma_calibration: true
 
 # Flip-to-opposite

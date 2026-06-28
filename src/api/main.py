@@ -564,27 +564,14 @@ def eth_hourly_late_call_now(
   return out
 
 
-@app.get("/api/eth/hourly/bot")
-def eth_hourly_bot_status(_: None = Depends(require_session)):
-  if _loop is None:
-    raise HTTPException(503, "Service starting")
-  tab = _loop.eth_hourly_prediction()
-  return _loop.eth_hourly_bot_status(tab if tab.get("ok") else None)
+def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
+  from src.trading.hourly_bot_store import HourlyBotSettings
 
-
-@app.post("/api/eth/hourly/bot/settings")
-async def eth_hourly_bot_settings(request: Request, _: None = Depends(require_session)):
-  if _loop is None:
-    raise HTTPException(503, "Service starting")
-  from src.trading.eth_hourly_bot_store import EthHourlyBotSettings
-
-  body = await request.json()
-  store = _loop.eth_hourly_bot_store()
   current = store.get_settings()
   mode = str(body.get("mode", current.mode))
   if mode not in ("paper", "live"):
     raise HTTPException(400, "mode must be paper or live")
-  settings = EthHourlyBotSettings(
+  settings = HourlyBotSettings(
     enabled=bool(body.get("enabled", current.enabled)),
     mode=mode,
     max_spend_per_hour_usd=float(body.get("max_spend_per_hour_usd", current.max_spend_per_hour_usd)),
@@ -596,8 +583,55 @@ async def eth_hourly_bot_settings(request: Request, _: None = Depends(require_se
   if not settings.allow_strong and not settings.allow_actionable:
     raise HTTPException(400, "Enable at least one of STRONG or ACTIONABLE")
   store.save_settings(settings)
+  return settings.to_dict()
+
+
+@app.get("/api/hourly/bot")
+def hourly_bot_status(_: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop.daily_prediction()
+  return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/hourly/bot/settings")
+async def hourly_bot_settings(request: Request, _: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  body = await request.json()
+  store = _loop.hourly_bot_store("btc")
+  _apply_hourly_bot_settings(store, body)
+  tab = _loop.daily_prediction()
+  return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.get("/api/hourly/bot/trades")
+def hourly_bot_trades(
+  limit: int = Query(default=30, le=100),
+  _: None = Depends(require_session),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.hourly_bot_store("btc").list_trades(limit=limit)
+
+
+@app.get("/api/eth/hourly/bot")
+def eth_hourly_bot_status(_: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
   tab = _loop.eth_hourly_prediction()
-  return _loop.eth_hourly_bot_status(tab if tab.get("ok") else None)
+  return _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/hourly/bot/settings")
+async def eth_hourly_bot_settings(request: Request, _: None = Depends(require_session)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  body = await request.json()
+  store = _loop.hourly_bot_store("eth")
+  _apply_hourly_bot_settings(store, body)
+  tab = _loop.eth_hourly_prediction()
+  return _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
 
 
 @app.get("/api/eth/hourly/bot/trades")
@@ -607,7 +641,7 @@ def eth_hourly_bot_trades(
 ):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  return _loop.eth_hourly_bot_store().list_trades(limit=limit)
+  return _loop.hourly_bot_store("eth").list_trades(limit=limit)
 
 
 @app.post("/api/admin/train-hourly")

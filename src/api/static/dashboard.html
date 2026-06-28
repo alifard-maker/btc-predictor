@@ -457,6 +457,11 @@
     </div>
 
     <div id="panel-daily" style="display:none">
+      <div class="card" id="btc-hourly-bot-card">
+        <h2>BTC hourly auto-bet</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper mode logs simulated fills. Live mode places real Kalshi orders when credentials are configured. Bets fire at <strong>:05</strong>, <strong>:45</strong>, and on <strong>intrahour opportunities</strong> when signals match your filters.</p>
+        <div id="btc-hourly-bot"><p class="muted">Loading…</p></div>
+      </div>
       <div class="card" id="hourly-guide-card">
         <h2>How to read this tab</h2>
         <div id="hourly-guide"><p class="muted">Loading…</p></div>
@@ -497,7 +502,7 @@
     <div id="panel-eth-hourly" style="display:none">
       <div class="card" id="eth-hourly-bot-card">
         <h2>ETH hourly auto-bet</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper mode logs simulated fills. Live mode places real Kalshi orders when credentials are configured. Bets fire at <strong>:05</strong>, <strong>:45</strong>, and on <strong>intrahour opportunities</strong> when signals match your filters.</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same controls as BTC hourly — paper/live, max $ per hour, STRONG/ACTIONABLE filters. Bets at <strong>:05</strong>, <strong>:45</strong>, and <strong>intrahour</strong> opportunities.</p>
         <div id="eth-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="eth-hourly-guide-card">
@@ -1716,14 +1721,20 @@
       </div>`;
     }
 
-    function renderEthHourlyBot(bot) {
-      const el = $('eth-hourly-bot');
+    function hourlyBotSettingsUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly/bot/settings' : '/api/hourly/bot/settings';
+    }
+
+    function renderHourlyBot(bot, asset) {
+      const el = $(`${asset}-hourly-bot`);
       if (!el) return;
-      if (activeTab !== 'eth-hourly') return;
+      const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
+      if (activeTab !== tab) return;
       if (!bot || !bot.ok) {
         el.innerHTML = '<p class="muted">Bot status unavailable.</p>';
         return;
       }
+      const p = asset;
       const s = bot.settings || {};
       const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
       const trades = (bot.recent_trades || []).map((t) => {
@@ -1733,24 +1744,24 @@
       el.innerHTML = `<div class="bot-panel">
         <div class="bot-row">
           <label class="bot-label">Auto-bet
-            <label class="switch"><input type="checkbox" id="bot-enabled" ${s.enabled ? 'checked' : ''} onchange="saveEthBotSettings()"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-enabled-${p}" ${s.enabled ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
           </label>
           <label class="bot-label">Paper
-            <label class="switch"><input type="checkbox" id="bot-paper" ${s.mode === 'paper' ? 'checked' : ''} onchange="onBotModeToggle()"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-paper-${p}" ${s.mode === 'paper' ? 'checked' : ''} onchange="onBotModeToggle('${asset}')"><span class="slider"></span></label>
           </label>
           <label class="bot-label">Live
-            <label class="switch"><input type="checkbox" id="bot-live" ${s.mode === 'live' ? 'checked' : ''} onchange="onBotModeToggle()"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-live-${p}" ${s.mode === 'live' ? 'checked' : ''} onchange="onBotModeToggle('${asset}')"><span class="slider"></span></label>
           </label>
         </div>
         <div class="bot-row">
           <label class="bot-label">Max $ / hour
-            <input type="number" id="bot-max-spend" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="saveEthBotSettings()">
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="saveHourlyBotSettings('${asset}')">
           </label>
           <label class="bot-label">STRONG bets
-            <label class="switch"><input type="checkbox" id="bot-strong" ${s.allow_strong ? 'checked' : ''} onchange="saveEthBotSettings()"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
           </label>
           <label class="bot-label">ACTIONABLE bets
-            <label class="switch"><input type="checkbox" id="bot-actionable" ${s.allow_actionable ? 'checked' : ''} onchange="saveEthBotSettings()"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
           </label>
         </div>
         <div class="bot-row">
@@ -1763,31 +1774,33 @@
       </div>`;
     }
 
-    function onBotModeToggle() {
-      const paper = $('bot-paper');
-      const live = $('bot-live');
+    function onBotModeToggle(asset) {
+      const p = asset;
+      const paper = $(`bot-paper-${p}`);
+      const live = $(`bot-live-${p}`);
       if (!paper || !live) return;
-      if (event.target.id === 'bot-paper' && paper.checked) live.checked = false;
-      if (event.target.id === 'bot-live' && live.checked) paper.checked = false;
+      if (event.target.id === `bot-paper-${p}` && paper.checked) live.checked = false;
+      if (event.target.id === `bot-live-${p}` && live.checked) paper.checked = false;
       if (!paper.checked && !live.checked) paper.checked = true;
-      saveEthBotSettings();
+      saveHourlyBotSettings(asset);
     }
 
-    async function saveEthBotSettings() {
+    async function saveHourlyBotSettings(asset) {
+      const p = asset;
       const body = {
-        enabled: !!$('bot-enabled')?.checked,
-        mode: $('bot-live')?.checked ? 'live' : 'paper',
-        max_spend_per_hour_usd: parseFloat($('bot-max-spend')?.value || '25'),
-        allow_strong: !!$('bot-strong')?.checked,
-        allow_actionable: !!$('bot-actionable')?.checked,
+        enabled: !!$(`bot-enabled-${p}`)?.checked,
+        mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
+        max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
+        allow_strong: !!$(`bot-strong-${p}`)?.checked,
+        allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
       };
       try {
-        await fetch('/api/eth/hourly/bot/settings', {
+        await fetch(hourlyBotSettingsUrl(asset), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (activeTab === 'eth-hourly') loadDaily();
+        if ((asset === 'eth' && activeTab === 'eth-hourly') || (asset === 'btc' && activeTab === 'daily')) loadDaily();
       } catch (e) {
         showError('Bot settings: ' + e.message);
       }
@@ -1944,7 +1957,8 @@
         locked: (rangeRg.recommendations || []).find(r => r.tier === 'locked')?.label,
       });
       renderDailyStructure(live.structure);
-      if (activeTab === 'eth-hourly') renderEthHourlyBot(data.bot);
+      if (activeTab === 'eth-hourly') renderHourlyBot(data.bot, 'eth');
+      if (activeTab === 'daily') renderHourlyBot(data.bot, 'btc');
     }
 
     async function loadDaily() {
