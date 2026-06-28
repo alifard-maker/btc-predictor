@@ -26,6 +26,7 @@ from src.config import load_config
 from src.data.storage import CandleStorage, HistoricalCollector
 from src.models.predictor import Prediction
 from src.scheduler.loop import PredictionLoop
+from src.trading.live_mode_auth import live_bet_password, require_live_password
 from src.trading.slot15_bet_assessment import assess_slot15_from_prediction
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -242,14 +243,33 @@ def dashboard(request: Request, _: None = Depends(_session_user)):
   return FileResponse(_DASHBOARD_HTML, media_type="text/html")
 
 
+def _volume_health_fields() -> dict[str, Any]:
+  mount = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+  return {
+    "railway_volume_mount_path": mount,
+    "volume_mounted_at_data": mount == "/data",
+  }
+
+
 @app.get("/health")
 def health():
   """Always return 200 so Railway healthchecks pass."""
-  base = {"status": "starting", "service": "btc-predictor", "version": APP_VERSION}
+  base = {
+    "status": "starting",
+    "service": "btc-predictor",
+    "version": APP_VERSION,
+    **_volume_health_fields(),
+  }
   if _loop is None:
     return base
   status = _loop.status()
-  out = {"status": "ok", "service": "btc-predictor", "version": APP_VERSION, **status}
+  out = {
+    "status": "ok",
+    "service": "btc-predictor",
+    "version": APP_VERSION,
+    **_volume_health_fields(),
+    **status,
+  }
   if _loop.eth_calibration is not None:
     out["eth_15m"] = _loop.eth_status()
   return out
@@ -582,6 +602,12 @@ def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
   mode = str(body.get("mode", current.mode))
   if mode not in ("paper", "live"):
     raise HTTPException(400, "mode must be paper or live")
+  require_live_password(
+    current_mode=current.mode,
+    new_mode=mode,
+    body=body,
+    password=live_bet_password(_cfg),
+  )
   new_enabled = bool(body.get("enabled", current.enabled))
   if new_enabled:
     auto_stopped = False
@@ -614,6 +640,8 @@ def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
     "auto_stop_on_budget_exhausted": bool(
       body.get("auto_stop_on_budget_exhausted", current.auto_stop_on_budget_exhausted)
     ),
+    "use_accumulated_profit": bool(body.get("use_accumulated_profit", current.use_accumulated_profit)),
+    "paper_auto_refill": bool(body.get("paper_auto_refill", current.paper_auto_refill)),
     "auto_stopped": auto_stopped,
   })
   if settings.max_spend_per_hour_usd < 0:
@@ -629,6 +657,12 @@ def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
   mode = str(body.get("mode", current.mode))
   if mode not in ("paper", "live"):
     raise HTTPException(400, "mode must be paper or live")
+  require_live_password(
+    current_mode=current.mode,
+    new_mode=mode,
+    body=body,
+    password=live_bet_password(_cfg),
+  )
   new_enabled = bool(body.get("enabled", current.enabled))
   if new_enabled:
     auto_stopped = False
@@ -661,6 +695,8 @@ def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
     "auto_stop_on_budget_exhausted": bool(
       body.get("auto_stop_on_budget_exhausted", current.auto_stop_on_budget_exhausted)
     ),
+    "use_accumulated_profit": bool(body.get("use_accumulated_profit", current.use_accumulated_profit)),
+    "paper_auto_refill": bool(body.get("paper_auto_refill", current.paper_auto_refill)),
     "auto_stopped": auto_stopped,
   })
   if settings.max_spend_per_slot_usd < 0:
@@ -688,6 +724,24 @@ async def hourly_bot_settings(request: Request, _: None = Depends(_session_user)
   return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
 
 
+def _hourly_bot_fresh_start(store, tab_fn, asset: str):
+  settings = store.get_settings()
+  if settings.mode != "paper":
+    raise HTTPException(400, "Fresh start is only available in paper mode")
+  store.fresh_start_paper(settings.max_spend_per_hour_usd)
+  tab = tab_fn()
+  return _loop.hourly_bot_status(asset, tab if tab.get("ok") else None)
+
+
+def _slot15_bot_fresh_start(store, tab_fn, asset: str):
+  settings = store.get_settings()
+  if settings.mode != "paper":
+    raise HTTPException(400, "Fresh start is only available in paper mode")
+  store.fresh_start_paper(settings.max_spend_per_slot_usd)
+  tab = tab_fn()
+  return _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+
+
 @app.post("/api/hourly/bot/reset-bankroll")
 def hourly_bot_reset_bankroll(_: None = Depends(_session_user)):
   if _loop is None:
@@ -699,6 +753,13 @@ def hourly_bot_reset_bankroll(_: None = Depends(_session_user)):
   store.reset_paper_bankroll(settings.max_spend_per_hour_usd)
   tab = _loop.daily_prediction()
   return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/hourly/bot/fresh-start")
+def hourly_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_fresh_start(_loop.hourly_bot_store("btc"), _loop.daily_prediction, "btc")
 
 
 @app.get("/api/hourly/bot/trades")
@@ -749,6 +810,13 @@ def eth_hourly_bot_reset_bankroll(_: None = Depends(_session_user)):
   return _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
 
 
+@app.post("/api/eth/hourly/bot/fresh-start")
+def eth_hourly_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_fresh_start(_loop.hourly_bot_store("eth"), _loop.eth_hourly_prediction, "eth")
+
+
 @app.get("/api/eth/hourly/bot/trades")
 def eth_hourly_bot_trades(
   limit: int = Query(default=100, le=200),
@@ -795,6 +863,13 @@ def slot15_bot_reset_bankroll(_: None = Depends(_session_user)):
   store.reset_paper_bankroll(settings.max_spend_per_slot_usd)
   tab = _loop._slot15_tab("btc")
   return _loop.slot15_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/slot15/bot/fresh-start")
+def slot15_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _slot15_bot_fresh_start(_loop.slot15_bot_store("btc"), lambda: _loop._slot15_tab("btc"), "btc")
 
 
 @app.get("/api/slot15/bot/trades")
@@ -849,6 +924,15 @@ def eth_slot15_bot_reset_bankroll(_: None = Depends(_session_user)):
   store.reset_paper_bankroll(settings.max_spend_per_slot_usd)
   tab = _loop._slot15_tab("eth")
   return _loop.slot15_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/15m/bot/fresh-start")
+def eth_slot15_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _slot15_bot_fresh_start(_loop.slot15_bot_store("eth"), lambda: _loop._slot15_tab("eth"), "eth")
 
 
 @app.get("/api/eth/15m/bot/trades")
@@ -1024,6 +1108,24 @@ def admin_snapshot_stats(
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return {"status": "ok", **_loop.calibration.snapshot_stats(note=note)}
+
+
+@app.post("/api/admin/fresh-start-all-paper-bots")
+def admin_fresh_start_all_paper_bots(_: None = Depends(_session_user)):
+  """Clear trade logs and reset bankroll for every paper bot (BTC/ETH hourly + 15m)."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  results: dict[str, Any] = {}
+  for asset in ("btc", "eth"):
+    h_store = _loop.hourly_bot_store(asset)
+    h_settings = h_store.get_settings()
+    if h_settings.mode == "paper":
+      results[f"hourly_{asset}"] = h_store.fresh_start_paper(h_settings.max_spend_per_hour_usd)
+    s_store = _loop.slot15_bot_store(asset)
+    s_settings = s_store.get_settings()
+    if s_settings.mode == "paper":
+      results[f"slot15_{asset}"] = s_store.fresh_start_paper(s_settings.max_spend_per_slot_usd)
+  return {"status": "ok", "reset": results}
 
 
 @app.post("/api/admin/reset-stats")

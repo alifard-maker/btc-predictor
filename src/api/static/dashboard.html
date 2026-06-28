@@ -776,6 +776,27 @@
       el.textContent = msg;
     }
 
+    function promptLivePassword() {
+      return prompt('Enter password to enable LIVE trading:');
+    }
+
+    function revertBotModeToPaper(prefix) {
+      const paper = $(`bot-paper-${prefix}`);
+      const live = $(`bot-live-${prefix}`);
+      if (paper) paper.checked = true;
+      if (live) live.checked = false;
+    }
+
+    async function parseSettingsError(res) {
+      const errText = await res.text();
+      try {
+        const j = JSON.parse(errText);
+        return j.detail || errText;
+      } catch {
+        return errText;
+      }
+    }
+
     function renderKalshiYesMid(k) {
       if (!k || k.yes_mid == null) return '';
       return `<p class="muted" style="font-size:.8rem;margin-top:.65rem">Kalshi YES mid: <strong>${(k.yes_mid * 100).toFixed(1)}¢</strong> implied UP · ${k.market_ticker || ''}</p>`;
@@ -1089,7 +1110,7 @@
         <strong class="${statusCls}">${statusLabel}</strong>
         · Last bot cycle: <strong>${formatCycleAge(cycleAt)}</strong>
         · ${autoHint}
-        <div class="muted" style="margin-top:.25rem;font-size:.65rem">Bots poll every ~5s on the server when Auto-bet is ON. Paper bankroll and trade logs survive redeploys only with a Railway volume mounted at <code>/data</code>.${dataHint}</div>
+        <div class="muted" style="margin-top:.25rem;font-size:.65rem">Bots poll every ~5s on the server when Auto-bet is ON. Paper bankroll and trade logs survive redeploys only with a Railway volume mounted at <code>/data</code>.${dataHint} <button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .45rem;margin-left:.35rem" onclick="freshStartAllPaperBots()">Fresh start all paper bots</button></div>
       </div>`;
     }
 
@@ -1805,6 +1826,10 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/reset-bankroll' : '/api/hourly/bot/reset-bankroll';
     }
 
+    function hourlyBotFreshStartUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly/bot/fresh-start' : '/api/hourly/bot/fresh-start';
+    }
+
     function hourlyBotStatusUrl(asset) {
       return asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
     }
@@ -1863,6 +1888,8 @@
         max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
+        use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
     }
 
@@ -1890,6 +1917,44 @@
           <label class="bot-label">ACTIONABLE bets
             <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
           </label>
+          <label class="bot-label" title="When ON, wins increase deployable capital and cumulative $ entered per hour can exceed max at-risk. When OFF, capped at max at-risk $ for this hour only.">Use profits
+            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit !== false ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
+            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+        </div>`;
+    }
+
+    function botIntervalPerformanceHtml(bot, periodLabel) {
+      const ip = bot.interval_performance || {};
+      const profits = Number(ip.profit_intervals ?? 0);
+      const losses = Number(ip.loss_intervals ?? 0);
+      const breakeven = Number(ip.breakeven_intervals ?? 0);
+      const scored = Number(ip.intervals_scored ?? 0);
+      if (scored === 0 && !ip.current_interval) return '';
+      const unit = periodLabel === 'hour' ? 'hours' : 'slots';
+      const unitSingular = periodLabel === 'hour' ? 'hour' : 'slot';
+      const bePart = breakeven > 0 ? ` · ${breakeven} breakeven` : '';
+      const netPnl = Number(ip.net_interval_pnl_usd ?? 0);
+      const netCls = netPnl > 0 ? 'up' : netPnl < 0 ? 'down' : 'muted';
+      const winRate = ip.win_rate_pct != null ? `${ip.win_rate_pct}%` : '—';
+      let currentPart = '';
+      const cur = ip.current_interval;
+      if (cur) {
+        const curPnl = Number(cur.realized_pnl_usd ?? 0);
+        let curLabel = 'idle';
+        if (cur.outcome === 'profit') curLabel = `profit so far (+$${curPnl.toFixed(2)})`;
+        else if (cur.outcome === 'loss') curLabel = `loss so far ($${curPnl.toFixed(2)})`;
+        else if (cur.outcome === 'breakeven') curLabel = 'flat so far';
+        else if (cur.outcome === 'pending') curLabel = 'open position(s)';
+        currentPart = ` · Current ${unitSingular}: ${curLabel}`;
+      }
+      return `
+        <div class="bot-row" style="padding:.25rem .15rem .35rem;border-top:1px solid rgba(148,163,184,.12);margin-top:.15rem">
+          <div class="bot-stat"><span class="muted" title="Completed ${unit} with net closed P&amp;L — independent of bankroll balance">Interval record (all time)</span><strong><span class="up">${profits} profit</span> / <span class="down">${losses} loss</span>${bePart}</strong><span class="muted" style="font-size:.64rem">${currentPart}</span></div>
+          ${scored > 0 ? `<div class="bot-stat"><span class="muted">Net across scored ${unit}</span><strong class="${netCls}">${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(2)}</strong></div>` : ''}
+          ${scored > 0 ? `<div class="bot-stat"><span class="muted">Win rate</span><strong>${winRate}</strong></div>` : ''}
         </div>`;
     }
 
@@ -1899,12 +1964,20 @@
       const bankroll = Number(bot.hour_bankroll_usd ?? bot.slot_bankroll_usd ?? pb.paper_bankroll_usd ?? s.max_spend_per_hour_usd ?? s.max_spend_per_slot_usd ?? 25);
       const since = Number(pb.paper_bankroll_since_reset_usd ?? 0);
       const pct = Number(pb.paper_bankroll_since_reset_pct ?? 0);
+      const invested = Number(pb.paper_total_invested_usd ?? pb.paper_bankroll_initial_usd ?? bankroll);
+      const netVsInvested = Number(pb.paper_net_vs_invested_usd ?? pb.paper_realized_all_time_usd ?? 0);
+      const roi = Number(pb.paper_roi_vs_invested_pct ?? 0);
+      const refills = Number(pb.paper_refill_count ?? 0);
       const sinceCls = since > 0 ? 'up' : since < 0 ? 'down' : 'muted';
-      const resetBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.35rem" onclick="resetPaperBankroll('${periodLabel}', '${bot.asset || 'btc'}')">Reset paper bankroll</button>`;
+      const netCls = netVsInvested > 0 ? 'up' : netVsInvested < 0 ? 'down' : 'muted';
+      const resetBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.35rem" onclick="resetPaperBankroll('${periodLabel}', '${bot.asset || 'btc'}')">Reset bankroll</button>`;
+      const freshBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.25rem" onclick="freshStartPaperBot('${periodLabel}', '${bot.asset || 'btc'}')">Fresh start</button>`;
       return `
         <div class="bot-row" style="padding:.35rem .15rem .15rem">
-          <div class="bot-stat"><span class="muted" title="Accumulated paper capital across all ${periodLabel === 'hour' ? 'hours' : 'slots'}">Paper bankroll</span><strong>$${bankroll.toFixed(2)}</strong>${resetBtn}</div>
+          <div class="bot-stat"><span class="muted" title="Accumulated paper capital across all ${periodLabel === 'hour' ? 'hours' : 'slots'}">Paper bankroll</span><strong>$${bankroll.toFixed(2)}</strong>${resetBtn}${freshBtn}</div>
           <div class="bot-stat"><span class="muted">Since reset</span><strong class="${sinceCls}">${since >= 0 ? '+' : ''}$${since.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)</strong></div>
+          <div class="bot-stat"><span class="muted" title="Starting stake plus each auto-refill chunk">Total invested</span><strong>$${invested.toFixed(2)}</strong>${refills > 0 ? `<span class="muted" style="font-size:.64rem"> · ${refills} refill${refills === 1 ? '' : 's'}</span>` : ''}</div>
+          <div class="bot-stat"><span class="muted" title="Closed-trade P&amp;L vs total capital deployed">Net vs invested</span><strong class="${netCls}">${netVsInvested >= 0 ? '+' : ''}$${netVsInvested.toFixed(2)} (${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%)</strong></div>
         </div>`;
     }
 
@@ -1924,9 +1997,48 @@
       }
     }
 
+    async function freshStartPaperBot(period, asset) {
+      const url = period === 'hour'
+        ? hourlyBotFreshStartUrl(asset)
+        : slot15BotFreshStartUrl(asset);
+      if (!confirm(`Fresh start ${asset.toUpperCase()} ${period === 'hour' ? 'hourly' : '15m'} paper bot?\n\nThis clears the trade log, open positions, cooldowns, and resets bankroll to max at-risk.`)) return;
+      try {
+        const res = await fetch(url, { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        const bot = await res.json();
+        if (period === 'hour') renderHourlyBot(bot, asset);
+        else renderSlot15Bot(bot, asset);
+      } catch (e) {
+        showError('Fresh start: ' + e.message);
+      }
+    }
+
+    async function freshStartAllPaperBots() {
+      if (!confirm('Fresh start ALL paper bots (BTC + ETH hourly and 15m)?\n\nClears every trade log and resets each paper bankroll. Live-mode bots are skipped.')) return;
+      try {
+        const res = await fetch('/api/admin/fresh-start-all-paper-bots', { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        await loadAll();
+      } catch (e) {
+        showError('Fresh start all: ' + e.message);
+      }
+    }
+
     function botCents(c) {
       if (c == null || c === '') return '—';
       return Number(c) + '¢';
+    }
+
+    function botEntryBook(t) {
+      const bid = t.entry_bid_cents;
+      const ask = t.entry_ask_cents;
+      const spread = t.entry_spread_cents;
+      if (bid == null && ask == null) return '—';
+      const parts = [];
+      if (bid != null) parts.push(`bid ${bid}¢`);
+      if (ask != null) parts.push(`ask ${ask}¢`);
+      if (spread != null) parts.push(`Δ${spread}¢`);
+      return parts.join(' / ');
     }
 
     function botPnlUsd(v) {
@@ -1958,6 +2070,11 @@
         fully_deployed: 'Max at-risk reached — waiting for an exit to free budget.',
         no_buy_yes_no_candidates: 'No BUY YES/NO candidates in live picks.',
         no_long_short_candidates: 'No LONG/SHORT entry signals on 15m tab.',
+        no_liquidity: 'No usable bid/ask on Kalshi for paper fill.',
+        spread_too_wide: 'Bid/ask spread too wide for paper entry.',
+        price_floor: 'Ask below minimum price floor for paper entry.',
+        price_ceiling: 'Ask above maximum price ceiling for paper entry.',
+        contract_cap_exceeded: 'Position size would exceed paper contract cap.',
         signal_filtered_by_settings: 'Signal blocked by STRONG/ACTIONABLE filters (both off = free mode).',
         missing_kalshi_mid: 'Kalshi mid quote missing on active market.',
         budget_too_small_for_contract: 'Remaining budget too small for one contract at current price.',
@@ -2080,6 +2197,10 @@
       return asset === 'eth' ? '/api/eth/15m/bot/reset-bankroll' : '/api/slot15/bot/reset-bankroll';
     }
 
+    function slot15BotFreshStartUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m/bot/fresh-start' : '/api/slot15/bot/fresh-start';
+    }
+
     function readSlot15BotSettingsFromDom(asset) {
       const p = `slot15-${asset}`;
       const enabledEl = $(`bot-enabled-${p}`);
@@ -2090,6 +2211,8 @@
         max_spend_per_slot_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
+        use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
     }
 
@@ -2116,6 +2239,12 @@
           </label>
           <label class="bot-label">ACTIONABLE bets
             <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="When ON, wins increase deployable capital and cumulative $ entered per slot can exceed max at-risk. When OFF, capped at max at-risk $ for this slot only.">Use profits
+            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit !== false ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
+            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
           </label>
         </div>`;
     }
@@ -2182,6 +2311,7 @@
           <td class="${st}">${t.status}</td>
           <td style="font-size:.68rem">${mkt}</td>
           <td>${botCents(entryC)}</td>
+          <td style="font-size:.65rem" title="Kalshi bid/ask/spread at paper entry">${botEntryBook(t)}</td>
           <td>${botCents(exitC)}</td>
           <td>${pnlCell}</td>
           <td style="font-size:.68rem">${t.detail || ''}</td>
@@ -2209,6 +2339,7 @@
           <div class="bot-stat"><span class="muted">Enters / Exits this slot</span><strong>${ss.enter_count ?? 0} / ${ss.exit_count ?? 0}</strong></div>
           <div class="bot-stat"><span class="muted" title="Sum of all enter fills this slot — can exceed max at-risk when positions rotate">Cumulative $ entered (slot)</span><strong>$${Number(ss.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
+        ${botIntervalPerformanceHtml(bot, 'slot')}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across slots. Max at-risk caps concurrent open exposure.' : 'Slot bankroll = max cap + realized P&amp;L this slot.'} <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
         ${botPaperBankrollHtml(bot, s, 'slot')}
         ${openPosHtml}
@@ -2220,8 +2351,8 @@
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
-        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log is kept permanently — not cleared when Auto-bet or filters change.</p>
-        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Slot</th><th>Action</th><th>Status</th><th>Signal</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log persists across setting changes. Use <strong>Fresh start</strong> to clear it.</p>
+        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Slot</th><th>Action</th><th>Status</th><th>Signal</th><th>Entry</th><th>Book @ entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
     }
@@ -2232,37 +2363,65 @@
       const live = $(`bot-live-${p}`);
       if (!paper || !live) return;
       const targetId = ev?.target?.id;
-      if (targetId === `bot-paper-${p}` && paper.checked) live.checked = false;
-      if (targetId === `bot-live-${p}` && live.checked) paper.checked = false;
+      if (targetId === `bot-paper-${p}` && paper.checked) {
+        live.checked = false;
+        saveSlot15BotSettings(asset);
+        return;
+      }
+      if (targetId === `bot-live-${p}` && live.checked) {
+        paper.checked = false;
+        const pwd = promptLivePassword();
+        if (!pwd) {
+          revertBotModeToPaper(p);
+          return;
+        }
+        saveSlot15BotSettings(asset, pwd);
+        return;
+      }
       if (!paper.checked && !live.checked) paper.checked = true;
       saveSlot15BotSettings(asset);
     }
 
-    async function saveSlot15BotSettings(asset) {
+    async function saveSlot15BotSettings(asset, livePassword) {
       const p = `slot15-${asset}`;
       const enabledEl = $(`bot-enabled-${p}`);
-      if (!enabledEl) return;
+      if (!enabledEl) return false;
       const body = {
         enabled: !!enabledEl.checked,
         mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
         max_spend_per_slot_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
+        use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
+      if (body.mode === 'live' && livePassword) body.live_password = livePassword;
       try {
         const res = await fetch(slot15BotSettingsUrl(asset), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) {
+          const msg = await parseSettingsError(res);
+          if (res.status === 403) {
+            showError('Wrong Password - Denied Access');
+            revertBotModeToPaper(p);
+            botForceSettingsRender[asset] = true;
+            return false;
+          }
+          showError('15m bot settings: ' + msg);
+          return false;
+        }
         const tab = asset === 'eth' ? 'eth-15m' : '15m';
         if (activeTab === tab) {
           const bot = await res.json();
           renderSlot15Bot(bot, asset);
         }
+        return true;
       } catch (e) {
         showError('15m bot settings: ' + e.message);
+        return false;
       }
     }
 
@@ -2328,6 +2487,7 @@
           <td class="${st}">${t.status}</td>
           <td style="font-size:.68rem">${mkt}</td>
           <td>${botCents(entryC)}</td>
+          <td style="font-size:.65rem" title="Kalshi bid/ask/spread at paper entry">${botEntryBook(t)}</td>
           <td>${botCents(exitC)}</td>
           <td>${pnlCell}</td>
           <td style="font-size:.68rem">${t.detail || ''}</td>
@@ -2355,6 +2515,7 @@
           <div class="bot-stat"><span class="muted">Enters / Exits this hour</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
           <div class="bot-stat"><span class="muted" title="Sum of all enter fills this hour — can exceed max at-risk when positions rotate">Cumulative $ entered (hour)</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
+        ${botIntervalPerformanceHtml(bot, 'hour')}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across hours. Max at-risk caps concurrent open exposure.' : 'Hour bankroll = max cap + realized P&amp;L this hour.'} <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
         ${botPaperBankrollHtml(bot, s, 'hour')}
         ${openPosHtml}
@@ -2366,8 +2527,8 @@
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
-        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log is kept permanently — not cleared when Auto-bet or filters change.</p>
-        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Hour</th><th>Action</th><th>Status</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log persists across setting changes. Use <strong>Fresh start</strong> to clear it.</p>
+        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Hour</th><th>Action</th><th>Status</th><th>Contract</th><th>Entry</th><th>Book @ entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
     }
@@ -2378,36 +2539,64 @@
       const live = $(`bot-live-${p}`);
       if (!paper || !live) return;
       const targetId = ev?.target?.id;
-      if (targetId === `bot-paper-${p}` && paper.checked) live.checked = false;
-      if (targetId === `bot-live-${p}` && live.checked) paper.checked = false;
+      if (targetId === `bot-paper-${p}` && paper.checked) {
+        live.checked = false;
+        saveHourlyBotSettings(asset);
+        return;
+      }
+      if (targetId === `bot-live-${p}` && live.checked) {
+        paper.checked = false;
+        const pwd = promptLivePassword();
+        if (!pwd) {
+          revertBotModeToPaper(p);
+          return;
+        }
+        saveHourlyBotSettings(asset, pwd);
+        return;
+      }
       if (!paper.checked && !live.checked) paper.checked = true;
       saveHourlyBotSettings(asset);
     }
 
-    async function saveHourlyBotSettings(asset) {
+    async function saveHourlyBotSettings(asset, livePassword) {
       const p = asset;
       const enabledEl = $(`bot-enabled-${p}`);
-      if (!enabledEl) return;
+      if (!enabledEl) return false;
       const body = {
         enabled: !!enabledEl.checked,
         mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
         max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
+        use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
+      if (body.mode === 'live' && livePassword) body.live_password = livePassword;
       try {
         const res = await fetch(hourlyBotSettingsUrl(asset), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) {
+          const msg = await parseSettingsError(res);
+          if (res.status === 403) {
+            showError('Wrong Password - Denied Access');
+            revertBotModeToPaper(p);
+            botForceSettingsRender[asset] = true;
+            return false;
+          }
+          showError('Bot settings: ' + msg);
+          return false;
+        }
         if ((asset === 'eth' && activeTab === 'eth-hourly') || (asset === 'btc' && activeTab === 'daily')) {
           const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
           if (activeTab === tab) loadDaily();
         }
+        return true;
       } catch (e) {
         showError('Bot settings: ' + e.message);
+        return false;
       }
     }
 

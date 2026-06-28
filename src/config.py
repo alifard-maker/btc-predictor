@@ -49,6 +49,7 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     cfg["price_feed"]["live"] = live_feed
 
   cfg["app_password"] = os.getenv("APP_PASSWORD", cfg.get("app_password") or "")
+  cfg["live_bet_password"] = os.getenv("LIVE_BET_PASSWORD", "Ducati1098R!")
 
   from src.data.kalshi import load_kalshi_config
   cfg["kalshi"] = load_kalshi_config(cfg)

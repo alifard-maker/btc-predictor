@@ -6,6 +6,7 @@ import logging
 import uuid
 from typing import Any
 
+from src.trading.bot_period_rollover import force_close_period_positions
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
   evaluate_adaptive_profit_exit,
@@ -17,6 +18,12 @@ from src.trading.hourly_bet_assessment import assess_contract_bet
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
 from src.trading.hourly_position_alert import assess_hourly_position_alert
+from src.trading.paper_execution import (
+  entry_quote_log_fields,
+  format_entry_book_detail,
+  paper_entry_fill,
+  paper_exit_fill,
+)
 
 log = logging.getLogger(__name__)
 
@@ -200,7 +207,10 @@ def enrich_open_positions_live(
   for pos in positions:
     row = dict(pos)
     pick = _find_contract_in_live(live, pos["market_ticker"])
-    mark = _price_cents_for_pick(pick, pos["side"]) if pick else None
+    mark = None
+    if pick:
+      exit_fill = paper_exit_fill(pick=pick, side=str(pos["side"]))
+      mark = int(exit_fill["price_cents"]) if exit_fill.get("ok") else None
     row["mark_price_cents"] = mark
     row["unrealized_pnl_usd"] = _unrealized_pnl_usd(pos, mark)
     row["current_signal"] = pick.get("signal") if pick else None
@@ -255,7 +265,7 @@ class HourlyBot:
       self.store.set_last_skip_reason("missing_event_ticker")
       return []
 
-    settings = self.store.sync_period(str(event_ticker), self.store.get_settings())
+    settings, prev_period = self.store.sync_period(str(event_ticker), self.store.get_settings())
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []
@@ -264,6 +274,31 @@ class HourlyBot:
       return []
 
     actions: list[dict[str, Any]] = []
+    if prev_period:
+      live = tab.get("live") or tab
+
+      def _exit_cents(pos: dict[str, Any]) -> int:
+        pick = _find_contract_in_live(live, pos["market_ticker"])
+        if pick:
+          fill = paper_exit_fill(pick=pick, side=str(pos.get("side") or ""))
+          if fill.get("ok") and fill.get("price_cents") is not None:
+            return int(fill["price_cents"])
+        last_mark = pos.get("last_mark_cents")
+        if last_mark is not None:
+          return int(last_mark)
+        return int(pos["entry_price_cents"])
+
+      actions.extend(
+        force_close_period_positions(
+          self.store,
+          prev_period,
+          exit_cents_for_position=_exit_cents,
+          settings=settings,
+          log_label=f"{self.asset.upper()} hourly",
+        )
+      )
+      settings = self.store.get_settings()
+
     actions.extend(self._process_exits(tab, event_ticker, settings, cfg))
     settings = self.store.get_settings()
     stop_row = self._maybe_auto_stop_on_budget_exhausted(event_ticker, settings)
@@ -288,8 +323,28 @@ class HourlyBot:
     bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap, settings)
     exposure = self.store.open_exposure_usd(event_ticker)
     if settings.mode == "paper":
-      if bankroll - exposure > 0:
+      if exposure > 0:
         return None
+      if bankroll > 0:
+        return None
+      if settings.paper_auto_refill:
+        state = self.store.refill_paper_bankroll(max_cap)
+        detail = (
+          f"Paper bankroll refilled to ${max_cap:.2f} "
+          f"(refill #{state['paper_refill_count']}, "
+          f"total invested ${state['paper_total_invested_usd']:.2f}, "
+          f"net P&L ${state['paper_net_vs_invested_usd']:.2f})"
+        )
+        row = self.store.log_trade({
+          "event_ticker": event_ticker,
+          "trigger": "continuous",
+          "action": "paper_refill",
+          "mode": settings.mode,
+          "status": "filled",
+          "detail": detail,
+        })
+        log.info("%s hourly bot paper refill: %s", self.asset.upper(), detail)
+        return row
       realized = self.store.get_paper_state_dict(max_cap).get("paper_realized_all_time_usd", 0)
       detail = (
         f"Paper bankroll exhausted (${realized:.2f} all-time since reset, "
@@ -395,9 +450,11 @@ class HourlyBot:
         cfg=cfg,
       )
 
-      exit_price = _price_cents_for_pick(pick, pos["side"])
+      exit_fill = paper_exit_fill(pick=pick, side=str(pos["side"]))
+      exit_price = int(exit_fill["price_cents"]) if exit_fill.get("ok") else None
       if exit_price is None:
         exit_price = pos["entry_price_cents"]
+      self.store.update_position_mark(pos["id"], exit_price)
 
       unrealized = _unrealized_pnl_usd(pos, exit_price)
       cost_usd = float(pos.get("cost_usd") or 0)
@@ -513,20 +570,27 @@ class HourlyBot:
         last_reason = "unrecognized_signal"
         continue
 
-      price_cents = _price_cents_for_pick(pick, side)
-      if price_cents is None:
-        last_reason = f"missing_price:{market_ticker}"
-        continue
-
       remaining = self.store.remaining_budget_usd(event_ticker, settings.max_spend_per_hour_usd, settings)
       if remaining <= 0:
         last_reason = "hour_budget_exhausted"
         break
 
-      count = _contracts_for_budget(remaining, price_cents)
-      if count <= 0:
-        last_reason = "budget_too_small_for_contract"
-        continue
+      if settings.mode == "paper":
+        entry_fill = paper_entry_fill(pick=pick, side=side, remaining_budget_usd=remaining)
+        if not entry_fill.get("ok"):
+          last_reason = str(entry_fill.get("skip_reason") or "no_liquidity")
+          continue
+        price_cents = int(entry_fill["price_cents"])
+        count = int(entry_fill["contracts"])
+      else:
+        price_cents = _price_cents_for_pick(pick, side)
+        if price_cents is None:
+          last_reason = f"missing_price:{market_ticker}"
+          continue
+        count = _contracts_for_budget(remaining, price_cents)
+        if count <= 0:
+          last_reason = "budget_too_small_for_contract"
+          continue
 
       cost_usd = round(count * price_cents / 100.0, 2)
       pid = str(uuid.uuid4())
@@ -553,6 +617,7 @@ class HourlyBot:
         detail = (
           f"Paper ENTER: {side.upper()} ×{count} @ {price_cents}¢ "
           f"on {market_ticker} ({pick.get('signal')})"
+          f"{format_entry_book_detail(entry_fill)}"
         )
         result = self.store.log_trade({
           "event_ticker": event_ticker,
@@ -571,6 +636,7 @@ class HourlyBot:
           "status": "filled",
           "detail": detail,
           "position_id": pid,
+          **entry_quote_log_fields(entry_fill),
         })
         log.info("%s hourly bot [paper enter]: %s", self.asset.upper(), detail)
 

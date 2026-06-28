@@ -74,15 +74,15 @@ def test_live_mode_interval_bankroll_unaffected_by_paper_state():
     assert store.hour_bankroll_usd("EV2", 25.0, live_settings) == 29.0
 
 
-def test_paper_auto_stop_does_not_clear_on_new_hour():
+def test_paper_auto_stop_clears_on_new_hour():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     store.save_settings(HourlyBotSettings(
       enabled=True, auto_stopped=True, max_spend_per_hour_usd=25.0, mode="paper",
     ))
     store.sync_period("EV1", store.get_settings())
-    updated = store.sync_period("EV2", store.get_settings())
-    assert updated.auto_stopped is True
+    settings, _ = store.sync_period("EV2", store.get_settings())
+    assert settings.auto_stopped is False
 
 
 def test_slot15_paper_bankroll_persists_across_slots():
@@ -118,11 +118,71 @@ def test_paper_status_includes_bankroll_fields():
     assert st["paper_bankroll"]["paper_bankroll_since_reset_usd"] == 5.0
 
 
-def test_paper_auto_stop_when_bankroll_exhausted():
+def test_fresh_start_clears_trades_and_resets_bankroll():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "mode": "paper",
+      "status": "filled",
+      "cost_usd": 10.0,
+    })
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "yes",
+      "contracts": 10,
+      "entry_price_cents": 50,
+      "cost_usd": 5.0,
+      "signal": "BUY YES",
+    })
+    paper = store.fresh_start_paper(25.0)
+    assert store.list_trades() == []
+    assert store.open_positions("EV1") == []
+    assert paper["paper_bankroll_usd"] == 25.0
+    assert paper["paper_total_invested_usd"] == 25.0
+    assert paper["paper_refill_count"] == 0
+
+
+def test_paper_refills_when_bankroll_exhausted():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     max_cap = 25.0
     store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=max_cap, mode="paper"))
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "mode": "paper",
+      "status": "filled",
+      "pnl_usd": -25.0,
+    })
+    bot = HourlyBot(store, asset="btc")
+    from tests.test_hourly_bot_continuous import _live_tab
+
+    actions = bot.run_continuous_cycle(
+      _live_tab(event="EV1"),
+      cfg={"hourly": {"regime": {"min_edge": 0.05, "min_expected_move_pct": 0.12}}},
+    )
+    assert any(a.get("action") == "paper_refill" for a in actions)
+    assert not store.get_settings().auto_stopped
+    paper = store.get_paper_state_dict(max_cap)
+    assert paper["paper_bankroll_usd"] == 25.0
+    assert paper["paper_refill_count"] == 1
+    assert paper["paper_total_invested_usd"] == 50.0
+
+
+def test_paper_auto_stop_when_refill_disabled():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    max_cap = 25.0
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=max_cap,
+      mode="paper",
+      paper_auto_refill=False,
+    ))
     store.log_trade({
       "event_ticker": "EV1",
       "action": "exit",

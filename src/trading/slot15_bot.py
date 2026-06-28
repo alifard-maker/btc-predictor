@@ -6,6 +6,7 @@ import logging
 import uuid
 from typing import Any
 
+from src.trading.bot_period_rollover import force_close_period_positions, resolve_rollover_exit_cents
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
   evaluate_adaptive_profit_exit,
@@ -13,6 +14,12 @@ from src.trading.bot_profit_exit import (
   position_hold_seconds,
 )
 from src.trading.edge import Signal
+from src.trading.paper_execution import (
+  entry_quote_log_fields,
+  format_entry_book_detail,
+  paper_entry_fill,
+  paper_exit_fill,
+)
 from src.trading.slot15_bet_assessment import assess_slot15_bet
 from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
 
@@ -159,6 +166,9 @@ def _entry_candidates(tab: dict[str, Any]) -> list[tuple[float, str, dict[str, A
       "signal": sig,
       "label": label or sig,
       "edge": edge,
+      "yes_bid": kalshi.get("yes_bid"),
+      "yes_ask": kalshi.get("yes_ask"),
+      "yes_mid": kalshi.get("yes_mid"),
     }
     out.append((score, sig, pick, assessment))
 
@@ -220,7 +230,13 @@ def enrich_open_positions_live(
 
   for pos in positions:
     row = dict(pos)
-    mark = _price_cents_for_side(yes_cents, pos["side"])
+    quote = {
+      "yes_bid": kalshi.get("yes_bid"),
+      "yes_ask": kalshi.get("yes_ask"),
+      "yes_mid": kalshi.get("yes_mid"),
+    }
+    fill = paper_exit_fill(pick=quote, side=str(pos["side"]))
+    mark = int(fill["price_cents"]) if fill.get("ok") else _price_cents_for_side(yes_cents, str(pos["side"]))
     row["mark_price_cents"] = mark
     row["unrealized_pnl_usd"] = _unrealized_pnl_usd(pos, mark)
     row["current_signal"] = monitor.get("signal_at_open")
@@ -246,7 +262,7 @@ class Slot15Bot:
       self.store.set_last_skip_reason("missing_slot_key")
       return []
 
-    settings = self.store.sync_period(str(slot_key), self.store.get_settings())
+    settings, prev_period = self.store.sync_period(str(slot_key), self.store.get_settings())
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []
@@ -255,6 +271,35 @@ class Slot15Bot:
       return []
 
     actions: list[dict[str, Any]] = []
+    if prev_period:
+      kalshi = tab.get("kalshi") or {}
+      market_ticker = str(kalshi.get("market_ticker") or "") or None
+      yes_cents = _yes_mid_cents(kalshi)
+
+      def _exit_cents(pos: dict[str, Any]) -> int:
+        return resolve_rollover_exit_cents(
+          pos,
+          current_market_ticker=market_ticker,
+          quote={
+            "yes_bid": kalshi.get("yes_bid"),
+            "yes_ask": kalshi.get("yes_ask"),
+            "yes_mid": kalshi.get("yes_mid"),
+          },
+          yes_mid_cents=yes_cents,
+          price_for_side=_price_cents_for_side,
+        )
+
+      actions.extend(
+        force_close_period_positions(
+          self.store,
+          prev_period,
+          exit_cents_for_position=_exit_cents,
+          settings=settings,
+          log_label=f"{self.asset.upper()} 15m",
+        )
+      )
+      settings = self.store.get_settings()
+
     actions.extend(self._process_exits(tab, slot_key, settings))
     settings = self.store.get_settings()
     stop_row = self._maybe_auto_stop_on_budget_exhausted(slot_key, settings)
@@ -279,8 +324,28 @@ class Slot15Bot:
     bankroll = self.store.slot_bankroll_usd(slot_key, max_cap, settings)
     exposure = self.store.open_exposure_usd(slot_key)
     if settings.mode == "paper":
-      if bankroll - exposure > 0:
+      if exposure > 0:
         return None
+      if bankroll > 0:
+        return None
+      if settings.paper_auto_refill:
+        state = self.store.refill_paper_bankroll(max_cap)
+        detail = (
+          f"Paper bankroll refilled to ${max_cap:.2f} "
+          f"(refill #{state['paper_refill_count']}, "
+          f"total invested ${state['paper_total_invested_usd']:.2f}, "
+          f"net P&L ${state['paper_net_vs_invested_usd']:.2f})"
+        )
+        row = self.store.log_trade({
+          "event_ticker": slot_key,
+          "trigger": "continuous",
+          "action": "paper_refill",
+          "mode": settings.mode,
+          "status": "filled",
+          "detail": detail,
+        })
+        log.info("%s 15m bot paper refill: %s", self.asset.upper(), detail)
+        return row
       realized = self.store.get_paper_state_dict(max_cap).get("paper_realized_all_time_usd", 0)
       detail = (
         f"Paper bankroll exhausted (${realized:.2f} all-time since reset, "
@@ -357,9 +422,18 @@ class Slot15Bot:
     results: list[dict[str, Any]] = []
 
     for pos in self.store.open_positions(slot_key):
-      exit_price = _price_cents_for_side(yes_cents, pos["side"])
+      fill = paper_exit_fill(
+        pick={
+          "yes_bid": kalshi.get("yes_bid"),
+          "yes_ask": kalshi.get("yes_ask"),
+          "yes_mid": kalshi.get("yes_mid"),
+        },
+        side=str(pos["side"]),
+      )
+      exit_price = int(fill["price_cents"]) if fill.get("ok") else _price_cents_for_side(yes_cents, str(pos["side"]))
       if exit_price is None:
         exit_price = pos["entry_price_cents"]
+      self.store.update_position_mark(pos["id"], exit_price)
 
       unrealized = _unrealized_pnl_usd(pos, exit_price)
       cost_usd = float(pos.get("cost_usd") or 0)
@@ -476,20 +550,27 @@ class Slot15Bot:
         last_reason = "unrecognized_signal"
         continue
 
-      price_cents = _price_cents_for_side(yes_cents, side)
-      if price_cents is None:
-        last_reason = "missing_kalshi_mid"
-        continue
-
       remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd, settings)
       if remaining <= 0:
         last_reason = "fully_deployed"
         break
 
-      count = _contracts_for_budget(remaining, price_cents)
-      if count <= 0:
-        last_reason = "budget_too_small_for_contract"
-        continue
+      if settings.mode == "paper":
+        entry_fill = paper_entry_fill(pick=pick, side=side, remaining_budget_usd=remaining)
+        if not entry_fill.get("ok"):
+          last_reason = str(entry_fill.get("skip_reason") or "no_liquidity")
+          continue
+        price_cents = int(entry_fill["price_cents"])
+        count = int(entry_fill["contracts"])
+      else:
+        price_cents = _price_cents_for_side(yes_cents, side)
+        if price_cents is None:
+          last_reason = "missing_kalshi_mid"
+          continue
+        count = _contracts_for_budget(remaining, price_cents)
+        if count <= 0:
+          last_reason = "budget_too_small_for_contract"
+          continue
 
       cost_usd = round(count * price_cents / 100.0, 2)
       pid = str(uuid.uuid4())
@@ -516,6 +597,7 @@ class Slot15Bot:
         detail = (
           f"Paper ENTER: {side.upper()} ×{count} @ {price_cents}¢ "
           f"on {market_ticker} ({signal})"
+          f"{format_entry_book_detail(entry_fill)}"
         )
         result = self.store.log_trade({
           "event_ticker": slot_key,
@@ -534,6 +616,7 @@ class Slot15Bot:
           "status": "filled",
           "detail": detail,
           "position_id": pid,
+          **entry_quote_log_fields(entry_fill),
         })
         log.info("%s 15m bot [paper enter]: %s", self.asset.upper(), detail)
 

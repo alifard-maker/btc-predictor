@@ -34,6 +34,8 @@ class Slot15BotSettings:
   profit_exit_cooldown_seconds: int = 60
   auto_stop_on_budget_exhausted: bool = True
   auto_stopped: bool = False
+  paper_auto_refill: bool = True
+  use_accumulated_profit: bool = True
 
   def to_dict(self) -> dict[str, Any]:
     return asdict(self)
@@ -64,6 +66,8 @@ class Slot15BotSettings:
       profit_exit_cooldown_seconds=int(raw.get("profit_exit_cooldown_seconds", 60)),
       auto_stop_on_budget_exhausted=bool(raw.get("auto_stop_on_budget_exhausted", True)),
       auto_stopped=bool(raw.get("auto_stopped", False)),
+      paper_auto_refill=bool(raw.get("paper_auto_refill", True)),
+      use_accumulated_profit=bool(raw.get("use_accumulated_profit", True)),
     )
 
 
@@ -93,6 +97,9 @@ CREATE TABLE IF NOT EXISTS bot_trades (
   detail TEXT,
   kalshi_order_id TEXT,
   position_id TEXT,
+  entry_bid_cents INTEGER,
+  entry_ask_cents INTEGER,
+  entry_spread_cents INTEGER,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_bot_trades_event ON bot_trades(event_ticker, created_at);
@@ -148,21 +155,17 @@ class Slot15BotStore:
     with self._connect() as conn:
       return bot_runtime_dict(conn)
 
-  def sync_period(self, slot_key: str, settings: Slot15BotSettings) -> Slot15BotSettings:
-    """Clear slot-scoped auto_stop when the active 15m slot changes (live mode only)."""
+  def sync_period(self, slot_key: str, settings: Slot15BotSettings) -> tuple[Slot15BotSettings, str | None]:
+    """Track slot changes; clear auto_stop on rollover (paper + live)."""
     prev = self._last_period_key
     self._last_period_key = slot_key
-    if (
-      settings.mode != "paper"
-      and settings.auto_stopped
-      and prev
-      and prev != slot_key
-    ):
+    rolled = bool(prev and prev != slot_key)
+    if rolled and settings.auto_stopped:
       updated = Slot15BotSettings(**{**settings.to_dict(), "auto_stopped": False})
       self.save_settings(updated)
       self.set_last_skip_reason(None)
-      return updated
-    return settings
+      return updated, prev
+    return settings, prev if rolled else None
 
   def _connect(self) -> sqlite3.Connection:
     conn = sqlite3.connect(self.db_path)
@@ -175,9 +178,16 @@ class Slot15BotStore:
 
     migrate_paper_state(conn)
     migrate_bot_runtime(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_trades)").fetchall()}
     cd_cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_cooldowns)").fetchall()}
     if cd_cols and "cooldown_seconds" not in cd_cols:
       conn.execute("ALTER TABLE bot_cooldowns ADD COLUMN cooldown_seconds INTEGER")
+    pos_cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_positions)").fetchall()}
+    if pos_cols and "last_mark_cents" not in pos_cols:
+      conn.execute("ALTER TABLE bot_positions ADD COLUMN last_mark_cents INTEGER")
+    for col in ("entry_bid_cents", "entry_ask_cents", "entry_spread_cents"):
+      if cols and col not in cols:
+        conn.execute(f"ALTER TABLE bot_trades ADD COLUMN {col} INTEGER")
 
   def _init_db(self) -> None:
     with self._connect() as conn:
@@ -293,6 +303,30 @@ class Slot15BotStore:
     self.set_last_skip_reason(None)
     return state.to_dict()
 
+  def fresh_start_paper(self, max_cap: float) -> dict[str, Any]:
+    from src.trading.bot_fresh_start import fresh_start_paper_bot
+
+    with self._connect() as conn:
+      paper = fresh_start_paper_bot(conn, max_cap)
+    self._position_peaks.clear()
+    self._last_period_key = None
+    settings = self.get_settings()
+    if settings.auto_stopped:
+      self.save_settings(Slot15BotSettings(**{**settings.to_dict(), "auto_stopped": False}))
+    self.set_last_skip_reason(None)
+    return paper
+
+  def refill_paper_bankroll(self, max_cap: float) -> dict[str, Any]:
+    from src.trading.paper_bankroll import refill_paper_bankroll
+
+    with self._connect() as conn:
+      state = refill_paper_bankroll(conn, max_cap)
+    settings = self.get_settings()
+    if settings.auto_stopped:
+      self.save_settings(Slot15BotSettings(**{**settings.to_dict(), "auto_stopped": False}))
+    self.set_last_skip_reason(None)
+    return state.to_dict()
+
   def _apply_paper_exit_pnl(self, pnl: float, default_cap: float) -> None:
     from src.trading.paper_bankroll import apply_paper_exit_pnl, get_paper_state
 
@@ -308,9 +342,28 @@ class Slot15BotStore:
     max_slot: float,
     settings: Slot15BotSettings | None = None,
   ) -> float:
-    if settings and settings.mode == "paper":
-      return max(0.0, self.ensure_paper_state(max_slot).paper_bankroll_usd)
-    return max(0.0, float(max_slot) + self.realized_pnl_usd(event_ticker))
+    from src.trading.bot_budget import deploy_bankroll_usd
+
+    settings = settings or self.get_settings()
+    if settings.mode == "paper":
+      paper = self.ensure_paper_state(max_slot).paper_bankroll_usd
+      return deploy_bankroll_usd(
+        mode="paper",
+        use_accumulated_profit=settings.use_accumulated_profit,
+        max_cap=max_slot,
+        paper_bankroll_usd=paper,
+        interval_realized_pnl_usd=0.0,
+      )
+    return deploy_bankroll_usd(
+      mode="live",
+      use_accumulated_profit=settings.use_accumulated_profit,
+      max_cap=max_slot,
+      paper_bankroll_usd=0.0,
+      interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
+    )
+
+  def _interval_total_entered_usd(self, event_ticker: str) -> float:
+    return self.slot_interval_summary(event_ticker)["total_entered_usd"]
 
   def remaining_budget_usd(
     self,
@@ -318,12 +371,18 @@ class Slot15BotStore:
     max_slot: float,
     settings: Slot15BotSettings | None = None,
   ) -> float:
-    exposure = self.open_exposure_usd(event_ticker)
-    if settings and settings.mode == "paper":
-      bankroll = self.ensure_paper_state(max_slot).paper_bankroll_usd
-      deploy_cap = min(bankroll, float(max_slot))
-      return max(0.0, deploy_cap - exposure)
-    return max(0.0, self.slot_bankroll_usd(event_ticker, max_slot) - exposure)
+    from src.trading.bot_budget import remaining_budget_usd
+
+    settings = settings or self.get_settings()
+    paper = self.ensure_paper_state(max_slot).paper_bankroll_usd if settings.mode == "paper" else 0.0
+    return remaining_budget_usd(
+      settings=settings,
+      max_cap=max_slot,
+      paper_bankroll_usd=paper,
+      interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
+      open_exposure_usd=self.open_exposure_usd(event_ticker),
+      interval_total_entered_usd=self._interval_total_entered_usd(event_ticker),
+    )
 
   def record_exit_cooldown(
     self,
@@ -425,6 +484,15 @@ class Slot15BotStore:
   def clear_position_peaks(self, position_id: str) -> None:
     self._position_peaks.pop(position_id, None)
 
+  def update_position_mark(self, position_id: str, mark_cents: int | None) -> None:
+    if mark_cents is None:
+      return
+    with self._connect() as conn:
+      conn.execute(
+        "UPDATE bot_positions SET last_mark_cents = ? WHERE id = ? AND status = 'open'",
+        (int(mark_cents), position_id),
+      )
+
   def close_position(self, position_id: str) -> dict[str, Any] | None:
     with self._connect() as conn:
       row = conn.execute("SELECT * FROM bot_positions WHERE id = ?", (position_id,)).fetchone()
@@ -481,6 +549,16 @@ class Slot15BotStore:
       "net_result_usd": realized,
     }
 
+  def interval_performance(self, current_event_ticker: str | None = None) -> dict[str, Any]:
+    from src.trading.bot_interval_stats import compute_interval_performance
+
+    with self._connect() as conn:
+      return compute_interval_performance(
+        conn,
+        current_event_ticker=current_event_ticker,
+        realized_pnl_fn=self._realized_pnl_usd,
+      )
+
   def log_trade(self, trade: dict[str, Any]) -> dict[str, Any]:
     tid = trade.get("id") or str(uuid.uuid4())
     now = trade.get("created_at") or datetime.now(timezone.utc).isoformat()
@@ -516,6 +594,9 @@ class Slot15BotStore:
       "detail": trade.get("detail"),
       "kalshi_order_id": trade.get("kalshi_order_id"),
       "position_id": trade.get("position_id"),
+      "entry_bid_cents": trade.get("entry_bid_cents"),
+      "entry_ask_cents": trade.get("entry_ask_cents"),
+      "entry_spread_cents": trade.get("entry_spread_cents"),
       "created_at": now,
     }
     with self._connect() as conn:
@@ -524,11 +605,13 @@ class Slot15BotStore:
         INSERT INTO bot_trades (
           id, event_ticker, trigger, action, mode, market_ticker, side, contracts,
           price_cents, entry_price_cents, exit_price_cents, cost_usd, pnl_usd, signal, label, actionable_headline,
-          status, detail, kalshi_order_id, position_id, created_at
+          status, detail, kalshi_order_id, position_id, entry_bid_cents, entry_ask_cents, entry_spread_cents,
+          created_at
         ) VALUES (
           :id, :event_ticker, :trigger, :action, :mode, :market_ticker, :side, :contracts,
           :price_cents, :entry_price_cents, :exit_price_cents, :cost_usd, :pnl_usd, :signal, :label, :actionable_headline,
-          :status, :detail, :kalshi_order_id, :position_id, :created_at
+          :status, :detail, :kalshi_order_id, :position_id, :entry_bid_cents, :entry_ask_cents, :entry_spread_cents,
+          :created_at
         )
         """,
         row,
@@ -596,6 +679,7 @@ class Slot15BotStore:
       "open_positions": open_pos,
       "open_position_count": len(open_pos),
       "slot_summary": slot_summary,
+      "interval_performance": self.interval_performance(event_ticker),
       "paper_bankroll": paper_state,
       "auto_stopped": settings.auto_stopped,
       "auto_stop_reason": auto_stop_row.get("detail") if auto_stop_row else None,

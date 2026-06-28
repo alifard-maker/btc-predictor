@@ -575,7 +575,7 @@ class KalshiClient:
     return close_brti, actual_return, outcome
 
   def active_market_summary(self) -> dict[str, Any] | None:
-    """Compact Kalshi market info for dashboard (YES mid, ticker)."""
+    """Compact Kalshi market info for dashboard/bots."""
     active = self.active_slot15m_market()
     if not active:
       return None
@@ -586,6 +586,8 @@ class KalshiClient:
       yes_mid = active.last_price
     return {
       "market_ticker": active.market_ticker,
+      "yes_bid": round(active.yes_bid, 4) if active.yes_bid is not None else None,
+      "yes_ask": round(active.yes_ask, 4) if active.yes_ask is not None else None,
       "yes_mid": round(yes_mid, 4) if yes_mid is not None else None,
       "title": active.title,
     }

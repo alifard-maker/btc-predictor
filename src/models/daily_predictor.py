@@ -33,6 +33,8 @@ class ContractOdds:
   label: str
   model_prob: float
   kalshi_mid: float | None
+  yes_bid: float | None
+  yes_ask: float | None
   edge: float | None
   signal: str  # BUY YES | BUY NO | NEUTRAL | VALUE YES | FADE YES
   strike_type: str
@@ -47,6 +49,8 @@ class ContractOdds:
       "label": self.label,
       "model_prob": round(self.model_prob, 4),
       "kalshi_mid": round(self.kalshi_mid, 4) if self.kalshi_mid is not None else None,
+      "yes_bid": round(self.yes_bid, 4) if self.yes_bid is not None else None,
+      "yes_ask": round(self.yes_ask, 4) if self.yes_ask is not None else None,
       "edge": round(self.edge, 4) if self.edge is not None else None,
       "signal": self.signal,
       "strike_type": self.strike_type,
@@ -228,6 +232,8 @@ class DailyPredictor:
       label=label,
       model_prob=p,
       kalshi_mid=m.yes_mid,
+      yes_bid=m.yes_bid,
+      yes_ask=m.yes_ask,
       edge=edge,
       signal=sig,
       strike_type=strike_type,
@@ -261,6 +267,8 @@ class DailyPredictor:
       label=m.subtitle or f"${low:,.0f}–${high:,.0f}",
       model_prob=p,
       kalshi_mid=m.yes_mid,
+      yes_bid=m.yes_bid,
+      yes_ask=m.yes_ask,
       edge=edge,
       signal=sig,
       strike_type="between",

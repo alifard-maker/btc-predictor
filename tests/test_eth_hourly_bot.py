@@ -44,6 +44,8 @@ def test_paper_enter_fills_open_position():
           "ticker": "KXETH-T1",
           "signal": "BUY YES",
           "kalshi_mid": 0.40,
+          "yes_bid": 0.40,
+          "yes_ask": 0.40,
           "edge": 0.12,
         },
         "current_price": 2500.0,

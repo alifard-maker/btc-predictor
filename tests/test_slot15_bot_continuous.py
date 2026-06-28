@@ -45,6 +45,8 @@ def _live_tab(slot_key="2025-06-28T14:00:00-04:00", signal="LONG"):
     },
     "kalshi": {
       "market_ticker": "KXBTC15M-TEST",
+      "yes_bid": 0.55,
+      "yes_ask": 0.55,
       "yes_mid": 0.55,
     },
     "bet_assessment": _strong_bet(),
@@ -70,10 +72,12 @@ def test_remaining_budget_increases_after_win():
     store.log_trade({
       "event_ticker": "SLOT1",
       "action": "exit",
+      "mode": "paper",
       "status": "filled",
       "pnl_usd": 5.0,
     })
-    assert store.remaining_budget_usd("SLOT1", 25.0) == 30.0
+    assert store.slot_bankroll_usd("SLOT1", 25.0) == 30.0
+    assert store.remaining_budget_usd("SLOT1", 25.0) == 25.0
 
 
 def test_no_exit_on_cut_loss_when_flat_pnl():
@@ -95,6 +99,8 @@ def test_no_exit_on_cut_loss_when_flat_pnl():
     tab["monitor"]["action"] = "CUT LOSS"
     tab["monitor"]["message"] = "Signal weakened — cut loss"
     tab["kalshi"]["yes_mid"] = 0.55
+    tab["kalshi"]["yes_bid"] = 0.55
+    tab["kalshi"]["yes_ask"] = 0.55
     actions = bot.run_continuous_cycle(tab)
     assert actions == []
     assert len(store.open_positions(tab["slot_key"])) == 1
@@ -170,6 +176,8 @@ def test_continuous_exit_on_take_profit():
     tab["prediction"]["signal"] = "NO TRADE"
     tab["bet_assessment"] = {"actionable_bet": False, "actionable_tone": "weak"}
     tab["kalshi"]["yes_mid"] = 0.60
+    tab["kalshi"]["yes_bid"] = 0.60
+    tab["kalshi"]["yes_ask"] = 0.60
     actions = bot.run_continuous_cycle(tab)
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
@@ -272,7 +280,7 @@ def test_auto_stop_when_slot_bankroll_exhausted():
   with tempfile.TemporaryDirectory() as tmp:
     store = Slot15BotStore(Path(tmp) / "bot.db")
     max_cap = 25.0
-    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=max_cap))
+    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=max_cap, mode="live"))
     store.log_trade({
       "event_ticker": "SLOT1",
       "action": "exit",
@@ -346,6 +354,8 @@ def test_profit_target_exit_on_hold_monitor():
     tab = _live_tab(slot_key=slot_key)
     tab["monitor"]["action"] = "HOLD"
     tab["kalshi"]["yes_mid"] = 0.52
+    tab["kalshi"]["yes_bid"] = 0.52
+    tab["kalshi"]["yes_ask"] = 0.52
     actions = bot.run_continuous_cycle(tab)
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
@@ -375,6 +385,8 @@ def test_profit_target_increases_slot_bankroll():
     tab = _live_tab(slot_key=slot_key)
     tab["monitor"]["action"] = "HOLD"
     tab["kalshi"]["yes_mid"] = 0.52
+    tab["kalshi"]["yes_bid"] = 0.52
+    tab["kalshi"]["yes_ask"] = 0.52
     bot.run_continuous_cycle(tab)
     assert store.realized_pnl_usd(slot_key) == 3.0
     settings = store.get_settings()
@@ -403,6 +415,8 @@ def test_no_exit_when_profit_below_threshold_slot15():
     tab = _live_tab(slot_key=slot_key)
     tab["monitor"]["action"] = "HOLD"
     tab["kalshi"]["yes_mid"] = 0.44
+    tab["kalshi"]["yes_bid"] = 0.44
+    tab["kalshi"]["yes_ask"] = 0.44
     actions = bot.run_continuous_cycle(tab)
     assert not any(a.get("action") == "exit" for a in actions)
     assert len(store.open_positions(slot_key)) == 1
@@ -435,6 +449,8 @@ def test_profit_trail_exit_slot15():
     tab = _live_tab(slot_key=slot_key)
     tab["monitor"]["action"] = "HOLD"
     tab["kalshi"]["yes_mid"] = 0.50
+    tab["kalshi"]["yes_bid"] = 0.50
+    tab["kalshi"]["yes_ask"] = 0.50
     actions = bot.run_continuous_cycle(tab)
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1

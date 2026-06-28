@@ -28,6 +28,8 @@ def _live_tab(event="KXTEST-1H", pick=None, regime_allow=True):
     "signal": "BUY YES",
     "label": "$2,500+",
     "kalshi_mid": 0.40,
+    "yes_bid": 0.40,
+    "yes_ask": 0.40,
     "edge": 0.12,
     "model_prob": 0.65,
   }
@@ -49,6 +51,50 @@ def _live_tab(event="KXTEST-1H", pick=None, regime_allow=True):
     },
     "brti_live": 2500.0,
   }
+
+
+def test_paper_enter_logs_bid_ask_spread():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0,
+      allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab()
+    tab["live"]["primary_pick"]["yes_bid"] = 0.40
+    tab["live"]["primary_pick"]["yes_ask"] = 0.42
+    actions = bot.run_continuous_cycle(tab)
+    assert len(actions) == 1
+    enter = actions[0]
+    assert enter["entry_bid_cents"] == 40
+    assert enter["entry_ask_cents"] == 42
+    assert enter["entry_spread_cents"] == 2
+    assert enter["entry_price_cents"] == 42
+    assert "book:" in (enter.get("detail") or "")
+
+
+def test_paper_skips_penny_ask():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=25.0,
+      allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(pick={
+      "ticker": "KXETHD-T1270",
+      "signal": "BUY YES",
+      "label": "$1,270 or above",
+      "kalshi_mid": 0.01,
+      "yes_bid": 0.01,
+      "yes_ask": 0.01,
+      "edge": 0.10,
+      "model_prob": 0.99,
+    })
+    actions = bot.run_continuous_cycle(tab)
+    assert actions == []
+    assert store.last_skip_reason() == "price_floor"
 
 
 def test_exposure_budget_frees_on_exit():
@@ -251,6 +297,8 @@ def test_enrich_open_positions_live_mark_to_market():
     "signal": "BUY YES",
     "label": "$2,500+",
     "kalshi_mid": 0.55,
+    "yes_bid": 0.55,
+    "yes_ask": 0.55,
     "edge": 0.08,
   })
   positions = [{
@@ -304,11 +352,13 @@ def test_remaining_budget_increases_after_win():
     store.log_trade({
       "event_ticker": "EV1",
       "action": "exit",
+      "mode": "paper",
       "status": "filled",
       "pnl_usd": 5.0,
     })
-    assert store.remaining_budget_usd("EV1", 25.0) == 30.0
     assert store.hour_bankroll_usd("EV1", 25.0) == 30.0
+    # At-risk cap still limits concurrent deployment to max_cap.
+    assert store.remaining_budget_usd("EV1", 25.0) == 25.0
 
 
 def test_no_exit_on_cut_losses_when_flat_pnl():
@@ -330,6 +380,8 @@ def test_no_exit_on_cut_losses_when_flat_pnl():
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab(regime_allow=False)
     tab["live"]["primary_pick"]["kalshi_mid"] = 0.80
+    tab["live"]["primary_pick"]["yes_bid"] = 0.80
+    tab["live"]["primary_pick"]["yes_ask"] = 0.80
     tab["live"]["regime"] = {"allow_trade": False, "reasons": ["compressed"]}
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
     assert actions == []
@@ -398,7 +450,7 @@ def test_auto_stop_when_hour_bankroll_exhausted():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     max_cap = 25.0
-    store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=max_cap))
+    store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=max_cap, mode="live"))
     store.log_trade({
       "event_ticker": "EV1",
       "action": "exit",
@@ -487,6 +539,8 @@ def test_free_mode_enters_from_range_contract_row():
       "signal": "BUY YES",
       "label": "$2,500–$2,519",
       "kalshi_mid": 0.35,
+      "yes_bid": 0.35,
+      "yes_ask": 0.35,
       "edge": 0.15,
       "model_prob": 0.50,
     }
@@ -501,7 +555,7 @@ def test_free_mode_enters_from_range_contract_row():
     assert actions[0]["market_ticker"] == "KXTEST-BAND"
 
 
-def test_enters_with_model_prob_when_kalshi_mid_missing():
+def test_skips_when_no_book_quotes_available():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     store.save_settings(HourlyBotSettings(
@@ -514,12 +568,10 @@ def test_enters_with_model_prob_when_kalshi_mid_missing():
       "signal": "BUY YES",
       "label": "$2,500+",
       "edge": 0.12,
-      "model_prob": 0.65,
     }
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {}, "intrahour": {"enabled": False}}})
-    assert len(actions) == 1
-    assert actions[0]["action"] == "enter"
-    assert actions[0]["entry_price_cents"] == 65
+    assert actions == []
+    assert store.last_skip_reason() == "no_liquidity"
 
 
 def test_profit_target_exit_on_hold_alert():
@@ -547,6 +599,8 @@ def test_profit_target_exit_on_hold_alert():
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab()
     tab["live"]["primary_pick"]["kalshi_mid"] = 0.52
+    tab["live"]["primary_pick"]["yes_bid"] = 0.52
+    tab["live"]["primary_pick"]["yes_ask"] = 0.52
     tab["live"]["primary_pick"]["edge"] = 0.12
     tab["live"]["regime"] = {"allow_trade": True, "reasons": []}
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
@@ -577,6 +631,8 @@ def test_profit_target_increases_hour_bankroll():
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab()
     tab["live"]["primary_pick"]["kalshi_mid"] = 0.52
+    tab["live"]["primary_pick"]["yes_bid"] = 0.52
+    tab["live"]["primary_pick"]["yes_ask"] = 0.52
     bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
     assert store.realized_pnl_usd("KXTEST-1H") == 3.0
     settings = store.get_settings()
@@ -603,6 +659,8 @@ def test_no_exit_when_profit_below_threshold():
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab()
     tab["live"]["primary_pick"]["kalshi_mid"] = 0.44
+    tab["live"]["primary_pick"]["yes_bid"] = 0.44
+    tab["live"]["primary_pick"]["yes_ask"] = 0.44
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
     assert not any(a.get("action") == "exit" for a in actions)
     assert len(store.open_positions("KXTEST-1H")) == 1
@@ -633,6 +691,8 @@ def test_profit_trail_exit_on_giveback_from_peak():
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab()
     tab["live"]["primary_pick"]["kalshi_mid"] = 0.50
+    tab["live"]["primary_pick"]["yes_bid"] = 0.50
+    tab["live"]["primary_pick"]["yes_ask"] = 0.50
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
@@ -665,6 +725,8 @@ def test_profit_trail_exits_without_hitting_fixed_target():
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab()
     tab["live"]["primary_pick"]["kalshi_mid"] = 0.42
+    tab["live"]["primary_pick"]["yes_bid"] = 0.42
+    tab["live"]["primary_pick"]["yes_ask"] = 0.42
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
