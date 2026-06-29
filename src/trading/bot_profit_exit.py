@@ -283,10 +283,50 @@ def cheap_leg_exit_config(cfg: dict[str, Any] | None, *, kind: str) -> CheapLegE
   )
 
 
+def hourly_mark_stop_thesis_broken(
+  pos: dict[str, Any],
+  pick: dict[str, Any] | None,
+  live_price: float | None,
+) -> bool:
+  """True when mark-only hourly stops may fire (signal and spot no longer support the leg)."""
+  if not pick:
+    return True
+
+  from src.trading.hourly_position_alert import (
+    _signal_favors_held_side,
+    _spot_favors_held_side,
+  )
+
+  side = str(pos.get("side") or "yes")
+  sig_favors = _signal_favors_held_side(pick.get("signal"), side)
+  if sig_favors is True:
+    return False
+
+  spot_favors: bool | None = None
+  if live_price is not None:
+    try:
+      spot_favors = _spot_favors_held_side(
+        side=side,
+        live_price=float(live_price),
+        pick=pick,
+      )
+    except (TypeError, ValueError):
+      spot_favors = None
+
+  if spot_favors is True:
+    return False
+
+  return sig_favors is False and spot_favors is not True
+
+
 def evaluate_cheap_leg_cut_loss(
   pos: dict[str, Any],
   mark_cents: int | None,
   cfg: CheapLegExitConfig,
+  *,
+  pick: dict[str, Any] | None = None,
+  live_price: float | None = None,
+  gate_on_hourly_thesis: bool = False,
 ) -> tuple[str | None, str]:
   """Tighter mark-based stop for low-cent entry legs (before normal CUT LOSSES)."""
   if mark_cents is None:
@@ -295,6 +335,8 @@ def evaluate_cheap_leg_cut_loss(
   if entry_c <= 0 or entry_c > cfg.max_entry_cents:
     return None, ""
   if int(mark_cents) <= cfg.cut_loss_cents:
+    if gate_on_hourly_thesis and not hourly_mark_stop_thesis_broken(pos, pick, live_price):
+      return None, ""
     return (
       "CHEAP LEG CUT LOSS",
       f"Cheap leg entry {entry_c}¢ — mark {int(mark_cents)}¢ at/below {cfg.cut_loss_cents}¢ floor",
@@ -395,11 +437,17 @@ def evaluate_slot15_leg_stop_loss(
   pos: dict[str, Any],
   mark_cents: int | None,
   leg_cfg: Slot15LegExitConfig,
+  *,
+  pick: dict[str, Any] | None = None,
+  live_price: float | None = None,
+  gate_on_hourly_thesis: bool = False,
 ) -> tuple[str | None, str]:
   delta = mark_vs_entry_cents(pos, mark_cents)
   if delta is None or leg_cfg.leg_stop_loss_cents <= 0:
     return None, ""
   if delta <= -leg_cfg.leg_stop_loss_cents:
+    if gate_on_hourly_thesis and not hourly_mark_stop_thesis_broken(pos, pick, live_price):
+      return None, ""
     entry_c = int(pos["entry_price_cents"])
     return (
       "LEG STOP",
@@ -569,12 +617,21 @@ def evaluate_slot15_contract_exits(
   cut_loss_min_usd: float = 0.05,
   bot_kind: str = "slot15",
   pick: dict[str, Any] | None = None,
+  live_price: float | None = None,
   standard_hourly_alert: str | None = None,
 ) -> tuple[str | None, str]:
   """Contract-first exit chain for 15m / hourly-trial bots; optional slot-monitor fallback last."""
   leg_cfg = leg_exit_config(cfg, bot_kind=bot_kind)
+  gate_hourly = bot_kind == "hourly_trial"
 
-  reason, detail = evaluate_slot15_leg_stop_loss(pos, mark_cents, leg_cfg)
+  reason, detail = evaluate_slot15_leg_stop_loss(
+    pos,
+    mark_cents,
+    leg_cfg,
+    pick=pick,
+    live_price=live_price,
+    gate_on_hourly_thesis=gate_hourly,
+  )
   if reason:
     return reason, detail
 
@@ -599,7 +656,14 @@ def evaluate_slot15_contract_exits(
     return reason, detail
 
   cheap_cfg = cheap_leg_exit_config(cfg, kind="slot15" if bot_kind == "slot15" else "hourly")
-  reason, detail = evaluate_cheap_leg_cut_loss(pos, mark_cents, cheap_cfg)
+  reason, detail = evaluate_cheap_leg_cut_loss(
+    pos,
+    mark_cents,
+    cheap_cfg,
+    pick=pick,
+    live_price=live_price,
+    gate_on_hourly_thesis=gate_hourly,
+  )
   if reason:
     return reason, detail
 

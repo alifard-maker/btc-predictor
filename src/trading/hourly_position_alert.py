@@ -161,7 +161,7 @@ def assess_held_hourly_position_alert(
         "danger",
         f"Signal flipped ({entry_signal} → {current_signal}) with loss on mark — cut.",
       )
-    if spot_ok is False:
+    if spot_ok is False and sig_ok is not True:
       return _result(
         "CUT LOSSES",
         "danger",
@@ -173,7 +173,13 @@ def assess_held_hourly_position_alert(
         detail += f" ({reasons[0]})"
       return _result("CUT LOSSES", "danger", detail + " — cut losses.")
 
-  if not regime_allow_trade and spot_ok is False and unrealized_pnl_usd is not None and unrealized_pnl_usd < 0:
+  if (
+    not regime_allow_trade
+    and spot_ok is False
+    and sig_ok is not True
+    and unrealized_pnl_usd is not None
+    and unrealized_pnl_usd < 0
+  ):
     detail = "Regime blocked with spot against your leg"
     if reasons:
       detail += f" ({reasons[0]})"
@@ -188,6 +194,13 @@ def assess_held_hourly_position_alert(
 
   if sig_ok and unrealized_pnl_usd is not None and unrealized_pnl_usd >= 0:
     return _result("HOLD", "success", "Signal and mark still favor your leg — hold.")
+
+  if sig_ok is True and unrealized_pnl_usd is not None and unrealized_pnl_usd < -0.05:
+    return _result(
+      "HOLD",
+      "neutral",
+      f"Signal still supports your {side.upper()} leg — hold through mark noise.",
+    )
 
   return _result("HOLD", "neutral", "Hold — position aligned or flat on mark.")
 

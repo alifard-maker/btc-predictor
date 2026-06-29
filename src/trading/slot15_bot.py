@@ -34,7 +34,7 @@ from src.trading.paper_execution import (
   paper_exit_fill,
   unrealized_leg_pnl_usd,
 )
-from src.trading.slot15_bet_assessment import assess_slot15_bet
+from src.trading.slot15_exit_context import build_slot15_exit_context, format_slot15_exit_context_detail
 from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
 
 log = logging.getLogger(__name__)
@@ -516,9 +516,28 @@ class Slot15Bot:
         )
 
       self.store.close_position(pos["id"])
+      leg_alert = assess_slot15_leg_position_alert(
+        pos=pos,
+        mark_cents=exit_price,
+        unrealized_pnl_usd=unrealized,
+        monitor=monitor,
+        cfg=cfg,
+        settings=settings,
+        peaks=peaks,
+        exit_ctx=exit_ctx,
+      )
+      exit_context = build_slot15_exit_context(
+        pos=pos,
+        tab=tab,
+        unrealized_pnl_usd=unrealized,
+        exit_reason=exit_reason,
+        asset=self.asset,
+        leg_position_alert=leg_alert,
+      )
+      vet_line = format_slot15_exit_context_detail(exit_context)
       detail = (
         f"{mode_label} EXIT ({exit_reason}): {pos['side'].upper()} ×{contracts} "
-        f"@ {exit_price}¢ (entry {entry_c}¢) — {detail_suffix}"
+        f"@ {exit_price}¢ (entry {entry_c}¢) — {detail_suffix} · {vet_line}"
       )
       row = self.store.log_trade({
         "event_ticker": slot_key,
@@ -539,6 +558,7 @@ class Slot15Bot:
         "detail": detail,
         "position_id": pos["id"],
         "kalshi_order_id": live_exit_oid,
+        "exit_context": exit_context,
       })
       log.info("%s 15m bot [%s exit]: %s", self.asset.upper(), mode_label.lower(), detail)
       record_exit_and_maybe_cap(
@@ -700,6 +720,17 @@ class Slot15Bot:
       cost_usd = round(count * price_cents / 100.0, 2)
       pid = str(uuid.uuid4())
       ref = (tab.get("monitor") or {}).get("reference_price")
+      index_id = str(
+        tab.get("index_label")
+        or (tab.get("monitor") or {}).get("index_id")
+        or ("ERTI" if self.asset == "eth" else "BRTI")
+      )
+      ref_note = ""
+      if ref is not None:
+        try:
+          ref_note = f" · {index_id} ${float(ref):,.2f}"
+        except (TypeError, ValueError):
+          pass
 
       if settings.mode == "live":
         result = self._place_live_enter(
@@ -722,6 +753,7 @@ class Slot15Bot:
         detail = (
           f"Paper ENTER: {side.upper()} ×{count} @ {price_cents}¢ "
           f"on {market_ticker} ({signal})"
+          f"{ref_note}"
           f"{format_entry_book_detail(entry_fill)}"
         )
         result = self.store.log_trade({

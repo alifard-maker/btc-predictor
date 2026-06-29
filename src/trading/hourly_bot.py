@@ -37,6 +37,7 @@ from src.trading.entry_strategy import (
 )
 from src.trading.hourly_bet_assessment import assess_contract_bet
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
+from src.trading.hourly_exit_context import build_hourly_exit_context, format_hourly_exit_context_detail
 from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
 from src.trading.hourly_position_alert import assess_held_hourly_position_alert
 from src.trading.hourly_trial_position_alert import assess_hourly_trial_leg_position_alert
@@ -358,9 +359,16 @@ class HourlyBot:
         contracts = int(pos["contracts"])
         entry_c = int(pos["entry_price_cents"])
         note = rollover_notes.get(str(pos["id"]), "")
+        index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
+        settle_line = ""
+        if settle_price is not None:
+          try:
+            settle_line = f" · Vet: {index_id} ${float(settle_price):,.2f} at settle"
+          except (TypeError, ValueError):
+            pass
         return (
           f"Paper EXIT (PERIOD SETTLEMENT): {pos['side'].upper()} ×{contracts} "
-          f"@ {exit_price}¢ (entry {entry_c}¢) — {note}"
+          f"@ {exit_price}¢ (entry {entry_c}¢) — {note}{settle_line}"
         )
 
       actions.extend(
@@ -466,6 +474,7 @@ class HourlyBot:
     mark_cents: int | None = None,
     cfg: dict[str, Any] | None = None,
     pick: dict[str, Any] | None = None,
+    live_price: float | None = None,
     standard_hourly_alert: str | None = None,
   ) -> tuple[str | None, str]:
     """Return (exit_reason, detail_suffix) or (None, '') if position should stay open."""
@@ -485,6 +494,7 @@ class HourlyBot:
         cut_loss_min_usd=CUT_LOSS_EXIT_MIN_LOSS_USD,
         bot_kind="hourly_trial",
         pick=pick,
+        live_price=live_price,
         standard_hourly_alert=standard_hourly_alert,
       )
 
@@ -492,7 +502,14 @@ class HourlyBot:
     if kind == "TAKE PROFIT" and _should_paper_exit(alert, unrealized):
       return "TAKE PROFIT", str(alert.get("detail", ""))
     cheap_cfg = cheap_leg_exit_config(cfg, kind="hourly")
-    cheap_reason, cheap_detail = evaluate_cheap_leg_cut_loss(pos, mark_cents, cheap_cfg)
+    cheap_reason, cheap_detail = evaluate_cheap_leg_cut_loss(
+      pos,
+      mark_cents,
+      cheap_cfg,
+      pick=pick,
+      live_price=live_price,
+      gate_on_hourly_thesis=True,
+    )
     if cheap_reason:
       return cheap_reason, cheap_detail
     if kind == "CUT LOSSES" and _should_paper_exit(alert, unrealized):
@@ -574,6 +591,7 @@ class HourlyBot:
       exit_reason, detail_suffix = self._resolve_exit(
         pos, alert, unrealized, settings, peaks=peaks, exit_ctx=exit_ctx,
         mark_cents=exit_price, cfg=cfg, pick=pick,
+        live_price=float(price) if price is not None else None,
         standard_hourly_alert=standard_alert,
       )
       if not exit_reason:
@@ -604,9 +622,23 @@ class HourlyBot:
         )
 
       self.store.close_position(pos["id"])
+      index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
+      exit_context = build_hourly_exit_context(
+        pos=pos,
+        pick=pick,
+        tab=tab,
+        live_price=float(price) if price is not None else None,
+        unrealized_pnl_usd=unrealized,
+        exit_reason=exit_reason,
+        position_alert=alert,
+        standard_hourly_alert=standard_alert,
+        bot_kind=self.kind,
+        hours_to_settle=float(hours_left) if hours_left is not None else None,
+      )
+      vet_line = format_hourly_exit_context_detail(exit_context)
       detail = (
         f"{mode_label} EXIT ({exit_reason}): {pos['side'].upper()} ×{contracts} "
-        f"@ {exit_price}¢ (entry {entry_c}¢) — {detail_suffix}"
+        f"@ {exit_price}¢ (entry {entry_c}¢) — {detail_suffix} · {vet_line}"
       )
       row = self.store.log_trade({
         "event_ticker": event_ticker,
@@ -627,6 +659,7 @@ class HourlyBot:
         "detail": detail,
         "position_id": pos["id"],
         "kalshi_order_id": live_exit_oid,
+        "exit_context": exit_context,
       })
       log.info("%s hourly bot [%s exit]: %s", self.asset.upper(), mode_label.lower(), detail)
       record_exit_and_maybe_cap(
@@ -810,6 +843,13 @@ class HourlyBot:
       cost_usd = round(count * price_cents / 100.0, 2)
       pid = str(uuid.uuid4())
       ref = live.get("current_price") or tab.get("brti_live")
+      index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
+      ref_note = ""
+      if ref is not None:
+        try:
+          ref_note = f" · {index_id} ${float(ref):,.2f}"
+        except (TypeError, ValueError):
+          pass
 
       if settings.mode == "live":
         result = self._place_live_enter(
@@ -836,6 +876,7 @@ class HourlyBot:
         detail = (
           f"Paper ENTER: {side.upper()} ×{count} @ {price_cents}¢ "
           f"on {market_ticker} ({pick.get('signal')})"
+          f"{ref_note}"
           f"{format_entry_book_detail(entry_fill)}"
         )
         result = self.store.log_trade({

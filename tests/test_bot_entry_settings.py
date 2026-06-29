@@ -112,8 +112,8 @@ def test_slot15_cheap_leg_exit_in_continuous_cycle():
       "market_ticker": "KXBTC15M-TEST",
       "side": "yes",
       "contracts": 10,
-      "entry_price_cents": 18,
-      "cost_usd": 1.8,
+      "entry_price_cents": 13,
+      "cost_usd": 1.3,
       "signal": "LONG",
     })
     bot = Slot15Bot(store, asset="btc")
@@ -162,7 +162,7 @@ def test_hourly_cheap_leg_exit_in_continuous_cycle():
         "regime": {"allow_trade": True, "reasons": []},
         "primary_pick": {
           "ticker": "KXTEST-T1",
-          "signal": "BUY NO",
+          "signal": "BUY YES",
           "edge": 0.12,
           "kalshi_mid": 0.92,
           "yes_bid": 0.92,
@@ -176,6 +176,124 @@ def test_hourly_cheap_leg_exit_in_continuous_cycle():
     assert len(actions) == 1
     assert actions[0]["action"] == "exit"
     assert "CHEAP LEG CUT LOSS" in (actions[0].get("detail") or "")
+
+
+def test_hourly_cheap_leg_cut_blocked_when_thesis_intact():
+  """NO range leg at mark floor — hold when signal and spot still support NO."""
+  cfg = CheapLegExitConfig(max_entry_cents=20, cut_loss_cents=10)
+  pos = {
+    "entry_price_cents": 14,
+    "side": "no",
+    "contracts": 10,
+    "signal": "BUY NO",
+  }
+  pick = {
+    "signal": "BUY NO",
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1610.0,
+    "cap_strike": 1629.99,
+  }
+  assert evaluate_cheap_leg_cut_loss(
+    pos,
+    mark_cents=10,
+    cfg=cfg,
+    pick=pick,
+    live_price=1629.0,
+    gate_on_hourly_thesis=True,
+  ) == (None, "")
+
+
+def test_hourly_cheap_leg_cut_when_thesis_broken():
+  cfg = CheapLegExitConfig(max_entry_cents=20, cut_loss_cents=10)
+  pos = {"entry_price_cents": 14, "side": "no", "contracts": 10, "signal": "BUY NO"}
+  pick = {
+    "signal": "BUY YES",
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1610.0,
+    "cap_strike": 1629.99,
+  }
+  reason, detail = evaluate_cheap_leg_cut_loss(
+    pos,
+    mark_cents=10,
+    cfg=cfg,
+    pick=pick,
+    live_price=1629.0,
+    gate_on_hourly_thesis=True,
+  )
+  assert reason == "CHEAP LEG CUT LOSS"
+  assert "14" in detail
+
+
+def test_yes_range_cheap_leg_blocked_when_thesis_intact():
+  cfg = CheapLegExitConfig(max_entry_cents=20, cut_loss_cents=10)
+  pos = {"entry_price_cents": 14, "side": "yes", "contracts": 10, "signal": "BUY YES"}
+  pick = {
+    "signal": "BUY YES",
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1610.0,
+    "cap_strike": 1629.99,
+  }
+  assert evaluate_cheap_leg_cut_loss(
+    pos,
+    mark_cents=10,
+    cfg=cfg,
+    pick=pick,
+    live_price=1620.0,
+    gate_on_hourly_thesis=True,
+  ) == (None, "")
+
+
+def test_hourly_regular_no_exit_blocked_when_thesis_intact():
+  """Regular hourly must not paper-exit on mark dip when signal still supports NO."""
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "hourly_bot_eth.db")
+    store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=25.0))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXETH-1H",
+      "market_ticker": "KXETH-T1",
+      "side": "no",
+      "contracts": 15,
+      "entry_price_cents": 14,
+      "cost_usd": 2.1,
+      "signal": "BUY NO",
+      "entry_edge": 0.12,
+      "contract_type": "range",
+      "floor_strike": 1610.0,
+      "cap_strike": 1629.99,
+    })
+    bot = HourlyBot(store, asset="eth")
+    tab = {
+      "ok": True,
+      "event": {"event_ticker": "KXETH-1H"},
+      "brti_live": 1629.0,
+      "live": {
+        "current_price": 1629.0,
+        "hours_to_settle": 0.5,
+        "regime": {"allow_trade": True, "reasons": []},
+        "primary_pick": {
+          "ticker": "KXETH-T1",
+          "signal": "BUY NO",
+          "edge": 0.12,
+          "contract_type": "range",
+          "strike_type": "between",
+          "floor_strike": 1610.0,
+          "cap_strike": 1629.99,
+          "kalshi_mid": 0.10,
+          "yes_bid": 0.90,
+          "yes_ask": 0.91,
+          "no_bid": 0.09,
+          "no_ask": 0.10,
+        },
+      },
+      "locked": {},
+    }
+    cfg = {"hourly": {"bot": {"cheap_leg_max_entry_cents": 20, "cheap_leg_cut_loss_cents": 10}, "regime": {}}}
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    assert actions == []
 
 
 def test_cheap_leg_config_defaults():

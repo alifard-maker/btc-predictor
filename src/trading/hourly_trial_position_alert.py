@@ -82,6 +82,7 @@ def assess_hourly_trial_leg_position_alert(
     include_monitor_fallback=False,
     bot_kind="hourly_trial",
     pick=pick,
+    live_price=live_price,
     standard_hourly_alert=std_alert,
   )
   if reason in ("LEG STOP", "CHEAP LEG CUT LOSS"):

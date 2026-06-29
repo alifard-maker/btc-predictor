@@ -156,6 +156,55 @@ def test_slot15_leg_stop_on_drawdown():
   assert reason == "LEG STOP"
 
 
+def test_hourly_trial_leg_stop_blocked_when_signal_favors_held_side():
+  from src.trading.bot_profit_exit import evaluate_slot15_leg_stop_loss, slot15_leg_exit_config
+
+  leg_cfg = slot15_leg_exit_config(None)
+  pos = {"entry_price_cents": 14, "side": "no", "signal": "BUY NO"}
+  pick = {
+    "signal": "BUY NO",
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1610.0,
+    "cap_strike": 1629.99,
+  }
+  assert evaluate_slot15_leg_stop_loss(
+    pos,
+    10,
+    leg_cfg,
+    pick=pick,
+    live_price=1629.0,
+    gate_on_hourly_thesis=True,
+  ) == (None, "")
+
+
+def test_hourly_trial_leg_stop_when_thesis_broken():
+  from src.trading.bot_profit_exit import evaluate_slot15_leg_stop_loss, slot15_leg_exit_config
+
+  leg_cfg = slot15_leg_exit_config(None)
+  pos = {"entry_price_cents": 14, "side": "no", "signal": "BUY NO"}
+  pick = {"signal": "BUY YES"}
+  reason, _ = evaluate_slot15_leg_stop_loss(
+    pos,
+    10,
+    leg_cfg,
+    pick=pick,
+    live_price=1629.0,
+    gate_on_hourly_thesis=True,
+  )
+  assert reason == "LEG STOP"
+
+
+def test_slot15_leg_stop_unchanged_without_hourly_gate():
+  from src.trading.bot_profit_exit import evaluate_slot15_leg_stop_loss, slot15_leg_exit_config
+
+  leg_cfg = slot15_leg_exit_config(None)
+  pos = {"entry_price_cents": 14, "side": "no", "signal": "BUY NO"}
+  pick = {"signal": "BUY NO"}
+  reason, _ = evaluate_slot15_leg_stop_loss(pos, 10, leg_cfg, pick=pick, live_price=1629.0)
+  assert reason == "LEG STOP"
+
+
 def test_slot15_reassess_neutral_take_profit():
   from src.trading.bot_profit_exit import (
     evaluate_slot15_reassess_neutral_take_profit,

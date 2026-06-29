@@ -211,6 +211,8 @@ class HourlyBotStore:
         conn.execute(f"ALTER TABLE bot_trades ADD COLUMN {col} INTEGER")
     if cols and "entry_settings_json" not in cols:
       conn.execute("ALTER TABLE bot_trades ADD COLUMN entry_settings_json TEXT")
+    if cols and "exit_context_json" not in cols:
+      conn.execute("ALTER TABLE bot_trades ADD COLUMN exit_context_json TEXT")
     for col in ("stop_order_id", "take_profit_order_id"):
       if pos_cols and col not in pos_cols:
         conn.execute(f"ALTER TABLE bot_positions ADD COLUMN {col} TEXT")
@@ -642,6 +644,12 @@ class HourlyBotStore:
         out["entry_settings"] = json.loads(raw_settings)
       except json.JSONDecodeError:
         pass
+    raw_exit = out.get("exit_context_json")
+    if raw_exit and isinstance(raw_exit, str):
+      try:
+        out["exit_context"] = json.loads(raw_exit)
+      except json.JSONDecodeError:
+        pass
     return out
 
   def hour_interval_summary(self, event_ticker: str) -> dict[str, Any]:
@@ -733,6 +741,13 @@ class HourlyBotStore:
       )
     else:
       row["entry_settings_json"] = None
+    exit_context = trade.get("exit_context")
+    if action == "exit" and exit_context is not None:
+      row["exit_context_json"] = (
+        exit_context if isinstance(exit_context, str) else json.dumps(exit_context)
+      )
+    else:
+      row["exit_context_json"] = None
     with self._connect() as conn:
       conn.execute(
         """
@@ -740,12 +755,12 @@ class HourlyBotStore:
           id, event_ticker, trigger, action, mode, market_ticker, side, contracts,
           price_cents, entry_price_cents, exit_price_cents, cost_usd, pnl_usd, signal, label, actionable_headline,
           status, detail, kalshi_order_id, position_id, entry_bid_cents, entry_ask_cents, entry_spread_cents,
-          entry_settings_json, created_at
+          entry_settings_json, exit_context_json, created_at
         ) VALUES (
           :id, :event_ticker, :trigger, :action, :mode, :market_ticker, :side, :contracts,
           :price_cents, :entry_price_cents, :exit_price_cents, :cost_usd, :pnl_usd, :signal, :label, :actionable_headline,
           :status, :detail, :kalshi_order_id, :position_id, :entry_bid_cents, :entry_ask_cents, :entry_spread_cents,
-          :entry_settings_json, :created_at
+          :entry_settings_json, :exit_context_json, :created_at
         )
         """,
         row,

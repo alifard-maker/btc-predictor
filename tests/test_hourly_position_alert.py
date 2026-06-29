@@ -172,6 +172,79 @@ def test_assess_hourly_position_alert_locked_edge_below_min():
   assert "below" in result["detail"].lower()
 
 
+def test_held_no_in_band_signal_no_hold_with_mark_loss():
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY NO",
+    "edge": 0.08,
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1610.0,
+    "cap_strike": 1629.99,
+  }
+  pos = {"side": "no", "signal": "BUY NO", "entry_price_cents": 14, "contracts": 15}
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=1629.0,
+    regime_allow_trade=True,
+    regime_reasons=[],
+    unrealized_pnl_usd=-0.45,
+    cfg={"hourly": {"regime": {"min_edge": 0.05}}},
+  )
+  assert result["alert"] == "HOLD"
+  assert "Signal still supports" in result["detail"]
+
+
+def test_held_yes_in_band_signal_yes_hold_with_mark_loss():
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY YES",
+    "edge": 0.08,
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1610.0,
+    "cap_strike": 1629.99,
+  }
+  pos = {"side": "yes", "signal": "BUY YES", "entry_price_cents": 14, "contracts": 15}
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=1620.0,
+    regime_allow_trade=True,
+    regime_reasons=[],
+    unrealized_pnl_usd=-0.45,
+    cfg={"hourly": {"regime": {"min_edge": 0.05}}},
+  )
+  assert result["alert"] == "HOLD"
+
+
+def test_held_no_spot_cut_when_signal_flipped():
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY YES",
+    "edge": 0.08,
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1610.0,
+    "cap_strike": 1629.99,
+  }
+  pos = {"side": "no", "signal": "BUY NO", "entry_price_cents": 14, "contracts": 10}
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=1629.0,
+    regime_allow_trade=True,
+    regime_reasons=[],
+    unrealized_pnl_usd=-0.45,
+  )
+  assert result["alert"] == "CUT LOSSES"
+  assert "flipped" in result["detail"].lower()
+
+
 def test_held_band_no_hold_when_spot_above_band():
   from src.trading.hourly_position_alert import assess_held_hourly_position_alert
 
