@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import Any
 
-from src.trading.bot_risk_gates import record_exit_and_maybe_cap, sync_auto_stop_for_risk
+from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip_reason, sync_auto_stop_for_risk
 from src.trading.live_bracket_orders import (
   cancel_resting_orders,
   place_live_bracket_orders,
@@ -559,6 +559,11 @@ class Slot15Bot:
     *,
     cfg: dict[str, Any] | None = None,
   ) -> list[dict[str, Any]]:
+    gate = risk_gate_skip_reason()
+    if gate:
+      self.store.set_last_skip_reason(gate)
+      return []
+
     if settings.auto_stopped:
       skip = settings.auto_stop_reason or "auto_stopped_budget_exhausted"
       if skip == "budget_exhausted":

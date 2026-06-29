@@ -53,3 +53,20 @@ def test_sync_auto_stop_clears_when_cap_lifted():
     s = store.get_settings()
     assert s.auto_stopped is False
     assert s.auto_stop_reason is None
+
+
+def test_kalshi_degraded_does_not_auto_stop():
+  with tempfile.TemporaryDirectory() as td:
+    from src.trading import kalshi_circuit as kc
+
+    data_dir = Path(td)
+    cb = kc.KalshiCircuitBreaker(kc.CircuitConfig(warn_threshold=2), data_dir / "c.json")
+    kc._STATE = cb
+    store = HourlyBotStore(data_dir / "bot.db")
+    cb.record_failure("e1")
+    cb.record_failure("e2")
+    from src.trading.bot_risk_gates import SKIP_KALSHI_DEGRADED
+
+    assert risk_gate_skip_reason() == SKIP_KALSHI_DEGRADED
+    sync_auto_stop_for_risk(store)
+    assert not store.get_settings().auto_stopped

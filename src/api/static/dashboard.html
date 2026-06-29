@@ -1246,8 +1246,13 @@
       if (daily.cap_active) {
         parts.push(`<strong>Daily loss cap</strong> hit (${botPnlUsd(daily.realized_pnl_usd)} today · cap $${daily.cap_usd}) — new entries paused until tomorrow (${daily.timezone}).`);
       }
+      if (kalshi.degraded && !kalshi.paused) {
+        const n = kalshi.live_failure_count != null ? kalshi.live_failure_count : kalshi.consecutive_failures;
+        parts.push(`<strong>Kalshi API degraded</strong> (${n}/${kalshi.warn_threshold} failures) — new entries blocked; exits and sell orders still run.`);
+      }
       if (kalshi.paused) {
-        parts.push(`<strong>Kalshi API paused</strong> (${kalshi.consecutive_failures}/${kalshi.failure_threshold} failures) — resumes in ~${kalshi.seconds_until_resume}s.${kalshi.last_error ? ` Last: ${kalshi.last_error}` : ''}`);
+        const n = kalshi.live_failure_count != null ? kalshi.live_failure_count : kalshi.consecutive_failures;
+        parts.push(`<strong>Kalshi API paused</strong> (${n} failures) — discovery throttled; sell/cancel still allowed; resumes in ~${kalshi.seconds_until_resume}s.${kalshi.last_error ? ` Last: ${kalshi.last_error}` : ''}`);
       }
       el.style.display = 'block';
       el.innerHTML = parts.map((p) => `<p style="margin:.25rem 0;font-size:.78rem">${p}</p>`).join('');
@@ -2286,6 +2291,9 @@
     function botSkipReasonLabel(raw) {
       if (!raw) return '';
       const labels = {
+        daily_loss_cap: 'Daily loss cap hit — new entries paused until tomorrow (ET).',
+        kalshi_api_degraded: 'Kalshi API degraded — new entries blocked proactively; exits still run.',
+        kalshi_api_paused: 'Kalshi API cooling down after errors — discovery throttled; sell/cancel still allowed.',
         auto_bet_off: 'Auto-bet is off on the server (toggle may be out of sync — flip Auto-bet off then on).',
         auto_stopped_budget_exhausted: 'Bankroll exhausted for this hour/slot — raise cap or wait for the next window.',
         continuous_mode_off: 'Continuous mode is off in stored bot settings.',

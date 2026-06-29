@@ -101,6 +101,8 @@ class PredictionLoop:
     self._hourly_bots: dict[str, Any] = {}
     self._slot15_bot_stores: dict[str, Any] = {}
     self._slot15_bots: dict[str, Any] = {}
+    self._hourly_tab_cache: dict[str, tuple[dict[str, Any], float]] = {}
+    self._slot15_tab_cache: dict[str, tuple[dict[str, Any], float]] = {}
     if asset_enabled(self.cfg, "eth"):
       self._eth_cfg = asset_cfg(self.cfg, "eth")
       ensure_dirs(self._eth_cfg)
@@ -259,8 +261,37 @@ class PredictionLoop:
     return {
       "daily_loss": daily,
       "kalshi_circuit": kalshi,
-      "bots_paused": bool(daily.get("cap_active")) or bool(kalshi.get("paused")),
+      "bots_paused": bool(daily.get("cap_active")) or bool(kalshi.get("entries_blocked")),
     }
+
+  def _cached_tab_if_throttled(
+    self,
+    cache: dict[str, tuple[dict[str, Any], float]],
+    asset: str,
+    *,
+    max_age_sec: float = 45.0,
+  ) -> dict[str, Any] | None:
+    from src.trading.kalshi_circuit import get_circuit_breaker
+
+    circuit = get_circuit_breaker()
+    if not circuit or not circuit.throttle_discovery():
+      return None
+    row = cache.get(asset)
+    if not row:
+      return None
+    tab, ts = row
+    if time.monotonic() - ts > max_age_sec:
+      return None
+    return tab
+
+  def _store_tab_cache(
+    self,
+    cache: dict[str, tuple[dict[str, Any], float]],
+    asset: str,
+    tab: dict[str, Any],
+  ) -> None:
+    if tab.get("ok"):
+      cache[asset] = (tab, time.monotonic())
 
   def hourly_bot_store(self, asset: str):
     asset = asset.lower()
@@ -369,7 +400,10 @@ class PredictionLoop:
           store.set_last_skip_reason("auto_bet_off")
         return
       acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
-      tab = self._hourly_tab_prediction(asset)
+      tab = self._cached_tab_if_throttled(self._hourly_tab_cache, asset)
+      if tab is None:
+        tab = self._hourly_tab_prediction(asset)
+        self._store_tab_cache(self._hourly_tab_cache, asset, tab)
       if tab.get("ok"):
         self.hourly_bot(asset).run_continuous_cycle(tab, cfg=acfg)
     except Exception as e:
@@ -584,7 +618,10 @@ class PredictionLoop:
           store.set_last_skip_reason("auto_bet_off")
         return
       self._ensure_slot_prediction_current(asset)
-      tab = self._slot15_tab(asset)
+      tab = self._cached_tab_if_throttled(self._slot15_tab_cache, asset)
+      if tab is None:
+        tab = self._slot15_tab(asset)
+        self._store_tab_cache(self._slot15_tab_cache, asset, tab)
       if tab.get("ok"):
         acfg = self._acfg_15m(asset)
         self.slot15_bot(asset).run_continuous_cycle(tab, cfg=acfg)

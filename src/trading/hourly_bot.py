@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import Any
 
-from src.trading.bot_risk_gates import record_exit_and_maybe_cap, sync_auto_stop_for_risk
+from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip_reason, sync_auto_stop_for_risk
 from src.trading.bot_period_rollover import force_close_period_positions
 from src.trading.live_bracket_orders import (
   cancel_resting_orders,
@@ -575,6 +575,11 @@ class HourlyBot:
   ) -> list[dict[str, Any]]:
     live = tab.get("live") or tab
     results: list[dict[str, Any]] = []
+    gate = risk_gate_skip_reason()
+    if gate:
+      self.store.set_last_skip_reason(gate)
+      return results
+
     if settings.auto_stopped:
       skip = settings.auto_stop_reason or "auto_stopped_budget_exhausted"
       if skip == "budget_exhausted":

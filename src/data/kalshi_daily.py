@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -75,6 +76,7 @@ class KalshiDailyMarkets:
     self.range_series: list[str] = list(dcfg.get("range_series", ["BTC", "KXBTC"]))
     self.max_markets_per_event = int(dcfg.get("max_markets_per_event", 1000))
     self.max_event_candidates = int(dcfg.get("max_event_candidates", 6))
+    self._book_cache: tuple[DailyEventBook | None, float] | None = None
 
   def _parse_market(self, row: dict[str, Any], series: str) -> KalshiContractMarket | None:
     close_raw = row.get("close_time")
@@ -322,6 +324,15 @@ class KalshiDailyMarkets:
 
   def active_book(self, reference_price: float | None = None) -> DailyEventBook | None:
     """Pick soonest Kalshi event and load its full strike ladder via event_ticker."""
+    from src.trading.kalshi_circuit import get_circuit_breaker
+
+    circuit = get_circuit_breaker()
+    now = time.monotonic()
+    if circuit and circuit.throttle_discovery() and self._book_cache:
+      book, ts = self._book_cache
+      if now - ts < 45.0:
+        return book
+
     candidates: list[tuple[float, DailyEventBook]] = []
 
     for thresh_series in self.threshold_series:
@@ -364,5 +375,8 @@ class KalshiDailyMarkets:
           candidates.append((score, book))
 
     if not candidates:
+      self._book_cache = (None, now)
       return None
-    return max(candidates, key=lambda x: x[0])[1]
+    book = max(candidates, key=lambda x: x[0])[1]
+    self._book_cache = (book, time.monotonic())
+    return book

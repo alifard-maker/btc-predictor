@@ -181,6 +181,7 @@ class KalshiClient:
     json_body: dict[str, Any] | None = None,
     auth: bool = False,
     timeout: float = 15,
+    critical: bool = False,
   ) -> dict[str, Any]:
     url = f"{self.base_url}{path}"
     headers: dict[str, str] = {"Accept": "application/json"}
@@ -201,7 +202,7 @@ class KalshiClient:
     from src.trading.kalshi_circuit import get_circuit_breaker
 
     circuit = get_circuit_breaker()
-    if circuit and circuit.is_paused():
+    if circuit and not circuit.allows_request(critical=critical):
       raise RuntimeError("Kalshi API circuit breaker open — requests paused")
 
     try:
@@ -217,8 +218,15 @@ class KalshiClient:
         circuit.record_failure(str(e))
       raise
 
-  def get(self, path: str, *, params: dict[str, Any] | None = None, auth: bool = False) -> dict[str, Any]:
-    return self._request("GET", path, params=params, auth=auth)
+  def get(
+    self,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    auth: bool = False,
+    critical: bool = False,
+  ) -> dict[str, Any]:
+    return self._request("GET", path, params=params, auth=auth, critical=critical, timeout=15)
 
   def post(
     self,
@@ -226,8 +234,9 @@ class KalshiClient:
     *,
     json_body: dict[str, Any] | None = None,
     auth: bool = False,
+    critical: bool = False,
   ) -> dict[str, Any]:
-    return self._request("POST", path, json_body=json_body, auth=auth)
+    return self._request("POST", path, json_body=json_body, auth=auth, critical=critical, timeout=15)
 
   def create_order(
     self,
@@ -252,11 +261,12 @@ class KalshiClient:
       body["yes_price"] = int(yes_price)
     if side == "no" and no_price is not None:
       body["no_price"] = int(no_price)
-    return self.post("/portfolio/orders", json_body=body, auth=True)
+    critical = action == "sell"
+    return self.post("/portfolio/orders", json_body=body, auth=True, critical=critical)
 
   def cancel_order(self, order_id: str) -> dict[str, Any]:
     """Cancel an open order by ID."""
-    return self._request("DELETE", f"/portfolio/orders/{order_id}", auth=True)
+    return self._request("DELETE", f"/portfolio/orders/{order_id}", auth=True, critical=True)
 
   def portfolio_balance(self) -> dict[str, Any] | None:
     """Verify API credentials; returns balance dict or None if not configured."""

@@ -14,6 +14,7 @@ class BotStoreLike(Protocol):
 
 
 SKIP_DAILY_CAP = "daily_loss_cap"
+SKIP_KALSHI_DEGRADED = "kalshi_api_degraded"
 SKIP_KALSHI_PAUSED = "kalshi_api_paused"
 
 
@@ -24,26 +25,29 @@ def risk_gate_skip_reason() -> str | None:
     if coord.is_cap_active():
       return SKIP_DAILY_CAP
   circuit = get_circuit_breaker()
-  if circuit and circuit.is_paused():
-    return SKIP_KALSHI_PAUSED
+  if circuit:
+    if circuit.is_paused():
+      return SKIP_KALSHI_PAUSED
+    if circuit.is_degraded():
+      return SKIP_KALSHI_DEGRADED
   return None
 
 
 def sync_auto_stop_for_risk(store: BotStoreLike, *, cfg: dict | None = None) -> None:
-  """Align auto_stopped with shared risk gates (daily cap / API pause)."""
+  """Align auto_stopped with daily loss cap only (Kalshi pause blocks entries, not exits)."""
   reason = risk_gate_skip_reason()
   settings = store.get_settings()
   d = settings.to_dict()
   current_reason = str(d.get("auto_stop_reason") or "")
 
-  if reason in (SKIP_DAILY_CAP, SKIP_KALSHI_PAUSED):
+  if reason == SKIP_DAILY_CAP:
     if not d.get("auto_stopped") or current_reason != reason:
       d["auto_stopped"] = True
       d["auto_stop_reason"] = reason
       store.save_settings(type(settings)(**d), source="internal", cfg=cfg)
     return
 
-  if current_reason in (SKIP_DAILY_CAP, SKIP_KALSHI_PAUSED):
+  if current_reason == SKIP_DAILY_CAP:
     d["auto_stopped"] = False
     d["auto_stop_reason"] = None
     store.save_settings(type(settings)(**d), source="internal", cfg=cfg)
