@@ -254,10 +254,10 @@ hourly:
       safety_weight: 0.40
       kelly_enabled: true
       kelly_fraction: 0.15
-      min_ask_edge_cents: 8
+      min_ask_edge_cents: 9
       tail_entry_max_cents: 20
       tail_entry_block: false
-      tail_entry_min_ask_edge_cents: 12
+      tail_entry_min_ask_edge_cents: 15
       max_entries_per_cycle: 2
       max_concurrent_positions: 12
       max_budget_fraction_per_entry: 0.55
@@ -447,10 +447,10 @@ eth:
         safety_weight: 0.40
         kelly_enabled: true
         kelly_fraction: 0.15
-        min_ask_edge_cents: 8
-        tail_entry_max_cents: 20
-        tail_entry_block: false
-        tail_entry_min_ask_edge_cents: 12
+        min_ask_edge_cents: 10
+        tail_entry_max_cents: 40
+        tail_entry_block: true
+        tail_entry_min_ask_edge_cents: 18
         max_entries_per_cycle: 2
         max_concurrent_positions: 12
         max_budget_fraction_per_entry: 0.55
