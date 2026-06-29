@@ -665,7 +665,14 @@ class HourlyBotStore:
         pnl = self._exit_pnl_from_prices(row)
       settings = self.get_settings()
       self._apply_paper_exit_pnl(float(pnl or 0), settings.max_spend_per_hour_usd)
-    return self._enrich_trade(row)
+    enriched = self._enrich_trade(row)
+    try:
+      from src.backup.trade_hook import notify_trade_logged
+
+      notify_trade_logged(self.db_path, trade=enriched)
+    except Exception:
+      pass
+    return enriched
 
   def list_trades(self, *, limit: int = 30, event_ticker: str | None = None) -> list[dict[str, Any]]:
     with self._connect() as conn:

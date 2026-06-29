@@ -124,6 +124,17 @@ async def lifespan(app: FastAPI):
       log.exception("Scheduler failed to start")
 
   threading.Thread(target=_boot_scheduler, daemon=True).start()
+  try:
+    from src.backup.logs_backup import volume_is_persistent
+
+    data_dir = os.getenv("DATA_DIR", "/data")
+    if not volume_is_persistent(data_dir):
+      log.warning(
+        "NO PERSISTENT VOLUME at /data — redeploys will wipe bot bankroll, trades, and backups. "
+        "Attach a Railway volume at /data (see RAILWAY.md)."
+      )
+  except Exception:
+    pass
   log.info("BTC Predictor API ready on port %s", os.getenv("PORT", "8080"))
   if auth_enabled(_cfg):
     log.info("Dashboard password protection enabled")
@@ -250,10 +261,19 @@ def bot_settings_ui_js(_: None = Depends(_session_user)):
 
 
 def _volume_health_fields() -> dict[str, Any]:
+  from src.backup.logs_backup import volume_is_persistent
+
   mount = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+  data_dir = os.getenv("DATA_DIR", "/data")
+  persistent = volume_is_persistent(data_dir)
   return {
     "railway_volume_mount_path": mount,
-    "volume_mounted_at_data": mount == "/data",
+    "volume_mounted_at_data": persistent,
+    "data_persistence_warning": (
+      None
+      if persistent
+      else "Redeploys wipe bot bankroll and trade logs until a Railway volume is mounted at /data"
+    ),
   }
 
 
@@ -1183,3 +1203,11 @@ def backfill_kalshi(_: None = Depends(_verify_admin)):
 
   stats = backfill_kalshi_predictions(_cfg, dry_run=False)
   return {"status": "ok", **stats}
+
+
+@app.post("/api/admin/backup-logs")
+def admin_backup_logs(_: None = Depends(_verify_admin)):
+  """Run full log backup now (paper + live trade exports and DB snapshots)."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return {"status": "ok", **_loop.run_log_backup(reason="manual")}

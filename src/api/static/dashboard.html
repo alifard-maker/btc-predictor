@@ -1161,13 +1161,13 @@
 
     let schedulerRunning = false;
     let serverDataDir = '';
-    let volumeMountedAtData = true;
+    let volumeMountedAtData = false;
 
     function volumeWarningBanner() {
       const host = location.hostname || '';
       const isProduction = host && host !== 'localhost' && host !== '127.0.0.1';
       if (!isProduction || volumeMountedAtData) return '';
-      return `<div style="margin:.55rem 0;padding:.65rem .75rem;background:rgba(249,115,22,.18);border:1px solid rgba(249,115,22,.55);border-radius:8px;color:#fdba74;font-size:.78rem;font-weight:600">⚠ Redeploys wipe bot stats without Railway volume at <code>/data</code></div>`;
+      return `<div style="margin:.55rem 0;padding:.75rem .85rem;background:rgba(239,68,68,.2);border:2px solid rgba(239,68,68,.65);border-radius:8px;color:#fecaca;font-size:.8rem;font-weight:700;line-height:1.45">⚠ <strong>Data will be wiped on every redeploy.</strong> No Railway volume at <code>/data</code>. Attach a volume in Railway → Volumes → mount <code>/data</code>, then redeploy. Bot bankroll, trades, and backups only persist on that volume.</div>`;
     }
 
     function formatCycleAge(iso) {
@@ -1210,7 +1210,7 @@
       if (h.version) $('app-version').textContent = h.version;
       schedulerRunning = !!h.scheduler_running;
       serverDataDir = h.data_dir || '';
-      volumeMountedAtData = h.volume_mounted_at_data !== false;
+      volumeMountedAtData = h.volume_mounted_at_data === true;
       const api = slot15Api();
       const data = activeTab === 'eth-15m' ? (h.eth_15m || h) : h;
       const series = data.series_ticker || api.series;

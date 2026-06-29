@@ -1971,7 +1971,7 @@ class PredictionLoop:
     index_id = index_id_for_cfg(acfg)
     last_err = self.last_error if asset == "btc" else self.eth_last_error
     logs_path = Path(self._acfg_15m(asset).get("paths", {}).get("logs", "data/logs"))
-    return {
+    out = {
       "asset": asset,
       "symbol": acfg["symbol"],
       "exchange": getattr(fetcher, "_exchange_id", None) or acfg.get("exchange"),
@@ -1998,6 +1998,18 @@ class PredictionLoop:
       "data_dir": str(logs_path.parent),
       "series_ticker": series,
     }
+    try:
+      from src.backup.logs_backup import backup_summary
+
+      out["log_backup"] = backup_summary(self.cfg)
+    except Exception:
+      pass
+    return out
+
+  def run_log_backup(self, *, reason: str = "scheduled") -> dict[str, Any]:
+    from src.backup.logs_backup import run_full_backup
+
+    return run_full_backup(self.cfg, reason=reason)
 
   def _schedule_second_chance(self, scheduler) -> None:
     if not self.cfg.get("second_chance", {}).get("enabled", True):
@@ -2118,6 +2130,24 @@ class PredictionLoop:
         max_instances=1,
       )
       log.info("Bot auto-tune scheduled daily at %02d:%02d %s", tune_hour, tune_minute, self.tz)
+    backup_cfg = self.cfg.get("log_backup") or {}
+    if backup_cfg.get("enabled", True):
+      interval_min = int(backup_cfg.get("interval_minutes", 15))
+      scheduler.add_job(
+        self.run_log_backup,
+        "interval",
+        minutes=interval_min,
+        id="log_backup",
+        max_instances=1,
+      )
+      scheduler.add_job(
+        self.run_log_backup,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=25),
+        kwargs={"reason": "startup"},
+        id="log_backup_now",
+      )
+      log.info("Log backup scheduled every %s min → %s/backups", interval_min, backup_cfg.get("backup_dir") or "{DATA_DIR}/backups")
     poll_sec = float(self.cfg.get("kalshi", {}).get("brti_poll_sec", 1))
     scheduler.add_job(self.poll_brti, "interval", seconds=poll_sec, id="brti_poll", max_instances=1)
     scheduler.add_job(self.poll_brti, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=1), id="brti_now")

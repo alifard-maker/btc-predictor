@@ -374,3 +374,10 @@ paths:
   models: data/models
   logs: data/logs
   db: data/logs/predictions.db
+
+# Automatic backups — paper and live logs kept separate (live = tax records)
+log_backup:
+  enabled: true
+  interval_minutes: 15
+  keep_snapshot_days: 90
+  # backup_dir: /data/backups   # default: {DATA_DIR}/backups
