@@ -18,16 +18,25 @@ fi
 if ! railway status >/dev/null 2>&1; then
   echo "=== Link this repo to your Railway project ===" >&2
   echo "Run:  railway link" >&2
+  echo "      (select accomplished-gentleness → production → btc-predictor)" >&2
   exit 1
 fi
 
-echo "Checking existing volumes for service ${SERVICE_ID}..."
-EXISTING="$(railway volume list --json 2>/dev/null || echo '[]')"
-if echo "$EXISTING" | grep -q "\"mountPath\":\"${MOUNT_PATH}\""; then
-  echo "Volume already mounted at ${MOUNT_PATH}."
+LINKED="$(railway status 2>/dev/null | grep -A1 'Linked service' | tail -1 | xargs || true)"
+if [ -n "$LINKED" ] && [ "$LINKED" != "btc-predictor" ]; then
+  echo "=== Wrong service linked: ${LINKED} ===" >&2
+  echo "Re-link to btc-predictor (not web):" >&2
+  echo "  railway link" >&2
+  exit 1
+fi
+
+echo "Checking existing volumes..."
+EXISTING="$(railway volume list --json 2>/dev/null || echo '{}')"
+if echo "$EXISTING" | grep -q "\"mountPath\":\"${MOUNT_PATH}\"" && echo "$EXISTING" | grep -q '"serviceName":"btc-predictor"'; then
+  echo "btc-predictor already has a volume at ${MOUNT_PATH}."
 else
-  echo "Adding volume at ${MOUNT_PATH}..."
-  railway volume add --service "$SERVICE_ID" --mount-path "$MOUNT_PATH" --json
+  echo "Adding volume at ${MOUNT_PATH} for linked btc-predictor service..."
+  railway volume add --mount-path "$MOUNT_PATH" --json
 fi
 
 echo "Redeploying so the volume is attached..."

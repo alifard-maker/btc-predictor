@@ -190,7 +190,10 @@ def test_notify_trade_hook_from_db_path():
     assert audit.exists()
 
 
-def test_volume_is_persistent_marker(tmp_path):
-  marker = tmp_path / ".persistent_volume"
-  marker.write_text("ok", encoding="utf-8")
-  assert volume_is_persistent(tmp_path) is True
+def test_volume_is_persistent_requires_railway_env(monkeypatch):
+  monkeypatch.delenv("RAILWAY_VOLUME_MOUNT_PATH", raising=False)
+  monkeypatch.delenv("RAILWAY_VOLUME_NAME", raising=False)
+  monkeypatch.delenv("RAILWAY_VOLUME_ID", raising=False)
+  assert volume_is_persistent("/data") is False
+  monkeypatch.setenv("RAILWAY_VOLUME_MOUNT_PATH", "/data")
+  assert volume_is_persistent("/data") is True

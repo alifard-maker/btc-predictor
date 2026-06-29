@@ -66,25 +66,13 @@ def backup_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def volume_is_persistent(data_dir: str | Path | None = None) -> bool:
-  """True when /data is a Railway volume (or local persistent marker exists)."""
+  """True when Railway has a volume mounted at /data (not just DATA_DIR=/data in env)."""
   mount = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
   if mount == "/data":
     return True
-  marker = Path("/data/.persistent_volume")
-  if marker.exists():
+  # Legacy marker only trusted when Railway volume env is also present in some form
+  if os.getenv("RAILWAY_VOLUME_NAME") or os.getenv("RAILWAY_VOLUME_ID"):
     return True
-  try:
-    with open("/proc/mounts") as f:
-      for line in f:
-        parts = line.split()
-        if len(parts) >= 2 and parts[1] == "/data":
-          return True
-  except OSError:
-    pass
-  if data_dir:
-    local_marker = Path(data_dir) / ".persistent_volume"
-    if local_marker.exists():
-      return True
   return False
 
 
