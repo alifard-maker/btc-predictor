@@ -27,7 +27,25 @@ def _bot_meta(db_path: Path) -> tuple[str, str]:
   return asset, kind
 
 
+def should_skip_audit_trade(db_path: Path, trade: dict[str, Any]) -> bool:
+  """Skip pytest / fixture trades so audit JSONL reflects production bots only."""
+  path_s = str(db_path).lower()
+  if any(part in path_s for part in ("/tmp/", "/temp/", "pytest", "py.test")):
+    return True
+  ev = str(trade.get("event_ticker") or "")
+  mt = str(trade.get("market_ticker") or "").upper()
+  if ev in ("EV1", "EVT"):
+    return True
+  if "KXTEST" in mt or mt.endswith("-OLD"):
+    return True
+  if ev.upper().startswith("KXTEST"):
+    return True
+  return False
+
+
 def notify_trade_logged(db_path: Path, *, trade: dict[str, Any]) -> None:
+  if should_skip_audit_trade(db_path, trade):
+    return
   try:
     from src.backup.logs_backup import on_trade_logged
 

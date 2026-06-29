@@ -14,7 +14,7 @@ from src.backup.logs_backup import (
   run_full_backup,
   volume_is_persistent,
 )
-from src.backup.trade_hook import notify_trade_logged
+from src.backup.trade_hook import notify_trade_logged, should_skip_audit_trade
 
 
 def _init_bot_db(path: Path) -> None:
@@ -155,6 +155,21 @@ def test_on_trade_logged_appends_audit_jsonl():
     on_trade_logged(cfg, kind="hourly", asset="btc", trade=trade)
     lines2 = [json.loads(ln) for ln in audit.read_text(encoding="utf-8").splitlines() if ln.strip()]
     assert len(lines2) == 1
+
+
+def test_should_skip_audit_trade_for_pytest_fixtures():
+  assert should_skip_audit_trade(
+    Path("/tmp/pytest-123/hourly_bot_btc.db"),
+    {"event_ticker": "EV1", "market_ticker": "M"},
+  )
+  assert should_skip_audit_trade(
+    Path("/data/logs/hourly_bot_btc.db"),
+    {"event_ticker": "EV1", "market_ticker": "KXBTC15M-OLD"},
+  )
+  assert not should_skip_audit_trade(
+    Path("/data/logs/hourly_bot_eth.db"),
+    {"event_ticker": "KXETH-26JUN291200", "market_ticker": "KXETH-26JUN291200-T1610"},
+  )
 
 
 def test_notify_trade_hook_from_db_path():
