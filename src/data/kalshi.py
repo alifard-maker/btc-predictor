@@ -198,11 +198,24 @@ class KalshiClient:
         "KALSHI-ACCESS-TIMESTAMP": ts,
         "KALSHI-ACCESS-SIGNATURE": self._sign(ts, method, sign_path),
       })
-    resp = requests.request(
-      method, url, params=params, json=json_body, headers=headers, timeout=timeout
-    )
-    resp.raise_for_status()
-    return resp.json()
+    from src.trading.kalshi_circuit import get_circuit_breaker
+
+    circuit = get_circuit_breaker()
+    if circuit and circuit.is_paused():
+      raise RuntimeError("Kalshi API circuit breaker open — requests paused")
+
+    try:
+      resp = requests.request(
+        method, url, params=params, json=json_body, headers=headers, timeout=timeout
+      )
+      resp.raise_for_status()
+      if circuit:
+        circuit.record_success()
+      return resp.json()
+    except Exception as e:
+      if circuit:
+        circuit.record_failure(str(e))
+      raise
 
   def get(self, path: str, *, params: dict[str, Any] | None = None, auth: bool = False) -> dict[str, Any]:
     return self._request("GET", path, params=params, auth=auth)
@@ -240,6 +253,10 @@ class KalshiClient:
     if side == "no" and no_price is not None:
       body["no_price"] = int(no_price)
     return self.post("/portfolio/orders", json_body=body, auth=True)
+
+  def cancel_order(self, order_id: str) -> dict[str, Any]:
+    """Cancel an open order by ID."""
+    return self._request("DELETE", f"/portfolio/orders/{order_id}", auth=True)
 
   def portfolio_balance(self) -> dict[str, Any] | None:
     """Verify API credentials; returns balance dict or None if not configured."""

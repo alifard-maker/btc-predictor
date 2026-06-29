@@ -196,6 +196,8 @@
     .bot-trades tr td { padding:.25rem .35rem; border-bottom:1px solid var(--border); }
     .bot-mode-live { color:#f87171; font-weight:700; }
     .bot-mode-paper { color:#86efac; font-weight:700; }
+    #edt-clock { font-size: .95rem; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); letter-spacing: .02em; }
+    #edt-clock .edt-label { font-size: .68rem; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; display: block; margin-bottom: .15rem; }
   </style>
 </head>
 <body>
@@ -207,6 +209,7 @@
         <div class="version" id="app-version">—</div>
       </div>
       <div class="meta">
+        <div id="edt-clock"><span class="edt-label">Eastern</span><span id="edt-clock-value">—</span></div>
         <div id="updated">—</div>
         <form method="post" action="/api/auth/logout" style="display:inline"><button type="submit" style="margin-top:0;margin-right:.35rem;background:var(--surface);border:1px solid var(--border)">Sign out</button></form>
         <button onclick="loadAll()">Refresh</button>
@@ -221,6 +224,8 @@
       <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">BTC Hourly</button>
       <button type="button" class="tab" id="tab-eth-hourly" data-panel="panel-eth-hourly" onclick="switchTab('eth-hourly')">ETH Hourly</button>
     </nav>
+
+    <div id="bot-risk-banner" class="card" style="display:none;margin-bottom:.75rem;border-color:var(--warn);background:rgba(255,180,0,.08)"></div>
 
     <details class="card" id="bot-performance-card" open>
       <summary style="cursor:pointer;font-weight:600">Paper bot performance · calibration report</summary>
@@ -1206,8 +1211,51 @@
       </div>`;
     }
 
+    function updateEdtClock() {
+      const el = $('edt-clock-value');
+      if (!el) return;
+      const now = new Date();
+      const datePart = now.toLocaleString('en-US', {
+        timeZone: 'America/New_York',
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+      });
+      const timePart = now.toLocaleString('en-US', {
+        timeZone: 'America/New_York',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+        timeZoneName: 'short',
+      });
+      el.textContent = `${datePart} · ${timePart}`;
+    }
+
+    function renderBotRiskBanner(risk) {
+      const el = $('bot-risk-banner');
+      if (!el) return;
+      if (!risk || !risk.bots_paused) {
+        el.style.display = 'none';
+        el.innerHTML = '';
+        return;
+      }
+      const daily = risk.daily_loss || {};
+      const kalshi = risk.kalshi_circuit || {};
+      const parts = [];
+      if (daily.cap_active) {
+        parts.push(`<strong>Daily loss cap</strong> hit (${botPnlUsd(daily.realized_pnl_usd)} today · cap $${daily.cap_usd}) — new entries paused until tomorrow (${daily.timezone}).`);
+      }
+      if (kalshi.paused) {
+        parts.push(`<strong>Kalshi API paused</strong> (${kalshi.consecutive_failures}/${kalshi.failure_threshold} failures) — resumes in ~${kalshi.seconds_until_resume}s.${kalshi.last_error ? ` Last: ${kalshi.last_error}` : ''}`);
+      }
+      el.style.display = 'block';
+      el.innerHTML = parts.map((p) => `<p style="margin:.25rem 0;font-size:.78rem">${p}</p>`).join('');
+    }
+
     function renderStatus(h) {
       if (h.version) $('app-version').textContent = h.version;
+      renderBotRiskBanner(h.bot_risk);
       schedulerRunning = !!h.scheduler_running;
       serverDataDir = h.data_dir || '';
       volumeMountedAtData = h.volume_mounted_at_data === true;
@@ -2411,13 +2459,32 @@
         return;
       }
       const combined = report.combined || {};
+      const combined60 = report.combined_60_days || {};
       const combWr = combined.win_rate != null ? `${(combined.win_rate * 100).toFixed(0)}%` : '—';
       const combPnl = combined.total_pnl_usd != null ? botPnlUsd(combined.total_pnl_usd) : '—';
+      const comb60Wr = combined60.win_rate != null ? `${(combined60.win_rate * 100).toFixed(0)}%` : '—';
+      const comb60Pnl = combined60.total_pnl_usd != null ? botPnlUsd(combined60.total_pnl_usd) : '—';
       let html = `<div class="perf-grid">
         <div class="perf-stat muted">All bots closed trades<strong>${combined.closed_trades ?? 0}</strong></div>
         <div class="perf-stat muted">Combined win rate<strong>${combWr}</strong></div>
         <div class="perf-stat muted">Combined realized P&amp;L<strong>${combPnl}</strong></div>
+      </div>
+      <p class="muted" style="font-size:.68rem;margin:.5rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Last 60 days (all bots)</p>
+      <div class="perf-grid">
+        <div class="perf-stat muted">60d closed<strong>${combined60.closed_trades ?? 0}</strong></div>
+        <div class="perf-stat muted">60d win rate<strong>${comb60Wr}</strong></div>
+        <div class="perf-stat muted">60d realized P&amp;L<strong>${comb60Pnl}</strong></div>
       </div>`;
+
+      const modeTable = (title, byMode) => {
+        if (!byMode || !Object.keys(byMode).length) return '';
+        const body = Object.entries(byMode).map(([mode, sm]) => {
+          const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
+          return `<tr><td>${mode}</td><td>${sm.closed_trades ?? 0}</td><td>${wr}</td><td>${botPnlUsd(sm.total_pnl_usd)}</td><td>${sm.max_drawdown_usd != null ? botPnlUsd(sm.max_drawdown_usd) : '—'}</td></tr>`;
+        }).join('');
+        return `<p class="muted" style="font-size:.68rem;margin:.45rem 0 .25rem;text-transform:uppercase;letter-spacing:.04em">${title}</p>
+          <table style="width:100%;font-size:.72rem;margin-bottom:.5rem"><thead><tr><th>Mode</th><th>n</th><th>Win%</th><th>P&amp;L</th><th>Max DD</th></tr></thead><tbody>${body}</tbody></table>`;
+      };
 
       const bucketTable = (title, rows) => {
         if (!rows || !rows.length) return '';
@@ -2439,6 +2506,8 @@
           ? `<p class="muted" style="font-size:.68rem;margin:0 0 .35rem">Auto-tuned: ask-edge <strong>${tune.min_ask_edge_cents}¢</strong>, Kelly <strong>${tune.kelly_fraction}</strong>${tune.base_min_ask_edge_cents != null ? ` (config ${tune.base_min_ask_edge_cents}¢)` : ''} — ${tune.message || ''}</p>`
           : (tune.message ? `<p class="muted" style="font-size:.68rem;margin:0 0 .35rem">${tune.message}</p>` : '');
         const recs = (bot.recommendations || []).map((t) => `<li>${t}</li>`).join('');
+        const w60 = bot.last_60_days || {};
+        const sm60 = w60.summary || {};
         html += `<div class="perf-bot-block">
           <p style="margin:0 0 .35rem;font-weight:600">${bot.label || `${bot.asset} ${bot.kind}`}
             <span class="muted" style="font-weight:400;font-size:.72rem"> · ask-edge gate ≥ ${gate ?? '—'}¢</span></p>
@@ -2449,6 +2518,8 @@
             <div class="perf-stat muted">Realized P&amp;L<strong>${botPnlUsd(sm.total_pnl_usd)}</strong></div>
             <div class="perf-stat muted">Avg / trade<strong>${sm.avg_pnl_usd != null ? botPnlUsd(sm.avg_pnl_usd) : '—'}</strong></div>
           </div>
+          <p class="muted" style="font-size:.68rem;margin:.35rem 0 .2rem"><strong>60d:</strong> ${sm60.closed_trades ?? 0} closed · ${sm60.win_rate != null ? `${(sm60.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(sm60.total_pnl_usd)}${sm60.max_drawdown_usd != null ? ` · max DD ${botPnlUsd(sm60.max_drawdown_usd)}` : ''}</p>
+          ${modeTable('60d by entry mode (free vs filtered)', w60.by_free_mode)}
           ${bucketTable('By entry price', bot.by_entry_price)}
           ${bucketTable('By spread at entry', bot.by_spread)}
           ${recs ? `<ul class="perf-rec" style="margin:.35rem 0 0;padding-left:1.1rem">${recs}</ul>` : ''}
@@ -3251,8 +3322,10 @@
     }
 
     loadAll();
+    updateEdtClock();
     setInterval(loadAll, 5000);
     setInterval(loadLiveMonitor, 1000);
+    setInterval(updateEdtClock, 1000);
   </script>
 </body>
 </html>

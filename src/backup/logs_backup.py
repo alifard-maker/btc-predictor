@@ -46,6 +46,7 @@ TRADE_COLUMNS = [
   "entry_bid_cents",
   "entry_ask_cents",
   "entry_spread_cents",
+  "entry_settings_json",
   "created_at",
 ]
 
@@ -345,6 +346,41 @@ def run_full_backup(cfg: dict[str, Any], *, reason: str = "scheduled") -> dict[s
       _LAST_RUN.clear()
       _LAST_RUN.update(err)
       return err
+
+
+def on_settings_saved(
+  cfg: dict[str, Any] | None,
+  *,
+  asset: str,
+  bot_type: str,
+  old_settings: dict[str, Any],
+  new_settings: dict[str, Any],
+  source: str = "internal",
+) -> None:
+  """Append settings change to mode-specific audit log (paper vs live)."""
+  if not cfg or old_settings == new_settings:
+    return
+  bcfg = backup_cfg(cfg)
+  if not bcfg["enabled"]:
+    return
+  mode = str(new_settings.get("mode") or old_settings.get("mode") or "paper")
+  mode_dir = bcfg["root"] / ("live" if mode == "live" else "paper")
+  audit_path = mode_dir / "settings_audit.jsonl"
+  ts = datetime.now(timezone.utc).isoformat()
+  dedupe = f"{asset}:{bot_type}:{ts}:{hash(json.dumps(new_settings, sort_keys=True, default=str))}"
+  record = {
+    "dedupe_key": dedupe,
+    "timestamp": ts,
+    "asset": asset,
+    "bot_type": bot_type,
+    "source": source,
+    "old_settings": old_settings,
+    "new_settings": new_settings,
+  }
+  try:
+    _append_audit_jsonl(audit_path, record, dedupe_key=None)
+  except Exception as e:
+    log.warning("Settings audit backup skipped: %s", e)
 
 
 def on_trade_logged(

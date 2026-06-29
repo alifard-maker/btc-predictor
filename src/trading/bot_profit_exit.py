@@ -254,3 +254,42 @@ def evaluate_adaptive_profit_exit(
 
 def is_profit_exit_reason(reason: str | None) -> bool:
   return reason in ("PROFIT TARGET", "PROFIT TRAIL")
+
+
+@dataclass
+class CheapLegExitConfig:
+  max_entry_cents: int = 20
+  cut_loss_cents: int = 10
+
+
+def cheap_leg_exit_config(cfg: dict[str, Any] | None, *, kind: str) -> CheapLegExitConfig:
+  """Read cheap-leg stop thresholds from hourly.bot or intra_slot.bot config."""
+  bot_cfg: dict[str, Any] = {}
+  if cfg:
+    if kind == "hourly":
+      bot_cfg = (cfg.get("hourly") or {}).get("bot") or {}
+    else:
+      bot_cfg = (cfg.get("intra_slot") or {}).get("bot") or {}
+  return CheapLegExitConfig(
+    max_entry_cents=int(bot_cfg.get("cheap_leg_max_entry_cents", 20)),
+    cut_loss_cents=int(bot_cfg.get("cheap_leg_cut_loss_cents", 10)),
+  )
+
+
+def evaluate_cheap_leg_cut_loss(
+  pos: dict[str, Any],
+  mark_cents: int | None,
+  cfg: CheapLegExitConfig,
+) -> tuple[str | None, str]:
+  """Tighter mark-based stop for low-cent entry legs (before normal CUT LOSSES)."""
+  if mark_cents is None:
+    return None, ""
+  entry_c = int(pos.get("entry_price_cents") or 0)
+  if entry_c <= 0 or entry_c > cfg.max_entry_cents:
+    return None, ""
+  if int(mark_cents) <= cfg.cut_loss_cents:
+    return (
+      "CHEAP LEG CUT LOSS",
+      f"Cheap leg entry {entry_c}¢ — mark {int(mark_cents)}¢ at/below {cfg.cut_loss_cents}¢ floor",
+    )
+  return None, ""

@@ -20,6 +20,10 @@ kalshi:
   series_ticker: KXBTC15M
   base_url: https://api.elections.kalshi.com/trade-api/v2
   cache_sec: 15
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    pause_seconds: 120
   brti_cache_sec: 0
   brti_poll_sec: 1
   brti_index_id: BRTI
@@ -107,11 +111,16 @@ intra_slot:
     max_take_profit_pct: 0.40
     min_hold_seconds: 30
     profit_exit_cooldown_seconds: 60
+    cheap_leg_max_entry_cents: 20
+    cheap_leg_cut_loss_cents: 10
     entry_strategy:
       enabled: true
       kelly_enabled: true
       kelly_fraction: 0.15
       min_ask_edge_cents: 5
+      tail_entry_max_cents: 20
+      tail_entry_block: false
+      tail_entry_min_ask_edge_cents: 12
       max_entries_per_cycle: 1
       max_concurrent_positions: 1
       max_budget_fraction_per_entry: 0.55
@@ -218,6 +227,8 @@ hourly:
     max_take_profit_pct: 0.40
     min_hold_seconds: 30
     profit_exit_cooldown_seconds: 60
+    cheap_leg_max_entry_cents: 20
+    cheap_leg_cut_loss_cents: 10
     entry_strategy:
       enabled: true
       risk_adjusted_ranking: true
@@ -226,6 +237,9 @@ hourly:
       kelly_enabled: true
       kelly_fraction: 0.15
       min_ask_edge_cents: 8
+      tail_entry_max_cents: 20
+      tail_entry_block: false
+      tail_entry_min_ask_edge_cents: 12
       max_entries_per_cycle: 2
       max_concurrent_positions: 12
       max_budget_fraction_per_entry: 0.55
@@ -270,6 +284,17 @@ auto_train:
   minute: 0
 
 # Paper bot threshold auto-tuning from trade logs (requires min_days history)
+bot_risk:
+  daily_loss_cap_enabled: true
+  daily_loss_cap_usd: 50.0
+  daily_loss_timezone: America/New_York
+
+# Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
+live_resting_exits:
+  enabled: true
+  cheap_leg_only: true
+  bracket_take_profit: true
+
 bot_auto_tune:
   enabled: true
   hour: 3
@@ -361,6 +386,8 @@ eth:
       max_take_profit_pct: 0.40
       min_hold_seconds: 30
       profit_exit_cooldown_seconds: 60
+      cheap_leg_max_entry_cents: 20
+      cheap_leg_cut_loss_cents: 10
       entry_strategy:
         enabled: true
         risk_adjusted_ranking: true

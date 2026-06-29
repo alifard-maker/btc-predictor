@@ -40,6 +40,15 @@ class PredictionLoop:
     self.cfg = cfg or load_config()
     ensure_dirs(self.cfg)
 
+    import os
+    from pathlib import Path
+    from src.trading.bot_risk_state import init_bot_risk_coordinator
+    from src.trading.kalshi_circuit import init_circuit_breaker
+
+    data_dir = Path(os.getenv("DATA_DIR", self.cfg.get("paths", {}).get("data", "data")))
+    init_circuit_breaker(self.cfg, data_dir)
+    init_bot_risk_coordinator(self.cfg, data_dir)
+
     self.fetcher = DataFetcher(self.cfg)
     self.kalshi = KalshiClient(self.cfg)
     self.storage = CandleStorage(self.cfg)
@@ -225,6 +234,34 @@ class PredictionLoop:
   def daily_prediction(self) -> dict[str, Any]:
     return self._hourly_tab_prediction("btc")
 
+  def all_bot_stores(self) -> list[Any]:
+    from src.trading.bot_risk_state import register_bot_stores
+
+    stores: list[Any] = [
+      self.hourly_bot_store("btc"),
+      self.slot15_bot_store("btc"),
+    ]
+    if asset_enabled(self.cfg, "eth"):
+      stores.append(self.hourly_bot_store("eth"))
+      if self._slot15m_enabled("eth"):
+        stores.append(self.slot15_bot_store("eth"))
+    register_bot_stores(stores)
+    return stores
+
+  def bot_risk_status(self) -> dict[str, Any]:
+    from src.trading.bot_risk_state import get_bot_risk_coordinator
+    from src.trading.kalshi_circuit import get_circuit_breaker
+
+    coord = get_bot_risk_coordinator()
+    circuit = get_circuit_breaker()
+    daily = coord.status_dict() if coord else {}
+    kalshi = circuit.status_dict() if circuit else {}
+    return {
+      "daily_loss": daily,
+      "kalshi_circuit": kalshi,
+      "bots_paused": bool(daily.get("cap_active")) or bool(kalshi.get("paused")),
+    }
+
   def hourly_bot_store(self, asset: str):
     asset = asset.lower()
     if asset not in self._hourly_bot_stores:
@@ -322,6 +359,7 @@ class PredictionLoop:
 
   def _run_hourly_bot_continuous(self, asset: str) -> None:
     asset = asset.lower()
+    self.all_bot_stores()
     store = self.hourly_bot_store(asset)
     settings = store.get_settings()
     active = settings.enabled and settings.continuous
@@ -536,6 +574,7 @@ class PredictionLoop:
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):
       return
+    self.all_bot_stores()
     store = self.slot15_bot_store(asset)
     settings = store.get_settings()
     active = settings.enabled and settings.continuous
@@ -2002,6 +2041,10 @@ class PredictionLoop:
       from src.backup.logs_backup import backup_summary
 
       out["log_backup"] = backup_summary(self.cfg)
+    except Exception:
+      pass
+    try:
+      out["bot_risk"] = self.bot_risk_status()
     except Exception:
       pass
     return out

@@ -69,6 +69,7 @@ def test_remaining_budget_accounts_for_realized_losses():
 def test_remaining_budget_increases_after_win():
   with tempfile.TemporaryDirectory() as tmp:
     store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.save_settings(Slot15BotSettings(use_accumulated_profit=True))
     store.log_trade({
       "event_ticker": "SLOT1",
       "action": "exit",
@@ -369,6 +370,7 @@ def test_profit_target_increases_slot_bankroll():
     slot_key = "2025-06-28T14:00:00-04:00"
     store.save_settings(Slot15BotSettings(
       enabled=True, max_spend_per_slot_usd=25.0, take_profit_pct=0.25, min_hold_seconds=0,
+      use_accumulated_profit=True,
     ))
     store.open_position({
       "id": "p1",

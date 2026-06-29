@@ -14,6 +14,7 @@ from src.trading.entry_strategy import (
   is_barbell_pair,
   kelly_stake_usd,
   passes_ask_edge_gate,
+  passes_tail_entry_gate,
   rank_hourly_candidates,
 )
 from src.trading.hourly_bot import HourlyBot
@@ -185,3 +186,45 @@ def test_ask_edge_gate_passes_strong_edge():
   assert edge >= 20
   ok, _ = passes_ask_edge_gate(pick, "yes", 8.0)
   assert ok
+
+
+def test_tail_entry_blocked_at_20c():
+  estrat = EntryStrategyConfig(
+    min_ask_edge_cents=5,
+    tail_entry_max_cents=20,
+    tail_entry_block=True,
+    tail_entry_min_ask_edge_cents=12,
+  )
+  pick = _pick("T", model_prob=0.70, ask=0.12)
+  ok, reason, _ = passes_tail_entry_gate(pick, "yes", 12, estrat)
+  assert not ok
+  assert reason == "tail_entry_blocked:12c"
+
+
+def test_tail_entry_allows_mid_bucket_with_base_edge():
+  estrat = EntryStrategyConfig(
+    min_ask_edge_cents=5,
+    tail_entry_max_cents=20,
+    tail_entry_block=False,
+  )
+  pick = _pick("T", model_prob=0.60, ask=0.45)
+  ok, reason, _ = passes_tail_entry_gate(pick, "yes", 45, estrat)
+  assert ok
+  assert reason is None
+
+
+def test_tail_entry_soft_mode_requires_higher_edge():
+  estrat = EntryStrategyConfig(
+    min_ask_edge_cents=5,
+    tail_entry_max_cents=20,
+    tail_entry_block=False,
+    tail_entry_min_ask_edge_cents=12,
+  )
+  pick = _pick("T", model_prob=0.25, ask=0.15)
+  ok, reason, _ = passes_tail_entry_gate(pick, "yes", 15, estrat)
+  assert not ok
+  assert reason and reason.startswith("tail_ask_edge_too_low")
+
+  pick2 = _pick("T", model_prob=0.80, ask=0.15)
+  ok2, _, _ = passes_tail_entry_gate(pick2, "yes", 15, estrat)
+  assert ok2

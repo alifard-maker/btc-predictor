@@ -6,17 +6,27 @@ import logging
 import uuid
 from typing import Any
 
+from src.trading.bot_risk_gates import record_exit_and_maybe_cap, sync_auto_stop_for_risk
+from src.trading.live_bracket_orders import (
+  cancel_resting_orders,
+  place_live_bracket_orders,
+  place_live_exit_sell,
+  resting_config_for_kind,
+)
 from src.trading.bot_period_rollover import force_close_period_positions, resolve_rollover_exit_cents
+from src.trading.bot_entry_settings import slot15_entry_settings_snapshot
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
+  cheap_leg_exit_config,
   evaluate_adaptive_profit_exit,
+  evaluate_cheap_leg_cut_loss,
   is_profit_exit_reason,
   position_hold_seconds,
 )
 from src.trading.edge import Signal
 from src.trading.bot_auto_tuning import effective_entry_strategy
 from src.trading.bot_scale_in import evaluate_scale_in
-from src.trading.entry_strategy import entry_budget_usd, passes_ask_edge_gate
+from src.trading.entry_strategy import entry_budget_usd, passes_tail_entry_gate
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
@@ -278,6 +288,8 @@ class Slot15Bot:
       return []
 
     settings, prev_period = self.store.sync_period(str(slot_key), self.store.get_settings())
+    sync_auto_stop_for_risk(self.store, cfg=cfg)
+    settings = self.store.get_settings()
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []
@@ -315,7 +327,7 @@ class Slot15Bot:
       )
       settings = self.store.get_settings()
 
-    actions.extend(self._process_exits(tab, slot_key, settings))
+    actions.extend(self._process_exits(tab, slot_key, settings, cfg=cfg))
     settings = self.store.get_settings()
     stop_row = self._maybe_auto_stop_on_budget_exhausted(slot_key, settings)
     if stop_row:
@@ -378,6 +390,7 @@ class Slot15Bot:
       **{
         **settings.to_dict(),
         "auto_stopped": True,
+        "auto_stop_reason": "budget_exhausted",
       }
     )
     self.store.save_settings(updated)
@@ -403,9 +416,15 @@ class Slot15Bot:
     *,
     peaks: dict[str, float],
     exit_ctx: AdaptiveExitContext,
+    mark_cents: int | None = None,
+    cfg: dict[str, Any] | None = None,
   ) -> tuple[str | None, str]:
     if monitor_action == "TAKE PROFIT" and _should_paper_exit(monitor_action, unrealized):
       return "TAKE PROFIT", monitor_message
+    cheap_cfg = cheap_leg_exit_config(cfg, kind="slot15")
+    cheap_reason, cheap_detail = evaluate_cheap_leg_cut_loss(pos, mark_cents, cheap_cfg)
+    if cheap_reason:
+      return cheap_reason, cheap_detail
     if monitor_action in ("CUT LOSS", "CUT LOSSES") and _should_paper_exit(monitor_action, unrealized):
       return "CUT LOSSES", monitor_message
     reason, detail = evaluate_adaptive_profit_exit(
@@ -425,6 +444,8 @@ class Slot15Bot:
     tab: dict[str, Any],
     slot_key: str,
     settings: Slot15BotSettings,
+    *,
+    cfg: dict[str, Any] | None = None,
   ) -> list[dict[str, Any]]:
     monitor = tab.get("monitor") or {}
     kalshi = tab.get("kalshi") or {}
@@ -466,6 +487,7 @@ class Slot15Bot:
       )
       exit_reason, detail_suffix = self._resolve_exit(
         pos, action, message, unrealized, settings, peaks=peaks, exit_ctx=exit_ctx,
+        mark_cents=exit_price, cfg=cfg,
       )
       if not exit_reason:
         continue
@@ -477,9 +499,22 @@ class Slot15Bot:
       else:
         pnl = contracts * (entry_c - exit_price) / 100.0
 
+      pnl_rounded = round(pnl, 2)
+      mode_label = "Paper" if settings.mode == "paper" else "Live"
+      live_exit_oid = None
+      if settings.mode == "live":
+        cancel_resting_orders(self.kalshi, pos)
+        live_exit_oid = place_live_exit_sell(
+          self.kalshi,
+          market_ticker=str(pos["market_ticker"]),
+          side=str(pos["side"]),
+          contracts=contracts,
+          limit_cents=exit_price,
+        )
+
       self.store.close_position(pos["id"])
       detail = (
-        f"Paper EXIT ({exit_reason}): {pos['side'].upper()} ×{contracts} "
+        f"{mode_label} EXIT ({exit_reason}): {pos['side'].upper()} ×{contracts} "
         f"@ {exit_price}¢ (entry {entry_c}¢) — {detail_suffix}"
       )
       row = self.store.log_trade({
@@ -494,14 +529,16 @@ class Slot15Bot:
         "entry_price_cents": entry_c,
         "exit_price_cents": exit_price,
         "cost_usd": 0,
-        "pnl_usd": round(pnl, 2),
+        "pnl_usd": pnl_rounded,
         "signal": monitor.get("signal_at_open"),
         "label": pos.get("label"),
         "status": "filled",
         "detail": detail,
         "position_id": pos["id"],
+        "kalshi_order_id": live_exit_oid,
       })
-      log.info("%s 15m bot [paper exit]: %s", self.asset.upper(), detail)
+      log.info("%s 15m bot [%s exit]: %s", self.asset.upper(), mode_label.lower(), detail)
+      record_exit_and_maybe_cap(pnl_rounded, cfg=cfg)
       cooldown = (
         settings.profit_exit_cooldown_seconds
         if is_profit_exit_reason(exit_reason)
@@ -523,7 +560,10 @@ class Slot15Bot:
     cfg: dict[str, Any] | None = None,
   ) -> list[dict[str, Any]]:
     if settings.auto_stopped:
-      self.store.set_last_skip_reason("auto_stopped_budget_exhausted")
+      skip = settings.auto_stop_reason or "auto_stopped_budget_exhausted"
+      if skip == "budget_exhausted":
+        skip = "auto_stopped_budget_exhausted"
+      self.store.set_last_skip_reason(skip)
       return []
 
     kalshi = tab.get("kalshi") or {}
@@ -581,10 +621,21 @@ class Slot15Bot:
         last_reason = "fully_deployed"
         break
 
-      ok_edge, ask_edge = passes_ask_edge_gate(pick_kelly, side, estrat.min_ask_edge_cents)
-      if not ok_edge:
-        last_reason = f"ask_edge_too_low:{ask_edge:.0f}c"
+      est_price = None
+      if settings.mode == "paper":
+        from src.trading.entry_strategy import ask_cents_for_side
+
+        est_price = ask_cents_for_side(pick, side)
+      else:
+        est_price = _price_cents_for_side(yes_cents, side)
+
+      ok_tail, tail_reason, _ = passes_tail_entry_gate(
+        pick_kelly, side, est_price, estrat
+      )
+      if not ok_tail:
+        last_reason = tail_reason or "tail_entry_blocked"
         continue
+
       bankroll = self.store.slot_bankroll_usd(slot_key, settings.max_spend_per_slot_usd, settings)
       stake = entry_budget_usd(
         estrat=estrat,
@@ -620,6 +671,12 @@ class Slot15Bot:
           continue
         price_cents = int(entry_fill["price_cents"])
         count = int(entry_fill["contracts"])
+        ok_fill, fill_reason, _ = passes_tail_entry_gate(
+          pick_kelly, side, price_cents, estrat
+        )
+        if not ok_fill:
+          last_reason = fill_reason or "tail_entry_blocked"
+          continue
       else:
         price_cents = _price_cents_for_side(yes_cents, side)
         if price_cents is None:
@@ -636,7 +693,7 @@ class Slot15Bot:
 
       if settings.mode == "live":
         result = self._place_live_enter(
-          slot_key, pick, side, count, price_cents, cost_usd, bet, settings, pid
+          slot_key, pick, side, count, price_cents, cost_usd, bet, settings, pid, cfg=cfg
         )
       else:
         self.store.open_position({
@@ -674,6 +731,7 @@ class Slot15Bot:
           "status": "filled",
           "detail": detail,
           "position_id": pid,
+          "entry_settings": slot15_entry_settings_snapshot(settings),
           **entry_quote_log_fields(entry_fill),
         })
         log.info("%s 15m bot [paper enter]: %s", self.asset.upper(), detail)
@@ -698,6 +756,8 @@ class Slot15Bot:
     bet: dict[str, Any],
     settings: Slot15BotSettings,
     pid: str,
+    *,
+    cfg: dict[str, Any] | None = None,
   ) -> dict[str, Any]:
     if not self.kalshi or not getattr(self.kalshi, "authenticated", False):
       return self.store.log_trade({
@@ -708,6 +768,7 @@ class Slot15Bot:
         "market_ticker": pick.get("ticker"),
         "status": "failed",
         "detail": "Live mode requires Kalshi API credentials",
+        "entry_settings": slot15_entry_settings_snapshot(settings),
       })
     try:
       order = self.kalshi.create_order(
@@ -718,6 +779,19 @@ class Slot15Bot:
         no_price=price_cents if side == "no" else None,
       )
       oid = (order.get("order") or order).get("order_id") or order.get("order_id")
+      cheap_cfg, resting_cfg = resting_config_for_kind(cfg, kind="slot15")
+      bracket = place_live_bracket_orders(
+        self.kalshi,
+        market_ticker=str(pick["ticker"]),
+        side=side,
+        contracts=count,
+        entry_cents=price_cents,
+        cheap_cfg=cheap_cfg,
+        resting_cfg=resting_cfg,
+        take_profit_pct=settings.take_profit_pct,
+        min_take_profit_pct=settings.min_take_profit_pct,
+        max_take_profit_pct=settings.max_take_profit_pct,
+      )
       self.store.open_position({
         "id": pid,
         "event_ticker": slot_key,
@@ -729,7 +803,15 @@ class Slot15Bot:
         "signal": pick.get("signal"),
         "label": pick.get("label"),
         "entry_edge": pick.get("edge"),
+        "stop_order_id": bracket.get("stop_order_id"),
+        "take_profit_order_id": bracket.get("take_profit_order_id"),
       })
+      bracket_note = ""
+      if bracket.get("stop_order_id") or bracket.get("take_profit_order_id"):
+        bracket_note = (
+          f" | resting stop={bracket.get('stop_order_id')} "
+          f"tp={bracket.get('take_profit_order_id')}"
+        )
       return self.store.log_trade({
         "event_ticker": slot_key,
         "trigger": "continuous",
@@ -747,7 +829,8 @@ class Slot15Bot:
         "status": "filled",
         "kalshi_order_id": oid,
         "position_id": pid,
-        "detail": f"Live ENTER order {oid}",
+        "detail": f"Live ENTER order {oid}{bracket_note}",
+        "entry_settings": slot15_entry_settings_snapshot(settings),
       })
     except Exception as e:
       log.exception("%s 15m bot live enter failed: %s", self.asset.upper(), e)
@@ -758,6 +841,7 @@ class Slot15Bot:
         "mode": "live",
         "status": "failed",
         "detail": str(e),
+        "entry_settings": slot15_entry_settings_snapshot(settings),
       })
 
   def evaluate_from_tab(self, tab: dict[str, Any], *, trigger: str) -> dict[str, Any] | None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 PRICE_BUCKETS = (
@@ -48,6 +48,148 @@ def _exit_pnl(row: dict[str, Any]) -> float:
   return 0.0
 
 
+def _parse_ts(value: str | None) -> datetime | None:
+  if not value:
+    return None
+  try:
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+  except ValueError:
+    return None
+
+
+def _filter_trades_since(trades: list[dict[str, Any]], days: int) -> list[dict[str, Any]]:
+  if days <= 0:
+    return trades
+  cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+  out: list[dict[str, Any]] = []
+  for t in trades:
+    ts = _parse_ts(t.get("created_at"))
+    if ts is None or ts >= cutoff:
+      out.append(t)
+  return out
+
+
+def _free_mode_from_enter(ent: dict[str, Any]) -> bool | None:
+  settings = ent.get("entry_settings")
+  if isinstance(settings, dict) and "free_mode" in settings:
+    return bool(settings["free_mode"])
+  raw = ent.get("entry_settings_json")
+  if isinstance(raw, str):
+    try:
+      import json
+
+      parsed = json.loads(raw)
+      if isinstance(parsed, dict) and "free_mode" in parsed:
+        return bool(parsed["free_mode"])
+    except json.JSONDecodeError:
+      pass
+  return None
+
+
+def _closed_round_trips_with_mode(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  rows = _closed_round_trips(trades)
+  enters_by_pid: dict[str, dict[str, Any]] = {}
+  for t in trades:
+    if t.get("action") == "enter" and t.get("status") == "filled":
+      pid = str(t.get("position_id") or t.get("id") or "")
+      if pid:
+        enters_by_pid[pid] = t
+  for r in rows:
+    pid = str(r.get("position_id") or "")
+    ent = enters_by_pid.get(pid, {})
+    fm = _free_mode_from_enter(ent)
+    r["free_mode"] = fm
+    r["mode_label"] = (
+      "free_mode" if fm is True else "filtered" if fm is False else "unknown"
+    )
+  return rows
+
+
+def _max_drawdown_usd(pnls_chronological: list[float]) -> float:
+  peak = 0.0
+  equity = 0.0
+  max_dd = 0.0
+  for p in pnls_chronological:
+    equity += p
+    peak = max(peak, equity)
+    max_dd = min(max_dd, equity - peak)
+  return round(max_dd, 2)
+
+
+def _summary_with_drawdown(
+  rows: list[dict[str, Any]],
+  enters: list[dict[str, Any]],
+  *,
+  trades: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+  sm = _summary(rows, enters)
+  if not rows or not trades:
+    sm["max_drawdown_usd"] = 0.0 if not rows else None
+    return sm
+  exit_rows = [
+    t for t in trades if t.get("action") == "exit" and t.get("status") == "filled"
+  ]
+  exit_rows.sort(key=lambda t: str(t.get("created_at") or ""))
+  pnls = [_exit_pnl(t) for t in exit_rows]
+  sm["max_drawdown_usd"] = _max_drawdown_usd(pnls)
+  return sm
+
+
+def _split_by_mode(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+  groups: dict[str, list[dict[str, Any]]] = {}
+  for r in rows:
+    label = str(r.get("mode_label") or "unknown")
+    groups.setdefault(label, []).append(r)
+  out: dict[str, dict[str, Any]] = {}
+  for label, group in groups.items():
+    sm = _summary(group, [])
+    out[label] = sm
+  return out
+
+
+def build_window_report(
+  *,
+  kind: str,
+  asset: str,
+  trades: list[dict[str, Any]],
+  window_days: int,
+  min_ask_edge_cents: float = 8.0,
+) -> dict[str, Any]:
+  filtered = _filter_trades_since(trades, window_days)
+  enters = [t for t in filtered if t.get("action") == "enter" and t.get("status") == "filled"]
+  closed = _closed_round_trips_with_mode(filtered)
+  sm = _summary_with_drawdown(closed, enters, trades=filtered)
+  return {
+    "window_days": window_days,
+    "summary": sm,
+    "by_free_mode": _split_by_mode(closed),
+    "by_entry_price": _aggregate_bucket(
+      closed,
+      lambda r: _bucket_label(r.get("entry_price_cents"), PRICE_BUCKETS),
+    ),
+    "by_signal": _signal_rows(closed),
+    "gates": {"min_ask_edge_cents": min_ask_edge_cents},
+  }
+
+
+def _signal_rows(closed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  by_signal: dict[str, list[float]] = {}
+  for r in closed:
+    sig = str(r.get("signal") or "—")
+    by_signal.setdefault(sig, []).append(float(r["pnl_usd"]))
+  signal_rows = []
+  for sig, pnls in sorted(by_signal.items(), key=lambda x: -len(x[1])):
+    n = len(pnls)
+    wins = sum(1 for p in pnls if p > 0)
+    signal_rows.append({
+      "signal": sig,
+      "trades": n,
+      "win_rate": round(wins / n, 3) if n else None,
+      "avg_pnl_usd": round(sum(pnls) / n, 2) if n else None,
+    })
+  return signal_rows
+
+
 def _closed_round_trips(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
   """Exit rows with entry metadata for bucketing."""
   out: list[dict[str, Any]] = []
@@ -72,6 +214,7 @@ def _closed_round_trips(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     pnl = _exit_pnl(t)
     out.append({
       "pnl_usd": pnl,
+      "position_id": pid or None,
       "entry_price_cents": int(entry_c) if entry_c is not None else None,
       "entry_spread_cents": int(spread) if spread is not None else None,
       "entry_bid_cents": bid,
@@ -264,11 +407,38 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
       min_ask_edge_cents=float(getattr(estrat, "min_ask_edge_cents", 8)),
     )
     report["auto_tuning"] = tuning
+    report["last_60_days"] = build_window_report(
+      kind=kind,
+      asset=asset,
+      trades=trades,
+      window_days=60,
+      min_ask_edge_cents=float(getattr(estrat, "min_ask_edge_cents", 8)),
+    )
     reports.append(report)
+
+  combined_60d = {
+    "closed_trades": sum(
+      int(r.get("last_60_days", {}).get("summary", {}).get("closed_trades") or 0)
+      for r in reports
+    ),
+    "total_pnl_usd": round(
+      sum(
+        float(r.get("last_60_days", {}).get("summary", {}).get("total_pnl_usd") or 0)
+        for r in reports
+      ),
+      2,
+    ),
+  }
+  wins_60 = sum(
+    int(r.get("last_60_days", {}).get("summary", {}).get("wins") or 0) for r in reports
+  )
+  if combined_60d["closed_trades"]:
+    combined_60d["win_rate"] = round(wins_60 / combined_60d["closed_trades"], 3)
 
   return {
     "ok": True,
     "generated_at": datetime.now(timezone.utc).isoformat(),
     "bots": reports,
     "combined": build_combined_report(reports),
+    "combined_60_days": combined_60d,
   }

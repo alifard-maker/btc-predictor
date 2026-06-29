@@ -34,6 +34,7 @@ class Slot15BotSettings:
   profit_exit_cooldown_seconds: int = 60
   auto_stop_on_budget_exhausted: bool = True
   auto_stopped: bool = False
+  auto_stop_reason: str | None = None
   paper_auto_refill: bool = True
   use_accumulated_profit: bool = False
 
@@ -66,6 +67,7 @@ class Slot15BotSettings:
       profit_exit_cooldown_seconds=int(raw.get("profit_exit_cooldown_seconds", 60)),
       auto_stop_on_budget_exhausted=bool(raw.get("auto_stop_on_budget_exhausted", True)),
       auto_stopped=bool(raw.get("auto_stopped", False)),
+      auto_stop_reason=raw.get("auto_stop_reason"),
       paper_auto_refill=bool(raw.get("paper_auto_refill", True)),
       use_accumulated_profit=bool(raw.get("use_accumulated_profit", False)),
     )
@@ -168,10 +170,14 @@ class Slot15BotStore:
     self._last_period_key = slot_key
     rolled = bool(prev and prev != slot_key)
     if rolled and settings.auto_stopped:
-      updated = Slot15BotSettings(**{**settings.to_dict(), "auto_stopped": False})
-      self.save_settings(updated)
-      self.set_last_skip_reason(None)
-      return updated, prev
+      reason = settings.auto_stop_reason
+      if reason in (None, "", "budget_exhausted"):
+        updated = Slot15BotSettings(
+          **{**settings.to_dict(), "auto_stopped": False, "auto_stop_reason": None}
+        )
+        self.save_settings(updated)
+        self.set_last_skip_reason(None)
+        return updated, prev
     return settings, prev if rolled else None
 
   def _connect(self) -> sqlite3.Connection:
@@ -198,6 +204,11 @@ class Slot15BotStore:
     for col in ("entry_bid_cents", "entry_ask_cents", "entry_spread_cents"):
       if cols and col not in cols:
         conn.execute(f"ALTER TABLE bot_trades ADD COLUMN {col} INTEGER")
+    if cols and "entry_settings_json" not in cols:
+      conn.execute("ALTER TABLE bot_trades ADD COLUMN entry_settings_json TEXT")
+    for col in ("stop_order_id", "take_profit_order_id"):
+      if pos_cols and col not in pos_cols:
+        conn.execute(f"ALTER TABLE bot_positions ADD COLUMN {col} TEXT")
 
   def _init_db(self) -> None:
     with self._connect() as conn:
@@ -227,12 +238,35 @@ class Slot15BotStore:
       row = conn.execute("SELECT json FROM bot_settings WHERE id = 1").fetchone()
     return Slot15BotSettings.from_dict(json.loads(row["json"]) if row else {})
 
-  def save_settings(self, settings: Slot15BotSettings) -> Slot15BotSettings:
+  def save_settings(
+    self,
+    settings: Slot15BotSettings,
+    *,
+    source: str = "internal",
+    cfg: dict[str, Any] | None = None,
+  ) -> Slot15BotSettings:
+    old = self.get_settings()
     with self._connect() as conn:
       conn.execute(
         "UPDATE bot_settings SET json = ? WHERE id = 1",
         (json.dumps(settings.to_dict()),),
       )
+    if old.to_dict() != settings.to_dict():
+      try:
+        from src.backup.logs_backup import on_settings_saved
+        from src.trading.bot_entry_settings import infer_store_meta
+
+        asset, bot_type = infer_store_meta(self.db_path)
+        on_settings_saved(
+          cfg,
+          asset=asset,
+          bot_type=bot_type,
+          old_settings=old.to_dict(),
+          new_settings=settings.to_dict(),
+          source=source,
+        )
+      except Exception:
+        pass
     return settings
 
   def open_positions(self, event_ticker: str) -> list[dict[str, Any]]:
@@ -474,6 +508,8 @@ class Slot15BotStore:
       "label": pos.get("label"),
       "entry_edge": pos.get("entry_edge"),
       "reference_price": pos.get("reference_price"),
+      "stop_order_id": pos.get("stop_order_id"),
+      "take_profit_order_id": pos.get("take_profit_order_id"),
       "opened_at": now,
       "status": "open",
     }
@@ -482,10 +518,12 @@ class Slot15BotStore:
         """
         INSERT INTO bot_positions (
           id, event_ticker, market_ticker, side, contracts, entry_price_cents,
-          cost_usd, signal, label, entry_edge, reference_price, opened_at, status
+          cost_usd, signal, label, entry_edge, reference_price, stop_order_id,
+          take_profit_order_id, opened_at, status
         ) VALUES (
           :id, :event_ticker, :market_ticker, :side, :contracts, :entry_price_cents,
-          :cost_usd, :signal, :label, :entry_edge, :reference_price, :opened_at, :status
+          :cost_usd, :signal, :label, :entry_edge, :reference_price, :stop_order_id,
+          :take_profit_order_id, :opened_at, :status
         )
         """,
         row,
@@ -520,6 +558,24 @@ class Slot15BotStore:
         (int(mark_cents), position_id),
       )
 
+  def update_position_orders(
+    self,
+    position_id: str,
+    *,
+    stop_order_id: str | None = None,
+    take_profit_order_id: str | None = None,
+  ) -> None:
+    with self._connect() as conn:
+      conn.execute(
+        """
+        UPDATE bot_positions
+        SET stop_order_id = COALESCE(?, stop_order_id),
+            take_profit_order_id = COALESCE(?, take_profit_order_id)
+        WHERE id = ? AND status = 'open'
+        """,
+        (stop_order_id, take_profit_order_id, position_id),
+      )
+
   def close_position(self, position_id: str) -> dict[str, Any] | None:
     with self._connect() as conn:
       row = conn.execute("SELECT * FROM bot_positions WHERE id = ?", (position_id,)).fetchone()
@@ -543,6 +599,12 @@ class Slot15BotStore:
     out["exit_price_cents"] = exit_c
     if action == "exit" and out.get("pnl_usd") is not None:
       out["realized_pnl_usd"] = out["pnl_usd"]
+    raw_settings = out.get("entry_settings_json")
+    if raw_settings and isinstance(raw_settings, str):
+      try:
+        out["entry_settings"] = json.loads(raw_settings)
+      except json.JSONDecodeError:
+        pass
     return out
 
   def slot_interval_summary(self, event_ticker: str) -> dict[str, Any]:
@@ -626,6 +688,13 @@ class Slot15BotStore:
       "entry_spread_cents": trade.get("entry_spread_cents"),
       "created_at": now,
     }
+    entry_settings = trade.get("entry_settings")
+    if action == "enter" and entry_settings is not None:
+      row["entry_settings_json"] = (
+        entry_settings if isinstance(entry_settings, str) else json.dumps(entry_settings)
+      )
+    else:
+      row["entry_settings_json"] = None
     with self._connect() as conn:
       conn.execute(
         """
@@ -633,12 +702,12 @@ class Slot15BotStore:
           id, event_ticker, trigger, action, mode, market_ticker, side, contracts,
           price_cents, entry_price_cents, exit_price_cents, cost_usd, pnl_usd, signal, label, actionable_headline,
           status, detail, kalshi_order_id, position_id, entry_bid_cents, entry_ask_cents, entry_spread_cents,
-          created_at
+          entry_settings_json, created_at
         ) VALUES (
           :id, :event_ticker, :trigger, :action, :mode, :market_ticker, :side, :contracts,
           :price_cents, :entry_price_cents, :exit_price_cents, :cost_usd, :pnl_usd, :signal, :label, :actionable_headline,
           :status, :detail, :kalshi_order_id, :position_id, :entry_bid_cents, :entry_ask_cents, :entry_spread_cents,
-          :created_at
+          :entry_settings_json, :created_at
         )
         """,
         row,
@@ -716,7 +785,9 @@ class Slot15BotStore:
       "interval_performance": self.interval_performance(event_ticker),
       "paper_bankroll": paper_state,
       "auto_stopped": settings.auto_stopped,
-      "auto_stop_reason": auto_stop_row.get("detail") if auto_stop_row else None,
+      "auto_stop_reason": settings.auto_stop_reason or (
+        auto_stop_row.get("detail") if auto_stop_row else None
+      ),
       "last_skip_reason": self._last_skip_reason,
       "last_entry_attempt": self._last_entry_attempt,
       "server_runtime": self.get_runtime(),

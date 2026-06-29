@@ -48,6 +48,50 @@ def _seed_round_trip(store: HourlyBotStore, *, entry: int, spread: int, pnl: flo
   })
 
 
+def test_performance_report_60d_free_mode_split():
+  with tempfile.TemporaryDirectory() as td:
+    store = HourlyBotStore(Path(td) / "bot.db")
+    store.log_trade({
+      "id": "e1",
+      "event_ticker": "EVT",
+      "action": "enter",
+      "mode": "paper",
+      "market_ticker": "MKT",
+      "side": "yes",
+      "contracts": 10,
+      "price_cents": 45,
+      "entry_price_cents": 45,
+      "cost_usd": 4.5,
+      "status": "filled",
+      "position_id": "p1",
+      "entry_settings": {"free_mode": True},
+      "created_at": "2026-06-01T12:00:00Z",
+    })
+    store.log_trade({
+      "id": "x1",
+      "event_ticker": "EVT",
+      "action": "exit",
+      "mode": "paper",
+      "market_ticker": "MKT",
+      "side": "yes",
+      "contracts": 10,
+      "price_cents": 50,
+      "entry_price_cents": 45,
+      "exit_price_cents": 50,
+      "pnl_usd": 0.5,
+      "status": "filled",
+      "position_id": "p1",
+      "created_at": "2026-06-01T12:05:00Z",
+    })
+    trades = store.list_trades(limit=100)
+    from src.trading.bot_performance_report import build_window_report
+
+    report = build_window_report(kind="hourly", asset="btc", trades=trades, window_days=60)
+    assert report["summary"]["closed_trades"] == 1
+    assert "free_mode" in report["by_free_mode"]
+    assert report["by_free_mode"]["free_mode"]["closed_trades"] == 1
+
+
 def test_performance_report_buckets_and_summary():
   with tempfile.TemporaryDirectory() as td:
     store = HourlyBotStore(Path(td) / "bot.db")

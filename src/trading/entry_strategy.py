@@ -25,6 +25,9 @@ class EntryStrategyConfig:
   allow_barbell: bool = True
   barbell_min_strike_gap_pct: float = 0.20
   min_ask_edge_cents: float = 8.0
+  tail_entry_max_cents: int = 20
+  tail_entry_block: bool = False
+  tail_entry_min_ask_edge_cents: float = 12.0
   allow_scale_in: bool = False
   scale_in_max_legs_per_ticker: int = 2
   scale_in_min_unrealized_pnl_usd: float = 0.05
@@ -50,6 +53,9 @@ class EntryStrategyConfig:
       allow_barbell=bool(raw.get("allow_barbell", True)),
       barbell_min_strike_gap_pct=float(raw.get("barbell_min_strike_gap_pct", 0.20)),
       min_ask_edge_cents=float(raw.get("min_ask_edge_cents", 8.0)),
+      tail_entry_max_cents=int(raw.get("tail_entry_max_cents", 20)),
+      tail_entry_block=bool(raw.get("tail_entry_block", False)),
+      tail_entry_min_ask_edge_cents=float(raw.get("tail_entry_min_ask_edge_cents", 12.0)),
       allow_scale_in=bool(raw.get("allow_scale_in", False)),
       scale_in_max_legs_per_ticker=int(raw.get("scale_in_max_legs_per_ticker", 2)),
       scale_in_min_unrealized_pnl_usd=float(raw.get("scale_in_min_unrealized_pnl_usd", 0.05)),
@@ -133,6 +139,50 @@ def passes_ask_edge_gate(
   if edge is None:
     return True, None
   return edge >= min_ask_edge_cents, edge
+
+
+def is_tail_entry_price(price_cents: int | None, *, max_cents: int) -> bool:
+  """True when the leg to buy is in the low-cent tail bucket (e.g. 1–20¢)."""
+  if price_cents is None or max_cents <= 0:
+    return False
+  return 1 <= int(price_cents) <= int(max_cents)
+
+
+def effective_min_ask_edge_cents(
+  estrat: EntryStrategyConfig,
+  *,
+  entry_price_cents: int | None,
+) -> float:
+  """Base ask-edge floor; stricter on tail entries when blocking is off."""
+  if is_tail_entry_price(entry_price_cents, max_cents=estrat.tail_entry_max_cents):
+    if estrat.tail_entry_block:
+      return float("inf")
+    return max(estrat.min_ask_edge_cents, estrat.tail_entry_min_ask_edge_cents)
+  return estrat.min_ask_edge_cents
+
+
+def passes_tail_entry_gate(
+  pick: dict[str, Any],
+  side: str,
+  entry_price_cents: int | None,
+  estrat: EntryStrategyConfig,
+) -> tuple[bool, str | None, float | None]:
+  """Block or tighten tail (1–N¢) entries. Returns (ok, skip_reason, ask_edge)."""
+  if not is_tail_entry_price(entry_price_cents, max_cents=estrat.tail_entry_max_cents):
+    min_edge = estrat.min_ask_edge_cents
+    ok, edge = passes_ask_edge_gate(pick, side, min_edge)
+    if not ok:
+      return False, f"ask_edge_too_low:{edge:.0f}c", edge
+    return True, None, edge
+
+  if estrat.tail_entry_block:
+    return False, f"tail_entry_blocked:{int(entry_price_cents)}c", None
+
+  min_edge = max(estrat.min_ask_edge_cents, estrat.tail_entry_min_ask_edge_cents)
+  ok, edge = passes_ask_edge_gate(pick, side, min_edge)
+  if not ok:
+    return False, f"tail_ask_edge_too_low:{edge:.0f}c", edge
+  return True, None, edge
 
 
 def expected_value_per_contract_usd(p_win: float, ask_cents: int) -> float:

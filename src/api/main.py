@@ -298,6 +298,10 @@ def health():
   }
   if _loop.eth_calibration is not None:
     out["eth_15m"] = _loop.eth_status()
+  try:
+    out["bot_risk"] = _loop.bot_risk_status()
+  except Exception:
+    pass
   return out
 
 
@@ -621,7 +625,12 @@ def eth_hourly_late_call_now(
   return out
 
 
-def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
+def _apply_hourly_bot_settings(
+  store,
+  body: dict[str, Any],
+  *,
+  cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
   from src.trading.hourly_bot_store import HourlyBotSettings
 
   current = store.get_settings()
@@ -673,13 +682,18 @@ def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
   if settings.max_spend_per_hour_usd < 0:
     raise HTTPException(400, "max_spend_per_hour_usd must be >= 0")
   old_cap = current.max_spend_per_hour_usd
-  store.save_settings(settings)
+  store.save_settings(settings, source="dashboard", cfg=cfg or _cfg)
   if settings.max_spend_per_hour_usd > old_cap:
     store.sync_paper_cap_on_max_increase(old_cap, settings.max_spend_per_hour_usd)
   return settings.to_dict()
 
 
-def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
+def _apply_slot15_bot_settings(
+  store,
+  body: dict[str, Any],
+  *,
+  cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
   from src.trading.slot15_bot_store import Slot15BotSettings
 
   current = store.get_settings()
@@ -731,7 +745,7 @@ def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
   if settings.max_spend_per_slot_usd < 0:
     raise HTTPException(400, "max_spend_per_slot_usd must be >= 0")
   old_cap = current.max_spend_per_slot_usd
-  store.save_settings(settings)
+  store.save_settings(settings, source="dashboard", cfg=cfg or _cfg)
   if settings.max_spend_per_slot_usd > old_cap:
     store.sync_paper_cap_on_max_increase(old_cap, settings.max_spend_per_slot_usd)
   return settings.to_dict()
@@ -751,7 +765,7 @@ async def hourly_bot_settings(request: Request, _: None = Depends(_session_user)
     raise HTTPException(503, "Service starting")
   body = await request.json()
   store = _loop.hourly_bot_store("btc")
-  _apply_hourly_bot_settings(store, body)
+  _apply_hourly_bot_settings(store, body, cfg=_cfg)
   tab = _loop.daily_prediction()
   return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
 
@@ -819,6 +833,13 @@ def bots_performance_report(_: None = Depends(_session_user)):
   return build_all_bots_performance_report(_loop)
 
 
+@app.get("/api/bots/risk-status")
+def bots_risk_status(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.bot_risk_status()
+
+
 @app.post("/api/admin/bots/auto-tune")
 def admin_bots_auto_tune(_: None = Depends(_verify_admin)):
   if _loop is None:
@@ -840,7 +861,10 @@ async def eth_hourly_bot_settings(request: Request, _: None = Depends(_session_u
     raise HTTPException(503, "Service starting")
   body = await request.json()
   store = _loop.hourly_bot_store("eth")
-  _apply_hourly_bot_settings(store, body)
+  from src.assets import asset_cfg
+
+  eth_cfg = _loop._eth_cfg or asset_cfg(_cfg, "eth")
+  _apply_hourly_bot_settings(store, body, cfg=eth_cfg)
   tab = _loop.eth_hourly_prediction()
   return _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
 
@@ -895,7 +919,7 @@ async def slot15_bot_settings(request: Request, _: None = Depends(_session_user)
     raise HTTPException(503, "Service starting")
   body = await request.json()
   store = _loop.slot15_bot_store("btc")
-  _apply_slot15_bot_settings(store, body)
+  _apply_slot15_bot_settings(store, body, cfg=_cfg)
   tab = _loop._slot15_tab("btc")
   return _loop.slot15_bot_status("btc", tab if tab.get("ok") else None)
 
@@ -954,7 +978,10 @@ async def eth_slot15_bot_settings(request: Request, _: None = Depends(_session_u
     raise HTTPException(503, "ETH 15m disabled")
   body = await request.json()
   store = _loop.slot15_bot_store("eth")
-  _apply_slot15_bot_settings(store, body)
+  from src.assets import asset_cfg
+
+  eth_cfg = _loop._eth_cfg or asset_cfg(_cfg, "eth")
+  _apply_slot15_bot_settings(store, body, cfg=eth_cfg)
   tab = _loop._slot15_tab("eth")
   return _loop.slot15_bot_status("eth", tab if tab.get("ok") else None)
 
