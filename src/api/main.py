@@ -120,6 +120,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
       log.warning("ETH hourly settings align skipped: %s", e)
     try:
+      from src.trading.bot_rollover_settlement_backfill import backfill_all_hourly_rollover_dbs
+
+      rollover_bf = backfill_all_hourly_rollover_dbs(data_dir, dry_run=False, cfg=_cfg)
+      if rollover_bf.get("fixed_count"):
+        log.info("Hourly rollover settlement backfill on startup: %s", rollover_bf)
+    except Exception as e:
+      log.warning("Hourly rollover settlement backfill skipped: %s", e)
+    try:
       snap = _loop.calibration.snapshot_stats(note="auto bootstrap")
       if snap.get("status") == "ok":
         log.info("Stats snapshot on startup: %s", snap)
@@ -1314,6 +1322,16 @@ def backfill_bot_pnl(_: None = Depends(_verify_admin)):
 
   data_dir = Path(_cfg["paths"]["logs"]).parent
   stats = backfill_all_bot_dbs(data_dir, dry_run=False, cfg=_cfg)
+  return {"status": "ok", **stats}
+
+
+@app.post("/api/admin/backfill-rollover-settlement")
+def backfill_rollover_settlement(_: None = Depends(_verify_admin)):
+  """Correct hourly period-rollover exits that used market marks instead of settlement."""
+  from src.trading.bot_rollover_settlement_backfill import backfill_all_hourly_rollover_dbs
+
+  data_dir = Path(_cfg["paths"]["logs"]).parent
+  stats = backfill_all_hourly_rollover_dbs(data_dir, dry_run=False, cfg=_cfg)
   return {"status": "ok", **stats}
 
 
