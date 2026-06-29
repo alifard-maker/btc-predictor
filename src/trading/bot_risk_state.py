@@ -158,6 +158,13 @@ class BotRiskCoordinator:
     self._save()
     log.info("Daily loss cap overridden for %s (%s)", bot_key, self._date_key)
 
+  def reset_bot_daily_pnl(self, bot_key: str) -> None:
+    """Clear today's realized P&L and cap flags for one bot (e.g. fresh start)."""
+    self._roll_day_if_needed()
+    self._bots[bot_key] = _empty_bot_row()
+    self._save()
+    log.info("Daily risk reset for %s (%s)", bot_key, self._date_key)
+
   def status_for_bot(self, bot_key: str) -> dict[str, Any]:
     self._roll_day_if_needed()
     cap = float(self.cfg.cap_usd)

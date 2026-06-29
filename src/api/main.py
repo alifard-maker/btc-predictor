@@ -794,10 +794,15 @@ async def hourly_bot_settings(request: Request, _: None = Depends(_session_user)
 
 
 def _hourly_bot_fresh_start(store, tab_fn, asset: str):
+  from src.trading.bot_risk_state import bot_risk_key, get_bot_risk_coordinator
+
   settings = store.get_settings()
   if settings.mode != "paper":
     raise HTTPException(400, "Fresh start is only available in paper mode")
-  store.fresh_start_paper(settings.max_spend_per_hour_usd)
+  store.fresh_start_paper(settings.max_spend_per_hour_usd, preserve_settings=True)
+  coord = get_bot_risk_coordinator()
+  if coord:
+    coord.reset_bot_daily_pnl(bot_risk_key("hourly", asset))
   tab = tab_fn()
   return _loop.hourly_bot_status(asset, tab if tab.get("ok") else None)
 

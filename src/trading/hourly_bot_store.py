@@ -339,15 +339,25 @@ class HourlyBotStore:
       state = sync_paper_cap_on_max_increase(conn, old_cap, new_cap)
     return state.to_dict() if state else None
 
-  def fresh_start_paper(self, max_cap: float) -> dict[str, Any]:
-    """Clear trade log, positions, cooldowns; reset paper bankroll."""
+  def fresh_start_paper(self, max_cap: float, *, preserve_settings: bool = True) -> dict[str, Any]:
+    """Clear trade log, positions, cooldowns, tuning; reset paper bankroll."""
     from src.trading.bot_fresh_start import fresh_start_paper_bot
 
+    settings = self.get_settings()
     with self._connect() as conn:
       paper = fresh_start_paper_bot(conn, max_cap)
     self._position_peaks.clear()
     self._last_period_key = None
-    self.save_settings(HourlyBotSettings(max_spend_per_hour_usd=float(max_cap)))
+    if preserve_settings:
+      updated = {
+        **settings.to_dict(),
+        "max_spend_per_hour_usd": float(max_cap),
+        "auto_stopped": False,
+        "auto_stop_reason": None,
+      }
+      self.save_settings(HourlyBotSettings.from_dict(updated))
+    else:
+      self.save_settings(HourlyBotSettings(max_spend_per_hour_usd=float(max_cap)))
     self.set_last_skip_reason(None)
     return paper
 

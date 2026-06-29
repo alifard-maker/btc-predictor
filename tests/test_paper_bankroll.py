@@ -121,6 +121,7 @@ def test_paper_status_includes_bankroll_fields():
 def test_fresh_start_clears_trades_and_resets_bankroll():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(enabled=True, use_accumulated_profit=False, mode="paper"))
     store.log_trade({
       "event_ticker": "EV1",
       "action": "enter",
@@ -144,6 +145,18 @@ def test_fresh_start_clears_trades_and_resets_bankroll():
     assert paper["paper_bankroll_usd"] == 25.0
     assert paper["paper_total_invested_usd"] == 25.0
     assert paper["paper_refill_count"] == 0
+    assert store.get_settings().enabled is True
+    assert store.get_auto_tuning() == {}
+
+
+def test_fresh_start_can_restore_dashboard_defaults():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(enabled=True, allow_strong=True, max_spend_per_hour_usd=50.0))
+    store.fresh_start_paper(50.0, preserve_settings=False)
+    s = store.get_settings()
+    assert s.enabled is False
+    assert s.allow_strong is False
 
 
 def test_paper_refills_when_bankroll_exhausted():
