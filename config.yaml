@@ -348,6 +348,8 @@ eth:
     drift_lookback_1h: 6
   hourly:
     enabled: true
+    hour_open_snapshot: true
+    open_log_minute: 0
     log_minute: 5
     late_call_minute: 45
     min_train_samples: 500
@@ -363,7 +365,7 @@ eth:
     regime:
       enabled: true
       min_expected_move_pct: 0.12
-      min_edge: 0.05
+      min_edge: 0.08
       min_hours_to_settle: 0.25
       max_sigma_pct: 2.5
       min_reasons_to_block: 2
@@ -404,6 +406,9 @@ eth:
         kelly_enabled: true
         kelly_fraction: 0.15
         min_ask_edge_cents: 8
+        tail_entry_max_cents: 20
+        tail_entry_block: false
+        tail_entry_min_ask_edge_cents: 12
         max_entries_per_cycle: 2
         max_concurrent_positions: 12
         max_budget_fraction_per_entry: 0.55

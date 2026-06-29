@@ -112,6 +112,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
       log.warning("NO exit P&L backfill skipped: %s", e)
     try:
+      from src.trading.bot_hourly_settings_align import align_eth_hourly_settings_from_btc
+
+      align_stats = align_eth_hourly_settings_from_btc(_loop)
+      if align_stats.get("aligned"):
+        log.info("ETH hourly settings aligned from BTC: %s", align_stats)
+    except Exception as e:
+      log.warning("ETH hourly settings align skipped: %s", e)
+    try:
       snap = _loop.calibration.snapshot_stats(note="auto bootstrap")
       if snap.get("status") == "ok":
         log.info("Stats snapshot on startup: %s", snap)
