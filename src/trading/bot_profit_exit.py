@@ -407,7 +407,8 @@ class Slot15LegExitConfig:
   """Aggressive contract-mark exits for 15m bot (bird-in-the-hand)."""
 
   leg_take_profit_cents: int = 3
-  leg_stop_loss_cents: int = 4
+  leg_stop_loss_cents: int = 8
+  leg_stop_gate_min_remaining_seconds: int = 180
   leg_take_profit_usd: float = 0.10
   leg_trail_arm_usd: float = 0.10
   leg_trail_giveback_usd: float = 0.05
@@ -465,7 +466,10 @@ def leg_exit_config(cfg: dict[str, Any] | None, *, bot_kind: str = "slot15") -> 
   bot_cfg = _leg_exit_bot_cfg(cfg, bot_kind=bot_kind)
   return Slot15LegExitConfig(
     leg_take_profit_cents=int(bot_cfg.get("leg_take_profit_cents", 3)),
-    leg_stop_loss_cents=int(bot_cfg.get("leg_stop_loss_cents", 4)),
+    leg_stop_loss_cents=int(bot_cfg.get("leg_stop_loss_cents", 8)),
+    leg_stop_gate_min_remaining_seconds=int(
+      bot_cfg.get("leg_stop_gate_min_remaining_seconds", 180)
+    ),
     leg_take_profit_usd=float(bot_cfg.get("leg_take_profit_usd", 0.10)),
     leg_trail_arm_usd=float(bot_cfg.get("leg_trail_arm_usd", 0.10)),
     leg_trail_giveback_usd=float(bot_cfg.get("leg_trail_giveback_usd", 0.05)),
@@ -491,6 +495,64 @@ def mark_vs_entry_cents(pos: dict[str, Any], mark_cents: int | None) -> int | No
   return int(mark_cents) - entry_c
 
 
+def _slot15_monitor_bet_side(pos: dict[str, Any], monitor: dict[str, Any]) -> str | None:
+  bs = str(monitor.get("bet_side") or "").upper()
+  if bs in ("UP", "DOWN"):
+    return bs
+  sig = str(pos.get("signal") or monitor.get("signal_at_open") or "").upper()
+  if sig == "LONG":
+    return "UP"
+  if sig == "SHORT":
+    return "DOWN"
+  side = str(pos.get("side") or "").lower()
+  if side == "yes":
+    return "UP"
+  if side == "no":
+    return "DOWN"
+  return None
+
+
+def _slot15_reassess_against_bet(bet_side: str | None, prob_up: float | None) -> bool:
+  if bet_side not in ("UP", "DOWN") or prob_up is None:
+    return False
+  if bet_side == "UP":
+    return float(prob_up) <= 0.45
+  return float(prob_up) >= 0.55
+
+
+def leg_stop_suppressed_by_early_slot(
+  *,
+  pos: dict[str, Any],
+  monitor: dict[str, Any] | None,
+  seconds_remaining: float | None,
+  leg_cfg: Slot15LegExitConfig,
+) -> bool:
+  """Hold leg stop when slot says HOLD, reassess is not against, and time remains."""
+  if seconds_remaining is None:
+    return False
+  if seconds_remaining <= float(leg_cfg.leg_stop_gate_min_remaining_seconds):
+    return False
+
+  mon = monitor or {}
+  action = str(mon.get("action") or "HOLD").upper().replace(" ", "_")
+  if action in ("CUT_LOSS", "CUT_LOSSES"):
+    return False
+
+  bet = _slot15_monitor_bet_side(pos, mon)
+  prob_raw = mon.get("reassessed_prob_up")
+  prob_up: float | None = None
+  if prob_raw is not None:
+    try:
+      prob_up = float(prob_raw)
+    except (TypeError, ValueError):
+      prob_up = None
+
+  if _slot15_reassess_against_bet(bet, prob_up):
+    return False
+
+  return action == "HOLD"
+
+
 def evaluate_slot15_leg_stop_loss(
   pos: dict[str, Any],
   mark_cents: int | None,
@@ -499,12 +561,22 @@ def evaluate_slot15_leg_stop_loss(
   pick: dict[str, Any] | None = None,
   live_price: float | None = None,
   gate_on_hourly_thesis: bool = False,
+  gate_early_slot15: bool = False,
+  monitor: dict[str, Any] | None = None,
+  seconds_remaining: float | None = None,
 ) -> tuple[str | None, str]:
   delta = mark_vs_entry_cents(pos, mark_cents)
   if delta is None or leg_cfg.leg_stop_loss_cents <= 0:
     return None, ""
   if delta <= -leg_cfg.leg_stop_loss_cents:
     if gate_on_hourly_thesis and not hourly_mark_cut_allowed(pos, pick, live_price):
+      return None, ""
+    if gate_early_slot15 and leg_stop_suppressed_by_early_slot(
+      pos=pos,
+      monitor=monitor,
+      seconds_remaining=seconds_remaining,
+      leg_cfg=leg_cfg,
+    ):
       return None, ""
     entry_c = int(pos["entry_price_cents"])
     return (
@@ -712,6 +784,9 @@ def evaluate_slot15_contract_exits(
     pick=pick,
     live_price=live_price,
     gate_on_hourly_thesis=gate_hourly,
+    gate_early_slot15=bot_kind == "slot15",
+    monitor=monitor,
+    seconds_remaining=exit_ctx.seconds_remaining,
   )
   if reason:
     return reason, detail

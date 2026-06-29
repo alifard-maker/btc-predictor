@@ -603,9 +603,10 @@ def test_leg_stop_on_mark_drawdown():
     bot = Slot15Bot(store, asset="btc")
     tab = _live_tab(slot_key=slot_key)
     tab["monitor"]["action"] = "HOLD"
-    tab["kalshi"]["yes_mid"] = 0.51
-    tab["kalshi"]["yes_bid"] = 0.51
-    tab["kalshi"]["yes_ask"] = 0.51
+    tab["monitor"]["seconds_remaining"] = 120.0
+    tab["kalshi"]["yes_mid"] = 0.46
+    tab["kalshi"]["yes_bid"] = 0.46
+    tab["kalshi"]["yes_ask"] = 0.46
     actions = bot.run_continuous_cycle(tab)
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
