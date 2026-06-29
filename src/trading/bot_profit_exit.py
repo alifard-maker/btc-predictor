@@ -319,6 +319,26 @@ def hourly_mark_stop_thesis_broken(
   return sig_favors is False and spot_favors is not True
 
 
+def hourly_thesis_favors_hold_to_settle(
+  pos: dict[str, Any],
+  pick: dict[str, Any] | None,
+  live_price: float | None,
+  *,
+  hours_to_settle: float | None = None,
+  standard_hourly_alert: str | None = None,
+  min_hours_to_settle: float = 0.15,
+) -> bool:
+  """True when hourly trial should hold for settle instead of bird-in-hand leg exits."""
+  std = str(standard_hourly_alert or "").upper()
+  if std == "TAKE PROFIT":
+    return False
+  if hours_to_settle is not None and hours_to_settle < min_hours_to_settle:
+    return False
+  if not pick:
+    return False
+  return not hourly_mark_stop_thesis_broken(pos, pick, live_price)
+
+
 def evaluate_cheap_leg_cut_loss(
   pos: dict[str, Any],
   mark_cents: int | None,
@@ -461,7 +481,11 @@ def evaluate_slot15_leg_take_profit(
   mark_cents: int | None,
   unrealized_usd: float | None,
   leg_cfg: Slot15LegExitConfig,
+  *,
+  gate_settle_hold: bool = False,
 ) -> tuple[str | None, str]:
+  if gate_settle_hold:
+    return None, ""
   delta = mark_vs_entry_cents(pos, mark_cents)
   cents_hit = (
     delta is not None
@@ -531,8 +555,11 @@ def evaluate_hourly_trial_neutral_take_profit(
   cfg: dict[str, Any] | None,
   *,
   standard_hourly_alert: str | None = None,
+  gate_settle_hold: bool = False,
 ) -> tuple[str | None, str]:
   """Bank small gains when hourly edge fades or standard hourly says take profit."""
+  if gate_settle_hold:
+    return None, ""
   if not leg_cfg.reassess_neutral_take_profit:
     return None, ""
   if unrealized_usd is None or unrealized_usd < leg_cfg.reassess_neutral_min_unrealized_usd:
@@ -577,7 +604,11 @@ def evaluate_slot15_leg_trail_exit(
   unrealized_usd: float | None,
   peaks: dict[str, float],
   leg_cfg: Slot15LegExitConfig,
+  *,
+  gate_settle_hold: bool = False,
 ) -> tuple[str | None, str]:
+  if gate_settle_hold:
+    return None, ""
   if unrealized_usd is None or unrealized_usd <= 0:
     return None, ""
   peak_usd = float(peaks.get("peak_unrealized_usd") or 0)
@@ -623,6 +654,18 @@ def evaluate_slot15_contract_exits(
   """Contract-first exit chain for 15m / hourly-trial bots; optional slot-monitor fallback last."""
   leg_cfg = leg_exit_config(cfg, bot_kind=bot_kind)
   gate_hourly = bot_kind == "hourly_trial"
+  hours_to_settle = (
+    float(exit_ctx.seconds_remaining) / 3600.0
+    if exit_ctx.seconds_remaining is not None
+    else None
+  )
+  gate_settle_hold = gate_hourly and hourly_thesis_favors_hold_to_settle(
+    pos,
+    pick,
+    live_price,
+    hours_to_settle=hours_to_settle,
+    standard_hourly_alert=standard_hourly_alert,
+  )
 
   reason, detail = evaluate_slot15_leg_stop_loss(
     pos,
@@ -635,7 +678,9 @@ def evaluate_slot15_contract_exits(
   if reason:
     return reason, detail
 
-  reason, detail = evaluate_slot15_leg_take_profit(pos, mark_cents, unrealized_usd, leg_cfg)
+  reason, detail = evaluate_slot15_leg_take_profit(
+    pos, mark_cents, unrealized_usd, leg_cfg, gate_settle_hold=gate_settle_hold,
+  )
   if reason:
     return reason, detail
 
@@ -647,6 +692,7 @@ def evaluate_slot15_contract_exits(
       leg_cfg,
       cfg,
       standard_hourly_alert=standard_hourly_alert,
+      gate_settle_hold=gate_settle_hold,
     )
   else:
     reason, detail = evaluate_slot15_reassess_neutral_take_profit(
@@ -667,7 +713,9 @@ def evaluate_slot15_contract_exits(
   if reason:
     return reason, detail
 
-  reason, detail = evaluate_slot15_leg_trail_exit(unrealized_usd, peaks, leg_cfg)
+  reason, detail = evaluate_slot15_leg_trail_exit(
+    unrealized_usd, peaks, leg_cfg, gate_settle_hold=gate_settle_hold,
+  )
   if reason:
     return reason, detail
 

@@ -776,7 +776,61 @@ def test_profit_trail_exits_without_hitting_fixed_target():
     assert "PROFIT TRAIL" in exits[0]["detail"]
 
 
-def test_hourly_trial_leg_take_profit_on_mark_gain():
+def test_hourly_trial_leg_take_profit_blocked_when_thesis_intact():
+  """Threshold YES in the money — hold for settle, don't bank +3¢ with 48m left."""
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "hourly_trial_bot_btc.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=25.0,
+      allow_strong=False,
+      allow_actionable=False,
+      min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 6,
+      "entry_price_cents": 75,
+      "cost_usd": 4.5,
+      "signal": "BUY YES",
+      "reference_price": 60119.0,
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    bot = HourlyBot(store, asset="btc", kind="hourly_trial")
+    pick = {
+      "ticker": "KXTEST-T1",
+      "signal": "BUY YES",
+      "edge": 0.10,
+      "contract_type": "threshold",
+      "strike_type": "greater",
+      "floor_strike": 60000.0,
+      "kalshi_mid": 0.78,
+      "yes_bid": 0.78,
+      "yes_ask": 0.78,
+    }
+    tab = _live_tab(pick=pick)
+    tab["brti_live"] = 60165.83
+    tab["live"]["current_price"] = 60165.83
+    tab["live"]["hours_to_settle"] = 0.80
+    cfg = {
+      "hourly": {
+        "regime": {"min_edge": 0.05},
+        "bot": {
+          "trial": {
+            "leg_take_profit_cents": 3,
+            "leg_take_profit_usd": 0.10,
+          },
+        },
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    assert [a for a in actions if a.get("action") == "exit"] == []
+
+
+def test_hourly_trial_leg_take_profit_when_thesis_broken():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "hourly_trial_bot_btc.db")
     store.save_settings(HourlyBotSettings(
@@ -799,9 +853,11 @@ def test_hourly_trial_leg_take_profit_on_mark_gain():
     })
     bot = HourlyBot(store, asset="btc", kind="hourly_trial")
     tab = _live_tab()
+    tab["live"]["primary_pick"]["signal"] = "BUY NO"
     tab["live"]["primary_pick"]["kalshi_mid"] = 0.44
     tab["live"]["primary_pick"]["yes_bid"] = 0.44
     tab["live"]["primary_pick"]["yes_ask"] = 0.44
+    tab["live"]["hours_to_settle"] = 0.80
     cfg = {
       "hourly": {
         "regime": {"min_edge": 0.05},
@@ -848,6 +904,8 @@ def test_hourly_trial_neutral_take_profit_when_edge_fades():
     tab["live"]["primary_pick"]["yes_bid"] = 0.41
     tab["live"]["primary_pick"]["yes_ask"] = 0.41
     tab["live"]["primary_pick"]["edge"] = 0.03
+    tab["live"]["primary_pick"]["signal"] = "BUY NO"
+    tab["live"]["hours_to_settle"] = 0.80
     cfg = {
       "hourly": {
         "regime": {"min_edge": 0.05},

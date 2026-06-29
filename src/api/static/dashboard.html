@@ -198,6 +198,9 @@
     .bot-mode-paper { color:#86efac; font-weight:700; }
     #edt-clock { font-size: .95rem; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); letter-spacing: .02em; }
     #edt-clock .edt-label { font-size: .68rem; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; display: block; margin-bottom: .15rem; }
+    .zoom-controls { display: inline-flex; align-items: center; gap: 0.2rem; margin-right: 0.35rem; vertical-align: middle; }
+    .zoom-controls button { margin-top: 0; padding: 0.3rem 0.5rem; font-size: 0.82rem; min-width: 1.75rem; line-height: 1; background: var(--surface); border: 1px solid var(--border); }
+    .zoom-controls .zoom-label { font-size: 0.72rem; color: var(--muted); min-width: 2.6rem; text-align: center; }
   </style>
 </head>
 <body>
@@ -211,6 +214,12 @@
       <div class="meta">
         <div id="edt-clock"><span class="edt-label">Eastern</span><span id="edt-clock-value">—</span></div>
         <div id="updated">—</div>
+        <span class="zoom-controls" title="Pinch on trackpad, or use − / + buttons · ⌘0 to reset">
+          <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+          <span class="zoom-label" id="zoom-label">100%</span>
+          <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+          <button type="button" id="zoom-reset" aria-label="Reset zoom" style="font-size:.68rem;padding:.3rem .45rem">Reset</button>
+        </span>
         <form method="post" action="/api/auth/logout" style="display:inline"><button type="submit" style="margin-top:0;margin-right:.35rem;background:var(--surface);border:1px solid var(--border)">Sign out</button></form>
         <button onclick="loadAll()">Refresh</button>
       </div>
@@ -3581,6 +3590,52 @@
     setInterval(loadAll, 5000);
     setInterval(loadLiveMonitor, 1000);
     setInterval(updateEdtClock, 1000);
+
+    (function initDashboardZoom() {
+      const ZOOM_KEY = 'dashboardPageZoom';
+      const ZOOM_MIN = 0.75;
+      const ZOOM_MAX = 1.75;
+      const ZOOM_STEP = 0.05;
+      let pageZoom = parseFloat(localStorage.getItem(ZOOM_KEY) || '1') || 1;
+
+      function clampZoom(z) {
+        return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
+      }
+
+      function applyPageZoom(z) {
+        pageZoom = clampZoom(z);
+        document.documentElement.style.zoom = String(pageZoom);
+        const lbl = document.getElementById('zoom-label');
+        if (lbl) lbl.textContent = Math.round(pageZoom * 100) + '%';
+        localStorage.setItem(ZOOM_KEY, String(pageZoom));
+      }
+
+      applyPageZoom(pageZoom);
+      document.getElementById('zoom-in')?.addEventListener('click', () => applyPageZoom(pageZoom + ZOOM_STEP));
+      document.getElementById('zoom-out')?.addEventListener('click', () => applyPageZoom(pageZoom - ZOOM_STEP));
+      document.getElementById('zoom-reset')?.addEventListener('click', () => applyPageZoom(1));
+
+      // Trackpad pinch on macOS arrives as wheel + ctrlKey (same as browser page zoom).
+      document.addEventListener('wheel', (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        applyPageZoom(pageZoom + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP));
+      }, { passive: false });
+
+      document.addEventListener('keydown', (e) => {
+        if (!(e.metaKey || e.ctrlKey)) return;
+        if (e.key === '=' || e.key === '+') {
+          e.preventDefault();
+          applyPageZoom(pageZoom + ZOOM_STEP);
+        } else if (e.key === '-' || e.key === '_') {
+          e.preventDefault();
+          applyPageZoom(pageZoom - ZOOM_STEP);
+        } else if (e.key === '0') {
+          e.preventDefault();
+          applyPageZoom(1);
+        }
+      });
+    })();
   </script>
 </body>
 </html>

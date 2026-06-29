@@ -136,6 +136,29 @@ def test_update_position_peaks_tracks_high_water_mark():
   assert peaks["peak_profit_pct"] == 0.4
 
 
+def test_hourly_trial_leg_take_profit_blocked_on_settle_hold_gate():
+  from src.trading.bot_profit_exit import (
+    evaluate_slot15_leg_take_profit,
+    hourly_thesis_favors_hold_to_settle,
+    slot15_leg_exit_config,
+  )
+
+  leg_cfg = slot15_leg_exit_config(None)
+  pos = {"entry_price_cents": 75, "side": "yes", "signal": "BUY YES"}
+  pick = {
+    "signal": "BUY YES",
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 60000.0,
+  }
+  assert hourly_thesis_favors_hold_to_settle(
+    pos, pick, 60165.83, hours_to_settle=0.80, standard_hourly_alert="HOLD",
+  )
+  assert evaluate_slot15_leg_take_profit(
+    pos, 78, 0.18, leg_cfg, gate_settle_hold=True,
+  ) == (None, "")
+
+
 def test_slot15_leg_take_profit_on_mark_cents():
   from src.trading.bot_profit_exit import evaluate_slot15_leg_take_profit, slot15_leg_exit_config
 
