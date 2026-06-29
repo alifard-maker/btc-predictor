@@ -25,6 +25,10 @@ class EntryStrategyConfig:
   allow_barbell: bool = True
   barbell_min_strike_gap_pct: float = 0.20
   min_ask_edge_cents: float = 8.0
+  allow_scale_in: bool = False
+  scale_in_max_legs_per_ticker: int = 2
+  scale_in_min_unrealized_pnl_usd: float = 0.05
+  scale_in_min_ask_edge_improvement_cents: float = 0.0
 
   @classmethod
   def from_bot_cfg(cls, bot_cfg: dict[str, Any] | None) -> EntryStrategyConfig:
@@ -46,6 +50,12 @@ class EntryStrategyConfig:
       allow_barbell=bool(raw.get("allow_barbell", True)),
       barbell_min_strike_gap_pct=float(raw.get("barbell_min_strike_gap_pct", 0.20)),
       min_ask_edge_cents=float(raw.get("min_ask_edge_cents", 8.0)),
+      allow_scale_in=bool(raw.get("allow_scale_in", False)),
+      scale_in_max_legs_per_ticker=int(raw.get("scale_in_max_legs_per_ticker", 2)),
+      scale_in_min_unrealized_pnl_usd=float(raw.get("scale_in_min_unrealized_pnl_usd", 0.05)),
+      scale_in_min_ask_edge_improvement_cents=float(
+        raw.get("scale_in_min_ask_edge_improvement_cents", 0.0)
+      ),
     )
 
 
@@ -264,6 +274,7 @@ def correlation_block_reason(
   resolve_pick: Any,
   ref_price: float | None,
   estrat: EntryStrategyConfig,
+  allow_scale_in_ticker: str | None = None,
 ) -> str | None:
   """Return skip reason if new entry correlates too strongly with an open leg."""
   if not estrat.enabled or not estrat.correlation_guard:
@@ -284,6 +295,8 @@ def correlation_block_reason(
       continue
 
     if ex_side == new_side and ticker == str(new_pick.get("ticker")):
+      if allow_scale_in_ticker and ticker == allow_scale_in_ticker:
+        continue
       return f"duplicate_ticker:{ticker}"
 
     if (

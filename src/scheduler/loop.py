@@ -298,6 +298,11 @@ class PredictionLoop:
         "regime_allow_trade": regime.get("allow_trade"),
         "regime_reasons": list(regime.get("reasons") or [])[:3],
       }
+    from src.trading.bot_auto_tuning import effective_entry_strategy
+
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    estrat = effective_entry_strategy(acfg, kind="hourly", tuning=store.get_auto_tuning())
+    status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
     return status
 
@@ -503,6 +508,11 @@ class PredictionLoop:
         "monitor_action": monitor.get("action"),
         "last_entry_attempt": self.slot15_bot_store(asset).last_entry_attempt(),
       }
+    from src.trading.bot_auto_tuning import effective_entry_strategy
+
+    acfg = self._acfg_15m(asset)
+    estrat = effective_entry_strategy(acfg, kind="slot15", tuning=store.get_auto_tuning())
+    status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
     return status
 

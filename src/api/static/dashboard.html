@@ -1161,6 +1161,14 @@
 
     let schedulerRunning = false;
     let serverDataDir = '';
+    let volumeMountedAtData = true;
+
+    function volumeWarningBanner() {
+      const host = location.hostname || '';
+      const isProduction = host && host !== 'localhost' && host !== '127.0.0.1';
+      if (!isProduction || volumeMountedAtData) return '';
+      return `<div style="margin:.55rem 0;padding:.65rem .75rem;background:rgba(249,115,22,.18);border:1px solid rgba(249,115,22,.55);border-radius:8px;color:#fdba74;font-size:.78rem;font-weight:600">⚠ Redeploys wipe bot stats without Railway volume at <code>/data</code></div>`;
+    }
 
     function formatCycleAge(iso) {
       if (!iso) return 'never';
@@ -1190,6 +1198,7 @@
         ? ` Data: <code>${serverDataDir}</code>`
         : '';
       return `<div style="margin-bottom:.55rem;padding:.5rem .65rem;background:rgba(34,197,94,${serverOk ? '.12' : '.06'});border:1px solid rgba(34,197,94,.35);border-radius:8px;font-size:.72rem">
+        ${volumeWarningBanner()}
         <strong class="${statusCls}">${statusLabel}</strong>
         · Last bot cycle: <strong>${formatCycleAge(cycleAt)}</strong>
         · ${autoHint}
@@ -1201,6 +1210,7 @@
       if (h.version) $('app-version').textContent = h.version;
       schedulerRunning = !!h.scheduler_running;
       serverDataDir = h.data_dir || '';
+      volumeMountedAtData = h.volume_mounted_at_data !== false;
       const api = slot15Api();
       const data = activeTab === 'eth-15m' ? (h.eth_15m || h) : h;
       const series = data.series_ticker || api.series;
@@ -1221,7 +1231,8 @@
       ];
       const list = s15$('status-list');
       if (!list) return;
-      list.innerHTML = items.map(([l,v,ok]) =>
+      const volBanner = volumeWarningBanner();
+      list.innerHTML = (volBanner ? volBanner : '') + items.map(([l,v,ok]) =>
         `<li><span class="dot" style="background:${ok?'var(--up)':'#f59e0b'}"></span><span class="muted">${l}</span><span>${v}</span></li>`
       ).join('');
     }
@@ -2163,16 +2174,51 @@
       return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:8px;color:#fecaca;font-size:.75rem"><strong>Auto-stopped this ${periodLabel}</strong> — ${reason}</div>`;
     }
 
-    function botEntryWatchHtml(bot, periodLabel) {
+    function botSkipReasonBrief(raw) {
+      if (!raw) return '';
+      if (raw.startsWith('already_open:')) return 'already open on this contract';
+      if (raw.startsWith('ask_edge_too_low:')) return `ask-edge thin (${raw.slice('ask_edge_too_low:'.length)})`;
+      if (raw.startsWith('reentry_cooldown:')) return 're-entry cooldown';
+      if (raw.startsWith('scale_in_not_winner:')) return 'scale-in blocked (not winning)';
+      if (raw === 'scale_in_max_legs') return 'scale-in max legs reached';
+      if (raw === 'scale_in_side_mismatch') return 'scale-in side mismatch';
+      if (raw.startsWith('scale_in_edge_not_improved:')) return 'scale-in needs better ask edge';
+      const labels = {
+        max_concurrent_positions: 'position slots full',
+        fully_deployed: 'budget fully deployed',
+        hour_budget_exhausted: 'hour budget exhausted',
+        slot_budget_exhausted: 'slot budget exhausted',
+        signal_filtered_by_settings: 'STRONG/ACTIONABLE filter',
+        no_entry_this_cycle: 'no entry passed checks',
+      };
+      return labels[raw] || raw.split(':')[0].replace(/_/g, ' ');
+    }
+
+    function botEntryWatchHtml(bot, periodLabel, freeMode) {
       const w = bot.entry_watch;
       if (!w) return '';
+      const openN = bot.open_position_count ?? 0;
+      const maxPos = bot.max_concurrent_positions ?? (periodLabel === 'hour' ? 3 : 1);
+      const slotsLine = ` · <strong>${openN}/${maxPos}</strong> slots`;
+      const deployLine = bot.remaining_usd != null
+        ? ` · <strong>$${Number(bot.remaining_usd).toFixed(2)}</strong> deployable`
+        : '';
+      const skipBrief = bot.last_skip_reason
+        ? ` · skip: ${botSkipReasonBrief(bot.last_skip_reason)}`
+        : '';
       if (periodLabel === 'hour') {
         const sig = w.signal || '—';
         const label = w.label ? ` · ${w.label}` : '';
-        const regime = w.regime_allow_trade === false
-          ? ' · regime blocked'
-          : '';
-        return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${label}${regime} — bot enters on BUY YES/NO when signal + book pass checks.</p>`;
+        let regime = '';
+        if (w.regime_allow_trade === false) {
+          regime = freeMode
+            ? ' · live regime <span class="muted">(advisory only in FREE mode)</span>'
+            : ' · <span class="down">regime blocked</span>';
+        }
+        const modeNote = freeMode
+          ? 'FREE mode: enters on any BUY YES/NO passing book + ask-edge (regime ignored).'
+          : 'Enters on STRONG/ACTIONABLE when signal + regime + book pass.';
+        return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${label}${regime}${slotsLine}${deployLine}${skipBrief}<br><span style="opacity:.9">${modeNote}</span></p>`;
       }
       const sig = w.signal || '—';
       const model = w.model_signal && w.model_signal !== sig ? ` (model ${w.model_signal})` : '';
@@ -2183,7 +2229,10 @@
       const attemptLine = attempt && attempt.skip_reason
         ? ` · last try: ${attempt.skip_reason}${attempt.bid_cents != null ? ` (bid ${attempt.bid_cents}¢ ask ${attempt.ask_cents}¢ spread ${attempt.spread_cents}¢)` : ''}`
         : '';
-      return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${model}${prob}${late}${flip}${attemptLine} — free mode enters on LONG/SHORT (or late/flip).</p>`;
+      const modeNote = freeMode
+        ? 'FREE mode: LONG/SHORT + late/flip (no STRONG/ACTIONABLE gate).'
+        : 'STRONG/ACTIONABLE filters apply.';
+      return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${model}${prob}${late}${flip}${attemptLine}${slotsLine}${deployLine}${skipBrief}<br><span style="opacity:.9">${modeNote}</span></p>`;
     }
 
     function botSkipReasonLabel(raw) {
@@ -2214,8 +2263,20 @@
         correlated_same_side_strikes: 'Skipped — too close to an open strike on the same side.',
         opposing_threshold_hedge: 'Skipped — would partially hedge an open threshold leg (enable barbell in config to allow).',
         max_concurrent_positions: 'Max concurrent open positions reached.',
+        scale_in_max_legs: 'Scale-in blocked — max legs per ticker reached.',
+        scale_in_side_mismatch: 'Scale-in blocked — open legs are not all the same side.',
+        scale_in_no_mark: 'Scale-in blocked — no live mark for open legs.',
+        scale_in_no_edge: 'Scale-in blocked — cannot compute ask edge.',
       };
-      if (raw.startsWith('already_open:')) return `Already holding open position on ${raw.slice('already_open:'.length)}.`;
+      if (raw.startsWith('already_open:')) return `Already holding open position on ${raw.slice('already_open:'.length)} — one position per contract (no add-to). Exit first to re-enter at a new price.`;
+      if (raw.startsWith('scale_in_not_winner:')) {
+        const upnl = raw.slice('scale_in_not_winner:'.length);
+        return `Scale-in blocked — combined unrealized P&L $${upnl} below minimum (only add to winners).`;
+      }
+      if (raw.startsWith('scale_in_edge_not_improved:')) {
+        const edge = raw.slice('scale_in_edge_not_improved:'.length);
+        return `Scale-in blocked — new ask edge ${edge}¢ does not beat prior leg entry edge plus improvement threshold.`;
+      }
       if (raw.startsWith('reentry_cooldown:')) return `Re-entry cooldown active for ${raw.slice('reentry_cooldown:'.length)}.`;
       if (raw.startsWith('ask_edge_too_low:')) {
         const cents = raw.slice('ask_edge_too_low:'.length);
@@ -2606,7 +2667,7 @@
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'slot');
       const skipHtml = botSkipReasonHtml(bot);
-      const watchHtml = botEntryWatchHtml(bot, 'slot');
+      const watchHtml = botEntryWatchHtml(bot, 'slot', freeMode);
       const serverBanner = botServerBanner(bot, s);
       statusWrap.innerHTML = `
         ${serverBanner}
@@ -2792,7 +2853,7 @@
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'hour');
       const skipHtml = botSkipReasonHtml(bot);
-      const watchHtml = botEntryWatchHtml(bot, 'hour');
+      const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode);
       const serverBanner = botServerBanner(bot, s);
       statusWrap.innerHTML = `
         ${serverBanner}

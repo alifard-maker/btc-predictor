@@ -325,6 +325,13 @@ class Slot15BotStore:
     self.set_last_skip_reason(None)
     return state.to_dict()
 
+  def sync_paper_cap_on_max_increase(self, old_cap: float, new_cap: float) -> dict[str, Any] | None:
+    from src.trading.paper_bankroll import sync_paper_cap_on_max_increase
+
+    with self._connect() as conn:
+      state = sync_paper_cap_on_max_increase(conn, old_cap, new_cap)
+    return state.to_dict() if state else None
+
   def fresh_start_paper(self, max_cap: float) -> dict[str, Any]:
     from src.trading.bot_fresh_start import fresh_start_paper_bot
 

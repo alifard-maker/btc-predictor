@@ -191,3 +191,28 @@ def reset_paper_bankroll(conn: sqlite3.Connection, max_cap: float) -> PaperBankr
   )
   save_paper_state(conn, state)
   return state
+
+
+def sync_paper_cap_on_max_increase(
+  conn: sqlite3.Connection,
+  old_cap: float,
+  new_cap: float,
+) -> PaperBankrollState | None:
+  """When max cap rises, never reset trades; bump bankroll only if still at old ceiling."""
+  if new_cap <= old_cap:
+    return None
+  state = get_paper_state(conn)
+  if state is None:
+    return None
+  if abs(state.paper_bankroll_usd - old_cap) > 0.009:
+    return state
+  updated = PaperBankrollState(
+    paper_bankroll_usd=float(new_cap),
+    paper_bankroll_initial_usd=state.paper_bankroll_initial_usd,
+    paper_bankroll_started_at=state.paper_bankroll_started_at,
+    paper_realized_all_time_usd=state.paper_realized_all_time_usd,
+    paper_refill_count=state.paper_refill_count,
+    paper_total_invested_usd=state.paper_total_invested_usd,
+  )
+  save_paper_state(conn, updated)
+  return updated

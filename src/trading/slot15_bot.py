@@ -15,6 +15,7 @@ from src.trading.bot_profit_exit import (
 )
 from src.trading.edge import Signal
 from src.trading.bot_auto_tuning import effective_entry_strategy
+from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import entry_budget_usd, passes_ask_edge_gate
 from src.trading.paper_execution import (
   entry_quote_log_fields,
@@ -548,17 +549,11 @@ class Slot15Bot:
 
     results: list[dict[str, Any]] = []
     last_reason = "no_entry_this_cycle"
+    open_pos = self.store.open_positions(slot_key)
+    estrat = effective_entry_strategy(cfg, kind="slot15", tuning=self.store.get_auto_tuning())
     for _score, signal, pick, bet in candidates:
       if not bet_qualifies(signal, bet, settings):
         last_reason = "signal_filtered_by_settings"
-        continue
-
-      if self.store.has_open_position(slot_key, market_ticker):
-        last_reason = f"already_open:{market_ticker}"
-        continue
-
-      if self.store.is_in_cooldown(slot_key, market_ticker, settings.reentry_cooldown_seconds):
-        last_reason = f"reentry_cooldown:{market_ticker}"
         continue
 
       side = _side_from_signal(signal)
@@ -566,15 +561,26 @@ class Slot15Bot:
         last_reason = "unrecognized_signal"
         continue
 
+      pred = tab.get("prediction") or {}
+      prob_up = float(pred.get("prob_up", 0.5))
+      pick_kelly = {**pick, "model_prob": prob_up}
+
+      existing_on_ticker = [p for p in open_pos if p["market_ticker"] == market_ticker]
+      if existing_on_ticker:
+        ok_scale, scale_reason = evaluate_scale_in(existing_on_ticker, pick_kelly, side, estrat)
+        if not ok_scale:
+          last_reason = scale_reason or f"already_open:{market_ticker}"
+          continue
+
+      if self.store.is_in_cooldown(slot_key, market_ticker, settings.reentry_cooldown_seconds):
+        last_reason = f"reentry_cooldown:{market_ticker}"
+        continue
+
       remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd, settings)
       if remaining <= 0:
         last_reason = "fully_deployed"
         break
 
-      pred = tab.get("prediction") or {}
-      prob_up = float(pred.get("prob_up", 0.5))
-      pick_kelly = {**pick, "model_prob": prob_up}
-      estrat = effective_entry_strategy(cfg, kind="slot15", tuning=self.store.get_auto_tuning())
       ok_edge, ask_edge = passes_ask_edge_gate(pick_kelly, side, estrat.min_ask_edge_cents)
       if not ok_edge:
         last_reason = f"ask_edge_too_low:{ask_edge:.0f}c"

@@ -218,11 +218,14 @@ hourly:
       kelly_fraction: 0.15
       min_ask_edge_cents: 8
       max_entries_per_cycle: 2
-      max_concurrent_positions: 3
+      max_concurrent_positions: 12
       max_budget_fraction_per_entry: 0.55
       correlation_guard: true
       allow_barbell: true
       barbell_min_strike_gap_pct: 0.20
+      allow_scale_in: true
+      scale_in_max_legs_per_ticker: 2
+      scale_in_min_unrealized_pnl_usd: 0.05
 
 # Flip-to-opposite
 flip:
@@ -356,11 +359,14 @@ eth:
         kelly_fraction: 0.15
         min_ask_edge_cents: 8
         max_entries_per_cycle: 2
-        max_concurrent_positions: 3
+        max_concurrent_positions: 12
         max_budget_fraction_per_entry: 0.55
         correlation_guard: true
         allow_barbell: true
         barbell_min_strike_gap_pct: 0.20
+        allow_scale_in: true
+        scale_in_max_legs_per_ticker: 2
+        scale_in_min_unrealized_pnl_usd: 0.05
     sigma_calibration: true
 
 paths:

@@ -652,7 +652,10 @@ def _apply_hourly_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
   })
   if settings.max_spend_per_hour_usd < 0:
     raise HTTPException(400, "max_spend_per_hour_usd must be >= 0")
+  old_cap = current.max_spend_per_hour_usd
   store.save_settings(settings)
+  if settings.max_spend_per_hour_usd > old_cap:
+    store.sync_paper_cap_on_max_increase(old_cap, settings.max_spend_per_hour_usd)
   return settings.to_dict()
 
 
@@ -707,7 +710,10 @@ def _apply_slot15_bot_settings(store, body: dict[str, Any]) -> dict[str, Any]:
   })
   if settings.max_spend_per_slot_usd < 0:
     raise HTTPException(400, "max_spend_per_slot_usd must be >= 0")
+  old_cap = current.max_spend_per_slot_usd
   store.save_settings(settings)
+  if settings.max_spend_per_slot_usd > old_cap:
+    store.sync_paper_cap_on_max_increase(old_cap, settings.max_spend_per_slot_usd)
   return settings.to_dict()
 
 

@@ -15,6 +15,7 @@ from src.trading.bot_profit_exit import (
 )
 from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
 from src.trading.bot_auto_tuning import effective_entry_strategy
+from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
   correlation_block_reason,
   entry_budget_usd,
@@ -590,19 +591,25 @@ class HourlyBot:
         continue
 
       market_ticker = str(pick["ticker"])
-      if self.store.has_open_position(event_ticker, market_ticker):
-        last_reason = f"already_open:{market_ticker}"
+
+      side = _side_from_signal(pick.get("signal"))
+      if not side:
+        last_reason = "unrecognized_signal"
         continue
+
+      existing_on_ticker = [p for p in open_pos if p["market_ticker"] == market_ticker]
+      allow_scale_in_ticker: str | None = None
+      if existing_on_ticker:
+        ok_scale, scale_reason = evaluate_scale_in(existing_on_ticker, pick, side, estrat)
+        if not ok_scale:
+          last_reason = scale_reason or f"already_open:{market_ticker}"
+          continue
+        allow_scale_in_ticker = market_ticker
 
       if self.store.is_in_cooldown(
         event_ticker, market_ticker, settings.reentry_cooldown_seconds
       ):
         last_reason = f"reentry_cooldown:{market_ticker}"
-        continue
-
-      side = _side_from_signal(pick.get("signal"))
-      if not side:
-        last_reason = "unrecognized_signal"
         continue
 
       ok_edge, ask_edge = passes_ask_edge_gate(pick, side, estrat.min_ask_edge_cents)
@@ -617,6 +624,7 @@ class HourlyBot:
         resolve_pick=_resolve_pick,
         ref_price=ref_f,
         estrat=estrat,
+        allow_scale_in_ticker=allow_scale_in_ticker,
       )
       if block:
         last_reason = block
