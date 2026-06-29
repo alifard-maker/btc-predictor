@@ -265,6 +265,30 @@ hourly:
       allow_scale_in: true
       scale_in_max_legs_per_ticker: 2
       scale_in_min_unrealized_pnl_usd: 0.05
+    trial:
+      continuous_enabled: true
+      poll_seconds: 10
+      take_profit_enabled: true
+      take_profit_mode: hybrid
+      take_profit_pct: 0.12
+      take_profit_usd: 0.10
+      trail_arm_profit_pct: 0.05
+      trail_giveback_pct: 0.30
+      trail_arm_profit_usd: 0.10
+      trail_giveback_usd: 0.05
+      min_take_profit_pct: 0.05
+      max_take_profit_pct: 0.20
+      min_hold_seconds: 15
+      profit_exit_cooldown_seconds: 60
+      leg_take_profit_cents: 3
+      leg_stop_loss_cents: 4
+      leg_take_profit_usd: 0.10
+      leg_trail_arm_usd: 0.10
+      leg_trail_giveback_usd: 0.05
+      leg_trail_giveback_pct: 0.30
+      reassess_neutral_take_profit: true
+      reassess_neutral_band: 0.07
+      reassess_neutral_min_unrealized_usd: 0.05
 
 # Flip-to-opposite
 flip:
@@ -428,6 +452,30 @@ eth:
         allow_scale_in: true
         scale_in_max_legs_per_ticker: 2
         scale_in_min_unrealized_pnl_usd: 0.05
+      trial:
+        continuous_enabled: true
+        poll_seconds: 10
+        take_profit_enabled: true
+        take_profit_mode: hybrid
+        take_profit_pct: 0.12
+        take_profit_usd: 0.10
+        trail_arm_profit_pct: 0.05
+        trail_giveback_pct: 0.30
+        trail_arm_profit_usd: 0.10
+        trail_giveback_usd: 0.05
+        min_take_profit_pct: 0.05
+        max_take_profit_pct: 0.20
+        min_hold_seconds: 15
+        profit_exit_cooldown_seconds: 60
+        leg_take_profit_cents: 3
+        leg_stop_loss_cents: 4
+        leg_take_profit_usd: 0.10
+        leg_trail_arm_usd: 0.10
+        leg_trail_giveback_usd: 0.05
+        leg_trail_giveback_pct: 0.30
+        reassess_neutral_take_profit: true
+        reassess_neutral_band: 0.07
+        reassess_neutral_min_unrealized_usd: 0.05
     sigma_calibration: true
 
 paths:

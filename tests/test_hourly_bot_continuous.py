@@ -774,3 +774,94 @@ def test_profit_trail_exits_without_hitting_fixed_target():
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
     assert "PROFIT TRAIL" in exits[0]["detail"]
+
+
+def test_hourly_trial_leg_take_profit_on_mark_gain():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "hourly_trial_bot_btc.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=25.0,
+      allow_strong=False,
+      allow_actionable=False,
+      min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 10,
+      "entry_price_cents": 40,
+      "cost_usd": 4.0,
+      "signal": "BUY YES",
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    bot = HourlyBot(store, asset="btc", kind="hourly_trial")
+    tab = _live_tab()
+    tab["live"]["primary_pick"]["kalshi_mid"] = 0.44
+    tab["live"]["primary_pick"]["yes_bid"] = 0.44
+    tab["live"]["primary_pick"]["yes_ask"] = 0.44
+    cfg = {
+      "hourly": {
+        "regime": {"min_edge": 0.05},
+        "bot": {
+          "trial": {
+            "leg_take_profit_cents": 3,
+            "leg_take_profit_usd": 0.10,
+          },
+        },
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "LEG TAKE PROFIT" in exits[0]["detail"]
+
+
+def test_hourly_trial_neutral_take_profit_when_edge_fades():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "hourly_trial_bot_btc.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=25.0,
+      allow_strong=False,
+      allow_actionable=False,
+      min_hold_seconds=0,
+      take_profit_pct=0.25,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 10,
+      "entry_price_cents": 40,
+      "cost_usd": 4.0,
+      "signal": "BUY YES",
+      "entry_edge": 0.12,
+      "opened_at": _opened_at_seconds_ago(60),
+    })
+    bot = HourlyBot(store, asset="btc", kind="hourly_trial")
+    tab = _live_tab()
+    tab["live"]["primary_pick"]["kalshi_mid"] = 0.41
+    tab["live"]["primary_pick"]["yes_bid"] = 0.41
+    tab["live"]["primary_pick"]["yes_ask"] = 0.41
+    tab["live"]["primary_pick"]["edge"] = 0.03
+    cfg = {
+      "hourly": {
+        "regime": {"min_edge": 0.05},
+        "bot": {
+          "trial": {
+            "leg_take_profit_cents": 99,
+            "leg_take_profit_usd": 99.0,
+            "reassess_neutral_take_profit": True,
+            "reassess_neutral_min_unrealized_usd": 0.05,
+          },
+        },
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "REASSESS NEUTRAL TP" in exits[0]["detail"]

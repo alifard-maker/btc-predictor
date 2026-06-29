@@ -801,7 +801,7 @@ async def hourly_bot_settings(request: Request, _: None = Depends(_session_user)
   return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
 
 
-def _hourly_bot_fresh_start(store, tab_fn, asset: str):
+def _hourly_bot_fresh_start(store, tab_fn, asset: str, *, kind: str = "hourly"):
   from src.trading.bot_risk_state import bot_risk_key, get_bot_risk_coordinator
 
   settings = store.get_settings()
@@ -810,9 +810,9 @@ def _hourly_bot_fresh_start(store, tab_fn, asset: str):
   store.fresh_start_paper(settings.max_spend_per_hour_usd, preserve_settings=True)
   coord = get_bot_risk_coordinator()
   if coord:
-    coord.reset_bot_daily_pnl(bot_risk_key("hourly", asset))
+    coord.reset_bot_daily_pnl(bot_risk_key(kind, asset))
   tab = tab_fn()
-  return _loop.hourly_bot_status(asset, tab if tab.get("ok") else None)
+  return _loop.hourly_bot_status(asset, tab if tab.get("ok") else None, kind=kind)
 
 
 def _slot15_bot_fresh_start(store, tab_fn, asset: str):
@@ -824,15 +824,15 @@ def _slot15_bot_fresh_start(store, tab_fn, asset: str):
   return _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
 
 
-def _override_daily_cap_hourly(asset: str) -> dict[str, Any]:
+def _override_daily_cap_hourly(asset: str, *, kind: str = "hourly") -> dict[str, Any]:
   from src.assets import asset_cfg
   from src.trading.bot_risk_gates import override_daily_loss_cap
 
-  store = _loop.hourly_bot_store(asset)
+  store = _loop.hourly_bot_store(asset, kind=kind)
   acfg = _cfg if asset == "btc" else (_loop._eth_cfg or asset_cfg(_cfg, asset))
-  daily = override_daily_loss_cap(store, kind="hourly", asset=asset, cfg=acfg)
+  daily = override_daily_loss_cap(store, kind=kind, asset=asset, cfg=acfg)
   tab = _loop.daily_prediction() if asset == "btc" else _loop.eth_hourly_prediction()
-  status = _loop.hourly_bot_status(asset, tab if tab.get("ok") else None)
+  status = _loop.hourly_bot_status(asset, tab if tab.get("ok") else None, kind=kind)
   status["daily_loss"] = daily
   return status
 
@@ -974,6 +974,143 @@ def eth_hourly_bot_trades(
   if _loop is None:
     raise HTTPException(503, "Service starting")
   store = _loop.hourly_bot_store("eth")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["hour_summary"] = store.hour_interval_summary(event_ticker)
+  return out
+
+
+@app.get("/api/hourly-trial/bot")
+def hourly_trial_bot_status(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop.daily_prediction()
+  return _loop.hourly_trial_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/hourly-trial/bot/settings")
+async def hourly_trial_bot_settings(request: Request, _: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  body = await request.json()
+  store = _loop.hourly_trial_bot_store("btc")
+  _apply_hourly_bot_settings(store, body, cfg=_cfg)
+  tab = _loop.daily_prediction()
+  return _loop.hourly_trial_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/hourly-trial/bot/reset-bankroll")
+def hourly_trial_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_trial_bot_store("btc")
+  settings = store.get_settings()
+  if settings.mode != "paper":
+    raise HTTPException(400, "Reset bankroll is only available in paper mode")
+  store.reset_paper_bankroll(settings.max_spend_per_hour_usd)
+  tab = _loop.daily_prediction()
+  return _loop.hourly_trial_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/hourly-trial/bot/fresh-start")
+def hourly_trial_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_fresh_start(
+    _loop.hourly_trial_bot_store("btc"),
+    _loop.daily_prediction,
+    "btc",
+    kind="hourly_trial",
+  )
+
+
+@app.post("/api/hourly-trial/bot/override-daily-cap")
+def hourly_trial_bot_override_daily_cap(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _override_daily_cap_hourly("btc", kind="hourly_trial")
+
+
+@app.get("/api/hourly-trial/bot/trades")
+def hourly_trial_bot_trades(
+  limit: int = Query(default=100, le=200),
+  event_ticker: str | None = Query(default=None),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_trial_bot_store("btc")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["hour_summary"] = store.hour_interval_summary(event_ticker)
+  return out
+
+
+@app.get("/api/eth/hourly-trial/bot")
+def eth_hourly_trial_bot_status(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop.eth_hourly_prediction()
+  return _loop.eth_hourly_trial_bot_status(tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/hourly-trial/bot/settings")
+async def eth_hourly_trial_bot_settings(request: Request, _: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  body = await request.json()
+  store = _loop.hourly_trial_bot_store("eth")
+  from src.assets import asset_cfg
+
+  eth_cfg = _loop._eth_cfg or asset_cfg(_cfg, "eth")
+  _apply_hourly_bot_settings(store, body, cfg=eth_cfg)
+  tab = _loop.eth_hourly_prediction()
+  return _loop.eth_hourly_trial_bot_status(tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/hourly-trial/bot/reset-bankroll")
+def eth_hourly_trial_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_trial_bot_store("eth")
+  settings = store.get_settings()
+  if settings.mode != "paper":
+    raise HTTPException(400, "Reset bankroll is only available in paper mode")
+  store.reset_paper_bankroll(settings.max_spend_per_hour_usd)
+  tab = _loop.eth_hourly_prediction()
+  return _loop.eth_hourly_trial_bot_status(tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/hourly-trial/bot/fresh-start")
+def eth_hourly_trial_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_fresh_start(
+    _loop.hourly_trial_bot_store("eth"),
+    _loop.eth_hourly_prediction,
+    "eth",
+    kind="hourly_trial",
+  )
+
+
+@app.post("/api/eth/hourly-trial/bot/override-daily-cap")
+def eth_hourly_trial_bot_override_daily_cap(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _override_daily_cap_hourly("eth", kind="hourly_trial")
+
+
+@app.get("/api/eth/hourly-trial/bot/trades")
+def eth_hourly_trial_bot_trades(
+  limit: int = Query(default=100, le=200),
+  event_ticker: str | None = Query(default=None),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_trial_bot_store("eth")
   trades = store.list_trades(limit=limit, event_ticker=event_ticker)
   out: dict[str, Any] = {"trades": trades}
   if event_ticker:
@@ -1288,6 +1425,10 @@ def admin_fresh_start_all_paper_bots(_: None = Depends(_session_user)):
     h_settings = h_store.get_settings()
     if h_settings.mode == "paper":
       results[f"hourly_{asset}"] = h_store.fresh_start_paper(h_settings.max_spend_per_hour_usd)
+    ht_store = _loop.hourly_trial_bot_store(asset)
+    ht_settings = ht_store.get_settings()
+    if ht_settings.mode == "paper":
+      results[f"hourly_trial_{asset}"] = ht_store.fresh_start_paper(ht_settings.max_spend_per_hour_usd)
     s_store = _loop.slot15_bot_store(asset)
     s_settings = s_store.get_settings()
     if s_settings.mode == "paper":

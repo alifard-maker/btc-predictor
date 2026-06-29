@@ -406,7 +406,11 @@ def build_bot_performance_report(
   return {
     "kind": kind,
     "asset": asset,
-    "label": f"{asset.upper()} {kind}",
+    "label": (
+      f"{asset.upper()} Hourly Trial" if kind == "hourly_trial"
+      else f"{asset.upper()} Hourly" if kind == "hourly"
+      else f"{asset.upper()} {kind}"
+    ),
     "summary": sm,
     "by_entry_price": by_price,
     "by_spread": by_spread,
@@ -437,7 +441,9 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
   reports: list[dict[str, Any]] = []
   specs = (
     ("hourly", "btc", loop.hourly_bot_store("btc"), loop.cfg),
+    ("hourly_trial", "btc", loop.hourly_trial_bot_store("btc"), loop.cfg),
     ("hourly", "eth", loop.hourly_bot_store("eth"), loop._eth_cfg or loop.cfg),
+    ("hourly_trial", "eth", loop.hourly_trial_bot_store("eth"), loop._eth_cfg or loop.cfg),
     ("slot15", "btc", loop.slot15_bot_store("btc"), loop._acfg_15m("btc")),
     ("slot15", "eth", loop.slot15_bot_store("eth"), loop._acfg_15m("eth")),
   )
@@ -449,7 +455,8 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
       except Exception:
         pass
     tuning = store.get_auto_tuning()
-    estrat = effective_entry_strategy(acfg, kind=kind, tuning=tuning)
+    entry_kind = "hourly" if kind == "hourly_trial" else kind
+    estrat = effective_entry_strategy(acfg, kind=entry_kind, tuning=tuning)
     trades = store.list_trades(limit=5000)
     report = build_bot_performance_report(
       kind=kind,

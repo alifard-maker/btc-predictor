@@ -241,10 +241,12 @@ class PredictionLoop:
 
     stores: list[Any] = [
       self.hourly_bot_store("btc"),
+      self.hourly_trial_bot_store("btc"),
       self.slot15_bot_store("btc"),
     ]
     if asset_enabled(self.cfg, "eth"):
       stores.append(self.hourly_bot_store("eth"))
+      stores.append(self.hourly_trial_bot_store("eth"))
       if self._slot15m_enabled("eth"):
         stores.append(self.slot15_bot_store("eth"))
     register_bot_stores(stores)
@@ -293,25 +295,37 @@ class PredictionLoop:
     if tab.get("ok"):
       cache[asset] = (tab, time.monotonic())
 
-  def hourly_bot_store(self, asset: str):
+  def _hourly_bot_key(self, kind: str, asset: str) -> str:
+    return f"{kind}:{asset.lower()}"
+
+  def hourly_bot_store(self, asset: str, *, kind: str = "hourly"):
     asset = asset.lower()
-    if asset not in self._hourly_bot_stores:
+    key = self._hourly_bot_key(kind, asset)
+    if key not in self._hourly_bot_stores:
       from src.trading.hourly_bot_store import HourlyBotStore
 
       acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
       logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
-      self._hourly_bot_stores[asset] = HourlyBotStore(logs / f"hourly_bot_{asset}.db")
-    return self._hourly_bot_stores[asset]
+      db_name = f"hourly_trial_bot_{asset}.db" if kind == "hourly_trial" else f"hourly_bot_{asset}.db"
+      self._hourly_bot_stores[key] = HourlyBotStore(logs / db_name)
+    return self._hourly_bot_stores[key]
 
-  def hourly_bot(self, asset: str):
+  def hourly_trial_bot_store(self, asset: str):
+    return self.hourly_bot_store(asset, kind="hourly_trial")
+
+  def hourly_bot(self, asset: str, *, kind: str = "hourly"):
     asset = asset.lower()
-    if asset not in self._hourly_bots:
+    key = self._hourly_bot_key(kind, asset)
+    if key not in self._hourly_bots:
       from src.trading.hourly_bot import HourlyBot
 
-      store = self.hourly_bot_store(asset)
+      store = self.hourly_bot_store(asset, kind=kind)
       kalshi = self._kalshi_for(asset)
-      self._hourly_bots[asset] = HourlyBot(store, kalshi_client=kalshi, asset=asset)
-    return self._hourly_bots[asset]
+      self._hourly_bots[key] = HourlyBot(store, kalshi_client=kalshi, asset=asset, kind=kind)
+    return self._hourly_bots[key]
+
+  def hourly_trial_bot(self, asset: str):
+    return self.hourly_bot(asset, kind="hourly_trial")
 
   def eth_hourly_bot_store(self):
     return self.hourly_bot_store("eth")
@@ -343,17 +357,28 @@ class PredictionLoop:
     except (TypeError, ValueError):
       pass
 
-  def hourly_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+  def hourly_bot_status(
+    self,
+    asset: str,
+    tab: dict[str, Any] | None = None,
+    *,
+    kind: str = "hourly",
+  ) -> dict[str, Any]:
     asset = asset.lower()
     if asset == "eth" and not asset_enabled(self.cfg, "eth"):
       return {"ok": False, "error": "ETH disabled"}
     event_ticker = None
     if tab:
       event_ticker = (tab.get("event") or {}).get("event_ticker")
-    status = self.hourly_bot_store(asset).status(event_ticker)
+    store = self.hourly_bot_store(asset, kind=kind)
+    status = store.status(event_ticker)
     status["ok"] = True
     status["asset"] = asset
-    store = self.hourly_bot_store(asset)
+    status["bot_kind"] = kind
+    label_asset = "ETH" if asset == "eth" else "BTC"
+    status["bot_label"] = (
+      f"{label_asset} Hourly Trial" if kind == "hourly_trial" else f"{label_asset} Hourly"
+    )
     status["recent_trades"] = store.list_trades(limit=100)
     status["hour_trades"] = (
       store.list_trades(limit=50, event_ticker=event_ticker) if event_ticker else []
@@ -362,8 +387,14 @@ class PredictionLoop:
     if tab and tab.get("ok"):
       from src.trading.hourly_bot import enrich_open_positions_live
 
-      acfg = self._acfg_15m(asset)
-      open_pos = enrich_open_positions_live(open_pos, tab, acfg)
+      acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+      open_pos = enrich_open_positions_live(
+        open_pos,
+        tab,
+        acfg,
+        settings=store.get_settings(),
+        bot_kind=kind,
+      )
       status["open_positions"] = open_pos
     hs = status.get("hourly_summary") or status.get("hour_summary")
     if hs:
@@ -396,9 +427,15 @@ class PredictionLoop:
     estrat = effective_entry_strategy(acfg, kind="hourly", tuning=store.get_auto_tuning())
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
-    self._attach_bot_daily_loss(status, kind="hourly", asset=asset)
+    self._attach_bot_daily_loss(status, kind=kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
     return status
+
+  def hourly_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+    return self.hourly_bot_status(asset, tab, kind="hourly_trial")
+
+  def eth_hourly_trial_bot_status(self, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+    return self.hourly_trial_bot_status("eth", tab)
 
   def _attach_bot_daily_loss(self, status: dict[str, Any], *, kind: str, asset: str) -> None:
     from src.trading.bot_risk_state import bot_risk_key, get_bot_risk_coordinator
@@ -421,10 +458,10 @@ class PredictionLoop:
   def _maybe_run_eth_hourly_bot(self, tab: dict[str, Any], trigger: str) -> None:
     self._maybe_run_hourly_bot("eth", tab, trigger)
 
-  def _run_hourly_bot_continuous(self, asset: str) -> None:
+  def _run_hourly_bot_continuous(self, asset: str, *, kind: str = "hourly") -> None:
     asset = asset.lower()
     self.all_bot_stores()
-    store = self.hourly_bot_store(asset)
+    store = self.hourly_bot_store(asset, kind=kind)
     settings = store.get_settings()
     active = settings.enabled and settings.continuous
     try:
@@ -438,9 +475,10 @@ class PredictionLoop:
         tab = self._hourly_tab_prediction(asset)
         self._store_tab_cache(self._hourly_tab_cache, asset, tab)
       if tab.get("ok"):
-        self.hourly_bot(asset).run_continuous_cycle(tab, cfg=acfg)
+        self.hourly_bot(asset, kind=kind).run_continuous_cycle(tab, cfg=acfg)
     except Exception as e:
-      log.exception("%s hourly bot continuous cycle failed: %s", asset.upper(), e)
+      label = "hourly trial" if kind == "hourly_trial" else "hourly"
+      log.exception("%s %s bot continuous cycle failed: %s", asset.upper(), label, e)
     finally:
       store.record_cycle(active=active)
 
@@ -451,6 +489,14 @@ class PredictionLoop:
     if not asset_enabled(self.cfg, "eth"):
       return
     self._run_hourly_bot_continuous("eth")
+
+  def run_hourly_trial_bot_continuous(self) -> None:
+    self._run_hourly_bot_continuous("btc", kind="hourly_trial")
+
+  def run_eth_hourly_trial_bot_continuous(self) -> None:
+    if not asset_enabled(self.cfg, "eth"):
+      return
+    self._run_hourly_bot_continuous("eth", kind="hourly_trial")
 
   def _run_hourly_bot_intrahour(self, asset: str) -> None:
     self._run_hourly_bot_continuous(asset)
@@ -1588,6 +1634,16 @@ class PredictionLoop:
           id="hourly_bot_continuous",
           max_instances=1,
         )
+      trial_cfg = bot_cfg.get("trial") or {}
+      if trial_cfg.get("continuous_enabled", False):
+        poll_sec = int(trial_cfg.get("poll_seconds", bot_cfg.get("poll_seconds", 10)))
+        scheduler.add_job(
+          self.run_hourly_trial_bot_continuous,
+          "interval",
+          seconds=poll_sec,
+          id="hourly_trial_bot_continuous_btc",
+          max_instances=1,
+        )
     if asset_enabled(self.cfg, "eth"):
       acfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
       if acfg.get("hourly", {}).get("enabled", True):
@@ -1622,6 +1678,16 @@ class PredictionLoop:
             "interval",
             seconds=poll_sec,
             id="eth_hourly_bot_continuous",
+            max_instances=1,
+          )
+        trial_cfg = bot_cfg.get("trial") or {}
+        if trial_cfg.get("continuous_enabled", False):
+          poll_sec = int(trial_cfg.get("poll_seconds", bot_cfg.get("poll_seconds", 10)))
+          scheduler.add_job(
+            self.run_eth_hourly_trial_bot_continuous,
+            "interval",
+            seconds=poll_sec,
+            id="hourly_trial_bot_continuous_eth",
             max_instances=1,
           )
 

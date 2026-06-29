@@ -488,6 +488,11 @@
         <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON — enters and exits paper/live positions from live signals (no browser required). <strong>Max at-risk $/hour</strong> caps open exposure at once; exits free budget for re-entry (many round-trips per hour are OK). <strong>Cumulative $ entered</strong> below can exceed your cap — that is normal churn, not overspend. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any BUY YES/NO pick).</p>
         <div id="btc-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="btc-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
+        <h2>BTC Hourly Trial</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same entries and market data as <strong>BTC hourly</strong> above, but exits use <strong>15m-style contract-first logic</strong> (+3¢ take-profit, −4¢ stop, leg trail). Separate paper bankroll and trade log for A/B comparison.</p>
+        <div id="btc-hourly-trial-bot"><p class="muted">Loading…</p></div>
+      </div>
       <div class="card" id="hourly-guide-card">
         <h2>How to read this tab</h2>
         <div id="hourly-guide"><p class="muted">Loading…</p></div>
@@ -530,6 +535,11 @@
         <h2>ETH hourly auto-bet</h2>
         <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON (browser not required) — continuous enter/exit within your <strong>max at-risk $/hour</strong> (open exposure only; exits free budget). <strong>Cumulative $ entered</strong> can exceed your cap when the bot rotates through many round-trips. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
         <div id="eth-hourly-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="eth-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
+        <h2>ETH Hourly Trial</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same entries and market data as <strong>ETH hourly</strong> above, but exits use <strong>15m-style contract-first logic</strong> (+3¢ take-profit, −4¢ stop, leg trail). Separate paper bankroll for A/B comparison.</p>
+        <div id="eth-hourly-trial-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="eth-hourly-guide-card">
         <h2>How to read this tab</h2>
@@ -646,6 +656,7 @@
     let slot15FetchGen = 0;
     let hourlyGuideCheatOpen = false;
     const lastBotStatus = { btc: null, eth: null };
+    const lastHourlyTrialBotStatus = { btc: null, eth: null };
     const lastSlot15BotStatus = { btc: null, eth: null };
     const lastKnownBotSettings = {};
     const pendingBotPatch = {};
@@ -1578,6 +1589,12 @@
           lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_hour_usd');
         }
         if (cached) renderHourlyBot(cached, asset);
+        const trialCached = lastHourlyTrialBotStatus[asset];
+        const trialKey = botUiKey('hourly_trial', asset);
+        if (trialCached?.settings && !pendingBotPatch[trialKey]) {
+          lastKnownBotSettings[trialKey] = normalizeBotSettings(trialCached.settings, 'max_spend_per_hour_usd');
+        }
+        if (trialCached) renderHourlyBot(trialCached, asset, 'hourly_trial');
         loadDaily();
         return;
       }
@@ -1994,8 +2011,23 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/fresh-start' : '/api/hourly/bot/fresh-start';
     }
 
-    function hourlyBotStatusUrl(asset) {
+    function hourlyBotStatusUrl(asset, kind = 'hourly') {
+      if (kind === 'hourly_trial') {
+        return asset === 'eth' ? '/api/eth/hourly-trial/bot' : '/api/hourly-trial/bot';
+      }
       return asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
+    }
+
+    function hourlyTrialBotSettingsUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly-trial/bot/settings' : '/api/hourly-trial/bot/settings';
+    }
+
+    function hourlyTrialBotResetBankrollUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly-trial/bot/reset-bankroll' : '/api/hourly-trial/bot/reset-bankroll';
+    }
+
+    function hourlyTrialBotFreshStartUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly-trial/bot/fresh-start' : '/api/hourly-trial/bot/fresh-start';
     }
 
     function mergeHourSummary(prev, next, eventTicker) {
@@ -2056,11 +2088,57 @@
       return merged;
     }
 
+    function mergeHourlyTrialBotStatus(asset, incoming) {
+      if (!incoming || !incoming.ok || (incoming.asset && incoming.asset !== asset)) {
+        return lastHourlyTrialBotStatus[asset];
+      }
+      const prev = lastHourlyTrialBotStatus[asset];
+      if (!prev) {
+        lastHourlyTrialBotStatus[asset] = incoming;
+        return incoming;
+      }
+      const eventTicker = incoming.event_ticker
+        || (incoming.hour_summary || incoming.hourly_summary || {}).event_ticker
+        || prev.event_ticker;
+      const prevHs = prev.hour_summary || prev.hourly_summary || {};
+      const nextHs = incoming.hour_summary || incoming.hourly_summary || {};
+      const mergedHs = mergeHourSummary(prevHs, nextHs, eventTicker);
+      const merged = {
+        ...prev,
+        ...incoming,
+        event_ticker: eventTicker,
+        settings: mergeBotSettingsForCache('hourly_trial', asset, incoming.settings, prev.settings),
+        hour_summary: mergedHs,
+        hourly_summary: mergedHs,
+        open_positions: incoming.open_positions ?? prev.open_positions,
+        recent_trades: incoming.recent_trades ?? prev.recent_trades,
+      };
+      lastHourlyTrialBotStatus[asset] = merged;
+      return merged;
+    }
+
     const botForceSettingsRender = { btc: true, eth: true };
+    const hourlyTrialForceSettingsRender = { btc: true, eth: true };
     const slot15BotForceSettingsRender = { btc: true, eth: true };
 
-    function readBotSettingsFromDom(asset) {
-      const p = asset;
+    function botDomPrefix(kind, asset) {
+      if (kind === 'slot15') return `slot15-${asset}`;
+      if (kind === 'hourly_trial') return `trial-${asset}`;
+      return asset;
+    }
+
+    function hourlyBotSettingsWrapId(kind, asset) {
+      if (kind === 'hourly_trial') return `${asset}-hourly-trial-bot-settings`;
+      return `${asset}-hourly-bot-settings`;
+    }
+
+    function hourlyBotPanelId(kind, asset) {
+      if (kind === 'hourly_trial') return `${asset}-hourly-trial-bot`;
+      return `${asset}-hourly-bot`;
+    }
+
+    function readBotSettingsFromDom(asset, kind = 'hourly') {
+      const p = botDomPrefix(kind, asset);
       const enabledEl = $(`bot-enabled-${p}`);
       if (!enabledEl) return null;
       return {
@@ -2075,38 +2153,47 @@
       };
     }
 
-    function botSettingsHtml(asset, s) {
-      const p = asset;
+    function botSettingsHtml(asset, s, kind = 'hourly') {
+      const p = botDomPrefix(kind, asset);
+      const saveFn = kind === 'hourly_trial'
+        ? `saveHourlyTrialBotSettings('${asset}')`
+        : `saveHourlyBotSettings('${asset}')`;
+      const modeFn = kind === 'hourly_trial'
+        ? `onBotModeToggle('${asset}', event, 'hourly_trial')`
+        : `onBotModeToggle('${asset}', event)`;
+      const profitsFn = kind === 'hourly_trial'
+        ? `onBotUseProfitsToggle('${asset}', 'hourly_trial')`
+        : `onBotUseProfitsToggle('${asset}', 'hourly')`;
       return `
         <div class="bot-row">
           <label class="bot-label">Auto-bet
-            <label class="switch"><input type="checkbox" id="bot-enabled-${p}" ${s.enabled ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-enabled-${p}" ${s.enabled ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
           </label>
           <label class="bot-label">Paper
-            <label class="switch"><input type="checkbox" id="bot-paper-${p}" ${s.mode === 'paper' ? 'checked' : ''} onchange="onBotModeToggle('${asset}', event)"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-paper-${p}" ${s.mode === 'paper' ? 'checked' : ''} onchange="${modeFn}"><span class="slider"></span></label>
           </label>
           <label class="bot-label">Live
-            <label class="switch"><input type="checkbox" id="bot-live-${p}" ${s.mode === 'live' ? 'checked' : ''} onchange="onBotModeToggle('${asset}', event)"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-live-${p}" ${s.mode === 'live' ? 'checked' : ''} onchange="${modeFn}"><span class="slider"></span></label>
           </label>
         </div>
         <div class="bot-row">
           <label class="bot-label" title="Max open exposure at once this hour — not cumulative spend">Max at-risk $ / hour
-            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="saveHourlyBotSettings('${asset}')">
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="${saveFn}">
           </label>
           <label class="bot-label">STRONG bets
-            <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
           </label>
           <label class="bot-label">ACTIONABLE bets
-            <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
           </label>
           <label class="bot-label" title="When ON, wins increase deployable capital and cumulative $ entered per hour can exceed max at-risk. When OFF, capped at max at-risk $ for this hour only.">Use profits
-            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit ? 'checked' : ''} onchange="onBotUseProfitsToggle('${asset}', 'hourly')"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit ? 'checked' : ''} onchange="${profitsFn}"><span class="slider"></span></label>
           </label>
           <label class="bot-label" title="% of interval profit deployable when Use profits is ON (0–100).">Profit use %
-            <input type="number" id="bot-profit-use-pct-${p}" min="0" max="100" step="5" value="${s.profit_use_pct ?? 100}" style="width:3.5rem;margin-left:.35rem" ${s.use_accumulated_profit ? '' : 'disabled'} onchange="saveHourlyBotSettings('${asset}')">
+            <input type="number" id="bot-profit-use-pct-${p}" min="0" max="100" step="5" value="${s.profit_use_pct ?? 100}" style="width:3.5rem;margin-left:.35rem" ${s.use_accumulated_profit ? '' : 'disabled'} onchange="${saveFn}">
           </label>
           <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
-            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
           </label>
         </div>`;
     }
@@ -2155,8 +2242,8 @@
       const refills = Number(pb.paper_refill_count ?? 0);
       const sinceCls = since > 0 ? 'up' : since < 0 ? 'down' : 'muted';
       const netCls = netVsInvested > 0 ? 'up' : netVsInvested < 0 ? 'down' : 'muted';
-      const resetBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.35rem" onclick="resetPaperBankroll('${periodLabel}', '${bot.asset || 'btc'}')">Reset bankroll</button>`;
-      const freshBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.25rem" onclick="freshStartPaperBot('${periodLabel}', '${bot.asset || 'btc'}')">Fresh start</button>`;
+      const resetBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.35rem" onclick="resetPaperBankroll('${periodLabel}', '${bot.asset || 'btc'}', '${bot.bot_kind || 'hourly'}')">Reset bankroll</button>`;
+      const freshBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.25rem" onclick="freshStartPaperBot('${periodLabel}', '${bot.asset || 'btc'}', '${bot.bot_kind || 'hourly'}')">Fresh start</button>`;
       return `
         <div class="bot-row" style="padding:.35rem .15rem .15rem">
           <div class="bot-stat"><span class="muted" title="Accumulated paper capital across all ${periodLabel === 'hour' ? 'hours' : 'slots'}">Paper bankroll</span><strong>$${bankroll.toFixed(2)}</strong>${resetBtn}${freshBtn}</div>
@@ -2166,32 +2253,34 @@
         </div>`;
     }
 
-    async function resetPaperBankroll(period, asset) {
+    async function resetPaperBankroll(period, asset, kind = 'hourly') {
       const url = period === 'hour'
-        ? hourlyBotResetBankrollUrl(asset)
+        ? (kind === 'hourly_trial' ? hourlyTrialBotResetBankrollUrl(asset) : hourlyBotResetBankrollUrl(asset))
         : slot15BotResetBankrollUrl(asset);
-      if (!confirm(`Reset ${asset.toUpperCase()} ${period === 'hour' ? 'hourly' : '15m'} paper bankroll to max at-risk cap? Trade log is kept.`)) return;
+      const label = kind === 'hourly_trial' ? 'hourly trial' : (period === 'hour' ? 'hourly' : '15m');
+      if (!confirm(`Reset ${asset.toUpperCase()} ${label} paper bankroll to max at-risk cap? Trade log is kept.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
-        if (period === 'hour') renderHourlyBot(bot, asset);
+        if (period === 'hour') renderHourlyBot(bot, asset, kind);
         else renderSlot15Bot(bot, asset);
       } catch (e) {
         showError('Reset bankroll: ' + e.message);
       }
     }
 
-    async function freshStartPaperBot(period, asset) {
+    async function freshStartPaperBot(period, asset, kind = 'hourly') {
       const url = period === 'hour'
-        ? hourlyBotFreshStartUrl(asset)
+        ? (kind === 'hourly_trial' ? hourlyTrialBotFreshStartUrl(asset) : hourlyBotFreshStartUrl(asset))
         : slot15BotFreshStartUrl(asset);
-      if (!confirm(`Fresh start ${asset.toUpperCase()} ${period === 'hour' ? 'hourly' : '15m'} paper bot?\n\nThis clears the trade log, open positions, cooldowns, and resets bankroll to max at-risk.`)) return;
+      const label = kind === 'hourly_trial' ? 'hourly trial' : (period === 'hour' ? 'hourly' : '15m');
+      if (!confirm(`Fresh start ${asset.toUpperCase()} ${label} paper bot?\n\nThis clears the trade log, open positions, cooldowns, and resets bankroll to max at-risk.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
-        if (period === 'hour') renderHourlyBot(bot, asset);
+        if (period === 'hour') renderHourlyBot(bot, asset, kind);
         else renderSlot15Bot(bot, asset);
       } catch (e) {
         showError('Fresh start: ' + e.message);
@@ -2256,17 +2345,20 @@
       const paths = {
         'hourly:btc': '/api/hourly/bot/override-daily-cap',
         'hourly:eth': '/api/eth/hourly/bot/override-daily-cap',
+        'hourly_trial:btc': '/api/hourly-trial/bot/override-daily-cap',
+        'hourly_trial:eth': '/api/eth/hourly-trial/bot/override-daily-cap',
         'slot15:btc': '/api/slot15/bot/override-daily-cap',
         'slot15:eth': '/api/eth/15m/bot/override-daily-cap',
       };
       const path = paths[`${kind}:${asset}`];
       if (!path) return;
-      if (!confirm(`Resume ${asset.toUpperCase()} ${kind === 'hourly' ? 'hourly' : '15m'} entries for the rest of today?\n\nDaily loss is still tracked; the $ cap will not block this bot until tomorrow (ET).`)) return;
+      const kindLabel = kind === 'hourly_trial' ? 'hourly trial' : (kind === 'hourly' ? 'hourly' : '15m');
+      if (!confirm(`Resume ${asset.toUpperCase()} ${kindLabel} entries for the rest of today?\n\nDaily loss is still tracked; the $ cap will not block this bot until tomorrow (ET).`)) return;
       try {
         const res = await fetch(path, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
-        if (kind === 'hourly') renderHourlyBot(bot, asset);
+        if (kind === 'hourly' || kind === 'hourly_trial') renderHourlyBot(bot, asset, kind);
         else renderSlot15Bot(bot, asset);
         const h = await get('/api/health');
         if (h) renderStatus(h);
@@ -2395,10 +2487,6 @@
       return `<p class="muted" style="font-size:.68rem;margin:.35rem 0 .45rem;padding:.45rem .55rem;background:rgba(148,163,184,.08);border-radius:6px"><strong>Last skip:</strong> ${botSkipReasonLabel(bot.last_skip_reason)}</p>`;
     }
 
-    function botDomPrefix(kind, asset) {
-      return kind === 'slot15' ? `slot15-${asset}` : asset;
-    }
-
     function applyBotSettingsToDom(kind, asset, settings) {
       const p = botDomPrefix(kind, asset);
       const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
@@ -2427,22 +2515,25 @@
     function syncBotSettingsUi(kind, asset, serverSettings, forceFlags) {
       const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
       const key = botUiKey(kind, asset);
-      const settingsWrapId = `${asset}-${kind === 'slot15' ? 'slot15' : 'hourly'}-bot-settings`;
+      const settingsWrapId = kind === 'slot15'
+        ? `${asset}-slot15-bot-settings`
+        : hourlyBotSettingsWrapId(kind, asset);
       const settingsWrap = $(settingsWrapId);
       if (!settingsWrap) return normalizeBotSettings(serverSettings, maxKey) || serverSettings || {};
 
       const pending = pendingBotPatch[key];
       const domSettings = kind === 'slot15'
         ? readSlot15BotSettingsFromDom(asset)
-        : readBotSettingsFromDom(asset);
+        : readBotSettingsFromDom(asset, kind);
       const lastKnown = lastKnownBotSettings[key];
       const patchConfirmed = settingsPatchConfirmed[key];
+      const forceFlags = kind === 'hourly_trial' ? hourlyTrialForceSettingsRender : botForceSettingsRender;
       const needStructure = !botSettingsDomReady[key] && (!domSettings || forceFlags[asset]);
 
       if (needStructure) {
         settingsWrap.innerHTML = kind === 'slot15'
           ? slot15BotSettingsHtml(asset, serverSettings)
-          : botSettingsHtml(asset, serverSettings);
+          : botSettingsHtml(asset, serverSettings, kind);
         forceFlags[asset] = false;
         botSettingsDomReady[key] = true;
         const norm = normalizeBotSettings(serverSettings, maxKey);
@@ -2647,8 +2738,9 @@
             : null
         );
         const legDetail = pa.detail ? `<div class="muted" style="font-size:.62rem;margin-top:.15rem">${pa.detail}</div>` : '';
-        const slotAlert = pa.slot_monitor_alert || '—';
+        const slotAlert = pa.standard_hourly_alert || pa.slot_monitor_alert || '—';
         const slotCls = slotAlert === 'TAKE PROFIT' ? 'up' : slotAlert === 'CUT LOSSES' ? 'down' : 'muted';
+        const compareLabel = opts.compareLabel || 'Slot (BRTI)';
         if (dualView) {
           return `<tr>
             <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
@@ -2671,10 +2763,10 @@
         </tr>`;
       }).join('');
       const head = dualView
-        ? '<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Mark Δ</th><th>Unreal. P&amp;L</th><th>Leg alert</th><th>Slot (BRTI)</th></tr></thead>'
+        ? `<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Mark Δ</th><th>Unreal. P&amp;L</th><th>Leg alert</th><th>${opts.compareLabel || 'Slot (BRTI)'}</th></tr></thead>`
         : '<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>';
       const title = dualView
-        ? 'Open positions · leg mark P&amp;L + slot BRTI view'
+        ? `Open positions · leg mark P&amp;L + ${opts.compareLabel || 'slot BRTI'} view`
         : 'Open positions · live mark-to-market';
       return `<div style="margin:.55rem 0;padding:.55rem .65rem;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:8px">
         <p class="muted" style="font-size:.68rem;margin:0 0 .4rem;text-transform:uppercase;letter-spacing:.05em">${title}${indexLine}</p>
@@ -2985,28 +3077,31 @@
       }
     }
 
-    function renderHourlyBot(bot, asset) {
-      const el = $(`${asset}-hourly-bot`);
+    function renderHourlyBot(bot, asset, kind = 'hourly') {
+      const isTrial = kind === 'hourly_trial';
+      const el = $(hourlyBotPanelId(kind, asset));
       if (!el) return;
       const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
       if (activeTab !== tab) return;
       if (bot && bot.asset && bot.asset !== asset) return;
-      if (bot && bot.ok) bot = mergeBotStatus(asset, bot) || bot;
+      if (bot && bot.ok) {
+        bot = (isTrial ? mergeHourlyTrialBotStatus(asset, bot) : mergeBotStatus(asset, bot)) || bot;
+      }
       if (!bot || !bot.ok) {
-        const statusWrap = $(`${asset}-hourly-bot-status`);
+        const statusWrap = $(`${hourlyBotPanelId(kind, asset)}-status`);
         const msg = `<p class="muted">Bot status unavailable${bot?.error ? `: ${bot.error}` : ''}.</p>`;
         if (statusWrap) {
           statusWrap.innerHTML = msg;
         } else {
           el.innerHTML = msg;
-          botForceSettingsRender[asset] = true;
+          (isTrial ? hourlyTrialForceSettingsRender : botForceSettingsRender)[asset] = true;
         }
         return;
       }
       const serverSettings = bot.settings || {};
-      noteAutoStoppedTransition('hourly', asset, bot.auto_stopped, serverSettings);
-      const settingsWrapId = `${asset}-hourly-bot-settings`;
-      const statusWrapId = `${asset}-hourly-bot-status`;
+      noteAutoStoppedTransition(kind, asset, bot.auto_stopped, serverSettings);
+      const settingsWrapId = hourlyBotSettingsWrapId(kind, asset);
+      const statusWrapId = `${hourlyBotPanelId(kind, asset)}-status`;
       if (!$(settingsWrapId)) {
         el.innerHTML = `<div class="bot-panel"><div id="${settingsWrapId}"></div><div id="${statusWrapId}"></div></div>`;
       }
@@ -3014,7 +3109,8 @@
       const statusWrap = $(statusWrapId);
       if (!settingsWrap || !statusWrap) return;
 
-      const s = syncBotSettingsUi('hourly', asset, serverSettings, botForceSettingsRender);
+      const forceFlags = isTrial ? hourlyTrialForceSettingsRender : botForceSettingsRender;
+      const s = syncBotSettingsUi(kind, asset, serverSettings, forceFlags);
       const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
       const freeMode = !s.allow_strong && !s.allow_actionable;
       const exposure = bot.open_exposure_usd ?? bot.spent_usd ?? 0;
@@ -3056,9 +3152,11 @@
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
         indexLabel: bot.index_label || (asset === 'eth' ? 'ERTI' : 'BRTI'),
         indexNow: bot.index_now_price,
+        dualLegSlotView: isTrial,
+        compareLabel: isTrial ? 'Std hourly' : 'Slot (BRTI)',
       });
       const tradesScroll = captureBotTradesScroll(statusWrap);
-      const autoStopHtml = botAutoStopBanner(bot, 'hour', 'hourly', asset);
+      const autoStopHtml = botAutoStopBanner(bot, 'hour', kind, asset);
       const skipHtml = botSkipReasonHtml(bot);
       const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode);
       const serverBanner = botServerBanner(bot, s);
@@ -3095,15 +3193,16 @@
       restoreBotTradesScroll(statusWrap, tradesScroll);
     }
 
-    function onBotModeToggle(asset, ev) {
-      const p = asset;
+    function onBotModeToggle(asset, ev, kind = 'hourly') {
+      const p = botDomPrefix(kind, asset);
       const paper = $(`bot-paper-${p}`);
       const live = $(`bot-live-${p}`);
       if (!paper || !live) return;
       const targetId = ev?.target?.id;
+      const saveFn = kind === 'hourly_trial' ? saveHourlyTrialBotSettings : saveHourlyBotSettings;
       if (targetId === `bot-paper-${p}` && paper.checked) {
         live.checked = false;
-        saveHourlyBotSettings(asset);
+        saveFn(asset);
         return;
       }
       if (targetId === `bot-live-${p}` && live.checked) {
@@ -3113,27 +3212,27 @@
           revertBotModeToPaper(p);
           return;
         }
-        saveHourlyBotSettings(asset, pwd);
+        saveFn(asset, pwd);
         return;
       }
       if (!paper.checked && !live.checked) paper.checked = true;
-      saveHourlyBotSettings(asset);
+      saveFn(asset);
     }
 
     function onBotUseProfitsToggle(asset, kind) {
-      const p = kind === 'slot15' ? `slot15-${asset}` : asset;
+      const p = botDomPrefix(kind, asset);
       const pctEl = $(`bot-profit-use-pct-${p}`);
       const useProfits = !!$(`bot-use-profits-${p}`)?.checked;
       if (pctEl) pctEl.disabled = !useProfits;
       if (kind === 'slot15') saveSlot15BotSettings(asset);
+      else if (kind === 'hourly_trial') saveHourlyTrialBotSettings(asset);
       else saveHourlyBotSettings(asset);
     }
 
-    async function saveHourlyBotSettings(asset, livePassword) {
-      const kind = 'hourly';
+    async function saveHourlyBotSettings(asset, livePassword, kind = 'hourly') {
       const maxKey = 'max_spend_per_hour_usd';
       const key = botUiKey(kind, asset);
-      const p = asset;
+      const p = botDomPrefix(kind, asset);
       const enabledEl = $(`bot-enabled-${p}`);
       if (!enabledEl) return false;
       const body = {
@@ -3150,7 +3249,8 @@
       const previousKnown = lastKnownBotSettings[key];
       pendingBotPatch[key] = normalizeBotSettings(body, maxKey);
       try {
-        const res = await fetch(hourlyBotSettingsUrl(asset), {
+        const settingsUrl = kind === 'hourly_trial' ? hourlyTrialBotSettingsUrl(asset) : hourlyBotSettingsUrl(asset);
+        const res = await fetch(settingsUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -3162,7 +3262,7 @@
           if (res.status === 403) {
             showError('Wrong Password - Denied Access');
             revertBotModeToPaper(p);
-            botForceSettingsRender[asset] = true;
+            (kind === 'hourly_trial' ? hourlyTrialForceSettingsRender : botForceSettingsRender)[asset] = true;
             return false;
           }
           showError('Bot settings: ' + msg);
@@ -3173,7 +3273,7 @@
         if (activeTab === tab) {
           const bot = await res.json();
           recordSettingsPatchConfirm(kind, asset, bot.settings || body, maxKey);
-          renderHourlyBot(bot, asset);
+          renderHourlyBot(bot, asset, kind);
         }
         return true;
       } catch (e) {
@@ -3182,6 +3282,10 @@
         showError('Bot settings: ' + e.message);
         return false;
       }
+    }
+
+    function saveHourlyTrialBotSettings(asset, livePassword) {
+      return saveHourlyBotSettings(asset, livePassword, 'hourly_trial');
     }
 
     function renderDaily(data) {
@@ -3375,11 +3479,12 @@
       const api = hourlyApiFor(tabAtStart);
       const asset = tabAtStart === 'eth-hourly' ? 'eth' : 'btc';
       try {
-        const [d, cal, hist, botDirect] = await Promise.all([
+        const [d, cal, hist, botDirect, trialDirect] = await Promise.all([
           get(api.prediction),
           get(api.calibration).catch(() => ({ summary: {} })),
           get(api.history).catch(() => []),
           get(hourlyBotStatusUrl(asset)).catch(() => null),
+          get(hourlyBotStatusUrl(asset, 'hourly_trial')).catch(() => null),
         ]);
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         hourlyRenderTab = tabAtStart;
@@ -3404,16 +3509,21 @@
         }
         bot = mergeBotStatus(asset, bot);
         if (bot) d.bot = bot;
+        let trialBot = trialDirect;
+        if (trialBot) trialBot = mergeHourlyTrialBotStatus(asset, trialBot);
         renderDaily(d);
         renderHourlyCalibration(cal);
         renderHourlyHistory(hist);
+        if (activeTab === tabAtStart) renderHourlyBot(trialBot, asset, 'hourly_trial');
       } catch (e) {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         hourlyRenderTab = tabAtStart;
         const cached = lastBotStatus[asset];
+        const trialCached = lastHourlyTrialBotStatus[asset];
         renderDaily({ ok: false, error: e.message, bot: cached || undefined });
         renderHourlyCalibration({});
         renderHourlyHistory([]);
+        if (trialCached) renderHourlyBot(trialCached, asset, 'hourly_trial');
       }
     }
 

@@ -317,8 +317,52 @@ class Slot15LegExitConfig:
   reassess_neutral_min_unrealized_usd: float = 0.05
 
 
-def slot15_leg_exit_config(cfg: dict[str, Any] | None) -> Slot15LegExitConfig:
-  bot_cfg = (cfg.get("intra_slot") or {}).get("bot") or {} if cfg else {}
+def _leg_exit_bot_cfg(cfg: dict[str, Any] | None, *, bot_kind: str) -> dict[str, Any]:
+  if not cfg:
+    return {}
+  if bot_kind == "hourly_trial":
+    trial = (cfg.get("hourly") or {}).get("bot") or {}
+    return dict(trial.get("trial") or {})
+  return (cfg.get("intra_slot") or {}).get("bot") or {}
+
+
+_TRIAL_PROFIT_EXIT_KEYS = (
+  "take_profit_enabled",
+  "take_profit_mode",
+  "take_profit_pct",
+  "take_profit_usd",
+  "trail_arm_profit_pct",
+  "trail_giveback_pct",
+  "trail_arm_profit_usd",
+  "trail_giveback_usd",
+  "min_take_profit_pct",
+  "max_take_profit_pct",
+  "min_hold_seconds",
+  "profit_exit_cooldown_seconds",
+)
+
+
+def effective_hourly_trial_settings(settings: ProfitExitSettings, cfg: dict[str, Any] | None):
+  """Overlay aggressive bird-in-the-hand profit exits from hourly.bot.trial config."""
+  trial = _leg_exit_bot_cfg(cfg, bot_kind="hourly_trial")
+  if not trial:
+    return settings
+  from src.trading.hourly_bot_store import HourlyBotSettings
+
+  if isinstance(settings, HourlyBotSettings):
+    merged = settings.to_dict()
+  elif hasattr(settings, "to_dict"):
+    merged = settings.to_dict()
+  else:
+    return settings
+  for key in _TRIAL_PROFIT_EXIT_KEYS:
+    if key in trial:
+      merged[key] = trial[key]
+  return HourlyBotSettings.from_dict(merged)
+
+
+def leg_exit_config(cfg: dict[str, Any] | None, *, bot_kind: str = "slot15") -> Slot15LegExitConfig:
+  bot_cfg = _leg_exit_bot_cfg(cfg, bot_kind=bot_kind)
   return Slot15LegExitConfig(
     leg_take_profit_cents=int(bot_cfg.get("leg_take_profit_cents", 3)),
     leg_stop_loss_cents=int(bot_cfg.get("leg_stop_loss_cents", 4)),
@@ -332,6 +376,10 @@ def slot15_leg_exit_config(cfg: dict[str, Any] | None) -> Slot15LegExitConfig:
       bot_cfg.get("reassess_neutral_min_unrealized_usd", 0.05)
     ),
   )
+
+
+def slot15_leg_exit_config(cfg: dict[str, Any] | None) -> Slot15LegExitConfig:
+  return leg_exit_config(cfg, bot_kind="slot15")
 
 
 def mark_vs_entry_cents(pos: dict[str, Any], mark_cents: int | None) -> int | None:
@@ -422,6 +470,61 @@ def evaluate_slot15_reassess_neutral_take_profit(
   return "REASSESS NEUTRAL TP", detail
 
 
+def _hourly_min_edge(cfg: dict[str, Any] | None) -> float:
+  hcfg = (cfg or {}).get("hourly", {}).get("regime", {})
+  return float(hcfg.get("min_edge", 0.05))
+
+
+def evaluate_hourly_trial_neutral_take_profit(
+  pos: dict[str, Any],
+  unrealized_usd: float | None,
+  pick: dict[str, Any] | None,
+  leg_cfg: Slot15LegExitConfig,
+  cfg: dict[str, Any] | None,
+  *,
+  standard_hourly_alert: str | None = None,
+) -> tuple[str | None, str]:
+  """Bank small gains when hourly edge fades or standard hourly says take profit."""
+  if not leg_cfg.reassess_neutral_take_profit:
+    return None, ""
+  if unrealized_usd is None or unrealized_usd < leg_cfg.reassess_neutral_min_unrealized_usd:
+    return None, ""
+
+  std = str(standard_hourly_alert or "").upper()
+  if std == "TAKE PROFIT":
+    return (
+      "REASSESS NEUTRAL TP",
+      f"Green +${unrealized_usd:.2f} and standard hourly says take profit — bank the gain",
+    )
+
+  if not pick:
+    return None, ""
+
+  current_edge = pick.get("edge")
+  if current_edge is None:
+    return None, ""
+
+  edge_f = float(current_edge)
+  min_edge = _hourly_min_edge(cfg)
+  entry_edge = pos.get("entry_edge")
+  entry_edge_f = float(entry_edge) if entry_edge is not None else None
+
+  edge_gone = edge_f < min_edge
+  edge_collapsed = (
+    entry_edge_f is not None
+    and entry_edge_f >= min_edge
+    and edge_f < entry_edge_f * 0.45
+  )
+  if not edge_gone and not edge_collapsed:
+    return None, ""
+
+  reason = "edge below minimum" if edge_gone else "edge collapsed vs entry"
+  return (
+    "REASSESS NEUTRAL TP",
+    f"Green +${unrealized_usd:.2f} but {reason} ({edge_f * 100:.1f}¢) — bank the gain",
+  )
+
+
 def evaluate_slot15_leg_trail_exit(
   unrealized_usd: float | None,
   peaks: dict[str, float],
@@ -464,9 +567,12 @@ def evaluate_slot15_contract_exits(
   monitor_action: str | None = None,
   monitor_message: str | None = None,
   cut_loss_min_usd: float = 0.05,
+  bot_kind: str = "slot15",
+  pick: dict[str, Any] | None = None,
+  standard_hourly_alert: str | None = None,
 ) -> tuple[str | None, str]:
-  """Contract-first exit chain for 15m bot; optional slot-monitor fallback last."""
-  leg_cfg = slot15_leg_exit_config(cfg)
+  """Contract-first exit chain for 15m / hourly-trial bots; optional slot-monitor fallback last."""
+  leg_cfg = leg_exit_config(cfg, bot_kind=bot_kind)
 
   reason, detail = evaluate_slot15_leg_stop_loss(pos, mark_cents, leg_cfg)
   if reason:
@@ -476,13 +582,23 @@ def evaluate_slot15_contract_exits(
   if reason:
     return reason, detail
 
-  reason, detail = evaluate_slot15_reassess_neutral_take_profit(
-    pos, unrealized_usd, monitor, leg_cfg,
-  )
+  if bot_kind == "hourly_trial":
+    reason, detail = evaluate_hourly_trial_neutral_take_profit(
+      pos,
+      unrealized_usd,
+      pick,
+      leg_cfg,
+      cfg,
+      standard_hourly_alert=standard_hourly_alert,
+    )
+  else:
+    reason, detail = evaluate_slot15_reassess_neutral_take_profit(
+      pos, unrealized_usd, monitor, leg_cfg,
+    )
   if reason:
     return reason, detail
 
-  cheap_cfg = cheap_leg_exit_config(cfg, kind="slot15")
+  cheap_cfg = cheap_leg_exit_config(cfg, kind="slot15" if bot_kind == "slot15" else "hourly")
   reason, detail = evaluate_cheap_leg_cut_loss(pos, mark_cents, cheap_cfg)
   if reason:
     return reason, detail

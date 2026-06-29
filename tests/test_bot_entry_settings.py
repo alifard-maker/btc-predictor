@@ -84,6 +84,7 @@ def test_save_settings_appends_audit_jsonl():
 def test_infer_store_meta_from_db_path():
   assert infer_store_meta("slot15_bot_eth.db") == ("eth", "slot15")
   assert infer_store_meta("hourly_bot_btc.db") == ("btc", "hourly")
+  assert infer_store_meta("hourly_trial_bot_eth.db") == ("eth", "hourly_trial")
 
 
 def test_cheap_leg_cut_loss_exits_before_flat_pnl_guard():

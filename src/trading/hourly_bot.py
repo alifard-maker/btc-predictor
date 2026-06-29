@@ -20,6 +20,8 @@ from src.trading.bot_profit_exit import (
   cheap_leg_exit_config,
   evaluate_adaptive_profit_exit,
   evaluate_cheap_leg_cut_loss,
+  evaluate_slot15_contract_exits,
+  effective_hourly_trial_settings,
   is_profit_exit_reason,
   position_hold_seconds,
 )
@@ -37,6 +39,7 @@ from src.trading.hourly_bet_assessment import assess_contract_bet
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
 from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+from src.trading.hourly_trial_position_alert import assess_hourly_trial_leg_position_alert
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
@@ -219,10 +222,16 @@ def enrich_open_positions_live(
   positions: list[dict[str, Any]],
   tab: dict[str, Any],
   cfg: dict[str, Any] | None = None,
+  *,
+  settings: HourlyBotSettings | None = None,
+  bot_kind: str = "hourly",
 ) -> list[dict[str, Any]]:
   """Attach live mark, unrealized P&L, and position alert to open bot legs."""
   live = tab.get("live") or tab
   price = tab.get("brti_live") or live.get("current_price")
+  hours_left = live.get("hours_to_settle")
+  seconds_remaining = float(hours_left) * 3600.0 if hours_left is not None else None
+  is_trial = bot_kind == "hourly_trial"
   out: list[dict[str, Any]] = []
 
   for pos in positions:
@@ -238,15 +247,36 @@ def enrich_open_positions_live(
 
     if pick:
       regime = live.get("regime") or {}
-      row["position_alert"] = assess_held_hourly_position_alert(
-        pos=pos,
-        pick=pick,
-        live_price=float(price) if price else None,
-        regime_allow_trade=bool(regime.get("allow_trade", True)),
-        regime_reasons=list(regime.get("reasons") or []),
-        unrealized_pnl_usd=row.get("unrealized_pnl_usd"),
-        cfg=cfg,
-      )
+      if is_trial:
+        exit_ctx = AdaptiveExitContext(
+          seconds_remaining=seconds_remaining,
+          period_seconds=3600.0,
+          current_edge=pick.get("edge"),
+          entry_edge=pos.get("entry_edge"),
+          regime_allow_trade=bool(regime.get("allow_trade", True)),
+        )
+        row["position_alert"] = assess_hourly_trial_leg_position_alert(
+          pos=pos,
+          pick=pick,
+          mark_cents=mark,
+          unrealized_pnl_usd=row.get("unrealized_pnl_usd"),
+          live_price=float(price) if price else None,
+          regime_allow_trade=bool(regime.get("allow_trade", True)),
+          regime_reasons=list(regime.get("reasons") or []),
+          cfg=cfg,
+          settings=settings,
+          exit_ctx=exit_ctx,
+        )
+      else:
+        row["position_alert"] = assess_held_hourly_position_alert(
+          pos=pos,
+          pick=pick,
+          live_price=float(price) if price else None,
+          regime_allow_trade=bool(regime.get("allow_trade", True)),
+          regime_reasons=list(regime.get("reasons") or []),
+          unrealized_pnl_usd=row.get("unrealized_pnl_usd"),
+          cfg=cfg,
+        )
     else:
       row["position_alert"] = {"alert": "HOLD", "detail": "Awaiting live quote"}
 
@@ -255,13 +285,21 @@ def enrich_open_positions_live(
 
 
 class HourlyBot:
-  def __init__(self, store: HourlyBotStore, kalshi_client: Any | None = None, *, asset: str = "btc"):
+  def __init__(
+    self,
+    store: HourlyBotStore,
+    kalshi_client: Any | None = None,
+    *,
+    asset: str = "btc",
+    kind: str = "hourly",
+  ):
     self.store = store
     self.kalshi = kalshi_client
     self.asset = asset.lower()
+    self.kind = kind
     from src.trading.bot_risk_state import bot_risk_key
 
-    self._bot_risk_key = bot_risk_key("hourly", self.asset)
+    self._bot_risk_key = bot_risk_key(kind, self.asset)
 
   def run_continuous_cycle(self, tab: dict[str, Any], *, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Evaluate exits then entries on live hourly data. Returns actions taken."""
@@ -427,8 +465,29 @@ class HourlyBot:
     exit_ctx: AdaptiveExitContext,
     mark_cents: int | None = None,
     cfg: dict[str, Any] | None = None,
+    pick: dict[str, Any] | None = None,
+    standard_hourly_alert: str | None = None,
   ) -> tuple[str | None, str]:
     """Return (exit_reason, detail_suffix) or (None, '') if position should stay open."""
+    if self.kind == "hourly_trial":
+      trial_settings = effective_hourly_trial_settings(settings, cfg)
+      return evaluate_slot15_contract_exits(
+        pos=pos,
+        mark_cents=mark_cents,
+        unrealized_usd=unrealized,
+        monitor={},
+        peaks=peaks,
+        hold_seconds=position_hold_seconds(pos),
+        settings=trial_settings,
+        exit_ctx=exit_ctx,
+        cfg=cfg,
+        include_monitor_fallback=False,
+        cut_loss_min_usd=CUT_LOSS_EXIT_MIN_LOSS_USD,
+        bot_kind="hourly_trial",
+        pick=pick,
+        standard_hourly_alert=standard_hourly_alert,
+      )
+
     kind = alert.get("alert")
     if kind == "TAKE PROFIT" and _should_paper_exit(alert, unrealized):
       return "TAKE PROFIT", str(alert.get("detail", ""))
@@ -476,15 +535,29 @@ class HourlyBot:
       self.store.update_position_mark(pos["id"], exit_price)
 
       unrealized = _unrealized_pnl_usd(pos, exit_price)
-      alert = assess_held_hourly_position_alert(
-        pos=pos,
-        pick=pick,
-        live_price=float(price) if price else None,
-        regime_allow_trade=bool(regime.get("allow_trade", True)),
-        regime_reasons=list(regime.get("reasons") or []),
-        unrealized_pnl_usd=unrealized,
-        cfg=cfg,
-      )
+      standard_alert = None
+      if self.kind == "hourly_trial":
+        standard = assess_held_hourly_position_alert(
+          pos=pos,
+          pick=pick,
+          live_price=float(price) if price else None,
+          regime_allow_trade=bool(regime.get("allow_trade", True)),
+          regime_reasons=list(regime.get("reasons") or []),
+          unrealized_pnl_usd=unrealized,
+          cfg=cfg,
+        )
+        standard_alert = str(standard.get("alert") or "")
+        alert = {"alert": "HOLD", "detail": standard.get("detail", "")}
+      else:
+        alert = assess_held_hourly_position_alert(
+          pos=pos,
+          pick=pick,
+          live_price=float(price) if price else None,
+          regime_allow_trade=bool(regime.get("allow_trade", True)),
+          regime_reasons=list(regime.get("reasons") or []),
+          unrealized_pnl_usd=unrealized,
+          cfg=cfg,
+        )
       cost_usd = float(pos.get("cost_usd") or 0)
       peaks = self.store.update_position_peaks(
         pos["id"],
@@ -500,7 +573,8 @@ class HourlyBot:
       )
       exit_reason, detail_suffix = self._resolve_exit(
         pos, alert, unrealized, settings, peaks=peaks, exit_ctx=exit_ctx,
-        mark_cents=exit_price, cfg=cfg,
+        mark_cents=exit_price, cfg=cfg, pick=pick,
+        standard_hourly_alert=standard_alert,
       )
       if not exit_reason:
         continue
