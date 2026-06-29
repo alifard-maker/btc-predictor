@@ -2623,8 +2623,14 @@
       }
     }
 
-    function renderOpenPositionsPanel(openPos) {
+    function renderOpenPositionsPanel(openPos, opts) {
       if (!openPos || !openPos.length) return '';
+      opts = opts || {};
+      const indexLabel = opts.indexLabel || 'BRTI';
+      const indexNow = opts.indexNow;
+      const indexLine = indexNow != null && Number.isFinite(Number(indexNow))
+        ? ` · <strong>${indexLabel} now ${price(indexNow)}</strong>`
+        : '';
       const rows = openPos.map((p) => {
         const alert = (p.position_alert && p.position_alert.alert) || 'HOLD';
         const alertCls = alert === 'TAKE PROFIT' ? 'up' : alert === 'CUT LOSSES' ? 'down' : 'muted';
@@ -2639,7 +2645,7 @@
         </tr>`;
       }).join('');
       return `<div style="margin:.55rem 0;padding:.55rem .65rem;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:8px">
-        <p class="muted" style="font-size:.68rem;margin:0 0 .4rem;text-transform:uppercase;letter-spacing:.05em">Open positions · live mark-to-market</p>
+        <p class="muted" style="font-size:.68rem;margin:0 0 .4rem;text-transform:uppercase;letter-spacing:.05em">Open positions · live mark-to-market${indexLine}</p>
         <table style="width:100%;font-size:.72rem">
           <thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>
           <tbody>${rows}</tbody>
@@ -2822,7 +2828,10 @@
       const emptyLog = s.enabled
         ? `No bot activity yet${freeMode ? ' — free mode waits for any live LONG/SHORT on the 15m tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
-      const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
+      const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
+        indexLabel: bot.index_label || (asset === 'eth' ? 'ERTI' : 'BRTI'),
+        indexNow: bot.index_now_price,
+      });
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'slot', 'slot15', asset);
       const skipHtml = botSkipReasonHtml(bot);
@@ -3009,7 +3018,10 @@
       const emptyLog = s.enabled
         ? `No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
-      const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
+      const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
+        indexLabel: bot.index_label || (asset === 'eth' ? 'ERTI' : 'BRTI'),
+        indexNow: bot.index_now_price,
+      });
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'hour', 'hourly', asset);
       const skipHtml = botSkipReasonHtml(bot);

@@ -205,6 +205,37 @@ def format_entry_book_detail(entry_fill: dict[str, Any]) -> str:
   return " · book: " + " / ".join(parts)
 
 
+def leg_pnl_usd(
+  *,
+  entry_price_cents: int,
+  mark_or_exit_cents: int | None,
+  contracts: int,
+) -> float | None:
+  """P&L for a held YES or NO leg (prices are always on the leg you own)."""
+  if mark_or_exit_cents is None:
+    return None
+  return round(
+    contracts * (int(mark_or_exit_cents) - int(entry_price_cents)) / 100.0,
+    2,
+  )
+
+
+def unrealized_leg_pnl_usd(
+  *,
+  side: str,
+  entry_price_cents: int,
+  mark_price_cents: int | None,
+  contracts: int,
+) -> float | None:
+  """Mark-to-market P&L for an open YES or NO leg (mark = exit bid on held side)."""
+  _ = side
+  return leg_pnl_usd(
+    entry_price_cents=entry_price_cents,
+    mark_or_exit_cents=mark_price_cents,
+    contracts=contracts,
+  )
+
+
 def paper_exit_fill(*, pick: dict[str, Any], side: str) -> dict[str, Any]:
   bid_cents, ask_cents = _side_quotes_cents(pick, side)
   if bid_cents is None:

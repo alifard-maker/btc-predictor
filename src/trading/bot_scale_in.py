@@ -5,17 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from src.trading.entry_strategy import EntryStrategyConfig, ask_cents_for_side, ask_implied_prob, win_prob_for_side
-from src.trading.paper_execution import paper_exit_fill
+from src.trading.paper_execution import paper_exit_fill, unrealized_leg_pnl_usd
 
 
 def unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | None:
-  if mark_cents is None:
-    return None
-  entry_c = int(pos["entry_price_cents"])
-  contracts = int(pos["contracts"])
-  if pos["side"] == "yes":
-    return round(contracts * (mark_cents - entry_c) / 100.0, 2)
-  return round(contracts * (entry_c - mark_cents) / 100.0, 2)
+  return unrealized_leg_pnl_usd(
+    side=str(pos.get("side") or "yes"),
+    entry_price_cents=int(pos["entry_price_cents"]),
+    mark_price_cents=mark_cents,
+    contracts=int(pos["contracts"]),
+  )
 
 
 def mark_cents_for_pick(pick: dict[str, Any], side: str) -> int | None:

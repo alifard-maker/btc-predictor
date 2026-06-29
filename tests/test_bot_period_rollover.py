@@ -34,5 +34,5 @@ def test_slot15_closes_orphan_position_on_slot_rollover():
     assert len(exits) == 1
     assert exits[0]["event_ticker"] == prev_slot
     assert exits[0]["trigger"] == "period_rollover"
-    assert exits[0]["pnl_usd"] == round(36 * (68 - 80) / 100.0, 2)
+    assert exits[0]["pnl_usd"] == round(36 * (80 - 68) / 100.0, 2)
     assert store.open_positions(prev_slot) == []

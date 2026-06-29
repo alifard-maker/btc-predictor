@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from src.trading.paper_execution import paper_exit_fill
+from src.trading.paper_execution import leg_pnl_usd, paper_exit_fill
 
 log = logging.getLogger(__name__)
 
@@ -18,9 +18,15 @@ def exit_pnl_usd(
   entry_cents: int,
   exit_cents: int,
 ) -> float:
-  if side == "yes":
-    return round(contracts * (exit_cents - entry_cents) / 100.0, 2)
-  return round(contracts * (entry_cents - exit_cents) / 100.0, 2)
+  _ = side
+  return float(
+    leg_pnl_usd(
+      entry_price_cents=entry_cents,
+      mark_or_exit_cents=exit_cents,
+      contracts=contracts,
+    )
+    or 0.0,
+  )
 
 
 def resolve_rollover_exit_cents(

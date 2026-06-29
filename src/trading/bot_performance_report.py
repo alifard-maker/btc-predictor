@@ -31,21 +31,24 @@ def _bucket_label(value: int | None, buckets: tuple[tuple[int, int, str], ...]) 
 
 
 def _exit_pnl(row: dict[str, Any]) -> float:
+  from src.trading.paper_execution import leg_pnl_usd
+
   pnl = row.get("pnl_usd")
   if pnl is not None:
     return float(pnl)
   entry_c = row.get("entry_price_cents")
   exit_c = row.get("exit_price_cents")
   contracts = row.get("contracts")
-  side = str(row.get("side") or "").lower()
   if entry_c is None or exit_c is None or contracts is None:
     return 0.0
-  entry_c, exit_c, contracts = int(entry_c), int(exit_c), int(contracts)
-  if side == "yes":
-    return round(contracts * (exit_c - entry_c) / 100.0, 2)
-  if side == "no":
-    return round(contracts * (entry_c - exit_c) / 100.0, 2)
-  return 0.0
+  return float(
+    leg_pnl_usd(
+      entry_price_cents=int(entry_c),
+      mark_or_exit_cents=int(exit_c),
+      contracts=int(contracts),
+    )
+    or 0.0,
+  )
 
 
 def _parse_ts(value: str | None) -> datetime | None:

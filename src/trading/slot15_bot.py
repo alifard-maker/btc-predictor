@@ -30,8 +30,10 @@ from src.trading.entry_strategy import entry_budget_usd, passes_tail_entry_gate
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
+  leg_pnl_usd,
   paper_entry_fill,
   paper_exit_fill,
+  unrealized_leg_pnl_usd,
 )
 from src.trading.slot15_bet_assessment import assess_slot15_bet
 from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
@@ -224,13 +226,12 @@ def _should_paper_exit(alert_label: str, unrealized_pnl: float | None) -> bool:
 
 
 def _unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | None:
-  if mark_cents is None:
-    return None
-  entry_c = int(pos["entry_price_cents"])
-  contracts = int(pos["contracts"])
-  if pos["side"] == "yes":
-    return round(contracts * (mark_cents - entry_c) / 100.0, 2)
-  return round(contracts * (entry_c - mark_cents) / 100.0, 2)
+  return unrealized_leg_pnl_usd(
+    side=str(pos.get("side") or "yes"),
+    entry_price_cents=int(pos["entry_price_cents"]),
+    mark_price_cents=mark_cents,
+    contracts=int(pos["contracts"]),
+  )
 
 
 def _position_alert_from_monitor(monitor: dict[str, Any]) -> dict[str, Any]:
@@ -497,10 +498,14 @@ class Slot15Bot:
 
       entry_c = int(pos["entry_price_cents"])
       contracts = int(pos["contracts"])
-      if pos["side"] == "yes":
-        pnl = contracts * (exit_price - entry_c) / 100.0
-      else:
-        pnl = contracts * (entry_c - exit_price) / 100.0
+      pnl = float(
+        leg_pnl_usd(
+          entry_price_cents=entry_c,
+          mark_or_exit_cents=exit_price,
+          contracts=contracts,
+        )
+        or 0.0,
+      )
 
       pnl_rounded = round(pnl, 2)
       mode_label = "Paper" if settings.mode == "paper" else "Live"

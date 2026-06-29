@@ -319,6 +319,30 @@ class PredictionLoop:
   def eth_hourly_bot(self):
     return self.hourly_bot("eth")
 
+  def _attach_index_now_to_bot_status(
+    self,
+    status: dict[str, Any],
+    tab: dict[str, Any] | None,
+    *,
+    asset: str,
+  ) -> None:
+    """Expose live settlement index (BRTI / ERTI) for open-position mark-to-market UI."""
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    status["index_label"] = index_id_for_cfg(acfg)
+    if not tab or not tab.get("ok"):
+      return
+    live = tab.get("live") or tab
+    raw = tab.get("brti_live") or live.get("current_price")
+    if raw is None:
+      monitor = tab.get("monitor") or {}
+      raw = monitor.get("current_price")
+    if raw is None:
+      return
+    try:
+      status["index_now_price"] = round(float(raw), 2)
+    except (TypeError, ValueError):
+      pass
+
   def hourly_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     asset = asset.lower()
     if asset == "eth" and not asset_enabled(self.cfg, "eth"):
@@ -373,6 +397,7 @@ class PredictionLoop:
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
     self._attach_bot_daily_loss(status, kind="hourly", asset=asset)
+    self._attach_index_now_to_bot_status(status, tab, asset=asset)
     return status
 
   def _attach_bot_daily_loss(self, status: dict[str, Any], *, kind: str, asset: str) -> None:
@@ -595,7 +620,10 @@ class PredictionLoop:
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
     self._attach_bot_daily_loss(status, kind="slot15", asset=asset)
+    self._attach_index_now_to_bot_status(status, tab, asset=asset)
     return status
+
+  def _ensure_slot_prediction_current(self, asset: str) -> None:
     """Refresh in-memory prediction when the active slot rolled but cron has not run yet."""
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):

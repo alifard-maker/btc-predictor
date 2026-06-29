@@ -36,12 +36,14 @@ from src.trading.entry_strategy import (
 from src.trading.hourly_bet_assessment import assess_contract_bet
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
-from src.trading.hourly_position_alert import assess_hourly_position_alert
+from src.trading.hourly_position_alert import assess_held_hourly_position_alert
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
+  leg_pnl_usd,
   paper_entry_fill,
   paper_exit_fill,
+  unrealized_leg_pnl_usd,
 )
 
 log = logging.getLogger(__name__)
@@ -205,13 +207,12 @@ def _should_paper_exit(alert: dict[str, Any], unrealized_pnl: float | None) -> b
 
 
 def _unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | None:
-  if mark_cents is None:
-    return None
-  entry_c = int(pos["entry_price_cents"])
-  contracts = int(pos["contracts"])
-  if pos["side"] == "yes":
-    return round(contracts * (mark_cents - entry_c) / 100.0, 2)
-  return round(contracts * (entry_c - mark_cents) / 100.0, 2)
+  return unrealized_leg_pnl_usd(
+    side=str(pos.get("side") or "yes"),
+    entry_price_cents=int(pos["entry_price_cents"]),
+    mark_price_cents=mark_cents,
+    contracts=int(pos["contracts"]),
+  )
 
 
 def enrich_open_positions_live(
@@ -221,7 +222,6 @@ def enrich_open_positions_live(
 ) -> list[dict[str, Any]]:
   """Attach live mark, unrealized P&L, and position alert to open bot legs."""
   live = tab.get("live") or tab
-  locked = tab.get("locked")
   price = tab.get("brti_live") or live.get("current_price")
   out: list[dict[str, Any]] = []
 
@@ -238,28 +238,13 @@ def enrich_open_positions_live(
 
     if pick:
       regime = live.get("regime") or {}
-      row["position_alert"] = assess_hourly_position_alert(
-        snapshot_kind="late_call",
-        signal=pick.get("signal"),
-        edge=pick.get("edge"),
+      row["position_alert"] = assess_held_hourly_position_alert(
+        pos=pos,
+        pick=pick,
+        live_price=float(price) if price else None,
         regime_allow_trade=bool(regime.get("allow_trade", True)),
         regime_reasons=list(regime.get("reasons") or []),
-        bet_assessment=assess_contract_bet(
-          signal=pick.get("signal"),
-          edge=pick.get("edge"),
-          live=live,
-          locked=locked,
-          use_live_regime=True,
-          cfg=cfg,
-        ),
-        locked_signal=pos.get("signal"),
-        locked_edge=pos.get("entry_edge"),
-        locked_regime_allow_trade=True,
-        locked_reference_price=pos.get("reference_price"),
-        reference_price=live.get("current_price"),
-        locked_terminal_mu=(locked or {}).get("terminal_mu"),
-        terminal_mu=live.get("terminal_mu"),
-        live_price=float(price) if price else None,
+        unrealized_pnl_usd=row.get("unrealized_pnl_usd"),
         cfg=cfg,
       )
     else:
@@ -446,7 +431,6 @@ class HourlyBot:
     cfg: dict[str, Any] | None,
   ) -> list[dict[str, Any]]:
     live = tab.get("live") or tab
-    locked = tab.get("locked")
     price = tab.get("brti_live") or live.get("current_price")
     hours_left = live.get("hours_to_settle")
     seconds_remaining = float(hours_left) * 3600.0 if hours_left is not None else None
@@ -458,31 +442,6 @@ class HourlyBot:
         continue
 
       regime = live.get("regime") or {}
-      alert = assess_hourly_position_alert(
-        snapshot_kind="late_call",
-        signal=pick.get("signal"),
-        edge=pick.get("edge"),
-        regime_allow_trade=bool(regime.get("allow_trade", True)),
-        regime_reasons=list(regime.get("reasons") or []),
-        bet_assessment=assess_contract_bet(
-          signal=pick.get("signal"),
-          edge=pick.get("edge"),
-          live=live,
-          locked=locked,
-          use_live_regime=True,
-          cfg=cfg,
-        ),
-        locked_signal=pos.get("signal"),
-        locked_edge=pos.get("entry_edge"),
-        locked_regime_allow_trade=True,
-        locked_reference_price=pos.get("reference_price"),
-        reference_price=live.get("current_price"),
-        locked_terminal_mu=(locked or {}).get("terminal_mu"),
-        terminal_mu=live.get("terminal_mu"),
-        live_price=float(price) if price else None,
-        cfg=cfg,
-      )
-
       exit_fill = paper_exit_fill(pick=pick, side=str(pos["side"]))
       exit_price = int(exit_fill["price_cents"]) if exit_fill.get("ok") else None
       if exit_price is None:
@@ -490,6 +449,15 @@ class HourlyBot:
       self.store.update_position_mark(pos["id"], exit_price)
 
       unrealized = _unrealized_pnl_usd(pos, exit_price)
+      alert = assess_held_hourly_position_alert(
+        pos=pos,
+        pick=pick,
+        live_price=float(price) if price else None,
+        regime_allow_trade=bool(regime.get("allow_trade", True)),
+        regime_reasons=list(regime.get("reasons") or []),
+        unrealized_pnl_usd=unrealized,
+        cfg=cfg,
+      )
       cost_usd = float(pos.get("cost_usd") or 0)
       peaks = self.store.update_position_peaks(
         pos["id"],
@@ -512,10 +480,14 @@ class HourlyBot:
 
       entry_c = int(pos["entry_price_cents"])
       contracts = int(pos["contracts"])
-      if pos["side"] == "yes":
-        pnl = contracts * (exit_price - entry_c) / 100.0
-      else:
-        pnl = contracts * (entry_c - exit_price) / 100.0
+      pnl = float(
+        leg_pnl_usd(
+          entry_price_cents=entry_c,
+          mark_or_exit_cents=exit_price,
+          contracts=contracts,
+        )
+        or 0.0,
+      )
 
       pnl_rounded = round(pnl, 2)
       mode_label = "Paper" if settings.mode == "paper" else "Live"

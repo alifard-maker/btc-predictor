@@ -318,6 +318,41 @@ def test_enrich_open_positions_live_mark_to_market():
   assert enriched[0]["position_alert"]["alert"] in ("HOLD", "TAKE PROFIT", "CUT LOSSES")
 
 
+def test_enrich_open_positions_band_no_not_cut_when_spot_above():
+  tab = _live_tab(pick={
+    "ticker": "KXETH-BAND-LOW",
+    "signal": "BUY YES",
+    "label": "$1,530 to 1,549.99",
+    "kalshi_mid": 0.08,
+    "yes_bid": 0.08,
+    "yes_ask": 0.08,
+    "edge": 0.02,
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1530.0,
+    "cap_strike": 1549.99,
+  })
+  tab["brti_live"] = 1565.0
+  tab["live"]["current_price"] = 1565.0
+  tab["live"]["regime"] = {"allow_trade": False, "reasons": ["compressed"]}
+  tab["live"]["strategy_range"] = {
+    "contracts": [tab["live"]["primary_pick"]],
+  }
+  positions = [{
+    "id": "p1",
+    "market_ticker": "KXETH-BAND-LOW",
+    "side": "no",
+    "contracts": 2,
+    "entry_price_cents": 90,
+    "cost_usd": 1.8,
+    "signal": "BUY NO",
+  }]
+  from src.trading.hourly_bot import enrich_open_positions_live
+  enriched = enrich_open_positions_live(positions, tab, cfg={"hourly": {"regime": {}}})
+  assert enriched[0]["unrealized_pnl_usd"] == 0.04
+  assert enriched[0]["position_alert"]["alert"] == "HOLD"
+
+
 def test_settings_save_does_not_delete_trades():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")

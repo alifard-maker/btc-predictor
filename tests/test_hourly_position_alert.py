@@ -170,3 +170,45 @@ def test_assess_hourly_position_alert_locked_edge_below_min():
   )
   assert result["alert"] == "CUT LOSSES"
   assert "below" in result["detail"].lower()
+
+
+def test_held_band_no_hold_when_spot_above_band():
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY YES",
+    "edge": 0.02,
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1530.0,
+    "cap_strike": 1549.99,
+  }
+  pos = {
+    "side": "no",
+    "signal": "BUY NO",
+    "entry_price_cents": 90,
+    "contracts": 2,
+  }
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=1565.0,
+    regime_allow_trade=False,
+    regime_reasons=["compressed"],
+    unrealized_pnl_usd=0.04,
+    cfg={"hourly": {"regime": {"min_edge": 0.05}}},
+  )
+  assert result["alert"] == "HOLD"
+  assert "Spot supports" in result["detail"]
+
+
+def test_unrealized_no_pnl_positive_when_mark_rises():
+  from src.trading.paper_execution import unrealized_leg_pnl_usd
+
+  pnl = unrealized_leg_pnl_usd(
+    side="no",
+    entry_price_cents=90,
+    mark_price_cents=92,
+    contracts=2,
+  )
+  assert pnl == 0.04

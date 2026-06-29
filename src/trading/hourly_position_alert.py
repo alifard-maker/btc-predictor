@@ -71,6 +71,127 @@ def _mu_shift_favors_signal(signal: str | None, locked_mu: float | None, current
   return None
 
 
+def _spot_favors_held_side(
+  *,
+  side: str,
+  live_price: float,
+  pick: dict[str, Any],
+) -> bool | None:
+  """Whether live index spot structurally favors the held YES/NO leg."""
+  floor = pick.get("floor_strike")
+  cap = pick.get("cap_strike")
+  strike_type = pick.get("strike_type")
+  ctype = pick.get("contract_type", "threshold")
+  held_yes = side == "yes"
+
+  if ctype == "range" or strike_type == "between":
+    if floor is not None and cap is not None:
+      lo, hi = float(floor), float(cap)
+      inside = lo <= live_price <= hi
+      return inside if held_yes else not inside
+
+  if strike_type == "greater" and floor is not None:
+    above = live_price >= float(floor)
+    return above if held_yes else not above
+  if strike_type == "less" and cap is not None:
+    below = live_price < float(cap)
+    return below if held_yes else not below
+  return None
+
+
+def _signal_favors_held_side(signal: str | None, side: str) -> bool | None:
+  if not is_actionable_buy(signal):
+    return None
+  held_yes = side == "yes"
+  return is_buy_yes(signal) if held_yes else is_buy_no(signal)
+
+
+def assess_held_hourly_position_alert(
+  *,
+  pos: dict[str, Any],
+  pick: dict[str, Any],
+  live_price: float | None,
+  regime_allow_trade: bool,
+  regime_reasons: list[str] | None = None,
+  unrealized_pnl_usd: float | None = None,
+  cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+  """Position alert for an open bot leg — uses spot vs band/strike, not index drift alone."""
+  side = str(pos.get("side") or "yes")
+  entry_signal = pos.get("signal")
+  current_signal = pick.get("signal")
+  edge_f = float(pick["edge"]) if pick.get("edge") is not None else None
+  min_edge = _min_edge(cfg)
+  reasons = list(regime_reasons or [])
+
+  spot_ok: bool | None = None
+  if live_price is not None:
+    try:
+      spot_ok = _spot_favors_held_side(side=side, live_price=float(live_price), pick=pick)
+    except (TypeError, ValueError):
+      spot_ok = None
+
+  sig_ok = _signal_favors_held_side(current_signal, side)
+  sig_flipped = (
+    is_actionable_buy(entry_signal)
+    and is_actionable_buy(current_signal)
+    and is_buy_yes(entry_signal) != is_buy_yes(current_signal)
+  )
+
+  if unrealized_pnl_usd is not None and unrealized_pnl_usd >= 0.50:
+    if edge_f is not None and edge_f < min_edge:
+      return _result(
+        "TAKE PROFIT",
+        "success",
+        "Marked gain with edge mostly priced in — consider taking profit.",
+      )
+    return _result("HOLD", "success", "Position ahead on mark — hold unless signal flips.")
+
+  if spot_ok is True and (unrealized_pnl_usd is None or unrealized_pnl_usd >= -0.05):
+    return _result(
+      "HOLD",
+      "success",
+      f"Spot supports your {side.upper()} leg on this contract — hold.",
+    )
+
+  if unrealized_pnl_usd is not None and unrealized_pnl_usd < -0.05:
+    if sig_flipped:
+      return _result(
+        "CUT LOSSES",
+        "danger",
+        f"Signal flipped ({entry_signal} → {current_signal}) with loss on mark — cut.",
+      )
+    if spot_ok is False:
+      return _result(
+        "CUT LOSSES",
+        "danger",
+        "Spot moved against your band/strike leg with loss on mark — cut.",
+      )
+    if not regime_allow_trade and sig_ok is False:
+      detail = "Regime blocked and signal no longer supports your leg"
+      if reasons:
+        detail += f" ({reasons[0]})"
+      return _result("CUT LOSSES", "danger", detail + " — cut losses.")
+
+  if not regime_allow_trade and spot_ok is False and unrealized_pnl_usd is not None and unrealized_pnl_usd < 0:
+    detail = "Regime blocked with spot against your leg"
+    if reasons:
+      detail += f" ({reasons[0]})"
+    return _result("CUT LOSSES", "danger", detail + " — cut losses.")
+
+  if sig_flipped and spot_ok is not True:
+    return _result(
+      "HOLD",
+      "neutral",
+      f"Signal flipped ({entry_signal} → {current_signal}) but spot still OK — hold with tight risk.",
+    )
+
+  if sig_ok and unrealized_pnl_usd is not None and unrealized_pnl_usd >= 0:
+    return _result("HOLD", "success", "Signal and mark still favor your leg — hold.")
+
+  return _result("HOLD", "neutral", "Hold — position aligned or flat on mark.")
+
+
 def assess_hourly_position_alert(
   *,
   snapshot_kind: Literal["locked", "late_call"],
