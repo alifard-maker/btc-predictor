@@ -16,6 +16,9 @@ def fresh_start_paper_bot(conn: sqlite3.Connection, max_cap: float) -> dict[str,
   conn.execute("DELETE FROM bot_trades")
   conn.execute("DELETE FROM bot_positions")
   conn.execute("DELETE FROM bot_cooldowns")
+  from src.trading.bot_cheap_leg_cooldown import clear_cheap_leg_cut_cooldowns
+
+  clear_cheap_leg_cut_cooldowns(conn)
   save_auto_tuning(conn, {})
   migrate_bot_runtime(conn)
   conn.execute(

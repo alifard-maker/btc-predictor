@@ -2390,6 +2390,7 @@
       if (raw.startsWith('already_open:')) return 'already open on this contract';
       if (raw.startsWith('ask_edge_too_low:')) return `ask-edge thin (${raw.slice('ask_edge_too_low:'.length)})`;
       if (raw.startsWith('reentry_cooldown:')) return 're-entry cooldown';
+      if (raw.startsWith('cheap_leg_cut_cooldown:')) return 'cheap leg cut cooldown';
       if (raw.startsWith('scale_in_not_winner:')) return 'scale-in blocked (not winning)';
       if (raw === 'scale_in_max_legs') return 'scale-in max legs reached';
       if (raw === 'scale_in_side_mismatch') return 'scale-in side mismatch';
@@ -2492,6 +2493,7 @@
         return `Scale-in blocked — new ask edge ${edge}¢ does not beat prior leg entry edge plus improvement threshold.`;
       }
       if (raw.startsWith('reentry_cooldown:')) return `Re-entry cooldown active for ${raw.slice('reentry_cooldown:'.length)}.`;
+      if (raw.startsWith('cheap_leg_cut_cooldown:')) return `Cheap leg cut cooldown active for ${raw.slice('cheap_leg_cut_cooldown:'.length)}.`;
       if (raw.startsWith('ask_edge_too_low:')) {
         const cents = raw.slice('ask_edge_too_low:'.length);
         return `Ask-edge ${cents} below min_ask_edge_cents — model prob minus ask-implied too thin.`;

@@ -191,6 +191,9 @@ class HourlyBotStore:
     from src.trading.bot_tuning_store import migrate_auto_tuning
 
     migrate_auto_tuning(conn)
+    from src.trading.bot_cheap_leg_cooldown import migrate_cheap_leg_cut_cooldowns
+
+    migrate_cheap_leg_cut_cooldowns(conn)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_trades)").fetchall()}
     if cols and "action" not in cols:
       conn.execute("ALTER TABLE bot_trades ADD COLUMN action TEXT NOT NULL DEFAULT 'enter'")
@@ -484,6 +487,46 @@ class HourlyBotStore:
       exited_at = exited_at.replace(tzinfo=timezone.utc)
     elapsed = (datetime.now(timezone.utc) - exited_at).total_seconds()
     return elapsed < float(effective)
+
+  def record_cheap_leg_cut_cooldown(
+    self,
+    event_ticker: str,
+    *,
+    label: str | None,
+    market_ticker: str,
+    cooldown_seconds: int,
+    exited_at: str | None = None,
+  ) -> None:
+    from src.trading.bot_cheap_leg_cooldown import record_cheap_leg_cut_cooldown
+
+    with self._connect() as conn:
+      record_cheap_leg_cut_cooldown(
+        conn,
+        event_ticker,
+        label=label,
+        market_ticker=market_ticker,
+        cooldown_seconds=cooldown_seconds,
+        exited_at=exited_at,
+      )
+
+  def is_in_cheap_leg_cut_cooldown(
+    self,
+    event_ticker: str,
+    *,
+    label: str | None,
+    market_ticker: str,
+    cooldown_seconds: int,
+  ) -> bool:
+    from src.trading.bot_cheap_leg_cooldown import is_in_cheap_leg_cut_cooldown
+
+    with self._connect() as conn:
+      return is_in_cheap_leg_cut_cooldown(
+        conn,
+        event_ticker,
+        label=label,
+        market_ticker=market_ticker,
+        cooldown_seconds=cooldown_seconds,
+      )
 
   def has_open_position(self, event_ticker: str, market_ticker: str) -> bool:
     with self._connect() as conn:

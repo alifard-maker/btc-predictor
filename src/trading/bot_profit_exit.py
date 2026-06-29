@@ -267,10 +267,13 @@ def is_profit_exit_reason(reason: str | None) -> bool:
 class CheapLegExitConfig:
   max_entry_cents: int = 20
   cut_loss_cents: int = 10
+  cut_cooldown_seconds: int = 300
 
 
 def cheap_leg_exit_config(cfg: dict[str, Any] | None, *, kind: str) -> CheapLegExitConfig:
   """Read cheap-leg stop thresholds from hourly.bot or intra_slot.bot config."""
+  from src.trading.bot_cheap_leg_cooldown import DEFAULT_CHEAP_LEG_CUT_COOLDOWN_SECONDS
+
   bot_cfg: dict[str, Any] = {}
   if cfg:
     if kind == "hourly":
@@ -280,6 +283,9 @@ def cheap_leg_exit_config(cfg: dict[str, Any] | None, *, kind: str) -> CheapLegE
   return CheapLegExitConfig(
     max_entry_cents=int(bot_cfg.get("cheap_leg_max_entry_cents", 20)),
     cut_loss_cents=int(bot_cfg.get("cheap_leg_cut_loss_cents", 10)),
+    cut_cooldown_seconds=int(
+      bot_cfg.get("cheap_leg_cut_cooldown_seconds", DEFAULT_CHEAP_LEG_CUT_COOLDOWN_SECONDS)
+    ),
   )
 
 

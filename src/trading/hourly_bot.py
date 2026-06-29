@@ -15,6 +15,11 @@ from src.trading.live_bracket_orders import (
   resting_config_for_kind,
 )
 from src.trading.bot_entry_settings import hourly_entry_settings_snapshot
+from src.trading.bot_cheap_leg_cooldown import (
+  cheap_leg_cut_cooldown_seconds,
+  is_cheap_leg_cut_reason,
+  resolve_exit_cooldown_seconds,
+)
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
   cheap_leg_exit_config,
@@ -22,7 +27,6 @@ from src.trading.bot_profit_exit import (
   evaluate_cheap_leg_cut_loss,
   evaluate_slot15_contract_exits,
   effective_hourly_trial_settings,
-  is_profit_exit_reason,
   position_hold_seconds,
 )
 from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
@@ -668,14 +672,19 @@ class HourlyBot:
       record_exit_and_maybe_cap(
         pnl_rounded, kind="hourly", asset=self.asset, store=self.store, cfg=cfg,
       )
-      cooldown = (
-        settings.profit_exit_cooldown_seconds
-        if is_profit_exit_reason(exit_reason)
-        else settings.reentry_cooldown_seconds
+      cooldown = resolve_exit_cooldown_seconds(
+        settings, exit_reason, cfg, bot_kind=self.kind,
       )
       self.store.record_exit_cooldown(
         event_ticker, pos["market_ticker"], cooldown_seconds=cooldown
       )
+      if is_cheap_leg_cut_reason(exit_reason):
+        self.store.record_cheap_leg_cut_cooldown(
+          event_ticker,
+          label=pos.get("label"),
+          market_ticker=pos["market_ticker"],
+          cooldown_seconds=cooldown,
+        )
       results.append(row)
 
     return results
@@ -773,6 +782,19 @@ class HourlyBot:
         event_ticker, market_ticker, settings.reentry_cooldown_seconds
       ):
         last_reason = f"reentry_cooldown:{market_ticker}"
+        continue
+
+      cheap_cut_cd = cheap_leg_cut_cooldown_seconds(
+        cfg, kind="hourly",
+      )
+      if self.store.is_in_cheap_leg_cut_cooldown(
+        event_ticker,
+        label=pick.get("label"),
+        market_ticker=market_ticker,
+        cooldown_seconds=cheap_cut_cd,
+      ):
+        identity = pick.get("label") or market_ticker
+        last_reason = f"cheap_leg_cut_cooldown:{identity}"
         continue
 
       if self.asset == "btc":

@@ -15,10 +15,14 @@ from src.trading.live_bracket_orders import (
 )
 from src.trading.bot_period_rollover import force_close_period_positions, resolve_rollover_exit_cents
 from src.trading.bot_entry_settings import slot15_entry_settings_snapshot
+from src.trading.bot_cheap_leg_cooldown import (
+  cheap_leg_cut_cooldown_seconds,
+  is_cheap_leg_cut_reason,
+  resolve_exit_cooldown_seconds,
+)
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
   evaluate_slot15_contract_exits,
-  is_profit_exit_reason,
   position_hold_seconds,
 )
 from src.trading.slot15_position_alert import assess_slot15_leg_position_alert
@@ -567,14 +571,19 @@ class Slot15Bot:
       record_exit_and_maybe_cap(
         pnl_rounded, kind="slot15", asset=self.asset, store=self.store, cfg=cfg,
       )
-      cooldown = (
-        settings.profit_exit_cooldown_seconds
-        if is_profit_exit_reason(exit_reason)
-        else settings.reentry_cooldown_seconds
+      cooldown = resolve_exit_cooldown_seconds(
+        settings, exit_reason, cfg, bot_kind="slot15",
       )
       self.store.record_exit_cooldown(
         slot_key, pos["market_ticker"], cooldown_seconds=cooldown
       )
+      if is_cheap_leg_cut_reason(exit_reason):
+        self.store.record_cheap_leg_cut_cooldown(
+          slot_key,
+          label=pos.get("label"),
+          market_ticker=pos["market_ticker"],
+          cooldown_seconds=cooldown,
+        )
       results.append(row)
 
     return results
@@ -663,6 +672,17 @@ class Slot15Bot:
 
       if self.store.is_in_cooldown(slot_key, market_ticker, settings.reentry_cooldown_seconds):
         last_reason = f"reentry_cooldown:{market_ticker}"
+        continue
+
+      cheap_cut_cd = cheap_leg_cut_cooldown_seconds(cfg, kind="slot15")
+      if self.store.is_in_cheap_leg_cut_cooldown(
+        slot_key,
+        label=pick.get("label"),
+        market_ticker=market_ticker,
+        cooldown_seconds=cheap_cut_cd,
+      ):
+        identity = pick.get("label") or market_ticker
+        last_reason = f"cheap_leg_cut_cooldown:{identity}"
         continue
 
       remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd, settings)

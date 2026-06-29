@@ -117,6 +117,7 @@ intra_slot:
     min_hold_seconds: 15
     cheap_leg_max_entry_cents: 20
     cheap_leg_cut_loss_cents: 10
+    cheap_leg_cut_cooldown_seconds: 180
     leg_take_profit_cents: 3
     leg_stop_loss_cents: 4
     leg_take_profit_usd: 0.10
@@ -244,6 +245,7 @@ hourly:
     profit_exit_cooldown_seconds: 60
     cheap_leg_max_entry_cents: 20
     cheap_leg_cut_loss_cents: 10
+    cheap_leg_cut_cooldown_seconds: 300
     entry_strategy:
       enabled: true
       risk_adjusted_ranking: true
@@ -365,6 +367,9 @@ eth:
     enabled: true
     series_ticker: KXETH15M
     brti_index_id: ERTI
+  intra_slot:
+    bot:
+      cheap_leg_cut_cooldown_seconds: 180
   daily:
     enabled: true
     threshold_series: [KXETHD]
@@ -431,6 +436,7 @@ eth:
       profit_exit_cooldown_seconds: 60
       cheap_leg_max_entry_cents: 20
       cheap_leg_cut_loss_cents: 10
+      cheap_leg_cut_cooldown_seconds: 300
       entry_strategy:
         enabled: true
         risk_adjusted_ranking: true
