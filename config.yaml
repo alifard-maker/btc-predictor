@@ -99,6 +99,7 @@ intra_slot:
     allow_strong: false
     allow_actionable: false
     use_accumulated_profit: false
+    profit_use_pct: 100
     paper_auto_refill: true
     continuous_enabled: true
     poll_seconds: 10
@@ -217,6 +218,7 @@ hourly:
     allow_strong: false
     allow_actionable: false
     use_accumulated_profit: false
+    profit_use_pct: 100
     paper_auto_refill: true
     continuous_enabled: true
     poll_seconds: 10
@@ -377,6 +379,7 @@ eth:
       allow_strong: false
       allow_actionable: false
       use_accumulated_profit: false
+      profit_use_pct: 100
       paper_auto_refill: true
       continuous_enabled: true
       poll_seconds: 10

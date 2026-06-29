@@ -2,31 +2,59 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Protocol
 
 
 class BudgetSettings(Protocol):
   mode: str
   use_accumulated_profit: bool
+  profit_use_pct: float
+
+
+def _clamp_profit_use_pct(pct: float) -> float:
+  return max(0.0, min(100.0, float(pct)))
+
+
+def _realized_adjustment(
+  realized: float,
+  *,
+  use_accumulated_profit: bool,
+  profit_use_pct: float,
+) -> float:
+  if not use_accumulated_profit:
+    return min(0.0, realized)
+  if realized <= 0:
+    return realized
+  pct = _clamp_profit_use_pct(profit_use_pct) / 100.0
+  return realized * pct
 
 
 def deploy_bankroll_usd(
   *,
   mode: str,
   use_accumulated_profit: bool,
+  profit_use_pct: float = 100.0,
   max_cap: float,
   paper_bankroll_usd: float,
   interval_realized_pnl_usd: float,
 ) -> float:
   """Capital the bot may use for new entries this interval."""
+  pct = _clamp_profit_use_pct(profit_use_pct) / 100.0
   if mode == "paper":
     if use_accumulated_profit:
-      return max(0.0, paper_bankroll_usd)
-    return max(0.0, min(paper_bankroll_usd, float(max_cap)))
+      paper = max(0.0, float(paper_bankroll_usd))
+      cap = float(max_cap)
+      if paper <= cap:
+        return paper
+      return cap + (paper - cap) * pct
+    return max(0.0, min(float(paper_bankroll_usd), float(max_cap)))
   realized = float(interval_realized_pnl_usd)
-  if use_accumulated_profit:
-    return max(0.0, float(max_cap) + realized)
-  return max(0.0, float(max_cap) + min(0.0, realized))
+  adjustment = _realized_adjustment(
+    realized,
+    use_accumulated_profit=use_accumulated_profit,
+    profit_use_pct=profit_use_pct,
+  )
+  return max(0.0, float(max_cap) + adjustment)
 
 
 def remaining_budget_usd(
@@ -42,6 +70,7 @@ def remaining_budget_usd(
   deploy = deploy_bankroll_usd(
     mode=settings.mode,
     use_accumulated_profit=settings.use_accumulated_profit,
+    profit_use_pct=settings.profit_use_pct,
     max_cap=max_cap,
     paper_bankroll_usd=paper_bankroll_usd,
     interval_realized_pnl_usd=interval_realized_pnl_usd,

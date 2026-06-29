@@ -676,11 +676,14 @@ def _apply_hourly_bot_settings(
       body.get("auto_stop_on_budget_exhausted", current.auto_stop_on_budget_exhausted)
     ),
     "use_accumulated_profit": bool(body.get("use_accumulated_profit", current.use_accumulated_profit)),
+    "profit_use_pct": float(body.get("profit_use_pct", current.profit_use_pct)),
     "paper_auto_refill": bool(body.get("paper_auto_refill", current.paper_auto_refill)),
     "auto_stopped": auto_stopped,
   })
   if settings.max_spend_per_hour_usd < 0:
     raise HTTPException(400, "max_spend_per_hour_usd must be >= 0")
+  if not 0 <= settings.profit_use_pct <= 100:
+    raise HTTPException(400, "profit_use_pct must be between 0 and 100")
   old_cap = current.max_spend_per_hour_usd
   store.save_settings(settings, source="dashboard", cfg=cfg or _cfg)
   if settings.max_spend_per_hour_usd > old_cap:
@@ -739,11 +742,14 @@ def _apply_slot15_bot_settings(
       body.get("auto_stop_on_budget_exhausted", current.auto_stop_on_budget_exhausted)
     ),
     "use_accumulated_profit": bool(body.get("use_accumulated_profit", current.use_accumulated_profit)),
+    "profit_use_pct": float(body.get("profit_use_pct", current.profit_use_pct)),
     "paper_auto_refill": bool(body.get("paper_auto_refill", current.paper_auto_refill)),
     "auto_stopped": auto_stopped,
   })
   if settings.max_spend_per_slot_usd < 0:
     raise HTTPException(400, "max_spend_per_slot_usd must be >= 0")
+  if not 0 <= settings.profit_use_pct <= 100:
+    raise HTTPException(400, "profit_use_pct must be between 0 and 100")
   old_cap = current.max_spend_per_slot_usd
   store.save_settings(settings, source="dashboard", cfg=cfg or _cfg)
   if settings.max_spend_per_slot_usd > old_cap:

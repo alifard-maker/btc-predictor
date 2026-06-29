@@ -14,6 +14,7 @@ BOT_DASHBOARD_DEFAULTS: dict[str, Any] = {
   "allow_strong": False,
   "allow_actionable": False,
   "use_accumulated_profit": False,
+  "profit_use_pct": 100.0,
   "paper_auto_refill": True,
   "auto_stopped": False,
 }

@@ -8,6 +8,7 @@ BOT_SETTING_FIELDS = (
   "allow_strong",
   "allow_actionable",
   "use_accumulated_profit",
+  "profit_use_pct",
   "paper_auto_refill",
 )
 
@@ -26,6 +27,7 @@ def normalize_bot_settings(raw: dict | None, max_key: str) -> dict | None:
     "allow_strong": bool(raw.get("allow_strong")),
     "allow_actionable": bool(raw.get("allow_actionable")),
     "use_accumulated_profit": bool(raw.get("use_accumulated_profit", False)),
+    "profit_use_pct": float(raw.get("profit_use_pct", 100)),
     "paper_auto_refill": raw.get("paper_auto_refill", True) is not False,
   }
 
@@ -79,6 +81,7 @@ def test_normalize_defaults():
   assert n["mode"] == "live"
   assert n["allow_strong"] is False
   assert n["use_accumulated_profit"] is False
+  assert n["profit_use_pct"] == 100.0
   assert n["paper_auto_refill"] is True
   assert n["max_spend_per_hour_usd"] == 25.0
 

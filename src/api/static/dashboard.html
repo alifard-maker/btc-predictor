@@ -572,7 +572,7 @@
   <script>
     /* Inlined from bot_settings_ui.js — must load before dashboard init (external script 404 broke all UI). */
     (function () {
-      const BOT_SETTING_FIELDS = ['enabled', 'mode', 'allow_strong', 'allow_actionable', 'use_accumulated_profit', 'paper_auto_refill'];
+      const BOT_SETTING_FIELDS = ['enabled', 'mode', 'allow_strong', 'allow_actionable', 'use_accumulated_profit', 'profit_use_pct', 'paper_auto_refill'];
       const PATCH_CONFIRM_MS = 120000;
       function botUiKey(kind, asset) { return `${kind}-${asset}`; }
       function normalizeBotSettings(raw, maxKey) {
@@ -584,6 +584,7 @@
           allow_strong: !!raw.allow_strong,
           allow_actionable: !!raw.allow_actionable,
           use_accumulated_profit: !!raw.use_accumulated_profit,
+          profit_use_pct: Number(raw.profit_use_pct ?? 100),
           paper_auto_refill: raw.paper_auto_refill !== false,
         };
       }
@@ -2069,6 +2070,7 @@
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
     }
@@ -2098,7 +2100,10 @@
             <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
           </label>
           <label class="bot-label" title="When ON, wins increase deployable capital and cumulative $ entered per hour can exceed max at-risk. When OFF, capped at max at-risk $ for this hour only.">Use profits
-            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit ? 'checked' : ''} onchange="onBotUseProfitsToggle('${asset}', 'hourly')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="% of interval profit deployable when Use profits is ON (0–100).">Profit use %
+            <input type="number" id="bot-profit-use-pct-${p}" min="0" max="100" step="5" value="${s.profit_use_pct ?? 100}" style="width:3.5rem;margin-left:.35rem" ${s.use_accumulated_profit ? '' : 'disabled'} onchange="saveHourlyBotSettings('${asset}')">
           </label>
           <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
             <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="saveHourlyBotSettings('${asset}')"><span class="slider"></span></label>
@@ -2410,6 +2415,11 @@
       set(`bot-actionable-${p}`, s.allow_actionable);
       set(`bot-use-profits-${p}`, s.use_accumulated_profit);
       set(`bot-auto-refill-${p}`, s.paper_auto_refill);
+      const pctEl = $(`bot-profit-use-pct-${p}`);
+      if (pctEl) {
+        pctEl.value = s.profit_use_pct ?? 100;
+        pctEl.disabled = !s.use_accumulated_profit;
+      }
       const maxEl = $(`bot-max-spend-${p}`);
       if (maxEl) maxEl.value = s[maxKey];
     }
@@ -2703,6 +2713,7 @@
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
     }
@@ -2732,7 +2743,10 @@
             <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
           </label>
           <label class="bot-label" title="When ON, wins increase deployable capital and cumulative $ entered per slot can exceed max at-risk. When OFF, capped at max at-risk $ for this slot only.">Use profits
-            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit ? 'checked' : ''} onchange="onBotUseProfitsToggle('${asset}', 'slot15')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="% of interval profit deployable when Use profits is ON (0–100).">Profit use %
+            <input type="number" id="bot-profit-use-pct-${p}" min="0" max="100" step="5" value="${s.profit_use_pct ?? 100}" style="width:3.5rem;margin-left:.35rem" ${s.use_accumulated_profit ? '' : 'disabled'} onchange="saveSlot15BotSettings('${asset}')">
           </label>
           <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
             <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
@@ -2886,6 +2900,7 @@
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
       if (body.mode === 'live' && livePassword) body.live_password = livePassword;
@@ -3058,6 +3073,15 @@
       saveHourlyBotSettings(asset);
     }
 
+    function onBotUseProfitsToggle(asset, kind) {
+      const p = kind === 'slot15' ? `slot15-${asset}` : asset;
+      const pctEl = $(`bot-profit-use-pct-${p}`);
+      const useProfits = !!$(`bot-use-profits-${p}`)?.checked;
+      if (pctEl) pctEl.disabled = !useProfits;
+      if (kind === 'slot15') saveSlot15BotSettings(asset);
+      else saveHourlyBotSettings(asset);
+    }
+
     async function saveHourlyBotSettings(asset, livePassword) {
       const kind = 'hourly';
       const maxKey = 'max_spend_per_hour_usd';
@@ -3072,6 +3096,7 @@
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
       };
       if (body.mode === 'live' && livePassword) body.live_password = livePassword;

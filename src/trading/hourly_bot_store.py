@@ -37,6 +37,7 @@ class HourlyBotSettings:
   auto_stop_reason: str | None = None
   paper_auto_refill: bool = True
   use_accumulated_profit: bool = False
+  profit_use_pct: float = 100.0
 
   def to_dict(self) -> dict[str, Any]:
     return asdict(self)
@@ -70,6 +71,7 @@ class HourlyBotSettings:
       auto_stop_reason=raw.get("auto_stop_reason"),
       paper_auto_refill=bool(raw.get("paper_auto_refill", True)),
       use_accumulated_profit=bool(raw.get("use_accumulated_profit", False)),
+      profit_use_pct=float(raw.get("profit_use_pct", 100.0)),
     )
 
 
@@ -384,6 +386,7 @@ class HourlyBotStore:
       return deploy_bankroll_usd(
         mode="paper",
         use_accumulated_profit=settings.use_accumulated_profit,
+        profit_use_pct=settings.profit_use_pct,
         max_cap=max_hourly,
         paper_bankroll_usd=paper,
         interval_realized_pnl_usd=0.0,
@@ -391,6 +394,7 @@ class HourlyBotStore:
     return deploy_bankroll_usd(
       mode="live",
       use_accumulated_profit=settings.use_accumulated_profit,
+      profit_use_pct=settings.profit_use_pct,
       max_cap=max_hourly,
       paper_bankroll_usd=0.0,
       interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
