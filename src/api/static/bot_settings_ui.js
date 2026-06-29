@@ -26,7 +26,7 @@ function normalizeBotSettings(raw, maxKey) {
     [maxKey]: Number(raw[maxKey] ?? 25),
     allow_strong: !!raw.allow_strong,
     allow_actionable: !!raw.allow_actionable,
-    use_accumulated_profit: raw.use_accumulated_profit !== false,
+    use_accumulated_profit: !!raw.use_accumulated_profit,
     paper_auto_refill: raw.paper_auto_refill !== false,
   };
 }

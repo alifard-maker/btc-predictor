@@ -9,6 +9,39 @@ from src.trading.slot15_bot import Slot15Bot, bet_qualifies, _contracts_for_budg
 from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
 
 
+def test_default_settings_on_fresh_db():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    s = store.get_settings()
+    assert s.enabled is False
+    assert s.mode == "paper"
+    assert s.max_spend_per_slot_usd == 25.0
+    assert s.allow_strong is False
+    assert s.allow_actionable is False
+    assert s.use_accumulated_profit is False
+    assert s.paper_auto_refill is True
+
+
+def test_fresh_start_restores_dashboard_defaults():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    store.save_settings(Slot15BotSettings(
+      enabled=True,
+      allow_strong=True,
+      allow_actionable=True,
+      use_accumulated_profit=True,
+      max_spend_per_slot_usd=50.0,
+    ))
+    store.fresh_start_paper(50.0)
+    s = store.get_settings()
+    assert s.enabled is False
+    assert s.allow_strong is False
+    assert s.allow_actionable is False
+    assert s.use_accumulated_profit is False
+    assert s.paper_auto_refill is True
+    assert s.max_spend_per_slot_usd == 50.0
+
+
 def test_settings_roundtrip():
   with tempfile.TemporaryDirectory() as tmp:
     store = Slot15BotStore(Path(tmp) / "bot.db")

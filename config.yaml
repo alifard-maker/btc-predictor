@@ -86,6 +86,13 @@ intra_slot:
   late_window_minutes: 3      # last N minutes — favor taking profit / cutting loss
   fee_buffer_pct: 0.13        # ~half round-trip cost — minimum "safe" net gain
   bot:
+    enabled: false
+    mode: paper
+    max_spend_per_slot_usd: 25
+    allow_strong: false
+    allow_actionable: false
+    use_accumulated_profit: false
+    paper_auto_refill: true
     continuous_enabled: true
     poll_seconds: 5
     paper_max_spread_cents: 40
@@ -194,8 +201,10 @@ hourly:
     enabled: false
     mode: paper
     max_spend_per_hour_usd: 25
-    allow_strong: true
-    allow_actionable: true
+    allow_strong: false
+    allow_actionable: false
+    use_accumulated_profit: false
+    paper_auto_refill: true
     continuous_enabled: true
     poll_seconds: 5
     take_profit_enabled: true
@@ -335,8 +344,10 @@ eth:
       enabled: false
       mode: paper
       max_spend_per_hour_usd: 25
-      allow_strong: true
-      allow_actionable: true
+      allow_strong: false
+      allow_actionable: false
+      use_accumulated_profit: false
+      paper_auto_refill: true
       continuous_enabled: true
       poll_seconds: 5
       take_profit_enabled: true

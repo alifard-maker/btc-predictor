@@ -16,8 +16,8 @@ class Slot15BotSettings:
   enabled: bool = False
   mode: str = "paper"  # paper | live
   max_spend_per_slot_usd: float = 25.0
-  allow_strong: bool = True
-  allow_actionable: bool = True
+  allow_strong: bool = False
+  allow_actionable: bool = False
   continuous: bool = True
   reentry_cooldown_seconds: int = 120
   take_profit_enabled: bool = True
@@ -35,7 +35,7 @@ class Slot15BotSettings:
   auto_stop_on_budget_exhausted: bool = True
   auto_stopped: bool = False
   paper_auto_refill: bool = True
-  use_accumulated_profit: bool = True
+  use_accumulated_profit: bool = False
 
   def to_dict(self) -> dict[str, Any]:
     return asdict(self)
@@ -48,8 +48,8 @@ class Slot15BotSettings:
       enabled=bool(raw.get("enabled", False)),
       mode=str(raw.get("mode", "paper")),
       max_spend_per_slot_usd=float(raw.get("max_spend_per_slot_usd", raw.get("max_spend_per_hour_usd", 25.0))),
-      allow_strong=bool(raw.get("allow_strong", True)),
-      allow_actionable=bool(raw.get("allow_actionable", True)),
+      allow_strong=bool(raw.get("allow_strong", False)),
+      allow_actionable=bool(raw.get("allow_actionable", False)),
       continuous=bool(raw.get("continuous", True)),
       reentry_cooldown_seconds=int(raw.get("reentry_cooldown_seconds", 120)),
       take_profit_enabled=bool(raw.get("take_profit_enabled", True)),
@@ -67,7 +67,7 @@ class Slot15BotSettings:
       auto_stop_on_budget_exhausted=bool(raw.get("auto_stop_on_budget_exhausted", True)),
       auto_stopped=bool(raw.get("auto_stopped", False)),
       paper_auto_refill=bool(raw.get("paper_auto_refill", True)),
-      use_accumulated_profit=bool(raw.get("use_accumulated_profit", True)),
+      use_accumulated_profit=bool(raw.get("use_accumulated_profit", False)),
     )
 
 
@@ -339,9 +339,7 @@ class Slot15BotStore:
       paper = fresh_start_paper_bot(conn, max_cap)
     self._position_peaks.clear()
     self._last_period_key = None
-    settings = self.get_settings()
-    if settings.auto_stopped:
-      self.save_settings(Slot15BotSettings(**{**settings.to_dict(), "auto_stopped": False}))
+    self.save_settings(Slot15BotSettings(max_spend_per_slot_usd=float(max_cap)))
     self.set_last_skip_reason(None)
     return paper
 

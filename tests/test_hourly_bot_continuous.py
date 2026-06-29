@@ -134,7 +134,7 @@ def test_continuous_enter_on_strong_live_signal():
 def test_no_enter_when_regime_weak_and_not_actionable():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
-    store.save_settings(HourlyBotSettings(enabled=True))
+    store.save_settings(HourlyBotSettings(enabled=True, allow_strong=True, allow_actionable=False))
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab(regime_allow=False)
     tab["live"]["primary_pick"]["signal"] = "BUY YES"
@@ -349,6 +349,7 @@ def test_remaining_budget_accounts_for_realized_losses():
 def test_remaining_budget_increases_after_win():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(use_accumulated_profit=True))
     store.log_trade({
       "event_ticker": "EV1",
       "action": "exit",
@@ -622,6 +623,7 @@ def test_profit_target_increases_hour_bankroll():
     store = HourlyBotStore(Path(tmp) / "bot.db")
     store.save_settings(HourlyBotSettings(
       enabled=True, max_spend_per_hour_usd=25.0, take_profit_pct=0.25, min_hold_seconds=0,
+      use_accumulated_profit=True,
     ))
     store.open_position({
       "id": "p1",
