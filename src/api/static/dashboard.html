@@ -2527,7 +2527,6 @@
         : readBotSettingsFromDom(asset, kind);
       const lastKnown = lastKnownBotSettings[key];
       const patchConfirmed = settingsPatchConfirmed[key];
-      const forceFlags = kind === 'hourly_trial' ? hourlyTrialForceSettingsRender : botForceSettingsRender;
       const needStructure = !botSettingsDomReady[key] && (!domSettings || forceFlags[asset]);
 
       if (needStructure) {
