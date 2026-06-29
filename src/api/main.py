@@ -103,6 +103,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
       log.warning("Late-entry backfill skipped: %s", e)
     try:
+      from src.trading.bot_pnl_backfill import backfill_all_bot_dbs
+
+      data_dir = Path(_cfg["paths"]["logs"]).parent
+      pnl_bf = backfill_all_bot_dbs(data_dir, dry_run=False, cfg=_cfg)
+      if pnl_bf.get("fixed_count"):
+        log.info("NO exit P&L backfill on startup: %s", pnl_bf)
+    except Exception as e:
+      log.warning("NO exit P&L backfill skipped: %s", e)
+    try:
       snap = _loop.calibration.snapshot_stats(note="auto bootstrap")
       if snap.get("status") == "ok":
         log.info("Stats snapshot on startup: %s", snap)
@@ -1282,6 +1291,16 @@ def backfill_late(_: None = Depends(_verify_admin)):
   from src.calibration.backfill_late import backfill_late_entries
 
   stats = backfill_late_entries(_cfg, dry_run=False, force=False, replay=True)
+  return {"status": "ok", **stats}
+
+
+@app.post("/api/admin/backfill-bot-pnl")
+def backfill_bot_pnl(_: None = Depends(_verify_admin)):
+  """Recompute inverted historical NO exit P&L in bot trade databases."""
+  from src.trading.bot_pnl_backfill import backfill_all_bot_dbs
+
+  data_dir = Path(_cfg["paths"]["logs"]).parent
+  stats = backfill_all_bot_dbs(data_dir, dry_run=False, cfg=_cfg)
   return {"status": "ok", **stats}
 
 
