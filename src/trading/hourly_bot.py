@@ -287,8 +287,10 @@ class HourlyBot:
     actions: list[dict[str, Any]] = []
     if prev_period:
       live = tab.get("live") or tab
+      settle_price = tab.get("brti_live") or live.get("current_price")
+      rollover_notes: dict[str, str] = {}
 
-      def _exit_cents(pos: dict[str, Any]) -> int:
+      def _market_exit_cents(pos: dict[str, Any]) -> int:
         pick = _find_contract_in_live(live, pos["market_ticker"])
         if pick:
           fill = paper_exit_fill(pick=pick, side=str(pos.get("side") or ""))
@@ -299,6 +301,30 @@ class HourlyBot:
           return int(last_mark)
         return int(pos["entry_price_cents"])
 
+      def _exit_cents(pos: dict[str, Any]) -> int:
+        from src.trading.hourly_settlement import resolve_hourly_rollover_exit_cents
+
+        pick = _find_contract_in_live(live, pos["market_ticker"])
+        market = _market_exit_cents(pos)
+        settle = float(settle_price) if settle_price is not None else None
+        cents, note = resolve_hourly_rollover_exit_cents(
+          pos,
+          settle_price=settle,
+          pick=pick,
+          market_exit_cents=market,
+        )
+        rollover_notes[str(pos["id"])] = note
+        return cents
+
+      def _rollover_detail(pos: dict[str, Any], exit_price: int, _pnl: float) -> str:
+        contracts = int(pos["contracts"])
+        entry_c = int(pos["entry_price_cents"])
+        note = rollover_notes.get(str(pos["id"]), "")
+        return (
+          f"Paper EXIT (PERIOD SETTLEMENT): {pos['side'].upper()} ×{contracts} "
+          f"@ {exit_price}¢ (entry {entry_c}¢) — {note}"
+        )
+
       actions.extend(
         force_close_period_positions(
           self.store,
@@ -306,6 +332,7 @@ class HourlyBot:
           exit_cents_for_position=_exit_cents,
           settings=settings,
           log_label=f"{self.asset.upper()} hourly",
+          format_detail=_rollover_detail,
         )
       )
       settings = self.store.get_settings()
@@ -727,6 +754,10 @@ class HourlyBot:
           "label": pick.get("label"),
           "entry_edge": pick.get("edge"),
           "reference_price": ref,
+          "contract_type": pick.get("contract_type"),
+          "strike_type": pick.get("strike_type"),
+          "floor_strike": pick.get("floor_strike"),
+          "cap_strike": pick.get("cap_strike"),
         })
         detail = (
           f"Paper ENTER: {side.upper()} ×{count} @ {price_cents}¢ "

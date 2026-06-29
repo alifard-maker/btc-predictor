@@ -58,6 +58,7 @@ def force_close_period_positions(
   exit_cents_for_position: Callable[[dict[str, Any]], int],
   settings: Any,
   log_label: str,
+  format_detail: Callable[[dict[str, Any], int, float], str] | None = None,
 ) -> list[dict[str, Any]]:
   """Close any open legs still tagged to the previous hour/slot."""
   results: list[dict[str, Any]] = []
@@ -72,10 +73,13 @@ def force_close_period_positions(
       exit_cents=exit_price,
     )
     store.close_position(pos["id"])
-    detail = (
-      f"Paper EXIT (PERIOD ROLLOVER): {pos['side'].upper()} ×{contracts} "
-      f"@ {exit_price}¢ (entry {entry_c}¢) — forced close at {log_label} end"
-    )
+    if format_detail:
+      detail = format_detail(pos, exit_price, pnl)
+    else:
+      detail = (
+        f"Paper EXIT (PERIOD ROLLOVER): {pos['side'].upper()} ×{contracts} "
+        f"@ {exit_price}¢ (entry {entry_c}¢) — forced close at {log_label} end"
+      )
     row = store.log_trade({
       "event_ticker": prev_period_key,
       "trigger": "period_rollover",

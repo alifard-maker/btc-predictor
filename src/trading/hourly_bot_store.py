@@ -214,6 +214,14 @@ class HourlyBotStore:
     for col in ("stop_order_id", "take_profit_order_id"):
       if pos_cols and col not in pos_cols:
         conn.execute(f"ALTER TABLE bot_positions ADD COLUMN {col} TEXT")
+    for col, typ in (
+      ("contract_type", "TEXT"),
+      ("strike_type", "TEXT"),
+      ("floor_strike", "REAL"),
+      ("cap_strike", "REAL"),
+    ):
+      if pos_cols and col not in pos_cols:
+        conn.execute(f"ALTER TABLE bot_positions ADD COLUMN {col} {typ}")
 
   def _init_db(self) -> None:
     with self._connect() as conn:
@@ -496,6 +504,10 @@ class HourlyBotStore:
       "label": pos.get("label"),
       "entry_edge": pos.get("entry_edge"),
       "reference_price": pos.get("reference_price"),
+      "contract_type": pos.get("contract_type"),
+      "strike_type": pos.get("strike_type"),
+      "floor_strike": pos.get("floor_strike"),
+      "cap_strike": pos.get("cap_strike"),
       "stop_order_id": pos.get("stop_order_id"),
       "take_profit_order_id": pos.get("take_profit_order_id"),
       "opened_at": now,
@@ -506,12 +518,14 @@ class HourlyBotStore:
         """
         INSERT INTO bot_positions (
           id, event_ticker, market_ticker, side, contracts, entry_price_cents,
-          cost_usd, signal, label, entry_edge, reference_price, stop_order_id,
-          take_profit_order_id, opened_at, status
+          cost_usd, signal, label, entry_edge, reference_price,
+          contract_type, strike_type, floor_strike, cap_strike,
+          stop_order_id, take_profit_order_id, opened_at, status
         ) VALUES (
           :id, :event_ticker, :market_ticker, :side, :contracts, :entry_price_cents,
-          :cost_usd, :signal, :label, :entry_edge, :reference_price, :stop_order_id,
-          :take_profit_order_id, :opened_at, :status
+          :cost_usd, :signal, :label, :entry_edge, :reference_price,
+          :contract_type, :strike_type, :floor_strike, :cap_strike,
+          :stop_order_id, :take_profit_order_id, :opened_at, :status
         )
         """,
         row,
