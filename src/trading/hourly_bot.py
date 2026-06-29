@@ -26,7 +26,10 @@ from src.trading.bot_profit_exit import (
   position_hold_seconds,
 )
 from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
-from src.trading.bot_auto_tuning import effective_entry_strategy
+from src.trading.bot_entry_presets import (
+  apply_bot_runtime_settings,
+  effective_bot_entry_strategy,
+)
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
   correlation_block_reason,
@@ -315,7 +318,7 @@ class HourlyBot:
 
     settings, prev_period = self.store.sync_period(str(event_ticker), self.store.get_settings())
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
-    settings = self.store.get_settings()
+    settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []
@@ -381,14 +384,14 @@ class HourlyBot:
           format_detail=_rollover_detail,
         )
       )
-      settings = self.store.get_settings()
+      settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
 
     actions.extend(self._process_exits(tab, event_ticker, settings, cfg))
-    settings = self.store.get_settings()
+    settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
     stop_row = self._maybe_auto_stop_on_budget_exhausted(event_ticker, settings)
     if stop_row:
       actions.append(stop_row)
-      settings = self.store.get_settings()
+      settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
     entry_actions = self._process_entries(tab, event_ticker, settings, cfg)
     actions.extend(entry_actions)
     if not entry_actions and not any(a.get("action") == "enter" for a in actions):
@@ -713,7 +716,12 @@ class HourlyBot:
       self.store.set_last_skip_reason("no_buy_yes_no_candidates")
       return results
 
-    estrat = effective_entry_strategy(cfg, kind="hourly", tuning=self.store.get_auto_tuning())
+    estrat = effective_bot_entry_strategy(
+      cfg,
+      kind=self.kind,
+      aggressive=settings.aggressive_entries,
+      tuning=self.store.get_auto_tuning(),
+    )
     ranked = rank_hourly_candidates(candidates, estrat=estrat)
     if not ranked:
       self.store.set_last_skip_reason("no_buy_yes_no_candidates")

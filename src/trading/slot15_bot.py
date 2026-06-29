@@ -17,14 +17,16 @@ from src.trading.bot_period_rollover import force_close_period_positions, resolv
 from src.trading.bot_entry_settings import slot15_entry_settings_snapshot
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
-  effective_slot15_settings,
   evaluate_slot15_contract_exits,
   is_profit_exit_reason,
   position_hold_seconds,
 )
 from src.trading.slot15_position_alert import assess_slot15_leg_position_alert
 from src.trading.edge import Signal
-from src.trading.bot_auto_tuning import effective_entry_strategy
+from src.trading.bot_entry_presets import (
+  apply_bot_runtime_settings,
+  effective_bot_entry_strategy,
+)
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import entry_budget_usd, passes_tail_entry_gate
 from src.trading.paper_execution import (
@@ -298,7 +300,7 @@ class Slot15Bot:
 
     settings, prev_period = self.store.sync_period(str(slot_key), self.store.get_settings())
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
-    settings = effective_slot15_settings(self.store.get_settings(), cfg)
+    settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind="slot15")
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []
@@ -334,14 +336,14 @@ class Slot15Bot:
           log_label=f"{self.asset.upper()} 15m",
         )
       )
-      settings = effective_slot15_settings(self.store.get_settings(), cfg)
+      settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind="slot15")
 
     actions.extend(self._process_exits(tab, slot_key, settings, cfg=cfg))
-    settings = effective_slot15_settings(self.store.get_settings(), cfg)
+    settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind="slot15")
     stop_row = self._maybe_auto_stop_on_budget_exhausted(slot_key, settings)
     if stop_row:
       actions.append(stop_row)
-      settings = effective_slot15_settings(self.store.get_settings(), cfg)
+      settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind="slot15")
     entry_actions = self._process_entries(tab, slot_key, settings, cfg=cfg)
     actions.extend(entry_actions)
     if not entry_actions and not any(a.get("action") == "enter" for a in actions):
@@ -621,7 +623,12 @@ class Slot15Bot:
     results: list[dict[str, Any]] = []
     last_reason = "no_entry_this_cycle"
     open_pos = self.store.open_positions(slot_key)
-    estrat = effective_entry_strategy(cfg, kind="slot15", tuning=self.store.get_auto_tuning())
+    estrat = effective_bot_entry_strategy(
+      cfg,
+      kind="slot15",
+      aggressive=settings.aggressive_entries,
+      tuning=self.store.get_auto_tuning(),
+    )
     entries_this_cycle = 0
     max_entries = estrat.max_entries_per_cycle if estrat.enabled else 1
 

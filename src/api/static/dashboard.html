@@ -591,7 +591,7 @@
   <script>
     /* Inlined from bot_settings_ui.js — must load before dashboard init (external script 404 broke all UI). */
     (function () {
-      const BOT_SETTING_FIELDS = ['enabled', 'mode', 'allow_strong', 'allow_actionable', 'use_accumulated_profit', 'profit_use_pct', 'paper_auto_refill'];
+      const BOT_SETTING_FIELDS = ['enabled', 'mode', 'allow_strong', 'allow_actionable', 'use_accumulated_profit', 'profit_use_pct', 'paper_auto_refill', 'aggressive_entries'];
       const PATCH_CONFIRM_MS = 120000;
       function botUiKey(kind, asset) { return `${kind}-${asset}`; }
       function normalizeBotSettings(raw, maxKey) {
@@ -605,6 +605,7 @@
           use_accumulated_profit: !!raw.use_accumulated_profit,
           profit_use_pct: Number(raw.profit_use_pct ?? 100),
           paper_auto_refill: raw.paper_auto_refill !== false,
+          aggressive_entries: !!raw.aggressive_entries,
         };
       }
       function botSettingsEqual(a, b, maxKey) {
@@ -2159,7 +2160,14 @@
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
         profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
+    }
+
+    function botAggressiveToggleHtml(p, s, saveFn) {
+      return `<label class="bot-label" title="OFF = passive defaults (Kelly 0.15, longer cooldowns). ON = $10/entry cap, more legs, 30s cooldowns, scale-in.">Aggressive entries
+            <label class="switch"><input type="checkbox" id="bot-aggressive-${p}" ${s.aggressive_entries ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
+          </label>`;
     }
 
     function botSettingsHtml(asset, s, kind = 'hourly') {
@@ -2204,6 +2212,7 @@
           <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
             <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
           </label>
+          ${botAggressiveToggleHtml(p, s, saveFn)}
         </div>`;
     }
 
@@ -2512,6 +2521,7 @@
       set(`bot-actionable-${p}`, s.allow_actionable);
       set(`bot-use-profits-${p}`, s.use_accumulated_profit);
       set(`bot-auto-refill-${p}`, s.paper_auto_refill);
+      set(`bot-aggressive-${p}`, s.aggressive_entries);
       const pctEl = $(`bot-profit-use-pct-${p}`);
       if (pctEl) {
         pctEl.value = s.profit_use_pct ?? 100;
@@ -2854,6 +2864,7 @@
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
         profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
     }
 
@@ -2890,6 +2901,7 @@
           <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
             <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
           </label>
+          ${botAggressiveToggleHtml(p, s, `saveSlot15BotSettings('${asset}')`)}
         </div>`;
     }
 
@@ -3046,6 +3058,7 @@
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
         profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
       if (body.mode === 'live' && livePassword) body.live_password = livePassword;
       const previousKnown = lastKnownBotSettings[key];
@@ -3252,6 +3265,7 @@
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
         profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
       if (body.mode === 'live' && livePassword) body.live_password = livePassword;
       const previousKnown = lastKnownBotSettings[key];

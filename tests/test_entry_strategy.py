@@ -97,11 +97,10 @@ def test_correlation_blocks_accidental_hedge():
   assert reason == "opposing_threshold_hedge"
 
 
-def test_entry_budget_caps_at_10pct_of_bankroll():
-  estrat = EntryStrategyConfig(
-    kelly_fraction=0.45,
-    max_budget_fraction_per_entry=0.10,
-  )
+def test_entry_budget_caps_at_10pct_when_aggressive_preset():
+  from src.trading.bot_entry_presets import effective_bot_entry_strategy
+
+  estrat = effective_bot_entry_strategy({}, kind="slot15", aggressive=True, tuning=None)
   pick = _pick("T", model_prob=0.80, ask=0.40)
   stake = entry_budget_usd(
     estrat=estrat,
@@ -129,7 +128,7 @@ def test_hourly_multi_entry_two_strikes():
     }
   }
   pick_a = _pick("KX-A", edge=0.14, floor=59700.0)
-  pick_b = _pick("KX-B", signal="BUY NO", edge=0.11, model_prob=0.35, ask=0.38, floor=59900.0)
+  pick_b = _pick("KX-B", signal="BUY NO", edge=0.11, model_prob=0.30, ask=0.36, floor=59900.0)
   tab = {
     "ok": True,
     "event": {"event_ticker": "KXTEST-MULTI"},
@@ -155,6 +154,7 @@ def test_hourly_multi_entry_two_strikes():
       max_spend_per_hour_usd=20.0,
       allow_strong=False,
       allow_actionable=False,
+      aggressive_entries=True,
     ))
     bot = HourlyBot(store, asset="btc")
     actions = bot.run_continuous_cycle(tab, cfg=cfg)

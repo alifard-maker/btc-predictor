@@ -704,7 +704,9 @@ def test_scale_in_second_leg_same_cycle():
   with tempfile.TemporaryDirectory() as tmp:
     store = Slot15BotStore(Path(tmp) / "bot.db")
     slot_key = "2025-06-28T14:00:00-04:00"
-    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=100.0))
+    store.save_settings(Slot15BotSettings(
+      enabled=True, max_spend_per_slot_usd=100.0, aggressive_entries=True,
+    ))
     store.open_position({
       "id": "p1",
       "event_ticker": slot_key,

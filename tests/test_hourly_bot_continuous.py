@@ -701,9 +701,9 @@ def test_no_exit_when_profit_below_threshold():
     })
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab()
-    tab["live"]["primary_pick"]["kalshi_mid"] = 0.44
-    tab["live"]["primary_pick"]["yes_bid"] = 0.44
-    tab["live"]["primary_pick"]["yes_ask"] = 0.44
+    tab["live"]["primary_pick"]["kalshi_mid"] = 0.40
+    tab["live"]["primary_pick"]["yes_bid"] = 0.40
+    tab["live"]["primary_pick"]["yes_ask"] = 0.40
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {"min_edge": 0.05}}})
     assert not any(a.get("action") == "exit" for a in actions)
     assert len(store.open_positions("KXTEST-1H")) == 1

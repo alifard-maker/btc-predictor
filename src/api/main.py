@@ -703,6 +703,7 @@ def _apply_hourly_bot_settings(
     "use_accumulated_profit": bool(body.get("use_accumulated_profit", current.use_accumulated_profit)),
     "profit_use_pct": float(body.get("profit_use_pct", current.profit_use_pct)),
     "paper_auto_refill": bool(body.get("paper_auto_refill", current.paper_auto_refill)),
+    "aggressive_entries": bool(body.get("aggressive_entries", current.aggressive_entries)),
     "auto_stopped": auto_stopped,
   })
   if settings.max_spend_per_hour_usd < 0:
@@ -769,6 +770,7 @@ def _apply_slot15_bot_settings(
     "use_accumulated_profit": bool(body.get("use_accumulated_profit", current.use_accumulated_profit)),
     "profit_use_pct": float(body.get("profit_use_pct", current.profit_use_pct)),
     "paper_auto_refill": bool(body.get("paper_auto_refill", current.paper_auto_refill)),
+    "aggressive_entries": bool(body.get("aggressive_entries", current.aggressive_entries)),
     "auto_stopped": auto_stopped,
   })
   if settings.max_spend_per_slot_usd < 0:

@@ -38,6 +38,7 @@ class HourlyBotSettings:
   paper_auto_refill: bool = True
   use_accumulated_profit: bool = False
   profit_use_pct: float = 100.0
+  aggressive_entries: bool = False
 
   def to_dict(self) -> dict[str, Any]:
     return asdict(self)
@@ -72,6 +73,7 @@ class HourlyBotSettings:
       paper_auto_refill=bool(raw.get("paper_auto_refill", True)),
       use_accumulated_profit=bool(raw.get("use_accumulated_profit", False)),
       profit_use_pct=float(raw.get("profit_use_pct", 100.0)),
+      aggressive_entries=bool(raw.get("aggressive_entries", False)),
     )
 
 
