@@ -55,6 +55,27 @@ def test_sync_auto_stop_clears_when_cap_lifted():
     assert s.auto_stop_reason is None
 
 
+def test_kalshi_stale_auto_stop_cleared():
+  with tempfile.TemporaryDirectory() as td:
+    from src.trading import kalshi_circuit as kc
+
+    data_dir = Path(td)
+    store = HourlyBotStore(data_dir / "bot.db")
+    store.save_settings(
+      type(store.get_settings())(
+        **{
+          **store.get_settings().to_dict(),
+          "auto_stopped": True,
+          "auto_stop_reason": "kalshi_api_paused",
+        }
+      )
+    )
+    sync_auto_stop_for_risk(store)
+    s = store.get_settings()
+    assert s.auto_stopped is False
+    assert s.auto_stop_reason is None
+
+
 def test_kalshi_degraded_does_not_auto_stop():
   with tempfile.TemporaryDirectory() as td:
     from src.trading import kalshi_circuit as kc

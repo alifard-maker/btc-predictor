@@ -17,6 +17,8 @@ SKIP_DAILY_CAP = "daily_loss_cap"
 SKIP_KALSHI_DEGRADED = "kalshi_api_degraded"
 SKIP_KALSHI_PAUSED = "kalshi_api_paused"
 
+_KALSHI_AUTO_STOP_REASONS = frozenset({SKIP_KALSHI_PAUSED, SKIP_KALSHI_DEGRADED})
+
 
 def risk_gate_skip_reason() -> str | None:
   coord = get_bot_risk_coordinator()
@@ -39,6 +41,13 @@ def sync_auto_stop_for_risk(store: BotStoreLike, *, cfg: dict | None = None) -> 
   settings = store.get_settings()
   d = settings.to_dict()
   current_reason = str(d.get("auto_stop_reason") or "")
+
+  if current_reason in _KALSHI_AUTO_STOP_REASONS:
+    if d.get("auto_stopped"):
+      d["auto_stopped"] = False
+      d["auto_stop_reason"] = None
+      store.save_settings(type(settings)(**d), source="internal", cfg=cfg)
+    return
 
   if reason == SKIP_DAILY_CAP:
     if not d.get("auto_stopped") or current_reason != reason:

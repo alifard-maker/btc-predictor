@@ -2222,7 +2222,14 @@
 
     function botAutoStopBanner(bot, periodLabel) {
       if (!bot || !bot.auto_stopped) return '';
-      const reason = bot.auto_stop_reason
+      const raw = bot.auto_stop_reason || '';
+      if (raw === 'kalshi_api_paused' || raw === 'kalshi_api_degraded') {
+        const msg = raw === 'kalshi_api_paused'
+          ? 'Kalshi API cooling down — new entries paused this cycle; exits still run.'
+          : 'Kalshi API degraded — new entries blocked; exits still run.';
+        return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.35);border-radius:8px;color:#fde68a;font-size:.75rem"><strong>Entries paused this ${periodLabel}</strong> — ${msg}</div>`;
+      }
+      const reason = raw
         || `Auto-stopped: ${periodLabel} budget exhausted. Increase max $/${periodLabel === 'hour' ? 'hour' : 'slot'} and re-enable Auto-bet to continue.`;
       return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:8px;color:#fecaca;font-size:.75rem"><strong>Auto-stopped this ${periodLabel}</strong> — ${reason}</div>`;
     }
@@ -2468,14 +2475,28 @@
       }
       const combined = report.combined || {};
       const combined60 = report.combined_60_days || {};
+      const combined60m = report.combined_last_60_min || {};
+      const combined4h = report.combined_prior_4h || {};
       const combWr = combined.win_rate != null ? `${(combined.win_rate * 100).toFixed(0)}%` : '—';
       const combPnl = combined.total_pnl_usd != null ? botPnlUsd(combined.total_pnl_usd) : '—';
       const comb60Wr = combined60.win_rate != null ? `${(combined60.win_rate * 100).toFixed(0)}%` : '—';
       const comb60Pnl = combined60.total_pnl_usd != null ? botPnlUsd(combined60.total_pnl_usd) : '—';
+      const rollLine = (label, block) => {
+        const sm = block || {};
+        const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
+        const losses = sm.loss_count != null ? sm.loss_count : '—';
+        const lossUsd = sm.loss_pnl_usd != null ? botPnlUsd(sm.loss_pnl_usd) : '—';
+        return `<div class="perf-stat muted">${label}<strong>${sm.closed_trades ?? 0} exits</strong><span style="display:block;font-size:.62rem;margin-top:.15rem">WR ${wr} · net ${botPnlUsd(sm.total_pnl_usd)} · ${losses} losses ${lossUsd}</span></div>`;
+      };
       let html = `<div class="perf-grid">
         <div class="perf-stat muted">All bots closed trades<strong>${combined.closed_trades ?? 0}</strong></div>
         <div class="perf-stat muted">Combined win rate<strong>${combWr}</strong></div>
         <div class="perf-stat muted">Combined realized P&amp;L<strong>${combPnl}</strong></div>
+      </div>
+      <p class="muted" style="font-size:.68rem;margin:.5rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Rolling windows (all bots)</p>
+      <div class="perf-grid">
+        ${rollLine('Last 60 min', combined60m)}
+        ${rollLine('Prior 4 hours', combined4h)}
       </div>
       <p class="muted" style="font-size:.68rem;margin:.5rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Last 60 days (all bots)</p>
       <div class="perf-grid">
@@ -2516,6 +2537,14 @@
         const recs = (bot.recommendations || []).map((t) => `<li>${t}</li>`).join('');
         const w60 = bot.last_60_days || {};
         const sm60 = w60.summary || {};
+        const r60 = bot.last_60_min?.summary || {};
+        const r4h = bot.prior_4h?.summary || {};
+        const rollBot = (label, sm) => {
+          if (!sm || !sm.closed_trades) return `${label}: —`;
+          const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
+          const lc = sm.loss_count != null ? sm.loss_count : sm.losses;
+          return `${label}: ${sm.closed_trades} exits · ${wr} WR · ${sm.loss_count != null || sm.losses != null ? `${lc}L` : ''} ${botPnlUsd(sm.total_pnl_usd)}`;
+        };
         html += `<div class="perf-bot-block">
           <p style="margin:0 0 .35rem;font-weight:600">${bot.label || `${bot.asset} ${bot.kind}`}
             <span class="muted" style="font-weight:400;font-size:.72rem"> · ask-edge gate ≥ ${gate ?? '—'}¢</span></p>
@@ -2527,6 +2556,7 @@
             <div class="perf-stat muted">Avg / trade<strong>${sm.avg_pnl_usd != null ? botPnlUsd(sm.avg_pnl_usd) : '—'}</strong></div>
           </div>
           <p class="muted" style="font-size:.68rem;margin:.35rem 0 .2rem"><strong>60d:</strong> ${sm60.closed_trades ?? 0} closed · ${sm60.win_rate != null ? `${(sm60.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(sm60.total_pnl_usd)}${sm60.max_drawdown_usd != null ? ` · max DD ${botPnlUsd(sm60.max_drawdown_usd)}` : ''}</p>
+          <p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem"><strong>60m:</strong> ${rollBot('', r60).replace(/^: /, '')} · <strong>4h prior:</strong> ${rollBot('', r4h).replace(/^: /, '')}</p>
           ${modeTable('60d by entry mode (free vs filtered)', w60.by_free_mode)}
           ${bucketTable('By entry price', bot.by_entry_price)}
           ${bucketTable('By spread at entry', bot.by_spread)}

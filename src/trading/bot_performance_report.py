@@ -69,6 +69,21 @@ def _filter_trades_since(trades: list[dict[str, Any]], days: int) -> list[dict[s
   return out
 
 
+def _filter_trades_between(
+  trades: list[dict[str, Any]],
+  start: datetime,
+  end: datetime,
+) -> list[dict[str, Any]]:
+  out: list[dict[str, Any]] = []
+  for t in trades:
+    ts = _parse_ts(t.get("created_at"))
+    if ts is None:
+      continue
+    if start <= ts < end:
+      out.append(t)
+  return out
+
+
 def _free_mode_from_enter(ent: dict[str, Any]) -> bool | None:
   settings = ent.get("entry_settings")
   if isinstance(settings, dict) and "free_mode" in settings:
@@ -168,6 +183,39 @@ def build_window_report(
       lambda r: _bucket_label(r.get("entry_price_cents"), PRICE_BUCKETS),
     ),
     "by_signal": _signal_rows(closed),
+    "gates": {"min_ask_edge_cents": min_ask_edge_cents},
+  }
+
+
+def build_rolling_hours_report(
+  *,
+  kind: str,
+  asset: str,
+  trades: list[dict[str, Any]],
+  window_hours: float,
+  end_hours_ago: float = 0.0,
+  min_ask_edge_cents: float = 8.0,
+) -> dict[str, Any]:
+  """Rolling window ending `end_hours_ago` before now (0 = now)."""
+  now = datetime.now(timezone.utc)
+  end = now - timedelta(hours=end_hours_ago)
+  start = end - timedelta(hours=window_hours)
+  filtered = _filter_trades_between(trades, start, end)
+  enters = [t for t in filtered if t.get("action") == "enter" and t.get("status") == "filled"]
+  closed = _closed_round_trips_with_mode(filtered)
+  sm = _summary(closed, enters)
+  loss_pnls = [float(r["pnl_usd"]) for r in closed if float(r["pnl_usd"]) < 0]
+  win_pnls = [float(r["pnl_usd"]) for r in closed if float(r["pnl_usd"]) > 0]
+  sm["loss_count"] = len(loss_pnls)
+  sm["loss_pnl_usd"] = round(sum(loss_pnls), 2) if loss_pnls else 0.0
+  sm["win_pnl_usd"] = round(sum(win_pnls), 2) if win_pnls else 0.0
+  sm["enter_count"] = len(enters)
+  return {
+    "window_hours": window_hours,
+    "end_hours_ago": end_hours_ago,
+    "window_start": start.isoformat(),
+    "window_end": end.isoformat(),
+    "summary": sm,
     "gates": {"min_ask_edge_cents": min_ask_edge_cents},
   }
 
@@ -414,7 +462,32 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
       window_days=60,
       min_ask_edge_cents=float(getattr(estrat, "min_ask_edge_cents", 8)),
     )
+    edge = float(getattr(estrat, "min_ask_edge_cents", 8))
+    report["last_60_min"] = build_rolling_hours_report(
+      kind=kind, asset=asset, trades=trades, window_hours=1, end_hours_ago=0, min_ask_edge_cents=edge,
+    )
+    report["prior_4h"] = build_rolling_hours_report(
+      kind=kind, asset=asset, trades=trades, window_hours=4, end_hours_ago=1, min_ask_edge_cents=edge,
+    )
     reports.append(report)
+
+  def _combined_rolling(key: str) -> dict[str, Any]:
+    closed = sum(int(r.get(key, {}).get("summary", {}).get("closed_trades") or 0) for r in reports)
+    pnl = round(sum(float(r.get(key, {}).get("summary", {}).get("total_pnl_usd") or 0) for r in reports), 2)
+    wins = sum(int(r.get(key, {}).get("summary", {}).get("wins") or 0) for r in reports)
+    losses = sum(int(r.get(key, {}).get("summary", {}).get("loss_count") or 0) for r in reports)
+    loss_pnl = round(
+      sum(float(r.get(key, {}).get("summary", {}).get("loss_pnl_usd") or 0) for r in reports), 2
+    )
+    out = {
+      "closed_trades": closed,
+      "total_pnl_usd": pnl,
+      "loss_count": losses,
+      "loss_pnl_usd": loss_pnl,
+    }
+    if closed:
+      out["win_rate"] = round(wins / closed, 3)
+    return out
 
   combined_60d = {
     "closed_trades": sum(
@@ -441,4 +514,6 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
     "bots": reports,
     "combined": build_combined_report(reports),
     "combined_60_days": combined_60d,
+    "combined_last_60_min": _combined_rolling("last_60_min"),
+    "combined_prior_4h": _combined_rolling("prior_4h"),
   }

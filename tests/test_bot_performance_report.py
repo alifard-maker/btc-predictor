@@ -92,7 +92,35 @@ def test_performance_report_60d_free_mode_split():
     assert report["by_free_mode"]["free_mode"]["closed_trades"] == 1
 
 
-def test_performance_report_buckets_and_summary():
+def test_rolling_hours_report_windows():
+  from datetime import datetime, timezone, timedelta
+
+  from src.trading.bot_performance_report import build_rolling_hours_report
+
+  now = datetime.now(timezone.utc)
+  recent = (now - timedelta(minutes=30)).isoformat()
+  older = (now - timedelta(hours=2)).isoformat()
+  trades = [
+    {"action": "enter", "status": "filled", "cost_usd": 5, "created_at": recent, "position_id": "a"},
+    {
+      "action": "exit", "status": "filled", "pnl_usd": 1.0, "created_at": recent,
+      "position_id": "a", "entry_price_cents": 50, "side": "yes", "contracts": 10,
+    },
+    {"action": "enter", "status": "filled", "cost_usd": 5, "created_at": older, "position_id": "b"},
+    {
+      "action": "exit", "status": "filled", "pnl_usd": -0.5, "created_at": older,
+      "position_id": "b", "entry_price_cents": 50, "side": "yes", "contracts": 10,
+    },
+  ]
+  last60 = build_rolling_hours_report(kind="hourly", asset="eth", trades=trades, window_hours=1)
+  prior4 = build_rolling_hours_report(
+    kind="hourly", asset="eth", trades=trades, window_hours=4, end_hours_ago=1,
+  )
+  assert last60["summary"]["closed_trades"] == 1
+  assert last60["summary"]["total_pnl_usd"] == 1.0
+  assert prior4["summary"]["closed_trades"] == 1
+  assert prior4["summary"]["total_pnl_usd"] == -0.5
+
   with tempfile.TemporaryDirectory() as td:
     store = HourlyBotStore(Path(td) / "bot.db")
     _seed_round_trip(store, entry=45, spread=3, pnl=1.20, pid="a")
