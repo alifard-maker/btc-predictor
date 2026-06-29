@@ -283,25 +283,22 @@ def cheap_leg_exit_config(cfg: dict[str, Any] | None, *, kind: str) -> CheapLegE
   )
 
 
-def hourly_mark_stop_thesis_broken(
+def hourly_mark_cut_allowed(
   pos: dict[str, Any],
   pick: dict[str, Any] | None,
   live_price: float | None,
 ) -> bool:
-  """True when mark-only hourly stops may fire (signal and spot no longer support the leg)."""
+  """True when mark-based loss cuts may fire on hourly bots."""
   if not pick:
     return True
 
   from src.trading.hourly_position_alert import (
     _signal_favors_held_side,
     _spot_favors_held_side,
+    spot_loss_cut_allowed,
   )
 
   side = str(pos.get("side") or "yes")
-  sig_favors = _signal_favors_held_side(pick.get("signal"), side)
-  if sig_favors is True:
-    return False
-
   spot_favors: bool | None = None
   if live_price is not None:
     try:
@@ -313,10 +310,21 @@ def hourly_mark_stop_thesis_broken(
     except (TypeError, ValueError):
       spot_favors = None
 
+  sig_favors = _signal_favors_held_side(pick.get("signal"), side)
   if spot_favors is True:
     return False
+  if spot_favors is False:
+    return spot_loss_cut_allowed(pick, spot_favors=False, sig_favors=sig_favors)
+  return sig_favors is False
 
-  return sig_favors is False and spot_favors is not True
+
+def hourly_mark_stop_thesis_broken(
+  pos: dict[str, Any],
+  pick: dict[str, Any] | None,
+  live_price: float | None,
+) -> bool:
+  """Alias: thesis broken for loss cuts when mark-based stops may fire."""
+  return hourly_mark_cut_allowed(pos, pick, live_price)
 
 
 def hourly_thesis_favors_hold_to_settle(
@@ -336,7 +344,31 @@ def hourly_thesis_favors_hold_to_settle(
     return False
   if not pick:
     return False
-  return not hourly_mark_stop_thesis_broken(pos, pick, live_price)
+
+  from src.trading.hourly_position_alert import (
+    _is_threshold_style_contract,
+    _signal_favors_held_side,
+    _spot_favors_held_side,
+  )
+
+  side = str(pos.get("side") or "yes")
+  spot_favors: bool | None = None
+  if live_price is not None:
+    try:
+      spot_favors = _spot_favors_held_side(
+        side=side,
+        live_price=float(live_price),
+        pick=pick,
+      )
+    except (TypeError, ValueError):
+      spot_favors = None
+  sig_favors = _signal_favors_held_side(pick.get("signal"), side)
+
+  if spot_favors is True and sig_favors is not False:
+    return True
+  if not _is_threshold_style_contract(pick) and sig_favors is True:
+    return True
+  return False
 
 
 def evaluate_cheap_leg_cut_loss(
@@ -355,7 +387,7 @@ def evaluate_cheap_leg_cut_loss(
   if entry_c <= 0 or entry_c > cfg.max_entry_cents:
     return None, ""
   if int(mark_cents) <= cfg.cut_loss_cents:
-    if gate_on_hourly_thesis and not hourly_mark_stop_thesis_broken(pos, pick, live_price):
+    if gate_on_hourly_thesis and not hourly_mark_cut_allowed(pos, pick, live_price):
       return None, ""
     return (
       "CHEAP LEG CUT LOSS",
@@ -466,7 +498,7 @@ def evaluate_slot15_leg_stop_loss(
   if delta is None or leg_cfg.leg_stop_loss_cents <= 0:
     return None, ""
   if delta <= -leg_cfg.leg_stop_loss_cents:
-    if gate_on_hourly_thesis and not hourly_mark_stop_thesis_broken(pos, pick, live_price):
+    if gate_on_hourly_thesis and not hourly_mark_cut_allowed(pos, pick, live_price):
       return None, ""
     entry_c = int(pos["entry_price_cents"])
     return (

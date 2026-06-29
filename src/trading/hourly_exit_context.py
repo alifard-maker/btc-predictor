@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.trading.bot_profit_exit import hourly_mark_stop_thesis_broken
+from src.trading.bot_profit_exit import hourly_mark_cut_allowed
 from src.trading.hourly_position_alert import (
   _signal_favors_held_side,
   _spot_favors_held_side,
@@ -98,7 +98,7 @@ def build_hourly_exit_context(
     "unrealized_pnl_usd": unrealized_pnl_usd,
     "spot_favors_held_side": spot_favors,
     "signal_favors_held_side": sig_favors,
-    "thesis_broken": hourly_mark_stop_thesis_broken(pos, pick, live_price),
+    "thesis_broken": hourly_mark_cut_allowed(pos, pick, live_price),
     "regime_allow_trade": bool(regime.get("allow_trade", True)),
     "regime_reasons": list(regime.get("reasons") or []),
   }

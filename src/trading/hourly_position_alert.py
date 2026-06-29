@@ -71,6 +71,33 @@ def _mu_shift_favors_signal(signal: str | None, locked_mu: float | None, current
   return None
 
 
+def _is_threshold_style_contract(pick: dict[str, Any]) -> bool:
+  ctype = pick.get("contract_type", "threshold")
+  strike_type = pick.get("strike_type")
+  return ctype == "threshold" or strike_type in ("greater", "less")
+
+
+def spot_loss_cut_allowed(
+  pick: dict[str, Any],
+  *,
+  spot_favors: bool | None,
+  sig_favors: bool | None,
+) -> bool:
+  """Whether spot being against the leg is enough to cut (threshold) or needs signal too (range)."""
+  if spot_favors is not False:
+    return False
+  if _is_threshold_style_contract(pick):
+    return True
+  return sig_favors is not True
+
+
+def _signal_favors_held_side(signal: str | None, side: str) -> bool | None:
+  if not is_actionable_buy(signal):
+    return None
+  held_yes = side == "yes"
+  return is_buy_yes(signal) if held_yes else is_buy_no(signal)
+
+
 def _spot_favors_held_side(
   *,
   side: str,
@@ -97,13 +124,6 @@ def _spot_favors_held_side(
     below = live_price < float(cap)
     return below if held_yes else not below
   return None
-
-
-def _signal_favors_held_side(signal: str | None, side: str) -> bool | None:
-  if not is_actionable_buy(signal):
-    return None
-  held_yes = side == "yes"
-  return is_buy_yes(signal) if held_yes else is_buy_no(signal)
 
 
 def assess_held_hourly_position_alert(
@@ -161,7 +181,7 @@ def assess_held_hourly_position_alert(
         "danger",
         f"Signal flipped ({entry_signal} → {current_signal}) with loss on mark — cut.",
       )
-    if spot_ok is False and sig_ok is not True:
+    if spot_loss_cut_allowed(pick, spot_favors=spot_ok, sig_favors=sig_ok):
       return _result(
         "CUT LOSSES",
         "danger",
@@ -196,11 +216,12 @@ def assess_held_hourly_position_alert(
     return _result("HOLD", "success", "Signal and mark still favor your leg — hold.")
 
   if sig_ok is True and unrealized_pnl_usd is not None and unrealized_pnl_usd < -0.05:
-    return _result(
-      "HOLD",
-      "neutral",
-      f"Signal still supports your {side.upper()} leg — hold through mark noise.",
-    )
+    if not spot_loss_cut_allowed(pick, spot_favors=spot_ok, sig_favors=sig_ok):
+      return _result(
+        "HOLD",
+        "neutral",
+        f"Signal still supports your {side.upper()} leg — hold through mark noise.",
+      )
 
   return _result("HOLD", "neutral", "Hold — position aligned or flat on mark.")
 

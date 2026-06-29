@@ -172,6 +172,40 @@ def test_assess_hourly_position_alert_locked_edge_below_min():
   assert "below" in result["detail"].lower()
 
 
+def test_held_threshold_yes_cut_when_spot_below_strike():
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY YES",
+    "edge": 0.08,
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 60300.0,
+  }
+  pos = {"side": "yes", "signal": "BUY YES", "entry_price_cents": 20, "contracts": 25}
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=60237.25,
+    regime_allow_trade=True,
+    regime_reasons=[],
+    unrealized_pnl_usd=-1.0,
+  )
+  assert result["alert"] == "CUT LOSSES"
+  assert "Spot moved against" in result["detail"]
+
+
+def test_spot_loss_cut_allowed_threshold_vs_range():
+  from src.trading.hourly_position_alert import spot_loss_cut_allowed
+
+  threshold = {"contract_type": "threshold", "strike_type": "greater", "floor_strike": 60300.0}
+  assert spot_loss_cut_allowed(threshold, spot_favors=False, sig_favors=True) is True
+
+  band = {"contract_type": "range", "strike_type": "between", "floor_strike": 1610.0, "cap_strike": 1629.99}
+  assert spot_loss_cut_allowed(band, spot_favors=False, sig_favors=True) is False
+  assert spot_loss_cut_allowed(band, spot_favors=False, sig_favors=False) is True
+
+
 def test_held_no_in_band_signal_no_hold_with_mark_loss():
   from src.trading.hourly_position_alert import assess_held_hourly_position_alert
 

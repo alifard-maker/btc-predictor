@@ -875,6 +875,84 @@ def test_hourly_trial_leg_take_profit_when_thesis_broken():
     assert "LEG TAKE PROFIT" in exits[0]["detail"]
 
 
+def test_hourly_trial_cheap_leg_when_threshold_spot_against():
+  """YES threshold below strike — cut on mark even if signal still BUY YES."""
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "hourly_trial_bot_btc.db")
+    store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=25.0))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 20,
+      "cost_usd": 5.0,
+      "signal": "BUY YES",
+      "contract_type": "threshold",
+      "strike_type": "greater",
+      "floor_strike": 60300.0,
+    })
+    bot = HourlyBot(store, asset="btc", kind="hourly_trial")
+    pick = {
+      "ticker": "KXTEST-T1",
+      "signal": "BUY YES",
+      "edge": 0.08,
+      "contract_type": "threshold",
+      "strike_type": "greater",
+      "floor_strike": 60300.0,
+      "kalshi_mid": 0.10,
+      "yes_bid": 0.10,
+      "yes_ask": 0.10,
+    }
+    tab = _live_tab(pick=pick)
+    tab["brti_live"] = 60237.25
+    tab["live"]["current_price"] = 60237.25
+    tab["live"]["hours_to_settle"] = 0.20
+    cfg = {"hourly": {"bot": {"cheap_leg_max_entry_cents": 20, "cheap_leg_cut_loss_cents": 10}, "regime": {}}}
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "LEG STOP" in exits[0]["detail"] or "CHEAP LEG CUT LOSS" in exits[0]["detail"]
+
+
+def test_hourly_regular_threshold_cut_when_spot_against():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "hourly_bot_btc.db")
+    store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=25.0))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "KXTEST-1H",
+      "market_ticker": "KXTEST-T1",
+      "side": "yes",
+      "contracts": 25,
+      "entry_price_cents": 20,
+      "cost_usd": 5.0,
+      "signal": "BUY YES",
+    })
+    bot = HourlyBot(store, asset="btc", kind="hourly")
+    pick = {
+      "ticker": "KXTEST-T1",
+      "signal": "BUY YES",
+      "edge": 0.08,
+      "contract_type": "threshold",
+      "strike_type": "greater",
+      "floor_strike": 60300.0,
+      "kalshi_mid": 0.10,
+      "yes_bid": 0.10,
+      "yes_ask": 0.10,
+    }
+    tab = _live_tab(pick=pick)
+    tab["brti_live"] = 60237.25
+    tab["live"]["current_price"] = 60237.25
+    tab["live"]["hours_to_settle"] = 0.20
+    cfg = {"hourly": {"bot": {"cheap_leg_max_entry_cents": 20, "cheap_leg_cut_loss_cents": 10}, "regime": {}}}
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "LEG STOP" in exits[0]["detail"] or "CHEAP LEG CUT LOSS" in exits[0]["detail"]
+
+
 def test_hourly_trial_neutral_take_profit_when_edge_fades():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "hourly_trial_bot_btc.db")

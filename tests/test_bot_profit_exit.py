@@ -159,6 +159,42 @@ def test_hourly_trial_leg_take_profit_blocked_on_settle_hold_gate():
   ) == (None, "")
 
 
+def test_hourly_mark_cut_allowed_threshold_spot_against():
+  from src.trading.bot_profit_exit import hourly_mark_cut_allowed, evaluate_cheap_leg_cut_loss, CheapLegExitConfig
+
+  pos = {"side": "yes", "entry_price_cents": 20, "signal": "BUY YES"}
+  pick = {
+    "signal": "BUY YES",
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 60300.0,
+  }
+  assert hourly_mark_cut_allowed(pos, pick, 60237.25) is True
+  cfg = CheapLegExitConfig(max_entry_cents=20, cut_loss_cents=10)
+  reason, _ = evaluate_cheap_leg_cut_loss(
+    pos, 10, cfg, pick=pick, live_price=60237.25, gate_on_hourly_thesis=True,
+  )
+  assert reason == "CHEAP LEG CUT LOSS"
+
+
+def test_hourly_mark_cut_blocked_range_signal_supports():
+  from src.trading.bot_profit_exit import hourly_mark_cut_allowed, evaluate_cheap_leg_cut_loss, CheapLegExitConfig
+
+  pos = {"side": "no", "entry_price_cents": 14, "signal": "BUY NO"}
+  pick = {
+    "signal": "BUY NO",
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": 1610.0,
+    "cap_strike": 1629.99,
+  }
+  assert hourly_mark_cut_allowed(pos, pick, 1629.0) is False
+  cfg = CheapLegExitConfig(max_entry_cents=20, cut_loss_cents=10)
+  assert evaluate_cheap_leg_cut_loss(
+    pos, 10, cfg, pick=pick, live_price=1629.0, gate_on_hourly_thesis=True,
+  ) == (None, "")
+
+
 def test_slot15_leg_take_profit_on_mark_cents():
   from src.trading.bot_profit_exit import evaluate_slot15_leg_take_profit, slot15_leg_exit_config
 
