@@ -261,7 +261,7 @@ class PredictionLoop:
     return {
       "daily_loss": daily,
       "kalshi_circuit": kalshi,
-      "bots_paused": bool(daily.get("cap_active")) or bool(kalshi.get("entries_blocked")),
+      "bots_paused": bool(daily.get("any_cap_active")) or bool(kalshi.get("entries_blocked")),
     }
 
   def _cached_tab_if_throttled(
@@ -372,7 +372,15 @@ class PredictionLoop:
     estrat = effective_entry_strategy(acfg, kind="hourly", tuning=store.get_auto_tuning())
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
+    self._attach_bot_daily_loss(status, kind="hourly", asset=asset)
     return status
+
+  def _attach_bot_daily_loss(self, status: dict[str, Any], *, kind: str, asset: str) -> None:
+    from src.trading.bot_risk_state import bot_risk_key, get_bot_risk_coordinator
+
+    coord = get_bot_risk_coordinator()
+    if coord:
+      status["daily_loss"] = coord.status_for_bot(bot_risk_key(kind, asset))
 
   def eth_hourly_bot_status(self, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     return self.hourly_bot_status("eth", tab)
@@ -586,9 +594,8 @@ class PredictionLoop:
     estrat = effective_entry_strategy(acfg, kind="slot15", tuning=store.get_auto_tuning())
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
+    self._attach_bot_daily_loss(status, kind="slot15", asset=asset)
     return status
-
-  def _ensure_slot_prediction_current(self, asset: str) -> None:
     """Refresh in-memory prediction when the active slot rolled but cron has not run yet."""
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):

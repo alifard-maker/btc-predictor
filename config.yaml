@@ -290,7 +290,7 @@ auto_train:
 # Paper bot threshold auto-tuning from trade logs (requires min_days history)
 bot_risk:
   daily_loss_cap_enabled: true
-  daily_loss_cap_usd: 50.0
+  daily_loss_cap_usd: 50.0   # per bot (BTC hourly, ETH hourly, BTC 15m, ETH 15m each get own $50/day)
   daily_loss_timezone: America/New_York
 
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)

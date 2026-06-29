@@ -1243,8 +1243,16 @@
       const daily = risk.daily_loss || {};
       const kalshi = risk.kalshi_circuit || {};
       const parts = [];
-      if (daily.cap_active) {
-        parts.push(`<strong>Daily loss cap</strong> hit (${botPnlUsd(daily.realized_pnl_usd)} today · cap $${daily.cap_usd}) — new entries paused until tomorrow (${daily.timezone}).`);
+      if (daily.cap_active || daily.any_cap_active) {
+        const botLines = daily.bots
+          ? Object.entries(daily.bots)
+            .filter(([, st]) => st.cap_active && !st.cap_override)
+            .map(([key, st]) => `${key}: ${botPnlUsd(st.realized_pnl_usd)} today (cap $${st.cap_usd})`)
+            .join('; ')
+          : '';
+        parts.push(`<strong>Daily loss cap</strong> hit per bot${botLines ? ` — ${botLines}` : ''} — new entries paused until tomorrow (${daily.timezone}). Use <em>Resume entries today</em> on that bot to override.`);
+      } else if (daily.realized_pnl_usd != null && daily.cap_usd) {
+        parts.push(`<strong>Daily loss cap</strong> (${botPnlUsd(daily.realized_pnl_usd)} today · cap $${daily.cap_usd}) — new entries paused until tomorrow (${daily.timezone}).`);
       }
       if (kalshi.degraded && !kalshi.paused) {
         const n = kalshi.live_failure_count != null ? kalshi.live_failure_count : kalshi.consecutive_failures;
@@ -2220,7 +2228,7 @@
       return `<span class="${cls}">${n >= 0 ? '+' : ''}$${n.toFixed(2)}</span>`;
     }
 
-    function botAutoStopBanner(bot, periodLabel) {
+    function botAutoStopBanner(bot, periodLabel, kind, asset) {
       if (!bot || !bot.auto_stopped) return '';
       const raw = bot.auto_stop_reason || '';
       if (raw === 'kalshi_api_paused' || raw === 'kalshi_api_degraded') {
@@ -2229,9 +2237,37 @@
           : 'Kalshi API degraded — new entries blocked; exits still run.';
         return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.35);border-radius:8px;color:#fde68a;font-size:.75rem"><strong>Entries paused this ${periodLabel}</strong> — ${msg}</div>`;
       }
+      if (raw === 'daily_loss_cap') {
+        const dl = bot.daily_loss || {};
+        const pnl = dl.realized_pnl_usd != null ? botPnlUsd(dl.realized_pnl_usd) : '—';
+        return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:8px;color:#fecaca;font-size:.75rem"><strong>Daily loss cap this bot</strong> — ${pnl} realized today (cap $${dl.cap_usd ?? '—'}). New entries paused until tomorrow (ET). <button type="button" class="btn-secondary" style="font-size:.65rem;padding:.15rem .45rem;margin-left:.35rem" onclick="overrideDailyLossCap('${kind}','${asset}')">Resume entries today</button></div>`;
+      }
       const reason = raw
         || `Auto-stopped: ${periodLabel} budget exhausted. Increase max $/${periodLabel === 'hour' ? 'hour' : 'slot'} and re-enable Auto-bet to continue.`;
       return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:8px;color:#fecaca;font-size:.75rem"><strong>Auto-stopped this ${periodLabel}</strong> — ${reason}</div>`;
+    }
+
+    async function overrideDailyLossCap(kind, asset) {
+      const paths = {
+        'hourly:btc': '/api/hourly/bot/override-daily-cap',
+        'hourly:eth': '/api/eth/hourly/bot/override-daily-cap',
+        'slot15:btc': '/api/slot15/bot/override-daily-cap',
+        'slot15:eth': '/api/eth/15m/bot/override-daily-cap',
+      };
+      const path = paths[`${kind}:${asset}`];
+      if (!path) return;
+      if (!confirm(`Resume ${asset.toUpperCase()} ${kind === 'hourly' ? 'hourly' : '15m'} entries for the rest of today?\n\nDaily loss is still tracked; the $ cap will not block this bot until tomorrow (ET).`)) return;
+      try {
+        const res = await fetch(path, { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        const bot = await res.json();
+        if (kind === 'hourly') renderHourlyBot(bot, asset);
+        else renderSlot15Bot(bot, asset);
+        const h = await get('/api/health');
+        if (h) renderStatus(h);
+      } catch (e) {
+        showError('Override daily cap: ' + e.message);
+      }
     }
 
     function botSkipReasonBrief(raw) {
@@ -2298,7 +2334,7 @@
     function botSkipReasonLabel(raw) {
       if (!raw) return '';
       const labels = {
-        daily_loss_cap: 'Daily loss cap hit — new entries paused until tomorrow (ET).',
+        daily_loss_cap: 'Daily loss cap hit for this bot — new entries paused until tomorrow (ET). Use Resume entries today to override.',
         kalshi_api_degraded: 'Kalshi API degraded — new entries blocked proactively; exits still run.',
         kalshi_api_paused: 'Kalshi API cooling down after errors — discovery throttled; sell/cancel still allowed.',
         auto_bet_off: 'Auto-bet is off on the server (toggle may be out of sync — flip Auto-bet off then on).',
@@ -2774,7 +2810,7 @@
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
       const tradesScroll = captureBotTradesScroll(statusWrap);
-      const autoStopHtml = botAutoStopBanner(bot, 'slot');
+      const autoStopHtml = botAutoStopBanner(bot, 'slot', 'slot15', asset);
       const skipHtml = botSkipReasonHtml(bot);
       const watchHtml = botEntryWatchHtml(bot, 'slot', freeMode);
       const serverBanner = botServerBanner(bot, s);
@@ -2960,7 +2996,7 @@
         : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions);
       const tradesScroll = captureBotTradesScroll(statusWrap);
-      const autoStopHtml = botAutoStopBanner(bot, 'hour');
+      const autoStopHtml = botAutoStopBanner(bot, 'hour', 'hourly', asset);
       const skipHtml = botSkipReasonHtml(bot);
       const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode);
       const serverBanner = botServerBanner(bot, s);

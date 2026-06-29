@@ -275,6 +275,9 @@ class Slot15Bot:
     self.store = store
     self.kalshi = kalshi_client
     self.asset = asset.lower()
+    from src.trading.bot_risk_state import bot_risk_key
+
+    self._bot_risk_key = bot_risk_key("slot15", self.asset)
 
   def run_continuous_cycle(self, tab: dict[str, Any], *, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Evaluate exits then entries on live 15m data. Returns actions taken."""
@@ -288,7 +291,7 @@ class Slot15Bot:
       return []
 
     settings, prev_period = self.store.sync_period(str(slot_key), self.store.get_settings())
-    sync_auto_stop_for_risk(self.store, cfg=cfg)
+    sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
     settings = self.store.get_settings()
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
@@ -538,7 +541,9 @@ class Slot15Bot:
         "kalshi_order_id": live_exit_oid,
       })
       log.info("%s 15m bot [%s exit]: %s", self.asset.upper(), mode_label.lower(), detail)
-      record_exit_and_maybe_cap(pnl_rounded, cfg=cfg)
+      record_exit_and_maybe_cap(
+        pnl_rounded, kind="slot15", asset=self.asset, store=self.store, cfg=cfg,
+      )
       cooldown = (
         settings.profit_exit_cooldown_seconds
         if is_profit_exit_reason(exit_reason)
@@ -559,7 +564,7 @@ class Slot15Bot:
     *,
     cfg: dict[str, Any] | None = None,
   ) -> list[dict[str, Any]]:
-    gate = risk_gate_skip_reason()
+    gate = risk_gate_skip_reason(bot_key=self._bot_risk_key)
     if gate:
       self.store.set_last_skip_reason(gate)
       return []

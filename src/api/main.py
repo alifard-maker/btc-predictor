@@ -788,6 +788,32 @@ def _slot15_bot_fresh_start(store, tab_fn, asset: str):
   return _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
 
 
+def _override_daily_cap_hourly(asset: str) -> dict[str, Any]:
+  from src.assets import asset_cfg
+  from src.trading.bot_risk_gates import override_daily_loss_cap
+
+  store = _loop.hourly_bot_store(asset)
+  acfg = _cfg if asset == "btc" else (_loop._eth_cfg or asset_cfg(_cfg, asset))
+  daily = override_daily_loss_cap(store, kind="hourly", asset=asset, cfg=acfg)
+  tab = _loop.daily_prediction() if asset == "btc" else _loop.eth_hourly_prediction()
+  status = _loop.hourly_bot_status(asset, tab if tab.get("ok") else None)
+  status["daily_loss"] = daily
+  return status
+
+
+def _override_daily_cap_slot15(asset: str) -> dict[str, Any]:
+  from src.assets import asset_cfg
+  from src.trading.bot_risk_gates import override_daily_loss_cap
+
+  store = _loop.slot15_bot_store(asset)
+  acfg = _loop._acfg_15m(asset) if asset == "btc" else (_loop._eth_cfg or asset_cfg(_cfg, asset))
+  daily = override_daily_loss_cap(store, kind="slot15", asset=asset, cfg=acfg)
+  tab = _loop._slot15_tab(asset)
+  status = _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+  status["daily_loss"] = daily
+  return status
+
+
 @app.post("/api/hourly/bot/reset-bankroll")
 def hourly_bot_reset_bankroll(_: None = Depends(_session_user)):
   if _loop is None:
@@ -806,6 +832,13 @@ def hourly_bot_fresh_start(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return _hourly_bot_fresh_start(_loop.hourly_bot_store("btc"), _loop.daily_prediction, "btc")
+
+
+@app.post("/api/hourly/bot/override-daily-cap")
+def hourly_bot_override_daily_cap(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _override_daily_cap_hourly("btc")
 
 
 @app.get("/api/hourly/bot/trades")
@@ -889,6 +922,13 @@ def eth_hourly_bot_fresh_start(_: None = Depends(_session_user)):
   return _hourly_bot_fresh_start(_loop.hourly_bot_store("eth"), _loop.eth_hourly_prediction, "eth")
 
 
+@app.post("/api/eth/hourly/bot/override-daily-cap")
+def eth_hourly_bot_override_daily_cap(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _override_daily_cap_hourly("eth")
+
+
 @app.get("/api/eth/hourly/bot/trades")
 def eth_hourly_bot_trades(
   limit: int = Query(default=100, le=200),
@@ -942,6 +982,13 @@ def slot15_bot_fresh_start(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return _slot15_bot_fresh_start(_loop.slot15_bot_store("btc"), lambda: _loop._slot15_tab("btc"), "btc")
+
+
+@app.post("/api/slot15/bot/override-daily-cap")
+def slot15_bot_override_daily_cap(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _override_daily_cap_slot15("btc")
 
 
 @app.get("/api/slot15/bot/trades")
@@ -1008,6 +1055,15 @@ def eth_slot15_bot_fresh_start(_: None = Depends(_session_user)):
   if _loop.eth_calibration is None:
     raise HTTPException(503, "ETH 15m disabled")
   return _slot15_bot_fresh_start(_loop.slot15_bot_store("eth"), lambda: _loop._slot15_tab("eth"), "eth")
+
+
+@app.post("/api/eth/15m/bot/override-daily-cap")
+def eth_slot15_bot_override_daily_cap(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _override_daily_cap_slot15("eth")
 
 
 @app.get("/api/eth/15m/bot/trades")

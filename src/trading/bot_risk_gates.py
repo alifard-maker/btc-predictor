@@ -1,10 +1,10 @@
-"""Pre-trade gates: daily loss cap and Kalshi API circuit breaker."""
+"""Pre-trade gates: per-bot daily loss cap and Kalshi API circuit breaker."""
 
 from __future__ import annotations
 
 from typing import Any, Protocol
 
-from src.trading.bot_risk_state import get_bot_risk_coordinator, get_registered_bot_stores
+from src.trading.bot_risk_state import bot_risk_key, get_bot_risk_coordinator
 from src.trading.kalshi_circuit import get_circuit_breaker
 
 
@@ -20,11 +20,11 @@ SKIP_KALSHI_PAUSED = "kalshi_api_paused"
 _KALSHI_AUTO_STOP_REASONS = frozenset({SKIP_KALSHI_PAUSED, SKIP_KALSHI_DEGRADED})
 
 
-def risk_gate_skip_reason() -> str | None:
+def risk_gate_skip_reason(*, bot_key: str) -> str | None:
   coord = get_bot_risk_coordinator()
   if coord:
     coord.refresh_day()
-    if coord.is_cap_active():
+    if coord.is_cap_active(bot_key):
       return SKIP_DAILY_CAP
   circuit = get_circuit_breaker()
   if circuit:
@@ -35,9 +35,14 @@ def risk_gate_skip_reason() -> str | None:
   return None
 
 
-def sync_auto_stop_for_risk(store: BotStoreLike, *, cfg: dict | None = None) -> None:
-  """Align auto_stopped with daily loss cap only (Kalshi pause blocks entries, not exits)."""
-  reason = risk_gate_skip_reason()
+def sync_auto_stop_for_risk(
+  store: BotStoreLike,
+  *,
+  bot_key: str,
+  cfg: dict | None = None,
+) -> None:
+  """Align auto_stopped with this bot's daily loss cap (Kalshi pause blocks entries only)."""
+  reason = risk_gate_skip_reason(bot_key=bot_key)
   settings = store.get_settings()
   d = settings.to_dict()
   current_reason = str(d.get("auto_stop_reason") or "")
@@ -62,23 +67,36 @@ def sync_auto_stop_for_risk(store: BotStoreLike, *, cfg: dict | None = None) -> 
     store.save_settings(type(settings)(**d), source="internal", cfg=cfg)
 
 
-def apply_daily_loss_cap_to_stores(stores: list[BotStoreLike], *, cfg: dict | None = None) -> None:
-  for store in stores:
-    sync_auto_stop_for_risk(store, cfg=cfg)
+def override_daily_loss_cap(
+  store: BotStoreLike,
+  *,
+  kind: str,
+  asset: str,
+  cfg: dict | None = None,
+) -> dict[str, Any]:
+  """Resume entries for this bot today after a daily loss cap trip."""
+  key = bot_risk_key(kind, asset)
+  coord = get_bot_risk_coordinator()
+  if coord:
+    coord.override_cap(key)
+  sync_auto_stop_for_risk(store, bot_key=key, cfg=cfg)
+  return coord.status_for_bot(key) if coord else {"bot_key": key, "cap_override": True}
 
 
 def record_exit_and_maybe_cap(
   pnl_usd: float,
-  stores: list[BotStoreLike] | None = None,
   *,
+  kind: str,
+  asset: str,
+  store: BotStoreLike,
   cfg: dict | None = None,
 ) -> bool:
-  """Record exit P&L; if cap hit, auto-stop all stores. Returns True if cap hit."""
+  """Record exit P&L for one bot; auto-stop that bot if its cap is hit."""
+  key = bot_risk_key(kind, asset)
   coord = get_bot_risk_coordinator()
   if not coord:
     return False
-  hit = coord.record_exit_pnl(float(pnl_usd))
-  peer = stores or get_registered_bot_stores()
-  if hit and peer:
-    apply_daily_loss_cap_to_stores(peer, cfg=cfg)
+  hit = coord.record_exit_pnl(key, float(pnl_usd))
+  if hit:
+    sync_auto_stop_for_risk(store, bot_key=key, cfg=cfg)
   return hit
