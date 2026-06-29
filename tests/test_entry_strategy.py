@@ -97,6 +97,22 @@ def test_correlation_blocks_accidental_hedge():
   assert reason == "opposing_threshold_hedge"
 
 
+def test_entry_budget_caps_at_10pct_of_bankroll():
+  estrat = EntryStrategyConfig(
+    kelly_fraction=0.45,
+    max_budget_fraction_per_entry=0.10,
+  )
+  pick = _pick("T", model_prob=0.80, ask=0.40)
+  stake = entry_budget_usd(
+    estrat=estrat,
+    bankroll_usd=100.0,
+    remaining_usd=100.0,
+    pick=pick,
+    side="yes",
+  )
+  assert stake == 10.0
+
+
 def test_hourly_multi_entry_two_strikes():
   cfg = {
     "hourly": {

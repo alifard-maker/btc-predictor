@@ -95,7 +95,7 @@ intra_slot:
   bot:
     enabled: false
     mode: paper
-    max_spend_per_slot_usd: 25
+    max_spend_per_slot_usd: 100
     allow_strong: false
     allow_actionable: false
     use_accumulated_profit: false
@@ -115,7 +115,8 @@ intra_slot:
     min_take_profit_pct: 0.05
     max_take_profit_pct: 0.20
     min_hold_seconds: 15
-    profit_exit_cooldown_seconds: 60
+    reentry_cooldown_seconds: 30
+    profit_exit_cooldown_seconds: 30
     cheap_leg_max_entry_cents: 20
     cheap_leg_cut_loss_cents: 10
     leg_take_profit_cents: 3
@@ -127,18 +128,29 @@ intra_slot:
     reassess_neutral_take_profit: true
     reassess_neutral_band: 0.07
     reassess_neutral_min_unrealized_usd: 0.05
+    # Passive preset (production baseline pre-3.13.23 — revert by copying into entry_strategy):
+    #   kelly_fraction: 0.15
+    #   max_budget_fraction_per_entry: 0.55
+    #   max_entries_per_cycle: 1
+    #   max_concurrent_positions: 1
+    #   allow_scale_in: false
+    #   reentry_cooldown_seconds: 120
+    #   profit_exit_cooldown_seconds: 60
     entry_strategy:
       enabled: true
       kelly_enabled: true
-      kelly_fraction: 0.15
+      kelly_fraction: 0.45
       min_ask_edge_cents: 5
       tail_entry_max_cents: 20
       tail_entry_block: false
       tail_entry_min_ask_edge_cents: 12
-      max_entries_per_cycle: 1
-      max_concurrent_positions: 1
-      max_budget_fraction_per_entry: 0.55
+      max_entries_per_cycle: 3
+      max_concurrent_positions: 6
+      max_budget_fraction_per_entry: 0.10
       correlation_guard: false
+      allow_scale_in: true
+      scale_in_max_legs_per_ticker: 6
+      scale_in_min_unrealized_pnl_usd: 0.05
     probe_no_trade:
       enabled: false
       min_prob: 0.58

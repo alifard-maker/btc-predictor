@@ -455,6 +455,28 @@ def effective_hourly_trial_settings(settings: ProfitExitSettings, cfg: dict[str,
   return HourlyBotSettings.from_dict(merged)
 
 
+_SLOT15_RUNTIME_KEYS = (
+  "reentry_cooldown_seconds",
+  "profit_exit_cooldown_seconds",
+)
+
+
+def effective_slot15_settings(settings: Any, cfg: dict[str, Any] | None):
+  """Overlay runtime bot knobs from intra_slot.bot config (cooldowns, etc.)."""
+  bot_cfg = _leg_exit_bot_cfg(cfg, bot_kind="slot15")
+  if not bot_cfg:
+    return settings
+  from src.trading.slot15_bot_store import Slot15BotSettings
+
+  if not hasattr(settings, "to_dict"):
+    return settings
+  merged = settings.to_dict()
+  for key in _SLOT15_RUNTIME_KEYS:
+    if key in bot_cfg:
+      merged[key] = bot_cfg[key]
+  return Slot15BotSettings.from_dict(merged)
+
+
 def leg_exit_config(cfg: dict[str, Any] | None, *, bot_kind: str = "slot15") -> Slot15LegExitConfig:
   bot_cfg = _leg_exit_bot_cfg(cfg, bot_kind=bot_kind)
   return Slot15LegExitConfig(

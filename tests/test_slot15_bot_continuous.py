@@ -680,3 +680,47 @@ def test_enrich_open_positions_leg_alert_not_slot_only():
   assert alert["alert"] == "TAKE PROFIT"
   assert alert.get("slot_monitor_alert") == "HOLD"
   assert alert.get("mark_vs_entry_cents") == 3
+
+
+def test_scale_in_second_leg_same_cycle():
+  cfg = {
+    "intra_slot": {
+      "bot": {
+        "leg_take_profit_cents": 99,
+        "leg_take_profit_usd": 99.0,
+        "entry_strategy": {
+          "enabled": True,
+          "max_entries_per_cycle": 2,
+          "max_concurrent_positions": 3,
+          "kelly_enabled": False,
+          "allow_scale_in": True,
+          "scale_in_max_legs_per_ticker": 3,
+          "scale_in_min_unrealized_pnl_usd": 0.05,
+          "min_ask_edge_cents": 0,
+        }
+      }
+    }
+  }
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    slot_key = "2025-06-28T14:00:00-04:00"
+    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=100.0))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": slot_key,
+      "market_ticker": "KXBTC15M-TEST",
+      "side": "yes",
+      "contracts": 20,
+      "entry_price_cents": 50,
+      "cost_usd": 10.0,
+      "signal": "LONG",
+    })
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab(slot_key=slot_key)
+    tab["kalshi"]["yes_mid"] = 0.52
+    tab["kalshi"]["yes_bid"] = 0.52
+    tab["kalshi"]["yes_ask"] = 0.52
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    enters = [a for a in actions if a.get("action") == "enter"]
+    assert len(enters) == 1
+    assert len(store.open_positions(slot_key)) == 2

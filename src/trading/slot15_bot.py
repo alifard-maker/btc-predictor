@@ -17,6 +17,7 @@ from src.trading.bot_period_rollover import force_close_period_positions, resolv
 from src.trading.bot_entry_settings import slot15_entry_settings_snapshot
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
+  effective_slot15_settings,
   evaluate_slot15_contract_exits,
   is_profit_exit_reason,
   position_hold_seconds,
@@ -297,7 +298,7 @@ class Slot15Bot:
 
     settings, prev_period = self.store.sync_period(str(slot_key), self.store.get_settings())
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
-    settings = self.store.get_settings()
+    settings = effective_slot15_settings(self.store.get_settings(), cfg)
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []
@@ -333,14 +334,14 @@ class Slot15Bot:
           log_label=f"{self.asset.upper()} 15m",
         )
       )
-      settings = self.store.get_settings()
+      settings = effective_slot15_settings(self.store.get_settings(), cfg)
 
     actions.extend(self._process_exits(tab, slot_key, settings, cfg=cfg))
-    settings = self.store.get_settings()
+    settings = effective_slot15_settings(self.store.get_settings(), cfg)
     stop_row = self._maybe_auto_stop_on_budget_exhausted(slot_key, settings)
     if stop_row:
       actions.append(stop_row)
-      settings = self.store.get_settings()
+      settings = effective_slot15_settings(self.store.get_settings(), cfg)
     entry_actions = self._process_entries(tab, slot_key, settings, cfg=cfg)
     actions.extend(entry_actions)
     if not entry_actions and not any(a.get("action") == "enter" for a in actions):
@@ -621,7 +622,18 @@ class Slot15Bot:
     last_reason = "no_entry_this_cycle"
     open_pos = self.store.open_positions(slot_key)
     estrat = effective_entry_strategy(cfg, kind="slot15", tuning=self.store.get_auto_tuning())
+    entries_this_cycle = 0
+    max_entries = estrat.max_entries_per_cycle if estrat.enabled else 1
+
     for _score, signal, pick, bet in candidates:
+      if entries_this_cycle >= max_entries:
+        break
+      if len(self.store.open_positions(slot_key)) >= (
+        estrat.max_concurrent_positions if estrat.enabled else 99
+      ):
+        last_reason = "max_concurrent_positions"
+        break
+
       if not bet_qualifies(signal, bet, settings):
         last_reason = "signal_filtered_by_settings"
         continue
@@ -667,12 +679,14 @@ class Slot15Bot:
         continue
 
       bankroll = self.store.slot_bankroll_usd(slot_key, settings.max_spend_per_slot_usd, settings)
+      entries_left = max_entries - entries_this_cycle
       stake = entry_budget_usd(
         estrat=estrat,
         bankroll_usd=bankroll,
         remaining_usd=remaining,
         pick=pick_kelly,
         side=side,
+        entries_left=entries_left,
       )
 
       if settings.mode == "paper":
@@ -781,7 +795,8 @@ class Slot15Bot:
       self.store.set_last_entry_attempt(None)
       self.store.set_last_skip_reason(None)
       results.append(result)
-      break
+      entries_this_cycle += 1
+      open_pos = self.store.open_positions(slot_key)
 
     if not results:
       self.store.set_last_skip_reason(last_reason)

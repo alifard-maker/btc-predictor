@@ -19,7 +19,7 @@ class Slot15BotSettings:
   allow_strong: bool = False
   allow_actionable: bool = False
   continuous: bool = True
-  reentry_cooldown_seconds: int = 120
+  reentry_cooldown_seconds: int = 30
   take_profit_enabled: bool = True
   take_profit_mode: str = "hybrid"  # fixed | adaptive | trailing | hybrid
   take_profit_pct: float = 0.25
@@ -31,7 +31,7 @@ class Slot15BotSettings:
   min_take_profit_pct: float = 0.10
   max_take_profit_pct: float = 0.40
   min_hold_seconds: int = 30
-  profit_exit_cooldown_seconds: int = 60
+  profit_exit_cooldown_seconds: int = 30
   auto_stop_on_budget_exhausted: bool = True
   auto_stopped: bool = False
   auto_stop_reason: str | None = None
@@ -53,7 +53,7 @@ class Slot15BotSettings:
       allow_strong=bool(raw.get("allow_strong", False)),
       allow_actionable=bool(raw.get("allow_actionable", False)),
       continuous=bool(raw.get("continuous", True)),
-      reentry_cooldown_seconds=int(raw.get("reentry_cooldown_seconds", 120)),
+      reentry_cooldown_seconds=int(raw.get("reentry_cooldown_seconds", 30)),
       take_profit_enabled=bool(raw.get("take_profit_enabled", True)),
       take_profit_mode=str(raw.get("take_profit_mode", "hybrid")),
       take_profit_pct=float(raw.get("take_profit_pct", 0.25)),
@@ -65,7 +65,7 @@ class Slot15BotSettings:
       min_take_profit_pct=float(raw.get("min_take_profit_pct", 0.10)),
       max_take_profit_pct=float(raw.get("max_take_profit_pct", 0.40)),
       min_hold_seconds=int(raw.get("min_hold_seconds", 30)),
-      profit_exit_cooldown_seconds=int(raw.get("profit_exit_cooldown_seconds", 60)),
+      profit_exit_cooldown_seconds=int(raw.get("profit_exit_cooldown_seconds", 30)),
       auto_stop_on_budget_exhausted=bool(raw.get("auto_stop_on_budget_exhausted", True)),
       auto_stopped=bool(raw.get("auto_stopped", False)),
       auto_stop_reason=raw.get("auto_stop_reason"),
