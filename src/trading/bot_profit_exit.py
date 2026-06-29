@@ -253,7 +253,14 @@ def evaluate_adaptive_profit_exit(
 
 
 def is_profit_exit_reason(reason: str | None) -> bool:
-  return reason in ("PROFIT TARGET", "PROFIT TRAIL")
+  return reason in (
+    "PROFIT TARGET",
+    "PROFIT TRAIL",
+    "TAKE PROFIT",
+    "LEG TAKE PROFIT",
+    "LEG TRAIL",
+    "REASSESS NEUTRAL TP",
+  )
 
 
 @dataclass
@@ -292,4 +299,220 @@ def evaluate_cheap_leg_cut_loss(
       "CHEAP LEG CUT LOSS",
       f"Cheap leg entry {entry_c}¢ — mark {int(mark_cents)}¢ at/below {cfg.cut_loss_cents}¢ floor",
     )
+  return None, ""
+
+
+@dataclass
+class Slot15LegExitConfig:
+  """Aggressive contract-mark exits for 15m bot (bird-in-the-hand)."""
+
+  leg_take_profit_cents: int = 3
+  leg_stop_loss_cents: int = 4
+  leg_take_profit_usd: float = 0.10
+  leg_trail_arm_usd: float = 0.10
+  leg_trail_giveback_usd: float = 0.05
+  leg_trail_giveback_pct: float = 0.30
+  reassess_neutral_take_profit: bool = True
+  reassess_neutral_band: float = 0.07
+  reassess_neutral_min_unrealized_usd: float = 0.05
+
+
+def slot15_leg_exit_config(cfg: dict[str, Any] | None) -> Slot15LegExitConfig:
+  bot_cfg = (cfg.get("intra_slot") or {}).get("bot") or {} if cfg else {}
+  return Slot15LegExitConfig(
+    leg_take_profit_cents=int(bot_cfg.get("leg_take_profit_cents", 3)),
+    leg_stop_loss_cents=int(bot_cfg.get("leg_stop_loss_cents", 4)),
+    leg_take_profit_usd=float(bot_cfg.get("leg_take_profit_usd", 0.10)),
+    leg_trail_arm_usd=float(bot_cfg.get("leg_trail_arm_usd", 0.10)),
+    leg_trail_giveback_usd=float(bot_cfg.get("leg_trail_giveback_usd", 0.05)),
+    leg_trail_giveback_pct=float(bot_cfg.get("leg_trail_giveback_pct", 0.30)),
+    reassess_neutral_take_profit=bool(bot_cfg.get("reassess_neutral_take_profit", True)),
+    reassess_neutral_band=float(bot_cfg.get("reassess_neutral_band", 0.07)),
+    reassess_neutral_min_unrealized_usd=float(
+      bot_cfg.get("reassess_neutral_min_unrealized_usd", 0.05)
+    ),
+  )
+
+
+def mark_vs_entry_cents(pos: dict[str, Any], mark_cents: int | None) -> int | None:
+  if mark_cents is None:
+    return None
+  entry_c = int(pos.get("entry_price_cents") or 0)
+  if entry_c <= 0:
+    return None
+  return int(mark_cents) - entry_c
+
+
+def evaluate_slot15_leg_stop_loss(
+  pos: dict[str, Any],
+  mark_cents: int | None,
+  leg_cfg: Slot15LegExitConfig,
+) -> tuple[str | None, str]:
+  delta = mark_vs_entry_cents(pos, mark_cents)
+  if delta is None or leg_cfg.leg_stop_loss_cents <= 0:
+    return None, ""
+  if delta <= -leg_cfg.leg_stop_loss_cents:
+    entry_c = int(pos["entry_price_cents"])
+    return (
+      "LEG STOP",
+      f"Mark {int(mark_cents)}¢ vs entry {entry_c}¢ ({delta:+d}¢) — leg stop −{leg_cfg.leg_stop_loss_cents}¢",
+    )
+  return None, ""
+
+
+def evaluate_slot15_leg_take_profit(
+  pos: dict[str, Any],
+  mark_cents: int | None,
+  unrealized_usd: float | None,
+  leg_cfg: Slot15LegExitConfig,
+) -> tuple[str | None, str]:
+  delta = mark_vs_entry_cents(pos, mark_cents)
+  cents_hit = (
+    delta is not None
+    and leg_cfg.leg_take_profit_cents > 0
+    and delta >= leg_cfg.leg_take_profit_cents
+  )
+  usd_hit = (
+    unrealized_usd is not None
+    and leg_cfg.leg_take_profit_usd > 0
+    and unrealized_usd >= leg_cfg.leg_take_profit_usd
+  )
+  if not cents_hit and not usd_hit:
+    return None, ""
+  entry_c = int(pos["entry_price_cents"])
+  parts: list[str] = []
+  if cents_hit and delta is not None:
+    parts.append(f"mark +{delta}¢ (≥{leg_cfg.leg_take_profit_cents}¢)")
+  if usd_hit and unrealized_usd is not None:
+    parts.append(f"+${unrealized_usd:.2f} unrealized (≥${leg_cfg.leg_take_profit_usd:.2f})")
+  return (
+    "LEG TAKE PROFIT",
+    f"Bird in hand — entry {entry_c}¢, mark {int(mark_cents)}¢: {' · '.join(parts)}",
+  )
+
+
+def _reassess_prob_is_neutral(prob_up: float | None, band: float) -> bool:
+  if prob_up is None or band <= 0:
+    return False
+  return abs(float(prob_up) - 0.5) <= band
+
+
+def evaluate_slot15_reassess_neutral_take_profit(
+  pos: dict[str, Any],
+  unrealized_usd: float | None,
+  monitor: dict[str, Any],
+  leg_cfg: Slot15LegExitConfig,
+) -> tuple[str | None, str]:
+  if not leg_cfg.reassess_neutral_take_profit:
+    return None, ""
+  if unrealized_usd is None or unrealized_usd < leg_cfg.reassess_neutral_min_unrealized_usd:
+    return None, ""
+  prob_up = monitor.get("reassessed_prob_up")
+  if prob_up is None:
+    return None, ""
+  if not _reassess_prob_is_neutral(float(prob_up), leg_cfg.reassess_neutral_band):
+    return None, ""
+  summary = str(monitor.get("reassess_summary") or monitor.get("message") or "")
+  up_pct = float(prob_up) * 100.0
+  detail = (
+    f"Green +${unrealized_usd:.2f} but reassess ~50/50 ({up_pct:.0f}% UP) — bank the gain"
+  )
+  if summary:
+    detail += f" — {summary}"
+  return "REASSESS NEUTRAL TP", detail
+
+
+def evaluate_slot15_leg_trail_exit(
+  unrealized_usd: float | None,
+  peaks: dict[str, float],
+  leg_cfg: Slot15LegExitConfig,
+) -> tuple[str | None, str]:
+  if unrealized_usd is None or unrealized_usd <= 0:
+    return None, ""
+  peak_usd = float(peaks.get("peak_unrealized_usd") or 0)
+  if peak_usd < leg_cfg.leg_trail_arm_usd:
+    return None, ""
+  giveback_usd = peak_usd - unrealized_usd
+  if leg_cfg.leg_trail_giveback_usd > 0 and giveback_usd >= leg_cfg.leg_trail_giveback_usd:
+    return (
+      "LEG TRAIL",
+      f"Peak +${peak_usd:.2f} now +${unrealized_usd:.2f} — leg trail giveback ${giveback_usd:.2f}",
+    )
+  if leg_cfg.leg_trail_giveback_pct > 0:
+    floor_usd = peak_usd * (1.0 - leg_cfg.leg_trail_giveback_pct)
+    if unrealized_usd <= floor_usd:
+      giveback_pct = max(0.0, giveback_usd / peak_usd) * 100.0
+      return (
+        "LEG TRAIL",
+        f"Peak +${peak_usd:.2f} now +${unrealized_usd:.2f} — leg trail giveback {giveback_pct:.0f}%",
+      )
+  return None, ""
+
+
+def evaluate_slot15_contract_exits(
+  *,
+  pos: dict[str, Any],
+  mark_cents: int | None,
+  unrealized_usd: float | None,
+  monitor: dict[str, Any],
+  peaks: dict[str, float],
+  hold_seconds: float | None,
+  settings: ProfitExitSettings | None,
+  exit_ctx: AdaptiveExitContext,
+  cfg: dict[str, Any] | None,
+  include_monitor_fallback: bool = True,
+  monitor_action: str | None = None,
+  monitor_message: str | None = None,
+  cut_loss_min_usd: float = 0.05,
+) -> tuple[str | None, str]:
+  """Contract-first exit chain for 15m bot; optional slot-monitor fallback last."""
+  leg_cfg = slot15_leg_exit_config(cfg)
+
+  reason, detail = evaluate_slot15_leg_stop_loss(pos, mark_cents, leg_cfg)
+  if reason:
+    return reason, detail
+
+  reason, detail = evaluate_slot15_leg_take_profit(pos, mark_cents, unrealized_usd, leg_cfg)
+  if reason:
+    return reason, detail
+
+  reason, detail = evaluate_slot15_reassess_neutral_take_profit(
+    pos, unrealized_usd, monitor, leg_cfg,
+  )
+  if reason:
+    return reason, detail
+
+  cheap_cfg = cheap_leg_exit_config(cfg, kind="slot15")
+  reason, detail = evaluate_cheap_leg_cut_loss(pos, mark_cents, cheap_cfg)
+  if reason:
+    return reason, detail
+
+  reason, detail = evaluate_slot15_leg_trail_exit(unrealized_usd, peaks, leg_cfg)
+  if reason:
+    return reason, detail
+
+  if settings:
+    reason, detail = evaluate_adaptive_profit_exit(
+      settings=settings,
+      unrealized_usd=unrealized_usd,
+      cost_usd=float(pos.get("cost_usd") or 0),
+      peaks=peaks,
+      hold_seconds=hold_seconds,
+      ctx=exit_ctx,
+    )
+    if reason:
+      return reason, detail
+
+  if not include_monitor_fallback:
+    return None, ""
+
+  action = str(monitor_action if monitor_action is not None else monitor.get("action") or "")
+  message = str(monitor_message if monitor_message is not None else monitor.get("message") or "")
+  if action == "TAKE PROFIT" and unrealized_usd is not None and unrealized_usd > 0:
+    return "TAKE PROFIT", message
+  if action in ("CUT LOSS", "CUT LOSSES"):
+    if unrealized_usd is None:
+      return None, ""
+    if unrealized_usd < -cut_loss_min_usd:
+      return "CUT LOSSES", message
   return None, ""

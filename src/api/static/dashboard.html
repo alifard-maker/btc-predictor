@@ -2628,13 +2628,39 @@
       opts = opts || {};
       const indexLabel = opts.indexLabel || 'BRTI';
       const indexNow = opts.indexNow;
+      const dualView = !!opts.dualLegSlotView;
       const indexLine = indexNow != null && Number.isFinite(Number(indexNow))
         ? ` · <strong>${indexLabel} now ${price(indexNow)}</strong>`
         : '';
+      const slotMon = opts.slotMonitor || {};
+      const slotMonLine = dualView && slotMon.action
+        ? `<p class="muted" style="font-size:.65rem;margin:0 0 .35rem">Slot monitor (${indexLabel}): <strong>${slotMon.action}</strong>${slotMon.reassess_summary ? ` — ${slotMon.reassess_summary}` : (slotMon.message ? ` — ${slotMon.message}` : '')}</p>`
+        : '';
       const rows = openPos.map((p) => {
-        const alert = (p.position_alert && p.position_alert.alert) || 'HOLD';
+        const pa = p.position_alert || {};
+        const alert = pa.alert || 'HOLD';
         const alertCls = alert === 'TAKE PROFIT' ? 'up' : alert === 'CUT LOSSES' ? 'down' : 'muted';
         const upnl = p.unrealized_pnl_usd;
+        const markDelta = pa.mark_vs_entry_cents ?? (
+          p.mark_price_cents != null && p.entry_price_cents != null
+            ? Number(p.mark_price_cents) - Number(p.entry_price_cents)
+            : null
+        );
+        const legDetail = pa.detail ? `<div class="muted" style="font-size:.62rem;margin-top:.15rem">${pa.detail}</div>` : '';
+        const slotAlert = pa.slot_monitor_alert || '—';
+        const slotCls = slotAlert === 'TAKE PROFIT' ? 'up' : slotAlert === 'CUT LOSSES' ? 'down' : 'muted';
+        if (dualView) {
+          return `<tr>
+            <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
+            <td>${(p.side || '').toUpperCase()} ×${p.contracts ?? '—'}</td>
+            <td>${botCents(p.entry_price_cents)}</td>
+            <td>${botCents(p.mark_price_cents)}</td>
+            <td class="${markDelta != null && markDelta > 0 ? 'up' : markDelta != null && markDelta < 0 ? 'down' : 'muted'}">${markDelta != null ? `${markDelta >= 0 ? '+' : ''}${markDelta}¢` : '—'}</td>
+            <td>${upnl != null ? botPnlUsd(upnl) : '—'}</td>
+            <td class="${alertCls}">${alert}${legDetail}</td>
+            <td class="${slotCls}" style="font-size:.65rem">${slotAlert}</td>
+          </tr>`;
+        }
         return `<tr>
           <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
           <td>${(p.side || '').toUpperCase()} ×${p.contracts ?? '—'}</td>
@@ -2644,10 +2670,17 @@
           <td class="${alertCls}">${alert}</td>
         </tr>`;
       }).join('');
+      const head = dualView
+        ? '<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Mark Δ</th><th>Unreal. P&amp;L</th><th>Leg alert</th><th>Slot (BRTI)</th></tr></thead>'
+        : '<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>';
+      const title = dualView
+        ? 'Open positions · leg mark P&amp;L + slot BRTI view'
+        : 'Open positions · live mark-to-market';
       return `<div style="margin:.55rem 0;padding:.55rem .65rem;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);border-radius:8px">
-        <p class="muted" style="font-size:.68rem;margin:0 0 .4rem;text-transform:uppercase;letter-spacing:.05em">Open positions · live mark-to-market${indexLine}</p>
+        <p class="muted" style="font-size:.68rem;margin:0 0 .4rem;text-transform:uppercase;letter-spacing:.05em">${title}${indexLine}</p>
+        ${slotMonLine}
         <table style="width:100%;font-size:.72rem">
-          <thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>
+          ${head}
           <tbody>${rows}</tbody>
         </table>
       </div>      `;
@@ -2831,6 +2864,8 @@
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
         indexLabel: bot.index_label || (asset === 'eth' ? 'ERTI' : 'BRTI'),
         indexNow: bot.index_now_price,
+        dualLegSlotView: true,
+        slotMonitor: bot.slot_monitor,
       });
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'slot', 'slot15', asset);

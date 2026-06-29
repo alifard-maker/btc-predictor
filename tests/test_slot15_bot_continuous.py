@@ -360,7 +360,7 @@ def test_profit_target_exit_on_hold_monitor():
     actions = bot.run_continuous_cycle(tab)
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
-    assert "PROFIT TARGET" in exits[0]["detail"]
+    assert "PROFIT TARGET" in exits[0]["detail"] or "LEG TAKE PROFIT" in exits[0]["detail"]
     assert exits[0]["pnl_usd"] == 3.0
 
 
@@ -416,10 +416,18 @@ def test_no_exit_when_profit_below_threshold_slot15():
     bot = Slot15Bot(store, asset="btc")
     tab = _live_tab(slot_key=slot_key)
     tab["monitor"]["action"] = "HOLD"
-    tab["kalshi"]["yes_mid"] = 0.44
-    tab["kalshi"]["yes_bid"] = 0.44
-    tab["kalshi"]["yes_ask"] = 0.44
-    actions = bot.run_continuous_cycle(tab)
+    tab["kalshi"]["yes_mid"] = 0.41
+    tab["kalshi"]["yes_bid"] = 0.41
+    tab["kalshi"]["yes_ask"] = 0.41
+    cfg = {
+      "intra_slot": {
+        "bot": {
+          "leg_take_profit_cents": 5,
+          "leg_take_profit_usd": 5.0,
+        },
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
     assert not any(a.get("action") == "exit" for a in actions)
     assert len(store.open_positions(slot_key)) == 1
 
@@ -453,10 +461,18 @@ def test_profit_trail_exit_slot15():
     tab["kalshi"]["yes_mid"] = 0.50
     tab["kalshi"]["yes_bid"] = 0.50
     tab["kalshi"]["yes_ask"] = 0.50
-    actions = bot.run_continuous_cycle(tab)
+    cfg = {
+      "intra_slot": {
+        "bot": {
+          "leg_take_profit_cents": 99,
+          "leg_take_profit_usd": 99.0,
+        },
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
-    assert "PROFIT TRAIL" in exits[0]["detail"]
+    assert "LEG TRAIL" in exits[0]["detail"] or "PROFIT TRAIL" in exits[0]["detail"]
 
 
 def test_wide_spread_enters_with_tab_max_spread():
@@ -539,3 +555,128 @@ def test_slot_prediction_refresh_needed_when_slots_differ():
   stale_slot = slot_s - pd.Timedelta(minutes=15)
   assert not slot_times_match(stale_slot, slot_s.isoformat(), tz)
   assert slot_times_match(slot_s, slot_s.isoformat(), tz)
+
+
+def test_leg_take_profit_on_small_mark_gain():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    slot_key = "2025-06-28T14:00:00-04:00"
+    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=25.0, min_hold_seconds=0))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": slot_key,
+      "market_ticker": "KXBTC15M-TEST",
+      "side": "yes",
+      "contracts": 10,
+      "entry_price_cents": 55,
+      "cost_usd": 5.5,
+      "signal": "LONG",
+      "opened_at": _opened_at_seconds_ago(30),
+    })
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab(slot_key=slot_key)
+    tab["monitor"]["action"] = "HOLD"
+    tab["kalshi"]["yes_mid"] = 0.58
+    tab["kalshi"]["yes_bid"] = 0.58
+    tab["kalshi"]["yes_ask"] = 0.58
+    actions = bot.run_continuous_cycle(tab)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "LEG TAKE PROFIT" in exits[0]["detail"]
+
+
+def test_leg_stop_on_mark_drawdown():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    slot_key = "2025-06-28T14:00:00-04:00"
+    store.save_settings(Slot15BotSettings(enabled=True, max_spend_per_slot_usd=25.0))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": slot_key,
+      "market_ticker": "KXBTC15M-TEST",
+      "side": "yes",
+      "contracts": 10,
+      "entry_price_cents": 55,
+      "cost_usd": 5.5,
+      "signal": "LONG",
+    })
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab(slot_key=slot_key)
+    tab["monitor"]["action"] = "HOLD"
+    tab["kalshi"]["yes_mid"] = 0.51
+    tab["kalshi"]["yes_bid"] = 0.51
+    tab["kalshi"]["yes_ask"] = 0.51
+    actions = bot.run_continuous_cycle(tab)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "LEG STOP" in exits[0]["detail"]
+
+
+def test_reassess_neutral_take_profit_while_green():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = Slot15BotStore(Path(tmp) / "bot.db")
+    slot_key = "2025-06-28T14:00:00-04:00"
+    store.save_settings(Slot15BotSettings(
+      enabled=True,
+      max_spend_per_slot_usd=25.0,
+      take_profit_pct=0.50,
+      min_hold_seconds=0,
+    ))
+    store.open_position({
+      "id": "p1",
+      "event_ticker": slot_key,
+      "market_ticker": "KXBTC15M-TEST",
+      "side": "yes",
+      "contracts": 20,
+      "entry_price_cents": 50,
+      "cost_usd": 10.0,
+      "signal": "LONG",
+      "opened_at": _opened_at_seconds_ago(120),
+    })
+    bot = Slot15Bot(store, asset="btc")
+    tab = _live_tab(slot_key=slot_key)
+    tab["monitor"]["action"] = "HOLD"
+    tab["monitor"]["reassessed_prob_up"] = 0.51
+    tab["monitor"]["reassess_summary"] = "Reassessed: 51% UP / 49% DOWN at close"
+    tab["kalshi"]["yes_mid"] = 0.52
+    tab["kalshi"]["yes_bid"] = 0.52
+    tab["kalshi"]["yes_ask"] = 0.52
+    cfg = {
+      "intra_slot": {
+        "bot": {
+          "leg_take_profit_cents": 10,
+          "leg_take_profit_usd": 99.0,
+          "reassess_neutral_take_profit": True,
+          "reassess_neutral_band": 0.07,
+          "reassess_neutral_min_unrealized_usd": 0.05,
+        },
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert "REASSESS NEUTRAL TP" in exits[0]["detail"]
+
+
+def test_enrich_open_positions_leg_alert_not_slot_only():
+  from src.trading.slot15_bot import enrich_open_positions_live
+
+  positions = [{
+    "id": "p1",
+    "side": "yes",
+    "entry_price_cents": 55,
+    "contracts": 10,
+    "cost_usd": 5.5,
+    "signal": "LONG",
+  }]
+  tab = _live_tab()
+  tab["monitor"]["action"] = "HOLD"
+  tab["monitor"]["message"] = "Hold — still winning with room to run."
+  tab["kalshi"]["yes_mid"] = 0.58
+  tab["kalshi"]["yes_bid"] = 0.58
+  tab["kalshi"]["yes_ask"] = 0.58
+  enriched = enrich_open_positions_live(positions, tab)
+  alert = enriched[0]["position_alert"]
+  assert alert["alert"] == "TAKE PROFIT"
+  assert alert.get("slot_monitor_alert") == "HOLD"
+  assert alert.get("mark_vs_entry_cents") == 3

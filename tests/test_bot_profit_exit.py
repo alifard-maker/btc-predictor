@@ -134,3 +134,38 @@ def test_update_position_peaks_tracks_high_water_mark():
   peaks = update_position_peaks(peaks, 2.0, 10.0)
   assert peaks["peak_unrealized_usd"] == 4.0
   assert peaks["peak_profit_pct"] == 0.4
+
+
+def test_slot15_leg_take_profit_on_mark_cents():
+  from src.trading.bot_profit_exit import evaluate_slot15_leg_take_profit, slot15_leg_exit_config
+
+  cfg = {"intra_slot": {"bot": {"leg_take_profit_cents": 3}}}
+  leg_cfg = slot15_leg_exit_config(cfg)
+  pos = {"entry_price_cents": 55}
+  reason, detail = evaluate_slot15_leg_take_profit(pos, 58, 0.30, leg_cfg)
+  assert reason == "LEG TAKE PROFIT"
+  assert "+3¢" in detail
+
+
+def test_slot15_leg_stop_on_drawdown():
+  from src.trading.bot_profit_exit import evaluate_slot15_leg_stop_loss, slot15_leg_exit_config
+
+  leg_cfg = slot15_leg_exit_config(None)
+  pos = {"entry_price_cents": 55}
+  reason, _ = evaluate_slot15_leg_stop_loss(pos, 51, leg_cfg)
+  assert reason == "LEG STOP"
+
+
+def test_slot15_reassess_neutral_take_profit():
+  from src.trading.bot_profit_exit import (
+    evaluate_slot15_reassess_neutral_take_profit,
+    slot15_leg_exit_config,
+  )
+
+  leg_cfg = slot15_leg_exit_config({"intra_slot": {"bot": {"reassess_neutral_band": 0.07}}})
+  monitor = {"reassessed_prob_up": 0.52, "reassess_summary": "50/50 at close"}
+  reason, detail = evaluate_slot15_reassess_neutral_take_profit(
+    {"side": "yes"}, 0.40, monitor, leg_cfg,
+  )
+  assert reason == "REASSESS NEUTRAL TP"
+  assert "50/50" in detail

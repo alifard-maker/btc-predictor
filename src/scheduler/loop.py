@@ -586,8 +586,21 @@ class PredictionLoop:
     if tab and tab.get("ok"):
       from src.trading.slot15_bot import enrich_open_positions_live
 
-      open_pos = enrich_open_positions_live(open_pos, tab)
+      acfg = self._acfg_15m(asset)
+      open_pos = enrich_open_positions_live(
+        open_pos,
+        tab,
+        cfg=acfg,
+        settings=store.get_settings(),
+      )
       status["open_positions"] = open_pos
+      monitor = tab.get("monitor") or {}
+      status["slot_monitor"] = {
+        "action": monitor.get("action"),
+        "message": monitor.get("message"),
+        "reassess_summary": monitor.get("reassess_summary"),
+        "reassessed_prob_up": monitor.get("reassessed_prob_up"),
+      }
       unrealized = round(
         sum(float(p.get("unrealized_pnl_usd") or 0) for p in open_pos),
         2,

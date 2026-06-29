@@ -17,12 +17,11 @@ from src.trading.bot_period_rollover import force_close_period_positions, resolv
 from src.trading.bot_entry_settings import slot15_entry_settings_snapshot
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
-  cheap_leg_exit_config,
-  evaluate_adaptive_profit_exit,
-  evaluate_cheap_leg_cut_loss,
+  evaluate_slot15_contract_exits,
   is_profit_exit_reason,
   position_hold_seconds,
 )
+from src.trading.slot15_position_alert import assess_slot15_leg_position_alert
 from src.trading.edge import Signal
 from src.trading.bot_auto_tuning import effective_entry_strategy
 from src.trading.bot_scale_in import evaluate_scale_in
@@ -215,16 +214,6 @@ def _entry_candidates(tab: dict[str, Any]) -> list[tuple[float, str, dict[str, A
   return out
 
 
-def _should_paper_exit(alert_label: str, unrealized_pnl: float | None) -> bool:
-  if alert_label == "TAKE PROFIT":
-    return True
-  if alert_label in ("CUT LOSS", "CUT LOSSES"):
-    if unrealized_pnl is None:
-      return False
-    return unrealized_pnl < -CUT_LOSS_EXIT_MIN_LOSS_USD
-  return False
-
-
 def _unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | None:
   return unrealized_leg_pnl_usd(
     side=str(pos.get("side") or "yes"),
@@ -234,24 +223,26 @@ def _unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | 
   )
 
 
-def _position_alert_from_monitor(monitor: dict[str, Any]) -> dict[str, Any]:
-  action = str(monitor.get("action") or "HOLD")
-  if action == "TAKE PROFIT":
-    return {"alert": "TAKE PROFIT", "detail": monitor.get("message", "")}
-  if action == "CUT LOSS":
-    return {"alert": "CUT LOSSES", "detail": monitor.get("message", "")}
-  return {"alert": "HOLD", "detail": monitor.get("message", "Monitoring slot")}
-
-
 def enrich_open_positions_live(
   positions: list[dict[str, Any]],
   tab: dict[str, Any],
+  *,
+  cfg: dict[str, Any] | None = None,
+  settings: Any | None = None,
 ) -> list[dict[str, Any]]:
-  """Attach live mark, unrealized P&L, and position alert to open bot legs."""
+  """Attach live mark, unrealized P&L, and per-leg contract alert to open bot legs."""
   kalshi = tab.get("kalshi") or {}
   monitor = tab.get("monitor") or {}
   yes_cents = _yes_mid_cents(kalshi)
-  alert = _position_alert_from_monitor(monitor)
+  seconds_remaining = monitor.get("seconds_remaining")
+  if seconds_remaining is not None:
+    seconds_remaining = float(seconds_remaining)
+  exit_ctx = AdaptiveExitContext(
+    seconds_remaining=seconds_remaining,
+    period_seconds=900.0,
+    current_edge=None,
+    regime_allow_trade=True,
+  )
   out: list[dict[str, Any]] = []
 
   for pos in positions:
@@ -266,7 +257,20 @@ def enrich_open_positions_live(
     row["mark_price_cents"] = mark
     row["unrealized_pnl_usd"] = _unrealized_pnl_usd(pos, mark)
     row["current_signal"] = monitor.get("signal_at_open")
-    row["position_alert"] = alert
+    peaks = {
+      "peak_unrealized_usd": float(pos.get("peak_unrealized_usd") or 0),
+      "peak_profit_pct": float(pos.get("peak_profit_pct") or 0),
+    }
+    row["position_alert"] = assess_slot15_leg_position_alert(
+      pos=pos,
+      mark_cents=mark,
+      unrealized_pnl_usd=row.get("unrealized_pnl_usd"),
+      monitor=monitor,
+      cfg=cfg,
+      settings=settings,
+      peaks=peaks,
+      exit_ctx=exit_ctx,
+    )
     out.append(row)
   return out
 
@@ -413,8 +417,7 @@ class Slot15Bot:
   def _resolve_exit(
     self,
     pos: dict[str, Any],
-    monitor_action: str,
-    monitor_message: str,
+    monitor: dict[str, Any],
     unrealized: float | None,
     settings: Slot15BotSettings,
     *,
@@ -423,25 +426,19 @@ class Slot15Bot:
     mark_cents: int | None = None,
     cfg: dict[str, Any] | None = None,
   ) -> tuple[str | None, str]:
-    if monitor_action == "TAKE PROFIT" and _should_paper_exit(monitor_action, unrealized):
-      return "TAKE PROFIT", monitor_message
-    cheap_cfg = cheap_leg_exit_config(cfg, kind="slot15")
-    cheap_reason, cheap_detail = evaluate_cheap_leg_cut_loss(pos, mark_cents, cheap_cfg)
-    if cheap_reason:
-      return cheap_reason, cheap_detail
-    if monitor_action in ("CUT LOSS", "CUT LOSSES") and _should_paper_exit(monitor_action, unrealized):
-      return "CUT LOSSES", monitor_message
-    reason, detail = evaluate_adaptive_profit_exit(
-      settings=settings,
+    return evaluate_slot15_contract_exits(
+      pos=pos,
+      mark_cents=mark_cents,
       unrealized_usd=unrealized,
-      cost_usd=float(pos.get("cost_usd") or 0),
+      monitor=monitor,
       peaks=peaks,
       hold_seconds=position_hold_seconds(pos),
-      ctx=exit_ctx,
+      settings=settings,
+      exit_ctx=exit_ctx,
+      cfg=cfg,
+      include_monitor_fallback=True,
+      cut_loss_min_usd=CUT_LOSS_EXIT_MIN_LOSS_USD,
     )
-    if reason:
-      return reason, detail
-    return None, ""
 
   def _process_exits(
     self,
@@ -453,8 +450,6 @@ class Slot15Bot:
   ) -> list[dict[str, Any]]:
     monitor = tab.get("monitor") or {}
     kalshi = tab.get("kalshi") or {}
-    action = str(monitor.get("action") or "")
-    message = str(monitor.get("message") or "")
     yes_cents = _yes_mid_cents(kalshi)
     seconds_remaining = monitor.get("seconds_remaining")
     if seconds_remaining is not None:
@@ -490,7 +485,7 @@ class Slot15Bot:
         regime_allow_trade=True,
       )
       exit_reason, detail_suffix = self._resolve_exit(
-        pos, action, message, unrealized, settings, peaks=peaks, exit_ctx=exit_ctx,
+        pos, monitor, unrealized, settings, peaks=peaks, exit_ctx=exit_ctx,
         mark_cents=exit_price, cfg=cfg,
       )
       if not exit_reason:
