@@ -71,12 +71,27 @@ class KalshiDailyMarkets:
     self.kalshi = KalshiClient(cfg)
     dcfg = daily_cfg if daily_cfg is not None else cfg.get("daily", {})
     self.threshold_series: list[str] = list(
-      dcfg.get("threshold_series", ["BTCD", "KXBTCD"])
+      dcfg.get("threshold_series", ["KXBTCD"])
     )
-    self.range_series: list[str] = list(dcfg.get("range_series", ["BTC", "KXBTC"]))
+    self.range_series: list[str] = list(dcfg.get("range_series", ["KXBTC"]))
     self.max_markets_per_event = int(dcfg.get("max_markets_per_event", 1000))
     self.max_event_candidates = int(dcfg.get("max_event_candidates", 6))
+    self.discovery_cache_sec = float(dcfg.get("discovery_cache_sec", 75))
     self._book_cache: tuple[DailyEventBook | None, float] | None = None
+    self._events_cache: dict[str, tuple[list[dict[str, Any]], float]] = {}
+    self._markets_cache: dict[tuple[str, str], tuple[list[KalshiContractMarket], float]] = {}
+
+  def _discovery_cache_ttl(self) -> float:
+    from src.trading.kalshi_circuit import get_circuit_breaker
+
+    base = self.discovery_cache_sec
+    circuit = get_circuit_breaker()
+    if circuit and circuit.throttle_discovery():
+      return max(base, 90.0)
+    return base
+
+  def _cache_fresh(self, ts: float) -> bool:
+    return time.monotonic() - ts < self._discovery_cache_ttl()
 
   def _parse_market(self, row: dict[str, Any], series: str) -> KalshiContractMarket | None:
     close_raw = row.get("close_time")
@@ -133,6 +148,11 @@ class KalshiDailyMarkets:
     return out
 
   def _fetch_event_markets(self, series: str, event_ticker: str) -> list[KalshiContractMarket]:
+    key = (series, event_ticker)
+    cached = self._markets_cache.get(key)
+    if cached and self._cache_fresh(cached[1]):
+      return cached[0]
+
     out: list[KalshiContractMarket] = []
     cursor: str | None = None
     pages = 0
@@ -157,9 +177,14 @@ class KalshiDailyMarkets:
       pages += 1
       if not cursor:
         break
+    self._markets_cache[key] = (out, time.monotonic())
     return out
 
   def _fetch_open_events(self, series: str) -> list[dict[str, Any]]:
+    cached = self._events_cache.get(series)
+    if cached and self._cache_fresh(cached[1]):
+      return cached[0]
+
     out: list[dict[str, Any]] = []
     cursor: str | None = None
     pages = 0
@@ -181,6 +206,7 @@ class KalshiDailyMarkets:
       pages += 1
       if not cursor:
         break
+    self._events_cache[series] = (out, time.monotonic())
     return out
 
   @staticmethod
@@ -324,13 +350,9 @@ class KalshiDailyMarkets:
 
   def active_book(self, reference_price: float | None = None) -> DailyEventBook | None:
     """Pick soonest Kalshi event and load its full strike ladder via event_ticker."""
-    from src.trading.kalshi_circuit import get_circuit_breaker
-
-    circuit = get_circuit_breaker()
-    now = time.monotonic()
-    if circuit and circuit.throttle_discovery() and self._book_cache:
+    if self._book_cache:
       book, ts = self._book_cache
-      if now - ts < 45.0:
+      if self._cache_fresh(ts):
         return book
 
     candidates: list[tuple[float, DailyEventBook]] = []
@@ -375,7 +397,7 @@ class KalshiDailyMarkets:
           candidates.append((score, book))
 
     if not candidates:
-      self._book_cache = (None, now)
+      self._book_cache = (None, time.monotonic())
       return None
     book = max(candidates, key=lambda x: x[0])[1]
     self._book_cache = (book, time.monotonic())

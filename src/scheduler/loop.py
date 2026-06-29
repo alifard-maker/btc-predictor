@@ -1532,7 +1532,7 @@ class PredictionLoop:
       )
       bot_cfg = hcfg.get("bot") or {}
       if bot_cfg.get("continuous_enabled", True):
-        poll_sec = int(bot_cfg.get("poll_seconds", 5))
+        poll_sec = int(bot_cfg.get("poll_seconds", 10))
         scheduler.add_job(
           self.run_hourly_bot_continuous,
           "interval",
@@ -1568,7 +1568,7 @@ class PredictionLoop:
         )
         bot_cfg = ehcfg.get("bot") or {}
         if bot_cfg.get("continuous_enabled", True):
-          poll_sec = int(bot_cfg.get("poll_seconds", 5))
+          poll_sec = int(bot_cfg.get("poll_seconds", 10))
           scheduler.add_job(
             self.run_eth_hourly_bot_continuous,
             "interval",
@@ -2112,7 +2112,7 @@ class PredictionLoop:
     acfg = self.cfg
     bot_cfg = (acfg.get("intra_slot") or {}).get("bot") or {}
     if bot_cfg.get("continuous_enabled", True):
-      poll_sec = int(bot_cfg.get("poll_seconds", 5))
+      poll_sec = int(bot_cfg.get("poll_seconds", 10))
       scheduler.add_job(
         self.run_slot15_bot_continuous,
         "interval",
@@ -2124,7 +2124,7 @@ class PredictionLoop:
       eth_cfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
       ebot_cfg = (eth_cfg.get("intra_slot") or {}).get("bot") or bot_cfg
       if ebot_cfg.get("continuous_enabled", True):
-        poll_sec = int(ebot_cfg.get("poll_seconds", 5))
+        poll_sec = int(ebot_cfg.get("poll_seconds", 10))
         scheduler.add_job(
           self.run_eth_slot15_bot_continuous,
           "interval",

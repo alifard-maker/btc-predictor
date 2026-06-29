@@ -28,8 +28,8 @@ def test_asset_cfg_eth_overrides(base_cfg):
   eth = asset_cfg(base_cfg, "eth")
   assert eth["symbol"] == "ETH/USD"
   assert eth["_asset"] == "eth"
-  assert eth["daily"]["threshold_series"] == ["KXETHD", "ETHD"]
-  assert eth["daily"]["range_series"] == ["KXETH", "ETH"]
+  assert eth["daily"]["threshold_series"] == ["KXETHD"]
+  assert eth["daily"]["range_series"] == ["KXETH"]
   assert "eth" in eth["paths"]["candles"]
   assert index_id_for_cfg(eth) == "ERTI"
 

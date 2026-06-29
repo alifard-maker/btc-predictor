@@ -101,7 +101,7 @@ intra_slot:
     use_accumulated_profit: false
     paper_auto_refill: true
     continuous_enabled: true
-    poll_seconds: 5
+    poll_seconds: 10
     paper_max_spread_cents: 40
     take_profit_enabled: true
     take_profit_mode: hybrid
@@ -168,8 +168,9 @@ second_chance:
 # Kalshi daily / hourly threshold + range contracts (separate tab on dashboard)
 daily:
   enabled: true
-  threshold_series: [KXBTCD, BTCD]   # hourly first — must bracket live BRTI
-  range_series: [KXBTC, BTC]
+  threshold_series: [KXBTCD]   # hourly KX series only (legacy BTCD dropped to cut API load)
+  range_series: [KXBTC]
+  discovery_cache_sec: 75
   nearby_strikes: 30
   top_bands: 30
   max_markets_per_event: 1000
@@ -218,7 +219,7 @@ hourly:
     use_accumulated_profit: false
     paper_auto_refill: true
     continuous_enabled: true
-    poll_seconds: 5
+    poll_seconds: 10
     take_profit_enabled: true
     take_profit_mode: hybrid
     take_profit_pct: 0.25
@@ -331,8 +332,9 @@ eth:
     brti_index_id: ERTI
   daily:
     enabled: true
-    threshold_series: [KXETHD, ETHD]
-    range_series: [KXETH, ETH]
+    threshold_series: [KXETHD]
+    range_series: [KXETH]
+    discovery_cache_sec: 75
     nearby_strikes: 30
     top_bands: 30
     max_markets_per_event: 1000
@@ -377,7 +379,7 @@ eth:
       use_accumulated_profit: false
       paper_auto_refill: true
       continuous_enabled: true
-      poll_seconds: 5
+      poll_seconds: 10
       take_profit_enabled: true
       take_profit_mode: hybrid
       take_profit_pct: 0.25
