@@ -509,6 +509,11 @@ class HourlyBot:
     if kind == "TAKE PROFIT" and _should_paper_exit(alert, unrealized):
       return "TAKE PROFIT", str(alert.get("detail", ""))
     cheap_cfg = cheap_leg_exit_config(cfg, kind="hourly")
+    hours_to_settle = (
+      exit_ctx.seconds_remaining / 3600.0
+      if exit_ctx.seconds_remaining is not None
+      else None
+    )
     cheap_reason, cheap_detail = evaluate_cheap_leg_cut_loss(
       pos,
       mark_cents,
@@ -516,6 +521,8 @@ class HourlyBot:
       pick=pick,
       live_price=live_price,
       gate_on_hourly_thesis=True,
+      hours_to_settle=hours_to_settle,
+      bot_cfg=cfg,
     )
     if cheap_reason:
       return cheap_reason, cheap_detail
@@ -568,6 +575,7 @@ class HourlyBot:
           regime_allow_trade=bool(regime.get("allow_trade", True)),
           regime_reasons=list(regime.get("reasons") or []),
           unrealized_pnl_usd=unrealized,
+          hours_to_settle=float(hours_left) if hours_left is not None else None,
           cfg=cfg,
         )
         standard_alert = str(standard.get("alert") or "")
@@ -580,6 +588,7 @@ class HourlyBot:
           regime_allow_trade=bool(regime.get("allow_trade", True)),
           regime_reasons=list(regime.get("reasons") or []),
           unrealized_pnl_usd=unrealized,
+          hours_to_settle=float(hours_left) if hours_left is not None else None,
           cfg=cfg,
         )
       cost_usd = float(pos.get("cost_usd") or 0)

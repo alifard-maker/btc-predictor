@@ -91,6 +91,50 @@ def spot_loss_cut_allowed(
   return sig_favors is not True
 
 
+def _distance_from_threshold_strike(live_price: float, pick: dict[str, Any]) -> float | None:
+  strike_type = pick.get("strike_type")
+  if strike_type == "greater" and pick.get("floor_strike") is not None:
+    return abs(float(live_price) - float(pick["floor_strike"]))
+  if strike_type == "less" and pick.get("cap_strike") is not None:
+    return abs(float(live_price) - float(pick["cap_strike"]))
+  return None
+
+
+def near_strike_cut_cfg(cfg: dict[str, Any] | None) -> tuple[float, float]:
+  """(min_hours_to_settle, tolerance_usd) for suppressing threshold spot cuts near strike."""
+  bot_cfg = (cfg or {}).get("hourly", {}).get("bot") or {}
+  min_hours = float(bot_cfg.get("near_strike_cut_min_hours", 5.0 / 60.0))
+  tolerance = float(bot_cfg.get("near_strike_tolerance_usd", 3.0))
+  return min_hours, tolerance
+
+
+def hourly_spot_cut_suppressed_near_strike(
+  pick: dict[str, Any],
+  *,
+  side: str,
+  live_price: float | None,
+  sig_favors: bool | None,
+  hours_to_settle: float | None,
+  cfg: dict[str, Any] | None = None,
+) -> bool:
+  """Hold threshold legs when spot hovers at the strike with time left and signal still supports."""
+  if not _is_threshold_style_contract(pick):
+    return False
+  if sig_favors is not True:
+    return False
+  if hours_to_settle is None:
+    return False
+  min_hours, tolerance = near_strike_cut_cfg(cfg)
+  if hours_to_settle < min_hours:
+    return False
+  if live_price is None:
+    return False
+  dist = _distance_from_threshold_strike(float(live_price), pick)
+  if dist is None:
+    return False
+  return dist <= tolerance
+
+
 def _signal_favors_held_side(signal: str | None, side: str) -> bool | None:
   if not is_actionable_buy(signal):
     return None
@@ -134,6 +178,7 @@ def assess_held_hourly_position_alert(
   regime_allow_trade: bool,
   regime_reasons: list[str] | None = None,
   unrealized_pnl_usd: float | None = None,
+  hours_to_settle: float | None = None,
   cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   """Position alert for an open bot leg — uses spot vs band/strike, not index drift alone."""
@@ -182,6 +227,21 @@ def assess_held_hourly_position_alert(
         f"Signal flipped ({entry_signal} → {current_signal}) with loss on mark — cut.",
       )
     if spot_loss_cut_allowed(pick, spot_favors=spot_ok, sig_favors=sig_ok):
+      if hourly_spot_cut_suppressed_near_strike(
+        pick,
+        side=side,
+        live_price=float(live_price) if live_price is not None else None,
+        sig_favors=sig_ok,
+        hours_to_settle=hours_to_settle,
+        cfg=cfg,
+      ):
+        mins = int((hours_to_settle or 0) * 60)
+        return _result(
+          "HOLD",
+          "neutral",
+          f"Spot hovering near strike with {mins}m to settle and signal still supports "
+          f"your {side.upper()} leg — hold through mark noise.",
+        )
       return _result(
         "CUT LOSSES",
         "danger",

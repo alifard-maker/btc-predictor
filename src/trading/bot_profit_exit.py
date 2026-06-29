@@ -293,6 +293,9 @@ def hourly_mark_cut_allowed(
   pos: dict[str, Any],
   pick: dict[str, Any] | None,
   live_price: float | None,
+  *,
+  hours_to_settle: float | None = None,
+  cfg: dict[str, Any] | None = None,
 ) -> bool:
   """True when mark-based loss cuts may fire on hourly bots."""
   if not pick:
@@ -301,6 +304,7 @@ def hourly_mark_cut_allowed(
   from src.trading.hourly_position_alert import (
     _signal_favors_held_side,
     _spot_favors_held_side,
+    hourly_spot_cut_suppressed_near_strike,
     spot_loss_cut_allowed,
   )
 
@@ -320,6 +324,15 @@ def hourly_mark_cut_allowed(
   if spot_favors is True:
     return False
   if spot_favors is False:
+    if hourly_spot_cut_suppressed_near_strike(
+      pick,
+      side=side,
+      live_price=float(live_price) if live_price is not None else None,
+      sig_favors=sig_favors,
+      hours_to_settle=hours_to_settle,
+      cfg=cfg,
+    ):
+      return False
     return spot_loss_cut_allowed(pick, spot_favors=False, sig_favors=sig_favors)
   return sig_favors is False
 
@@ -385,6 +398,8 @@ def evaluate_cheap_leg_cut_loss(
   pick: dict[str, Any] | None = None,
   live_price: float | None = None,
   gate_on_hourly_thesis: bool = False,
+  hours_to_settle: float | None = None,
+  bot_cfg: dict[str, Any] | None = None,
 ) -> tuple[str | None, str]:
   """Tighter mark-based stop for low-cent entry legs (before normal CUT LOSSES)."""
   if mark_cents is None:
@@ -393,7 +408,13 @@ def evaluate_cheap_leg_cut_loss(
   if entry_c <= 0 or entry_c > cfg.max_entry_cents:
     return None, ""
   if int(mark_cents) <= cfg.cut_loss_cents:
-    if gate_on_hourly_thesis and not hourly_mark_cut_allowed(pos, pick, live_price):
+    if gate_on_hourly_thesis and not hourly_mark_cut_allowed(
+      pos,
+      pick,
+      live_price,
+      hours_to_settle=hours_to_settle,
+      cfg=bot_cfg,
+    ):
       return None, ""
     return (
       "CHEAP LEG CUT LOSS",
@@ -564,12 +585,20 @@ def evaluate_slot15_leg_stop_loss(
   gate_early_slot15: bool = False,
   monitor: dict[str, Any] | None = None,
   seconds_remaining: float | None = None,
+  hours_to_settle: float | None = None,
+  bot_cfg: dict[str, Any] | None = None,
 ) -> tuple[str | None, str]:
   delta = mark_vs_entry_cents(pos, mark_cents)
   if delta is None or leg_cfg.leg_stop_loss_cents <= 0:
     return None, ""
   if delta <= -leg_cfg.leg_stop_loss_cents:
-    if gate_on_hourly_thesis and not hourly_mark_cut_allowed(pos, pick, live_price):
+    if gate_on_hourly_thesis and not hourly_mark_cut_allowed(
+      pos,
+      pick,
+      live_price,
+      hours_to_settle=hours_to_settle,
+      cfg=bot_cfg,
+    ):
       return None, ""
     if gate_early_slot15 and leg_stop_suppressed_by_early_slot(
       pos=pos,
@@ -787,6 +816,8 @@ def evaluate_slot15_contract_exits(
     gate_early_slot15=bot_kind == "slot15",
     monitor=monitor,
     seconds_remaining=exit_ctx.seconds_remaining,
+    hours_to_settle=hours_to_settle,
+    bot_cfg=cfg,
   )
   if reason:
     return reason, detail
@@ -822,6 +853,8 @@ def evaluate_slot15_contract_exits(
     pick=pick,
     live_price=live_price,
     gate_on_hourly_thesis=gate_hourly,
+    hours_to_settle=hours_to_settle,
+    bot_cfg=cfg,
   )
   if reason:
     return reason, detail

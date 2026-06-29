@@ -319,3 +319,77 @@ def test_unrealized_no_pnl_positive_when_mark_rises():
     contracts=2,
   )
   assert pnl == 0.04
+
+
+def test_held_threshold_no_hold_near_strike_with_time_left():
+  """ETH screenshot: NO on $1,610+ with spot ~$1,610.16 and ~6m left — hold, don't cut."""
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY NO",
+    "edge": 0.08,
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 1609.99,
+  }
+  pos = {"side": "no", "signal": "BUY NO", "entry_price_cents": 47, "contracts": 4}
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=1610.16,
+    regime_allow_trade=True,
+    regime_reasons=[],
+    unrealized_pnl_usd=-0.48,
+    hours_to_settle=0.11,
+    cfg={"hourly": {"bot": {"near_strike_cut_min_hours": 0.083, "near_strike_tolerance_usd": 3.0}}},
+  )
+  assert result["alert"] == "HOLD"
+  assert "hovering near strike" in result["detail"].lower()
+
+
+def test_held_threshold_no_still_cuts_far_from_strike():
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY NO",
+    "edge": 0.08,
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 1609.99,
+  }
+  pos = {"side": "no", "signal": "BUY NO", "entry_price_cents": 47, "contracts": 4}
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=1625.0,
+    regime_allow_trade=True,
+    regime_reasons=[],
+    unrealized_pnl_usd=-0.48,
+    hours_to_settle=0.11,
+    cfg={"hourly": {"bot": {"near_strike_cut_min_hours": 0.083, "near_strike_tolerance_usd": 3.0}}},
+  )
+  assert result["alert"] == "CUT LOSSES"
+
+
+def test_held_threshold_no_cuts_near_strike_late_in_hour():
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY NO",
+    "edge": 0.08,
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 1609.99,
+  }
+  pos = {"side": "no", "signal": "BUY NO", "entry_price_cents": 26, "contracts": 12}
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=1610.16,
+    regime_allow_trade=True,
+    regime_reasons=[],
+    unrealized_pnl_usd=-0.12,
+    hours_to_settle=0.04,
+    cfg={"hourly": {"bot": {"near_strike_cut_min_hours": 0.083, "near_strike_tolerance_usd": 3.0}}},
+  )
+  assert result["alert"] == "CUT LOSSES"
