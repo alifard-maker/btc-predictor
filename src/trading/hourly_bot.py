@@ -9,6 +9,10 @@ from typing import Any
 from src.trading.bot_budget import sync_max_spend_from_config
 from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip_reason, sync_auto_stop_for_risk
 from src.trading.bot_period_rollover import force_close_period_positions
+from src.trading.hourly_event_time import (
+  should_rollover_close_hourly_leg,
+  ticker_belongs_to_hourly_event,
+)
 from src.trading.live_bracket_orders import (
   cancel_resting_orders_for_ticker,
   place_live_bracket_orders,
@@ -63,7 +67,10 @@ from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 from src.trading.hourly_exit_context import build_hourly_exit_context, format_hourly_exit_context_detail
 from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
 from src.trading.hourly_position_alert import assess_held_hourly_position_alert
-from src.trading.hourly_regime import entry_too_close_to_settle_skip_reason
+from src.trading.hourly_regime import (
+  entry_too_close_to_settle_skip_reason,
+  entry_too_far_from_settle_skip_reason,
+)
 from src.trading.hourly_trial_position_alert import assess_hourly_trial_leg_position_alert
 from src.trading.paper_execution import (
   entry_quote_log_fields,
@@ -427,6 +434,7 @@ class HourlyBot:
           settings=settings,
           log_label=f"{self.asset.upper()} hourly",
           format_detail=_rollover_detail,
+          should_close=lambda pos: should_rollover_close_hourly_leg(pos, prev_period),
         )
       )
       settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
@@ -880,6 +888,13 @@ class HourlyBot:
       self.store.set_last_skip_reason(settle_gate)
       return results
 
+    far_gate = entry_too_far_from_settle_skip_reason(
+      live.get("hours_to_settle"), cfg,
+    )
+    if far_gate:
+      self.store.set_last_skip_reason(far_gate)
+      return results
+
     if settings.auto_stopped:
       skip = settings.auto_stop_reason or "auto_stopped_budget_exhausted"
       if skip == "budget_exhausted":
@@ -940,6 +955,10 @@ class HourlyBot:
         continue
 
       market_ticker = str(pick["ticker"])
+
+      if not ticker_belongs_to_hourly_event(market_ticker, event_ticker):
+        last_reason = f"wrong_hour_event:{market_ticker}"
+        continue
 
       side = _side_from_signal(pick.get("signal"))
       if not side:

@@ -1,8 +1,11 @@
 .venv/
+.pytest_deps/
 __pycache__/
 *.pyc
 data/candles/
 data/logs/
+data/*.log
+data/backups/
 *.db
 .env
 .DS_Store

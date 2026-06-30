@@ -108,10 +108,18 @@ def force_close_period_positions(
   settings: Any,
   log_label: str,
   format_detail: Callable[[dict[str, Any], int, float], str] | None = None,
+  should_close: Callable[[dict[str, Any]], bool] | None = None,
 ) -> list[dict[str, Any]]:
   """Close any open legs still tagged to the previous hour/slot."""
   results: list[dict[str, Any]] = []
   for pos in store.open_positions(prev_period_key):
+    if should_close is not None and not should_close(pos):
+      log.warning(
+        "Skipping period rollover close for %s on %s",
+        pos.get("market_ticker"),
+        prev_period_key,
+      )
+      continue
     entry_c = int(pos["entry_price_cents"])
     contracts = int(pos["contracts"])
     exit_price = exit_cents_for_position(pos)

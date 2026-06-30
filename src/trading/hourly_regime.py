@@ -64,6 +64,15 @@ def min_hours_to_settle_for_entry(cfg: dict[str, Any] | None) -> float:
   return float(regime.get("min_hours_to_settle", 0.25))
 
 
+def max_hours_to_settle_for_entry(cfg: dict[str, Any] | None) -> float:
+  """Maximum hours-to-settle for new entries (blocks far-future hourly events)."""
+  hourly = (cfg or {}).get("hourly") or {}
+  bot = hourly.get("bot") or {}
+  if "max_hours_to_settle_for_entry" in bot:
+    return float(bot["max_hours_to_settle_for_entry"])
+  return 1.25
+
+
 def entry_too_close_to_settle_skip_reason(
   hours_to_settle: float | None,
   cfg: dict[str, Any] | None,
@@ -73,4 +82,16 @@ def entry_too_close_to_settle_skip_reason(
   min_h = min_hours_to_settle_for_entry(cfg)
   if float(hours_to_settle) < min_h:
     return "too_late_for_new_entries"
+  return None
+
+
+def entry_too_far_from_settle_skip_reason(
+  hours_to_settle: float | None,
+  cfg: dict[str, Any] | None,
+) -> str | None:
+  if hours_to_settle is None:
+    return None
+  max_h = max_hours_to_settle_for_entry(cfg)
+  if float(hours_to_settle) > max_h:
+    return "too_far_for_new_entries"
   return None

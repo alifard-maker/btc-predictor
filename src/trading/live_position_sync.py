@@ -568,31 +568,15 @@ def adopt_filled_resting_enters(
 
 
 def _hourly_event_time_suffix(event_ticker: str) -> str | None:
-  parts = str(event_ticker).split("-", 1)
-  if len(parts) != 2 or not parts[1]:
-    return None
-  return parts[1]
+  from src.trading.hourly_event_time import hourly_event_time_suffix
+
+  return hourly_event_time_suffix(event_ticker)
 
 
 def _ticker_belongs_to_hourly_event(ticker: str, event_ticker: str) -> bool:
-  """True when a market ticker belongs to the current hourly event (KXBTCD + KXBTC siblings)."""
-  t = str(ticker)
-  e = str(event_ticker)
-  if t == e or t.startswith(f"{e}-"):
-    return True
-  suffix = _hourly_event_time_suffix(e)
-  if not suffix:
-    return False
-  sibling_prefixes: tuple[str, ...] = ()
-  if e.startswith("KXBTCD-"):
-    sibling_prefixes = ("KXBTC-",)
-  elif e.startswith("KXETHD-"):
-    sibling_prefixes = ("KXETH-",)
-  for prefix in sibling_prefixes:
-    root = f"{prefix}{suffix}"
-    if t == root or t.startswith(f"{root}-"):
-      return True
-  return False
+  from src.trading.hourly_event_time import ticker_belongs_to_hourly_event
+
+  return ticker_belongs_to_hourly_event(ticker, event_ticker)
 
 
 def _recent_enter_trade_meta(

@@ -14,11 +14,9 @@ def _leg_key(ticker: str, side: str) -> str:
 
 
 def _hourly_event_time_suffix(event_ticker: str) -> str | None:
-  """Hour slice shared by threshold (KXBTCD) and range (KXBTC) series, e.g. 26JUN3004."""
-  parts = str(event_ticker).split("-", 1)
-  if len(parts) != 2 or not parts[1]:
-    return None
-  return parts[1]
+  from src.trading.hourly_event_time import hourly_event_time_suffix
+
+  return hourly_event_time_suffix(event_ticker)
 
 
 def _ticker_belongs_to_event(ticker: str, event_ticker: str | None) -> bool:

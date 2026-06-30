@@ -24,7 +24,7 @@ def _strong_bet():
 
 def _live_tab(event="KXTEST-1H", pick=None, regime_allow=True):
   pick = pick or {
-    "ticker": "KXTEST-T1",
+    "ticker": f"{event}-T1",
     "signal": "BUY YES",
     "label": "$2,500+",
     "kalshi_mid": 0.40,
@@ -83,8 +83,10 @@ def test_paper_skips_penny_ask():
       allow_strong=False, allow_actionable=False,
     ))
     bot = HourlyBot(store, asset="btc")
-    tab = _live_tab(pick={
-      "ticker": "KXETHD-T1270",
+    tab = _live_tab(
+      event="KXETHD-26JUN3005",
+      pick={
+        "ticker": "KXETHD-26JUN3005-T1270",
       "signal": "BUY YES",
       "label": "$1,270 or above",
       "kalshi_mid": 0.01,
@@ -280,7 +282,7 @@ def test_auto_bet_off_cancels_resting_enters_on_hourly_event():
     kalshi = MagicMock()
     kalshi.authenticated = True
     kalshi.list_resting_orders.return_value = [
-      {"order_id": "e1", "action": "buy", "ticker": "KXTEST-T1"},
+      {"order_id": "e1", "action": "buy", "ticker": "KXTEST-1H-T1"},
       {"order_id": "e2", "action": "buy", "ticker": "WORLDCUP-T9"},
     ]
     bot = HourlyBot(store, kalshi, asset="btc")
@@ -341,7 +343,7 @@ def test_list_trades_without_event_filter_keeps_all_hours():
 
 def test_enrich_open_positions_live_mark_to_market():
   tab = _live_tab(pick={
-    "ticker": "KXTEST-T1",
+    "ticker": "KXTEST-1H-T1",
     "signal": "BUY YES",
     "label": "$2,500+",
     "kalshi_mid": 0.55,
@@ -351,7 +353,7 @@ def test_enrich_open_positions_live_mark_to_market():
   })
   positions = [{
     "id": "p1",
-    "market_ticker": "KXTEST-T1",
+    "market_ticker": "KXTEST-1H-T1",
     "side": "yes",
     "contracts": 10,
     "entry_price_cents": 40,
@@ -456,7 +458,7 @@ def test_no_exit_on_cut_losses_when_flat_pnl():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 30,
       "entry_price_cents": 80,
@@ -483,7 +485,7 @@ def test_reentry_cooldown_blocks_immediate_reentry():
       allow_strong=False, allow_actionable=False,
       reentry_cooldown_seconds=120,
     ))
-    store.record_exit_cooldown("KXTEST-1H", "KXTEST-T1")
+    store.record_exit_cooldown("KXTEST-1H", "KXTEST-1H-T1")
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab()
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {}, "intrahour": {"enabled": False}}})
@@ -628,7 +630,7 @@ def test_free_mode_enters_from_range_contract_row():
     tab["live"]["primary_pick"] = {"ticker": "NEUTRAL-T", "signal": "NEUTRAL", "kalshi_mid": 0.5, "edge": 0.0}
     tab["live"]["strategy_threshold"] = {"best_edge": None, "most_likely": None, "contracts": []}
     band = {
-      "ticker": "KXTEST-BAND",
+      "ticker": "KXTEST-1H-BAND",
       "signal": "BUY YES",
       "label": "$2,500–$2,519",
       "kalshi_mid": 0.35,
@@ -645,7 +647,7 @@ def test_free_mode_enters_from_range_contract_row():
     actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {}, "intrahour": {"enabled": False}}})
     assert len(actions) == 1
     assert actions[0]["action"] == "enter"
-    assert actions[0]["market_ticker"] == "KXTEST-BAND"
+    assert actions[0]["market_ticker"] == "KXTEST-1H-BAND"
 
 
 def test_skips_when_no_book_quotes_available():
@@ -657,7 +659,7 @@ def test_skips_when_no_book_quotes_available():
     bot = HourlyBot(store, asset="btc")
     tab = _live_tab(regime_allow=False)
     tab["live"]["primary_pick"] = {
-      "ticker": "KXTEST-T1",
+      "ticker": "KXTEST-1H-T1",
       "signal": "BUY YES",
       "label": "$2,500+",
       "edge": 0.12,
@@ -701,13 +703,68 @@ def test_allows_entries_when_enough_time_to_settle():
     cfg = {
       "hourly": {
         "regime": {"min_hours_to_settle": 0.25},
-        "bot": {"min_hours_to_settle_for_entry": 0.25},
+        "bot": {"min_hours_to_settle_for_entry": 0.25, "max_hours_to_settle_for_entry": 1.25},
         "intrahour": {"enabled": False},
       },
     }
     actions = bot.run_continuous_cycle(tab, cfg=cfg)
     assert len(actions) == 1
     assert actions[0]["action"] == "enter"
+
+
+def test_skips_new_entries_too_far_from_settle():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(regime_allow=True)
+    tab["live"]["hours_to_settle"] = 12.0
+    cfg = {
+      "hourly": {
+        "bot": {"min_hours_to_settle_for_entry": 0.25, "max_hours_to_settle_for_entry": 1.25},
+        "intrahour": {"enabled": False},
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    assert actions == []
+    assert store.last_skip_reason() == "too_far_for_new_entries"
+
+
+def test_skips_entry_when_pick_ticker_wrong_hour_event():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    pick = {
+      "ticker": "KXBTCD-26JUN3017-T59749.99",
+      "signal": "BUY NO",
+      "label": "$59,750 or above",
+      "kalshi_mid": 0.70,
+      "yes_bid": 0.28,
+      "yes_ask": 0.30,
+      "no_bid": 0.70,
+      "no_ask": 0.72,
+      "edge": 0.12,
+      "model_prob": 0.20,
+      "strike_type": "greater",
+      "floor_strike": 59750.0,
+    }
+    tab = _live_tab(event="KXBTCD-26JUN3006", pick=pick, regime_allow=True)
+    tab["live"]["hours_to_settle"] = 0.8
+    tab["live"]["strategy_threshold"] = {"best_edge": pick, "most_likely": pick, "contracts": [pick]}
+    cfg = {
+      "hourly": {
+        "bot": {"min_hours_to_settle_for_entry": 0.25, "max_hours_to_settle_for_entry": 1.25},
+        "intrahour": {"enabled": False},
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    assert actions == []
+    assert store.last_skip_reason() == "wrong_hour_event:KXBTCD-26JUN3017-T59749.99"
 
 
 def test_profit_target_exit_on_hold_alert():
@@ -723,7 +780,7 @@ def test_profit_target_exit_on_hold_alert():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 25,
       "entry_price_cents": 40,
@@ -757,7 +814,7 @@ def test_profit_target_increases_hour_bankroll():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 25,
       "entry_price_cents": 40,
@@ -785,7 +842,7 @@ def test_no_exit_when_profit_below_threshold():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 25,
       "entry_price_cents": 40,
@@ -816,7 +873,7 @@ def test_profit_trail_exit_on_giveback_from_peak():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 25,
       "entry_price_cents": 40,
@@ -850,7 +907,7 @@ def test_profit_trail_exits_without_hitting_fixed_target():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 25,
       "entry_price_cents": 40,
@@ -884,7 +941,7 @@ def test_hourly_trial_leg_take_profit_blocked_when_thesis_intact():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 6,
       "entry_price_cents": 75,
@@ -895,7 +952,7 @@ def test_hourly_trial_leg_take_profit_blocked_when_thesis_intact():
     })
     bot = HourlyBot(store, asset="btc", kind="hourly_trial")
     pick = {
-      "ticker": "KXTEST-T1",
+      "ticker": "KXTEST-1H-T1",
       "signal": "BUY YES",
       "edge": 0.10,
       "contract_type": "threshold",
@@ -937,7 +994,7 @@ def test_hourly_trial_leg_take_profit_when_thesis_broken():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 10,
       "entry_price_cents": 40,
@@ -977,7 +1034,7 @@ def test_hourly_trial_cheap_leg_when_threshold_spot_against():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 25,
       "entry_price_cents": 20,
@@ -989,7 +1046,7 @@ def test_hourly_trial_cheap_leg_when_threshold_spot_against():
     })
     bot = HourlyBot(store, asset="btc", kind="hourly_trial")
     pick = {
-      "ticker": "KXTEST-T1",
+      "ticker": "KXTEST-1H-T1",
       "signal": "BUY YES",
       "edge": 0.08,
       "contract_type": "threshold",
@@ -1017,7 +1074,7 @@ def test_hourly_regular_threshold_cut_when_spot_against():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 25,
       "entry_price_cents": 20,
@@ -1026,7 +1083,7 @@ def test_hourly_regular_threshold_cut_when_spot_against():
     })
     bot = HourlyBot(store, asset="btc", kind="hourly")
     pick = {
-      "ticker": "KXTEST-T1",
+      "ticker": "KXTEST-1H-T1",
       "signal": "BUY YES",
       "edge": 0.08,
       "contract_type": "threshold",
@@ -1061,7 +1118,7 @@ def test_hourly_trial_neutral_take_profit_when_edge_fades():
     store.open_position({
       "id": "p1",
       "event_ticker": "KXTEST-1H",
-      "market_ticker": "KXTEST-T1",
+      "market_ticker": "KXTEST-1H-T1",
       "side": "yes",
       "contracts": 10,
       "entry_price_cents": 40,

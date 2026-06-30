@@ -355,7 +355,9 @@ class KalshiDailyMarkets:
       if self._cache_fresh(ts):
         return book
 
-    candidates: list[tuple[float, DailyEventBook]] = []
+    candidates: list[tuple[float, float, DailyEventBook]] = []
+    now = datetime.now(timezone.utc)
+    hourly_mode = any(str(s).startswith("KX") for s in self.threshold_series)
 
     for thresh_series in self.threshold_series:
       for event in self._rank_events(self._fetch_open_events(thresh_series)):
@@ -394,11 +396,15 @@ class KalshiDailyMarkets:
           else:
             score = 1.0
 
-          candidates.append((score, book))
+          hours_left = max(0.01, (book.close_time - now).total_seconds() / 3600.0)
+          candidates.append((score, hours_left, book))
 
     if not candidates:
       self._book_cache = (None, time.monotonic())
       return None
-    book = max(candidates, key=lambda x: x[0])[1]
+    if hourly_mode:
+      book = min(candidates, key=lambda x: x[1])[2]
+    else:
+      book = max(candidates, key=lambda x: x[0])[2]
     self._book_cache = (book, time.monotonic())
     return book
