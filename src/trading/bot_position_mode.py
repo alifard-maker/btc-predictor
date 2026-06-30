@@ -10,6 +10,19 @@ def normalize_position_mode(mode: str | None) -> str:
   return m if m in ("paper", "live") else "paper"
 
 
+def exit_mode_label(
+  pos_or_mode: dict[str, Any] | str | None,
+  *,
+  settings_mode: str | None = None,
+) -> str:
+  """Human label for trade log detail lines (Paper vs Live)."""
+  if isinstance(pos_or_mode, dict):
+    mode = normalize_position_mode(pos_or_mode.get("mode") or settings_mode)
+  else:
+    mode = normalize_position_mode(pos_or_mode or settings_mode)
+  return "Live" if mode == "live" else "Paper"
+
+
 def exposure_by_mode(positions: list[dict[str, Any]]) -> tuple[float, float, float]:
   """Return (paper_usd, live_usd, total_usd) for open legs."""
   paper = live = 0.0

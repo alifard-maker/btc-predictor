@@ -69,3 +69,41 @@ def test_hourly_rollover_settles_winning_no_not_at_mark():
     assert exits[0]["pnl_usd"] == round(14 * (100 - 91) / 100.0, 2)
     assert "PERIOD SETTLEMENT" in exits[0]["detail"]
     assert store.open_positions(prev_event) == []
+
+
+def test_hourly_rollover_detail_says_live_for_live_positions():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "hourly_bot_btc.db")
+    store.save_settings(HourlyBotSettings(enabled=True, max_spend_per_hour_usd=100.0, mode="live"))
+    prev_event = "KXBTCD-26JUN2923"
+    new_event = "KXBTCD-26JUN3000"
+    pos = store.open_position({
+      "event_ticker": prev_event,
+      "market_ticker": "KXBTCD-T598",
+      "side": "no",
+      "contracts": 2,
+      "entry_price_cents": 70,
+      "cost_usd": 1.40,
+      "label": "$59,800 to 59,899.99",
+      "mode": "live",
+    })
+    store.update_position_mark(pos["id"], 50)
+    store.sync_period(prev_event, store.get_settings())
+
+    bot = HourlyBot(store, asset="btc")
+    tab = {
+      "ok": True,
+      "brti_live": 59869.81,
+      "event": {"event_ticker": new_event},
+      "live": {
+        "current_price": 59869.81,
+        "index_id": "BRTI",
+        "strategy_range": {"contracts": []},
+        "strategy_threshold": {"contracts": []},
+      },
+    }
+    actions = bot.run_continuous_cycle(tab)
+    exits = [a for a in actions if a.get("action") == "exit"]
+    assert len(exits) == 1
+    assert exits[0]["mode"] == "live"
+    assert exits[0]["detail"].startswith("Live EXIT (PERIOD SETTLEMENT):")

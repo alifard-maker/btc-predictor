@@ -374,6 +374,8 @@ class HourlyBot:
         return cents
 
       def _rollover_detail(pos: dict[str, Any], exit_price: int, _pnl: float) -> str:
+        from src.trading.bot_position_mode import exit_mode_label
+
         contracts = int(pos["contracts"])
         entry_c = int(pos["entry_price_cents"])
         note = rollover_notes.get(str(pos["id"]), "")
@@ -384,8 +386,9 @@ class HourlyBot:
             settle_line = f" · Vet: {index_id} ${float(settle_price):,.2f} at settle"
           except (TypeError, ValueError):
             pass
+        mode_label = exit_mode_label(pos, settings_mode=settings.mode)
         return (
-          f"Paper EXIT (PERIOD SETTLEMENT): {pos['side'].upper()} ×{contracts} "
+          f"{mode_label} EXIT (PERIOD SETTLEMENT): {pos['side'].upper()} ×{contracts} "
           f"@ {exit_price}¢ (entry {entry_c}¢) — {note}{settle_line}"
         )
 

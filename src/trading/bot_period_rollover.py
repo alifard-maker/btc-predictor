@@ -122,16 +122,17 @@ def force_close_period_positions(
       exit_cents=exit_price,
     )
     store.close_position(pos["id"])
+    from src.trading.bot_position_mode import exit_mode_label, normalize_position_mode
+
+    pos_mode = normalize_position_mode(pos.get("mode") or settings.mode)
+    mode_label = exit_mode_label(pos_mode)
     if format_detail:
       detail = format_detail(pos, exit_price, pnl)
     else:
       detail = (
-        f"Paper EXIT (PERIOD ROLLOVER): {pos['side'].upper()} ×{contracts} "
+        f"{mode_label} EXIT (PERIOD ROLLOVER): {pos['side'].upper()} ×{contracts} "
         f"@ {exit_price}¢ (entry {entry_c}¢) — forced close at {log_label} end"
       )
-    from src.trading.bot_position_mode import normalize_position_mode
-
-    pos_mode = normalize_position_mode(pos.get("mode") or settings.mode)
     row = store.log_trade({
       "event_ticker": prev_period_key,
       "trigger": "period_rollover",

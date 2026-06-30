@@ -109,8 +109,11 @@ def correct_rollover_settlement(
   )
   idx = f"${float(settle_price):,.2f}"
   outcome = "won" if settled == 100 else "lost"
+  from src.trading.bot_position_mode import exit_mode_label
+
+  mode_label = exit_mode_label(row.get("mode"))
   detail = (
-    f"Paper EXIT (PERIOD SETTLEMENT): {side.upper()} ×{contracts_i} "
+    f"{mode_label} EXIT (PERIOD SETTLEMENT): {side.upper()} ×{contracts_i} "
     f"@ {settled}¢ (entry {entry_i}¢) — settled @ {settled}¢ ({outcome} vs {idx}) [backfilled]"
   )
   return int(settled), pnl, detail
