@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.live_position_sync import (
   cancel_orphan_live_sell_orders,
+  cancel_resting_enter_orders_for_hourly_event,
+  hourly_event_market_tickers_from_tab,
   kalshi_sellable_contracts,
   order_still_resting,
   resting_exit_order_id,
@@ -68,6 +70,35 @@ def test_cancel_orphan_live_sell_orders():
   n = cancel_orphan_live_sell_orders(kalshi, {"T-open"})
   assert n == 1
   kalshi.cancel_order.assert_called_once_with("a")
+
+
+def test_hourly_event_market_tickers_from_tab_collects_contracts():
+  tab = {
+    "live": {
+      "primary_pick": {"ticker": "KXTEST-1H-T1"},
+      "strategy_threshold": {
+        "best_edge": {"ticker": "KXTEST-1H-T2"},
+        "contracts": [{"ticker": "KXTEST-1H-T3"}],
+      },
+      "strategy_range": {"most_likely": {"ticker": "KXTEST-1H-T4"}},
+    }
+  }
+  tickers = hourly_event_market_tickers_from_tab(tab)
+  assert tickers == {"KXTEST-1H-T1", "KXTEST-1H-T2", "KXTEST-1H-T3", "KXTEST-1H-T4"}
+
+
+def test_cancel_resting_enter_orders_for_hourly_event_scoped():
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.list_resting_orders.return_value = [
+    {"order_id": "e1", "action": "buy", "ticker": "KXTEST-1H-T1"},
+    {"order_id": "e2", "action": "buy", "ticker": "WORLDCUP-T9"},
+    {"order_id": "e3", "action": "sell", "ticker": "KXTEST-1H-T1"},
+  ]
+  tab = {"live": {"primary_pick": {"ticker": "KXTEST-1H-T1"}}}
+  n = cancel_resting_enter_orders_for_hourly_event(kalshi, "KXTEST-1H", tab)
+  assert n == 1
+  kalshi.cancel_order.assert_called_once_with("e1")
 
 
 def test_try_live_position_exit_reconciles_phantom_inventory():

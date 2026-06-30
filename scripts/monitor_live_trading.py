@@ -74,7 +74,7 @@ def _print_snapshot(bot: dict, recon: dict, kalshi: dict) -> bool:
     for row in recon.get("mismatches") or []:
       print(
         f"      COUNT: bot {_fmt_leg(row)} vs Kalshi x{row.get('kalshi_contracts')} "
-        f"(delta {row.get('delta'):+d})"
+        f"(delta {row.get('delta'):+.2f})"
       )
     for row in recon.get("bot_only") or []:
       sellable = row.get("kalshi_sellable")

@@ -16,6 +16,7 @@ from src.trading.live_bracket_orders import (
 )
 from src.trading.live_position_sync import (
   cancel_orphan_live_sell_orders,
+  cancel_resting_enter_orders_for_hourly_event,
   live_open_tickers,
   try_live_position_exit,
 )
@@ -348,6 +349,10 @@ class HourlyBot:
       cancel_orphan_live_sell_orders(
         self.kalshi, live_open_tickers(self.store, str(event_ticker)),
       )
+      if not settings.enabled:
+        cancel_resting_enter_orders_for_hourly_event(
+          self.kalshi, str(event_ticker), tab,
+        )
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []

@@ -2429,6 +2429,130 @@
       return `$${total.toFixed(2)}`;
     }
 
+    const botRestingTradesVisible = {};
+
+    function botTradeLogKey(kind, asset) {
+      return `${kind}-${asset}`;
+    }
+
+    function botTradeIsResting(t) {
+      return String(t?.status || '').toLowerCase() === 'resting';
+    }
+
+    function botTradeRowHtml(t, currentPeriodId, periodColLabel) {
+      const st = t.status === 'filled' || t.status === 'reconciled'
+        ? 'up'
+        : (t.status === 'skipped' || t.status === 'resting') ? 'muted' : 'down';
+      const act = t.action || 'enter';
+      const entryC = t.entry_price_cents;
+      const exitC = t.exit_price_cents;
+      const pnlCell = act === 'exit' ? botPnlUsd(t.realized_pnl_usd ?? t.pnl_usd) : '—';
+      const mkt = t.label || t.market_ticker || '—';
+      const evt = t.event_ticker || '—';
+      const evtCls = evt === currentPeriodId ? '' : 'muted';
+      return `<tr>
+        <td>${time(t.created_at)}</td>
+        <td class="${evtCls}" style="font-size:.65rem">${evt}</td>
+        <td>${act}</td>
+        <td>${botModeBadge(t.mode)}</td>
+        <td class="${st}">${t.status}</td>
+        <td style="font-size:.68rem">${mkt}</td>
+        <td>${botCents(entryC)}</td>
+        <td style="font-size:.65rem" title="Kalshi bid/ask/spread at paper entry">${botEntryBook(t)}</td>
+        <td>${botCents(exitC)}</td>
+        <td>${pnlCell}</td>
+        <td style="font-size:.68rem">${t.detail || ''}</td>
+      </tr>`;
+    }
+
+    function botTradeLogHtml(bot, trades, options) {
+      const {
+        kind,
+        asset,
+        periodColLabel,
+        currentPeriodId,
+        intervalSummary,
+        emptyLog,
+      } = options;
+      const key = botTradeLogKey(kind, asset);
+      const restingRows = trades.filter(botTradeIsResting);
+      const showResting = !!botRestingTradesVisible[key];
+      const visibleTrades = showResting ? trades : trades.filter((t) => !botTradeIsResting(t));
+      const restingEnterN = Number(
+        intervalSummary?.resting_enter_count ?? restingRows.filter((t) => (t.action || 'enter') === 'enter').length
+      );
+      const restingExitN = Number(
+        intervalSummary?.resting_exit_count ?? restingRows.filter((t) => (t.action || 'enter') === 'exit').length
+      );
+      const restingN = restingEnterN + restingExitN;
+      const rows = visibleTrades.map((t) => botTradeRowHtml(t, currentPeriodId, periodColLabel)).join('');
+      const restingBadge = restingN > 0
+        ? `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.2rem .5rem;margin:.35rem 0 .15rem" onclick="toggleBotRestingTrades('${kind}','${asset}')">${showResting ? 'Hide' : 'Show'} ${restingN} resting order${restingN === 1 ? '' : 's'} (unfilled)</button>`
+        : '';
+      if (!rows && !restingN) {
+        return `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`;
+      }
+      const table = rows
+        ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>${periodColLabel}</th><th>Action</th><th>Mode</th><th>Status</th><th>${periodColLabel === 'Slot' ? 'Signal' : 'Contract'}</th><th>Entry</th><th>Book @ entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<p class="muted" style="font-size:.72rem;margin-top:.35rem">No filled trades yet this period.${showResting ? '' : ' Resting orders hidden.'}</p>`;
+      return `${restingBadge}${table}`;
+    }
+
+    function toggleBotRestingTrades(kind, asset) {
+      const key = botTradeLogKey(kind, asset);
+      botRestingTradesVisible[key] = !botRestingTradesVisible[key];
+      const cache = kind === 'slot15'
+        ? lastSlot15BotStatus[asset]
+        : (kind === 'hourly_trial' ? lastHourlyTrialBotStatus : lastBotStatus)[asset];
+      if (!cache) return;
+      if (kind === 'slot15') renderSlot15Bot(cache, asset);
+      else renderHourlyBot(cache, asset, kind);
+    }
+
+    function botLiveReconcileHtml(bot) {
+      const recon = bot?.live_reconcile;
+      if (!recon || (bot.settings?.mode || 'paper') !== 'live') return '';
+      const ok = !!recon.ok;
+      const bg = ok ? 'rgba(34,197,94,.12)' : 'rgba(245,158,11,.12)';
+      const border = ok ? 'rgba(34,197,94,.35)' : 'rgba(245,158,11,.35)';
+      const color = ok ? '#86efac' : '#fde68a';
+      const botExp = Number(recon.bot_live_exposure_usd ?? bot.open_exposure_live_usd ?? 0);
+      const kalshiExp = recon.kalshi_exposure_usd;
+      const kalshiExpText = kalshiExp == null ? '—' : `$${Number(kalshiExp).toFixed(2)}`;
+      const mismatchN = (recon.mismatches?.length || 0)
+        + (recon.bot_only?.length || 0)
+        + (recon.kalshi_only?.length || 0);
+      const orphanN = recon.orphan_resting_sells?.length || 0;
+      const detailLines = [];
+      (recon.mismatches || []).slice(0, 3).forEach((row) => {
+        const label = (row.labels && row.labels[0]) || row.ticker || '?';
+        detailLines.push(`Count mismatch: bot ${String(row.side || '?').toUpperCase()} ${label} ×${row.contracts} vs Kalshi ×${row.kalshi_contracts}`);
+      });
+      (recon.bot_only || []).slice(0, 2).forEach((row) => {
+        const label = (row.labels && row.labels[0]) || row.ticker || '?';
+        detailLines.push(`Bot only: ${String(row.side || '?').toUpperCase()} ${label} ×${row.contracts}`);
+      });
+      (recon.kalshi_only || []).slice(0, 2).forEach((row) => {
+        detailLines.push(`Kalshi only: ${String(row.side || '?').toUpperCase()} ${row.ticker} ×${row.contracts}`);
+      });
+      if (orphanN > 0) {
+        detailLines.push(`${orphanN} orphan resting sell${orphanN === 1 ? '' : 's'} on Kalshi`);
+      }
+      const detailHtml = detailLines.length
+        ? `<ul style="margin:.35rem 0 0;padding-left:1.1rem;font-size:.68rem;color:#cbd5e1">${detailLines.map((line) => `<li>${line}</li>`).join('')}</ul>`
+        : '';
+      return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:${bg};border:1px solid ${border};border-radius:8px;color:${color};font-size:.75rem">
+        <strong>Live reconcile: ${ok ? 'OK' : 'MISMATCH'}</strong>
+        <div class="bot-row" style="margin-top:.4rem;padding:0">
+          <div class="bot-stat"><span class="muted">Bot legs / contracts</span><strong>${recon.bot_live_legs ?? 0} / ${recon.bot_live_contracts ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted">Kalshi legs / contracts</span><strong>${recon.kalshi_legs ?? 0} / ${recon.kalshi_contracts ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Open live legs tracked by the bot">Bot at-risk (reconcile)</span><strong>$${botExp.toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Kalshi market exposure for this hour's event">Kalshi exposure (reconcile)</span><strong>${kalshiExpText}</strong></div>
+        </div>
+        ${!ok ? `<p class="muted" style="font-size:.68rem;margin:.35rem 0 0">${mismatchN} position mismatch${mismatchN === 1 ? '' : 'es'}${orphanN ? ` · ${orphanN} orphan sell${orphanN === 1 ? '' : 's'}` : ''}</p>${detailHtml}` : `<p class="muted" style="font-size:.68rem;margin:.35rem 0 0">Bot open legs match Kalshi for this hour.</p>`}
+      </div>`;
+    }
+
     function confirmPaperCloseBeforeLive(bot, periodLabel) {
       const paperExp = Number(bot?.open_exposure_paper_usd ?? 0);
       const paperN = (bot?.open_positions || []).filter(
@@ -3113,32 +3237,7 @@
       const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
       const slotId = bot.slot_label || ss.event_ticker || bot.event_ticker || '—';
       const assetLabel = asset === 'eth' ? 'ETH' : 'BTC';
-      const trades = (bot.recent_trades || []).map((t) => {
-        const st = t.status === 'filled' ? 'up' : (t.status === 'skipped' || t.status === 'resting') ? 'muted' : 'down';
-        const act = t.action || 'enter';
-        const entryC = t.entry_price_cents;
-        const exitC = t.exit_price_cents;
-        const pnlCell = act === 'exit' ? botPnlUsd(t.realized_pnl_usd ?? t.pnl_usd) : '—';
-        const mkt = t.label || t.market_ticker || '—';
-        const evt = t.event_ticker || '—';
-        const evtCls = evt === (ss.event_ticker || bot.event_ticker) ? '' : 'muted';
-        return `<tr>
-          <td>${time(t.created_at)}</td>
-          <td class="${evtCls}" style="font-size:.65rem">${evt}</td>
-          <td>${act}</td>
-          <td>${botModeBadge(t.mode)}</td>
-          <td class="${st}">${t.status}</td>
-          <td style="font-size:.68rem">${mkt}</td>
-          <td>${botCents(entryC)}</td>
-          <td style="font-size:.65rem" title="Kalshi bid/ask/spread at paper entry">${botEntryBook(t)}</td>
-          <td>${botCents(exitC)}</td>
-          <td>${pnlCell}</td>
-          <td style="font-size:.68rem">${t.detail || ''}</td>
-        </tr>`;
-      }).join('');
-      const emptyLog = s.enabled
-        ? `No bot activity yet${freeMode ? ' — free mode waits for any live LONG/SHORT on the 15m tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
-        : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
+      const tradeSource = (bot.slot_trades && bot.slot_trades.length) ? bot.slot_trades : (bot.recent_trades || []);
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
         indexLabel: bot.index_label || (asset === 'eth' ? 'ERTI' : 'BRTI'),
         indexNow: bot.index_now_price,
@@ -3151,12 +3250,25 @@
       const settlementIndexHtml = settlementIndexWarningHtml(bot);
       const watchHtml = botEntryWatchHtml(bot, 'slot', freeMode);
       const serverBanner = botServerBanner(bot, s);
+      const reconcileHtml = botLiveReconcileHtml(bot);
+      const emptyLog = s.enabled
+        ? `No bot activity yet${freeMode ? ' — free mode waits for any live LONG/SHORT on the 15m tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
+        : 'No filled trades this slot yet. Auto-bet is off — resting orders are hidden by default.';
+      const tradeLogHtml = botTradeLogHtml(bot, tradeSource, {
+        kind: 'slot15',
+        asset,
+        periodColLabel: 'Slot',
+        currentPeriodId: ss.event_ticker || bot.event_ticker,
+        intervalSummary: ss,
+        emptyLog,
+      });
       statusWrap.innerHTML = `
         ${serverBanner}
         ${settlementIndexHtml}
         ${autoStopHtml}
         ${watchHtml}
         ${skipHtml}
+        ${reconcileHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · <strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}</strong> P&amp;L for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Slot total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
@@ -3164,8 +3276,8 @@
           <div class="bot-stat"><span class="muted">Unrealized (open)</span><strong class="${unrealCls}">${unrealized >= 0 ? '+' : ''}$${Number(unrealized).toFixed(2)}</strong></div>
         </div>
         <div class="bot-row" style="padding:0 .15rem .35rem">
-          <div class="bot-stat"><span class="muted">Enters / Exits this slot</span><strong>${ss.enter_count ?? 0} / ${ss.exit_count ?? 0}</strong></div>
-          <div class="bot-stat"><span class="muted" title="Sum of all enter fills this slot — can exceed max at-risk when positions rotate">Cumulative $ entered (slot)</span><strong>$${Number(ss.total_entered_usd ?? 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Filled enters / exits (slot)</span><strong>${ss.filled_enter_count_this_slot ?? ss.enter_count ?? 0} / ${ss.exit_count ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Sum of all filled enter costs this slot — can exceed max at-risk when positions rotate (churn)">Cumulative entered (churn)</span><strong>$${Number(ss.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
         ${botIntervalPerformanceHtml(bot, s, 'slot')}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across slots. Max at-risk caps concurrent open exposure.' : 'Slot bankroll = max cap + realized P&amp;L this slot (live only).' } <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
@@ -3176,13 +3288,13 @@
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
           <div class="bot-stat"><span class="muted" title="${s.mode === 'paper' ? 'Persistent paper capital' : 'Max cap + realized P&amp;L this slot'}">${s.mode === 'paper' ? 'Paper bankroll' : 'Slot bankroll'}</span><strong>$${Number(bot.slot_bankroll_usd ?? (Number(s.max_spend_per_slot_usd || 25) + realized)).toFixed(2)}</strong></div>
-          <div class="bot-stat"><span class="muted">At risk now</span><strong>${botAtRiskHtml(bot)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Open exposure from bot-tracked legs right now">Bot at-risk now</span><strong>${botAtRiskHtml(bot)}</strong></div>
           <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
-        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log persists across setting changes. Use <strong>Fresh start</strong> to clear it.</p>
-        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Slot</th><th>Action</th><th>Mode</th><th>Status</th><th>Signal</th><th>Entry</th><th>Book @ entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log shows filled + reconciled/skipped by default. Use <strong>Fresh start</strong> to clear history.</p>
+        ${tradeLogHtml}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
     }
@@ -3320,32 +3432,7 @@
       const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
       const hourId = hs.event_ticker || bot.event_ticker || '—';
       const assetLabel = asset === 'eth' ? 'ETH' : 'BTC';
-      const trades = (bot.recent_trades || []).map((t) => {
-        const st = t.status === 'filled' ? 'up' : (t.status === 'skipped' || t.status === 'resting') ? 'muted' : 'down';
-        const act = t.action || 'enter';
-        const entryC = t.entry_price_cents;
-        const exitC = t.exit_price_cents;
-        const pnlCell = act === 'exit' ? botPnlUsd(t.realized_pnl_usd ?? t.pnl_usd) : '—';
-        const mkt = t.label || t.market_ticker || '—';
-        const evt = t.event_ticker || '—';
-        const evtCls = evt === hourId ? '' : 'muted';
-        return `<tr>
-          <td>${time(t.created_at)}</td>
-          <td class="${evtCls}" style="font-size:.65rem">${evt}</td>
-          <td>${act}</td>
-          <td>${botModeBadge(t.mode)}</td>
-          <td class="${st}">${t.status}</td>
-          <td style="font-size:.68rem">${mkt}</td>
-          <td>${botCents(entryC)}</td>
-          <td style="font-size:.65rem" title="Kalshi bid/ask/spread at paper entry">${botEntryBook(t)}</td>
-          <td>${botCents(exitC)}</td>
-          <td>${pnlCell}</td>
-          <td style="font-size:.68rem">${t.detail || ''}</td>
-        </tr>`;
-      }).join('');
-      const emptyLog = s.enabled
-        ? `No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
-        : 'No trades logged yet. Auto-bet is off — past trades stay in the log below when you have them.';
+      const tradeSource = (bot.hour_trades && bot.hour_trades.length) ? bot.hour_trades : (bot.recent_trades || []);
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
         indexLabel: bot.index_label || (asset === 'eth' ? 'ERTI' : 'BRTI'),
         indexNow: bot.index_now_price,
@@ -3358,12 +3445,25 @@
       const settlementIndexHtml = settlementIndexWarningHtml(bot);
       const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode);
       const serverBanner = botServerBanner(bot, s);
+      const reconcileHtml = botLiveReconcileHtml(bot);
+      const emptyLog = s.enabled
+        ? `No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
+        : 'No filled trades this hour yet. Auto-bet is off — resting orders are hidden by default.';
+      const tradeLogHtml = botTradeLogHtml(bot, tradeSource, {
+        kind,
+        asset,
+        periodColLabel: 'Hour',
+        currentPeriodId: hourId,
+        intervalSummary: hs,
+        emptyLog,
+      });
       statusWrap.innerHTML = `
         ${serverBanner}
         ${settlementIndexHtml}
         ${autoStopHtml}
         ${watchHtml}
         ${skipHtml}
+        ${reconcileHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · <strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}</strong> P&amp;L for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Hour total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
@@ -3371,8 +3471,8 @@
           <div class="bot-stat"><span class="muted">Unrealized (open)</span><strong class="${unrealCls}">${unrealized >= 0 ? '+' : ''}$${Number(unrealized).toFixed(2)}</strong></div>
         </div>
         <div class="bot-row" style="padding:0 .15rem .35rem">
-          <div class="bot-stat"><span class="muted">Enters / Exits this hour</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
-          <div class="bot-stat"><span class="muted" title="Sum of all enter fills this hour — can exceed max at-risk when positions rotate">Cumulative $ entered (hour)</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Filled enters / exits (hour)</span><strong>${hs.filled_enter_count_this_hour ?? hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Sum of all filled enter costs this hour — can exceed max at-risk when positions rotate (churn)">Cumulative entered (churn)</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
         ${botIntervalPerformanceHtml(bot, s, 'hour')}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across hours. Max at-risk caps concurrent open exposure.' : 'Hour bankroll = max cap + realized P&amp;L this hour (live only).' } <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
@@ -3383,13 +3483,13 @@
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
           <div class="bot-stat"><span class="muted" title="${s.mode === 'paper' ? 'Persistent paper capital' : 'Max cap + realized P&amp;L this hour'}">${s.mode === 'paper' ? 'Paper bankroll' : 'Hour bankroll'}</span><strong>$${Number(bot.hour_bankroll_usd ?? (Number(s.max_spend_per_hour_usd || 25) + realized)).toFixed(2)}</strong></div>
-          <div class="bot-stat"><span class="muted">At risk now</span><strong>${botAtRiskHtml(bot)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Open exposure from bot-tracked legs right now">Bot at-risk now</span><strong>${botAtRiskHtml(bot)}</strong></div>
           <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
-        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log persists across setting changes. Use <strong>Fresh start</strong> to clear it.</p>
-        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Hour</th><th>Action</th><th>Mode</th><th>Status</th><th>Contract</th><th>Entry</th><th>Book @ entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log shows filled + reconciled/skipped by default. Use <strong>Fresh start</strong> to clear history.</p>
+        ${tradeLogHtml}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
     }

@@ -87,6 +87,63 @@ def live_open_tickers(store: Any, period_key: str) -> set[str]:
   return tickers
 
 
+def hourly_event_market_tickers_from_tab(tab: dict[str, Any]) -> set[str]:
+  """Market tickers for the current hourly event (from live prediction tab)."""
+  live = tab.get("live") or tab
+  tickers: set[str] = set()
+
+  def add(pick: dict[str, Any] | None) -> None:
+    if pick and pick.get("ticker"):
+      tickers.add(str(pick["ticker"]))
+
+  add(live.get("primary_pick"))
+  for block_key in ("strategy_threshold", "strategy_range"):
+    block = live.get(block_key) or {}
+    add(block.get("best_edge"))
+    add(block.get("most_likely"))
+    for row in block.get("contracts") or []:
+      add(row)
+  return tickers
+
+
+def _ticker_in_hourly_event(ticker: str, event_ticker: str, allowed_tickers: set[str]) -> bool:
+  t = str(ticker)
+  e = str(event_ticker)
+  if t in allowed_tickers:
+    return True
+  return t == e or t.startswith(f"{e}-")
+
+
+def cancel_resting_enter_orders_for_hourly_event(
+  kalshi: Any,
+  event_ticker: str,
+  tab: dict[str, Any],
+) -> int:
+  """Cancel unfilled resting BUY orders on the current hourly event only."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return 0
+  allowed = hourly_event_market_tickers_from_tab(tab)
+  cancelled = 0
+  for row in kalshi.list_resting_orders():
+    if str(row.get("action") or "").lower() != "buy":
+      continue
+    ticker = str(row.get("ticker") or "")
+    if not ticker or not _ticker_in_hourly_event(ticker, event_ticker, allowed):
+      continue
+    oid = row.get("order_id")
+    if not oid:
+      continue
+    try:
+      kalshi.cancel_order(str(oid))
+      cancelled += 1
+      log.info("Cancelled resting enter %s on %s (event %s)", oid, ticker, event_ticker)
+    except Exception as e:
+      log.warning("Cancel resting enter %s on %s failed: %s", oid, ticker, e)
+  if cancelled:
+    log.info("Cancelled %s resting enter order(s) for hourly event %s", cancelled, event_ticker)
+  return cancelled
+
+
 def try_live_position_exit(
   *,
   kalshi: Any,

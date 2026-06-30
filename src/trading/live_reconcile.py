@@ -13,6 +13,22 @@ def _leg_key(ticker: str, side: str) -> str:
   return f"{ticker}:{str(side).lower()}"
 
 
+def _ticker_belongs_to_event(ticker: str, event_ticker: str | None) -> bool:
+  if not event_ticker:
+    return True
+  t = str(ticker)
+  e = str(event_ticker)
+  return t == e or t.startswith(f"{e}-")
+
+
+def _market_exposure_usd(row: dict[str, Any]) -> float:
+  val = row.get("market_exposure_dollars") or row.get("market_exposure")
+  try:
+    return float(val or 0)
+  except (TypeError, ValueError):
+    return 0.0
+
+
 def _kalshi_contracts_for_side(net: float, side: str) -> float:
   s = str(side).lower()
   if s == "yes":
@@ -99,6 +115,11 @@ def build_live_reconcile_report(
   """Summarize bot vs exchange alignment for live hourly debugging."""
   bot = _aggregate_bot_legs(bot_positions, live_only=True)
   kalshi_rows = kalshi.list_market_positions() if kalshi else []
+  if event_ticker:
+    kalshi_rows = [
+      row for row in kalshi_rows
+      if _ticker_belongs_to_event(str(row.get("ticker") or ""), event_ticker)
+    ]
   kalshi_legs = _aggregate_kalshi_positions(kalshi_rows)
   resting_sells = _resting_sells_by_ticker(kalshi)
 
@@ -144,6 +165,11 @@ def build_live_reconcile_report(
       })
 
   aligned = not mismatches and not bot_only and not kalshi_only and not orphan_sells
+  bot_live_exposure_usd = round(sum(float(v.get("cost_usd") or 0) for v in bot.values()), 2)
+  kalshi_exposure_usd = round(
+    sum(_market_exposure_usd(k) for k in kalshi_legs.values()),
+    2,
+  )
   return {
     "ok": aligned,
     "event_ticker": event_ticker,
@@ -151,6 +177,8 @@ def build_live_reconcile_report(
     "kalshi_legs": len(kalshi_legs),
     "bot_live_contracts": sum(int(v["contracts"]) for v in bot.values()),
     "kalshi_contracts": sum(int(v["contracts"]) for v in kalshi_legs.values()),
+    "bot_live_exposure_usd": bot_live_exposure_usd,
+    "kalshi_exposure_usd": kalshi_exposure_usd,
     "matched": matched,
     "mismatches": mismatches,
     "bot_only": bot_only,

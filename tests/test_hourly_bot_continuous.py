@@ -243,6 +243,53 @@ def test_hour_interval_summary_totals():
     assert status["hourly_summary"]["realized_pnl_usd"] == 2.25
 
 
+def test_hour_interval_summary_counts_resting_orders():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "status": "resting",
+      "mode": "live",
+    })
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "status": "filled",
+      "cost_usd": 1.0,
+      "mode": "live",
+    })
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "status": "resting",
+      "mode": "live",
+    })
+    summary = store.hour_interval_summary("EV1", mode="live")
+    assert summary["resting_enter_count"] == 1
+    assert summary["resting_exit_count"] == 1
+    assert summary["filled_enter_count_this_hour"] == 1
+
+
+def test_auto_bet_off_cancels_resting_enters_on_hourly_event():
+  from unittest.mock import MagicMock
+
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(enabled=False, mode="live"))
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.list_resting_orders.return_value = [
+      {"order_id": "e1", "action": "buy", "ticker": "KXTEST-T1"},
+      {"order_id": "e2", "action": "buy", "ticker": "WORLDCUP-T9"},
+    ]
+    bot = HourlyBot(store, kalshi, asset="btc")
+    tab = _live_tab(event="KXTEST-1H")
+    assert bot.run_continuous_cycle(tab) == []
+    assert store.last_skip_reason() == "auto_bet_off"
+    kalshi.cancel_order.assert_called_once_with("e1")
+
+
 def test_hour_interval_summary_backfills_missing_exit_pnl():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
