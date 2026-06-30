@@ -111,6 +111,45 @@ def test_reconcile_filters_kalshi_positions_to_market_tickers():
   assert report["kalshi_legs"] == 1
 
 
+def test_reconcile_matches_kxbtc_range_under_kxbtcd_hourly_event():
+  bot_positions = [
+    {
+      "id": "p1",
+      "mode": "live",
+      "market_ticker": "KXBTC-26JUN3004-B59350",
+      "side": "no",
+      "contracts": 2,
+      "cost_usd": 1.44,
+      "label": "$59,300 to 59,399.99",
+    },
+    {
+      "id": "p2",
+      "mode": "live",
+      "market_ticker": "KXBTC-26JUN3004-B59450",
+      "side": "no",
+      "contracts": 2,
+      "cost_usd": 1.46,
+      "label": "$59,400 to 59,499.99",
+    },
+  ]
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.list_market_positions.return_value = [
+    {"ticker": "KXBTC-26JUN3004-B59350", "position_fp": "-2.00"},
+    {"ticker": "KXBTC-26JUN3004-B59450", "position_fp": "-2.00"},
+    {"ticker": "WORLDCUP-T9", "position_fp": "-5.00"},
+  ]
+  kalshi.list_resting_orders.return_value = []
+  report = build_live_reconcile_report(
+    bot_positions=bot_positions,
+    kalshi=kalshi,
+    event_ticker="KXBTCD-26JUN3004",
+  )
+  assert report["ok"] is True
+  assert len(report["matched"]) == 2
+  assert report["kalshi_legs"] == 2
+
+
 def test_reconcile_flags_orphan_resting_sell_when_bot_flat():
   kalshi = MagicMock()
   kalshi.authenticated = True

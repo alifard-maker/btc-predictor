@@ -453,12 +453,20 @@ class PredictionLoop:
     self._attach_bot_daily_loss(status, kind=kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
     if status.get("settings", {}).get("mode") == "live" and kalshi and kalshi.authenticated:
+      from src.trading.live_position_sync import hourly_event_market_tickers_from_tab
       from src.trading.live_reconcile import build_live_reconcile_report
 
+      market_tickers: set[str] = set()
+      if tab and tab.get("ok"):
+        market_tickers |= hourly_event_market_tickers_from_tab(tab)
+      for pos in status.get("open_positions") or []:
+        if pos.get("market_ticker"):
+          market_tickers.add(str(pos["market_ticker"]))
       status["live_reconcile"] = build_live_reconcile_report(
         bot_positions=list(status.get("open_positions") or []),
         kalshi=kalshi,
         event_ticker=event_ticker,
+        market_tickers=market_tickers or None,
       )
     return status
 
@@ -473,12 +481,20 @@ class PredictionLoop:
     if tab and tab.get("ok"):
       event_ticker = (tab.get("event") or {}).get("event_ticker")
     positions = store.open_positions(str(event_ticker)) if event_ticker else []
+    from src.trading.live_position_sync import hourly_event_market_tickers_from_tab
     from src.trading.live_reconcile import build_live_reconcile_report
 
+    market_tickers: set[str] = set()
+    if tab and tab.get("ok"):
+      market_tickers |= hourly_event_market_tickers_from_tab(tab)
+    for pos in positions:
+      if pos.get("market_ticker"):
+        market_tickers.add(str(pos["market_ticker"]))
     return build_live_reconcile_report(
       bot_positions=positions,
       kalshi=kalshi,
       event_ticker=event_ticker,
+      market_tickers=market_tickers or None,
     )
 
   def hourly_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
