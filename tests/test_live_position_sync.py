@@ -16,6 +16,7 @@ from src.trading.live_position_sync import (
   resting_exit_order_id,
   sync_live_positions_from_kalshi,
   try_live_position_exit,
+  verify_kalshi_exit_fill,
 )
 
 
@@ -171,6 +172,51 @@ def test_sync_live_positions_from_kalshi_updates_contracts_and_merges_duplicates
     assert open_pos[0]["contracts"] == 5
     assert open_pos[0]["cost_usd"] == 4.0
     assert any(c.get("action") == "synced" for c in out["changes"])
+
+
+def test_verify_kalshi_exit_fill_requires_inventory_drop():
+  assert verify_kalshi_exit_fill(sellable_before=5.0, sellable_after=3.0, claimed_fill=2) == 2
+  assert verify_kalshi_exit_fill(sellable_before=2.0, sellable_after=2.0, claimed_fill=2) == 0
+  assert verify_kalshi_exit_fill(sellable_before=None, sellable_after=0.0, claimed_fill=1) == 0
+
+
+def test_try_live_position_exit_rejects_unverified_api_fill():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "no",
+      "contracts": 2,
+      "entry_price_cents": 36,
+      "cost_usd": 0.72,
+      "mode": "live",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = -2
+    kalshi.list_resting_orders.return_value = []
+    kalshi.create_order.return_value = {
+      "order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0},
+    }
+    row = try_live_position_exit(
+      kalshi=kalshi,
+      store=store,
+      pos=store.open_positions("EV1")[0],
+      period_key="EV1",
+      exit_price=44,
+      contracts=2,
+      entry_c=36,
+      pos_mode="live",
+      pick={"signal": "BUY NO"},
+      exit_reason="PROFIT TARGET",
+      detail_suffix="test",
+      extra_detail="",
+    )
+    assert row is not None
+    assert row["status"] == "skipped"
+    assert store.open_positions("EV1") != []
 
 
 def test_try_live_position_exit_skips_when_pending_resting_exit():

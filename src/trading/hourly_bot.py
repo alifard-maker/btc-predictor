@@ -16,6 +16,7 @@ from src.trading.live_bracket_orders import (
 )
 from src.trading.live_position_sync import (
   kalshi_sellable_contracts,
+  order_still_resting,
   try_live_position_exit,
 )
 from src.trading.bot_entry_settings import hourly_entry_settings_snapshot
@@ -699,7 +700,8 @@ class HourlyBot:
           continue
         live_exit_oid = live_out["live_exit_oid"]
         exit_price = int(live_out["sell_cents"])
-        contracts = int(live_out["sell_count"])
+        verified_exit = int(live_out["fill_count"])
+        contracts = verified_exit
         pnl_rounded = round(
           float(
             leg_pnl_usd(
@@ -712,7 +714,19 @@ class HourlyBot:
           2,
         )
 
-      self.store.close_position(pos["id"])
+      if pos_mode == "live":
+        remaining_ct = int(pos["contracts"]) - int(contracts)
+        if remaining_ct > 0:
+          entry_c = int(pos["entry_price_cents"])
+          self.store.update_position_contracts(
+            str(pos["id"]),
+            contracts=remaining_ct,
+            cost_usd=round(remaining_ct * entry_c / 100.0, 2),
+          )
+        else:
+          self.store.close_position(pos["id"])
+      else:
+        self.store.close_position(pos["id"])
       if pos_mode != "live":
         index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
         exit_context = build_hourly_exit_context(
@@ -1135,7 +1149,11 @@ class HourlyBot:
         "entry_settings": hourly_entry_settings_snapshot(settings),
       })
     try:
-      cancel_resting_orders_for_ticker(self.kalshi, str(pick["ticker"]))
+      ticker = str(pick["ticker"])
+      prior = self.store.latest_resting_enter(event_ticker, ticker, mode="live")
+      if prior and order_still_resting(self.kalshi, str(prior.get("kalshi_order_id") or "")):
+        return prior
+      cancel_resting_orders_for_ticker(self.kalshi, ticker)
       order = self.kalshi.create_order(
         ticker=str(pick["ticker"]),
         side=side,

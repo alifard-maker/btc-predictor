@@ -239,6 +239,21 @@ def run_live_position_hygiene(
   }
 
 
+def verify_kalshi_exit_fill(
+  *,
+  sellable_before: float | None,
+  sellable_after: float | None,
+  claimed_fill: int,
+) -> int:
+  """Confirmed contracts sold on Kalshi; never trust API fill_count alone."""
+  if sellable_before is not None and sellable_after is not None:
+    sold = max(0.0, float(sellable_before) - float(sellable_after))
+    if sold < 0.05:
+      return 0
+    return min(int(round(sold)), max(0, int(claimed_fill)))
+  return 0
+
+
 def try_live_position_exit(
   *,
   kalshi: Any,
@@ -294,6 +309,7 @@ def try_live_position_exit(
       "position_id": pos["id"],
     })
 
+  sellable_before = sellable
   sell_count = float(contracts)
   if sellable is not None:
     if sellable > contracts + 0.05:
@@ -322,7 +338,43 @@ def try_live_position_exit(
     limit_cents=sell_cents,
   )
   live_exit_oid = exit_result.get("order_id")
-  fill_count = int(exit_result.get("fill_count") or 0)
+  claimed_fill = int(exit_result.get("fill_count") or 0)
+  sellable_after = kalshi_sellable_contracts(kalshi, ticker, side)
+  fill_count = verify_kalshi_exit_fill(
+    sellable_before=sellable_before,
+    sellable_after=sellable_after,
+    claimed_fill=claimed_fill,
+  )
+  if claimed_fill > 0 and fill_count <= 0:
+    log.warning(
+      "Live exit order %s claimed %s fills but Kalshi inventory unchanged on %s",
+      live_exit_oid,
+      claimed_fill,
+      ticker,
+    )
+    return store.log_trade({
+      "event_ticker": period_key,
+      "trigger": "continuous",
+      "action": "exit",
+      "mode": pos_mode,
+      "market_ticker": ticker,
+      "side": side,
+      "contracts": sell_count,
+      "price_cents": sell_cents,
+      "entry_price_cents": entry_c,
+      "exit_price_cents": sell_cents,
+      "cost_usd": 0,
+      "pnl_usd": 0,
+      "signal": pick.get("signal"),
+      "label": pos.get("label"),
+      "status": "skipped",
+      "detail": (
+        f"Live EXIT unverified (API claimed {claimed_fill} fill(s) but Kalshi inventory unchanged) — "
+        f"bot leg kept open · {exit_reason}: {detail_suffix}{extra_detail}"
+      ),
+      "position_id": pos["id"],
+      "kalshi_order_id": live_exit_oid,
+    })
   if fill_count <= 0:
     return store.log_trade({
       "event_ticker": period_key,
@@ -353,5 +405,5 @@ def try_live_position_exit(
     "live_exit_oid": live_exit_oid,
     "fill_count": fill_count,
     "sell_cents": sell_cents,
-    "sell_count": sell_count,
+    "sell_count": float(fill_count),
   }

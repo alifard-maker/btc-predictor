@@ -927,6 +927,25 @@ class HourlyBotStore:
       pass
     return enriched
 
+  def latest_resting_enter(
+    self,
+    event_ticker: str,
+    market_ticker: str,
+    *,
+    mode: str = "live",
+  ) -> dict[str, Any] | None:
+    with self._connect() as conn:
+      row = conn.execute(
+        """
+        SELECT * FROM bot_trades
+        WHERE event_ticker = ? AND market_ticker = ? AND action = 'enter'
+          AND status = 'resting' AND mode = ?
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (event_ticker, market_ticker, mode),
+      ).fetchone()
+    return self._enrich_trade(dict(row)) if row else None
+
   def list_trades(self, *, limit: int = 30, event_ticker: str | None = None) -> list[dict[str, Any]]:
     with self._connect() as conn:
       if event_ticker:
