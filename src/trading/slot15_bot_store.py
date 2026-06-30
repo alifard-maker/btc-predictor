@@ -195,9 +195,10 @@ class Slot15BotStore:
 
     migrate_paper_state(conn)
     migrate_bot_runtime(conn)
-    from src.trading.bot_tuning_store import migrate_auto_tuning
+    from src.trading.bot_tuning_store import migrate_adaptive_calibration, migrate_auto_tuning
 
     migrate_auto_tuning(conn)
+    migrate_adaptive_calibration(conn)
     from src.trading.bot_cheap_leg_cooldown import migrate_cheap_leg_cut_cooldowns
 
     migrate_cheap_leg_cut_cooldowns(conn)
@@ -241,6 +242,18 @@ class Slot15BotStore:
 
     with self._connect() as conn:
       return save_auto_tuning(conn, tuning)
+
+  def get_adaptive_calibration(self) -> dict[str, Any]:
+    from src.trading.bot_tuning_store import get_adaptive_calibration
+
+    with self._connect() as conn:
+      return get_adaptive_calibration(conn)
+
+  def save_adaptive_calibration(self, state: dict[str, Any]) -> dict[str, Any]:
+    from src.trading.bot_tuning_store import save_adaptive_calibration
+
+    with self._connect() as conn:
+      return save_adaptive_calibration(conn, state)
 
   def get_settings(self) -> Slot15BotSettings:
     with self._connect() as conn:

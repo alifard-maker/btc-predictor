@@ -354,6 +354,27 @@ bot_auto_tune:
   ask_edge_step: 1
   kelly_step: 0.02
 
+# Closed-loop bucket calibration: pause losing entry-price buckets, probe later
+bot_adaptive_calibration:
+  enabled: true
+  refresh_interval_minutes: 30
+  short_window_hours: 4
+  long_window_hours: 24
+  short_min_trades: 4
+  short_max_win_rate: 0.25
+  short_min_loss_usd: 2.0
+  long_min_trades: 8
+  long_max_win_rate: 0.35
+  long_min_loss_usd: 5.0
+  pause_hours_short: 6
+  pause_hours_long: 24
+  probe_max_entries: 2
+  probe_pause_hours_on_fail: 6
+  tightened_edge_boost_cents: 4
+  apply_in_aggressive_mode: true
+  price_buckets: true
+  spread_buckets: false
+
 # Ethereum — 15m slots (KXETH15M) + hourly (KXETHD/KXETH), CF Benchmarks ERTI
 eth:
   enabled: true

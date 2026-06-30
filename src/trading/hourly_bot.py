@@ -23,6 +23,12 @@ from src.trading.bot_cheap_leg_cooldown import (
   resolve_exit_cooldown_seconds,
   resolve_label_reentry_cooldown_seconds,
 )
+from src.trading.bot_adaptive_calibration import (
+  adaptive_entry_allowed,
+  record_adaptive_probe_entry,
+  record_adaptive_probe_exit,
+  run_adaptive_calibration_for_store,
+)
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
   cheap_leg_exit_config,
@@ -684,6 +690,7 @@ class HourlyBot:
       record_exit_and_maybe_cap(
         pnl_rounded, kind="hourly", asset=self.asset, store=self.store, cfg=cfg,
       )
+      self._adaptive_after_exit(entry_c, pnl_rounded, cfg)
       cooldown = resolve_exit_cooldown_seconds(
         settings,
         exit_reason,
@@ -710,6 +717,37 @@ class HourlyBot:
       results.append(row)
 
     return results
+
+  def _adaptive_after_exit(
+    self,
+    entry_price_cents: int,
+    pnl_usd: float,
+    cfg: dict[str, Any] | None,
+  ) -> None:
+    state = self.store.get_adaptive_calibration()
+    state = record_adaptive_probe_exit(
+      state,
+      entry_price_cents=entry_price_cents,
+      entry_spread_cents=None,
+      pnl_usd=pnl_usd,
+      cfg=cfg,
+    )
+    self.store.save_adaptive_calibration(state)
+    run_adaptive_calibration_for_store(self.store, cfg=cfg)
+
+  def _adaptive_after_enter(
+    self,
+    entry_price_cents: int,
+    entry_spread_cents: int | None,
+    cfg: dict[str, Any] | None,
+  ) -> None:
+    state = record_adaptive_probe_entry(
+      self.store.get_adaptive_calibration(),
+      entry_price_cents=entry_price_cents,
+      entry_spread_cents=entry_spread_cents,
+      cfg=cfg,
+    )
+    self.store.save_adaptive_calibration(state)
 
   def _process_entries(
     self,
@@ -820,22 +858,44 @@ class HourlyBot:
         last_reason = f"cheap_leg_cut_cooldown:{identity}"
         continue
 
+      from dataclasses import replace
+      from src.trading.entry_strategy import ask_cents_for_side
+
+      est_adaptive = ask_cents_for_side(pick, side)
+      ok_adapt, adapt_reason, edge_boost = adaptive_entry_allowed(
+        self.store.get_adaptive_calibration(),
+        entry_price_cents=est_adaptive,
+        entry_spread_cents=None,
+        cfg=cfg,
+        aggressive=settings.aggressive_entries,
+      )
+      if not ok_adapt:
+        last_reason = adapt_reason or "adaptive_bucket_blocked"
+        continue
+      estrat_entry = (
+        replace(
+          estrat,
+          min_ask_edge_cents=estrat.min_ask_edge_cents + edge_boost,
+          tail_entry_min_ask_edge_cents=estrat.tail_entry_min_ask_edge_cents + edge_boost,
+        )
+        if edge_boost > 0
+        else estrat
+      )
+
       if self.asset == "btc":
         est_price = None
         if settings.mode == "paper":
-          from src.trading.entry_strategy import ask_cents_for_side
-
           est_price = ask_cents_for_side(pick, side)
         else:
           est_price = _price_cents_for_pick(pick, side)
         ok_tail, tail_reason, _ = passes_tail_entry_gate(
-          pick, side, est_price, estrat
+          pick, side, est_price, estrat_entry
         )
         if not ok_tail:
           last_reason = tail_reason or "tail_entry_blocked"
           continue
       else:
-        ok_edge, ask_edge = passes_ask_edge_gate(pick, side, estrat.min_ask_edge_cents)
+        ok_edge, ask_edge = passes_ask_edge_gate(pick, side, estrat_entry.min_ask_edge_cents)
         if not ok_edge:
           last_reason = f"ask_edge_too_low:{ask_edge:.0f}c"
           continue
@@ -878,7 +938,7 @@ class HourlyBot:
         count = int(entry_fill["contracts"])
         if self.asset == "btc":
           ok_fill, fill_reason, _ = passes_tail_entry_gate(
-            pick, side, price_cents, estrat
+            pick, side, price_cents, estrat_entry
           )
           if not ok_fill:
             last_reason = fill_reason or "tail_entry_blocked"
@@ -954,6 +1014,7 @@ class HourlyBot:
         })
         log.info("%s hourly bot [paper enter]: %s", self.asset.upper(), detail)
 
+      self._adaptive_after_enter(price_cents, None, cfg)
       self.store.set_last_skip_reason(None)
       results.append(result)
       entries_this_cycle += 1

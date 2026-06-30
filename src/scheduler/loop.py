@@ -427,6 +427,7 @@ class PredictionLoop:
     estrat = effective_entry_strategy(acfg, kind="hourly", tuning=store.get_auto_tuning())
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
+    status["adaptive_calibration"] = store.get_adaptive_calibration()
     self._attach_bot_daily_loss(status, kind=kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
     return status
@@ -678,6 +679,7 @@ class PredictionLoop:
     estrat = effective_entry_strategy(acfg, kind="slot15", tuning=store.get_auto_tuning())
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
+    status["adaptive_calibration"] = store.get_adaptive_calibration()
     self._attach_bot_daily_loss(status, kind="slot15", asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
     return status
@@ -1592,6 +1594,47 @@ class PredictionLoop:
 
     return {"ok": True, "bots": results, "tuned_at": datetime.now(timezone.utc).isoformat()}
 
+  def run_adaptive_calibration(self) -> dict[str, Any]:
+    """Refresh per-bucket pause/tighten/probe state from recent closed trades."""
+    from src.trading.bot_adaptive_calibration import (
+      adaptive_calibration_cfg,
+      run_adaptive_calibration_for_store,
+    )
+
+    acfg = adaptive_calibration_cfg(self.cfg)
+    if not acfg["enabled"]:
+      return {"ok": False, "reason": "adaptive_calibration_disabled"}
+
+    results: list[dict[str, Any]] = []
+    specs = (
+      ("hourly", "btc", self.hourly_bot_store("btc"), self.cfg),
+      ("hourly", "eth", self.hourly_bot_store("eth"), self._eth_cfg or self.cfg),
+      ("slot15", "btc", self.slot15_bot_store("btc"), self._acfg_15m("btc")),
+      ("slot15", "eth", self.slot15_bot_store("eth"), self._acfg_15m("eth")),
+    )
+    for kind, asset, store, bot_cfg in specs:
+      if asset == "eth" and kind == "slot15" and not self._slot15m_enabled("eth"):
+        continue
+      try:
+        out = run_adaptive_calibration_for_store(store, cfg=bot_cfg)
+        out["kind"] = kind
+        out["asset"] = asset
+        results.append(out)
+        if out.get("ok"):
+          log.info(
+            "%s %s adaptive calibration: paused=%s probing=%s tightened=%s",
+            asset.upper(),
+            kind,
+            out.get("paused_buckets"),
+            out.get("probing_buckets"),
+            out.get("tightened_buckets"),
+          )
+      except Exception as e:
+        log.warning("%s %s adaptive calibration failed: %s", asset.upper(), kind, e)
+        results.append({"ok": False, "kind": kind, "asset": asset, "error": str(e)})
+
+    return {"ok": True, "bots": results, "refreshed_at": datetime.now(timezone.utc).isoformat()}
+
   def _schedule_hourly(self, scheduler) -> None:
     if self.cfg.get("hourly", {}).get("enabled", True):
       hcfg = self.cfg.get("hourly", {})
@@ -2324,6 +2367,23 @@ class PredictionLoop:
         max_instances=1,
       )
       log.info("Bot auto-tune scheduled daily at %02d:%02d %s", tune_hour, tune_minute, self.tz)
+    adapt_cfg = self.cfg.get("bot_adaptive_calibration") or {}
+    if adapt_cfg.get("enabled", True):
+      interval_min = int(adapt_cfg.get("refresh_interval_minutes", 30))
+      scheduler.add_job(
+        self.run_adaptive_calibration,
+        "interval",
+        minutes=interval_min,
+        id="bot_adaptive_calibration",
+        max_instances=1,
+      )
+      scheduler.add_job(
+        self.run_adaptive_calibration,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=30),
+        id="bot_adaptive_calibration_now",
+      )
+      log.info("Bot adaptive calibration scheduled every %s min", interval_min)
     backup_cfg = self.cfg.get("log_backup") or {}
     if backup_cfg.get("enabled", True):
       interval_min = int(backup_cfg.get("interval_minutes", 15))

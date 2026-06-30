@@ -11,7 +11,7 @@ from src.trading.paper_bankroll import reset_paper_bankroll
 def fresh_start_paper_bot(conn: sqlite3.Connection, max_cap: float) -> dict[str, Any]:
   """Delete trades, positions, cooldowns, tuning; reset paper bankroll to max_cap."""
   from src.trading.bot_runtime import migrate_bot_runtime
-  from src.trading.bot_tuning_store import save_auto_tuning
+  from src.trading.bot_tuning_store import save_adaptive_calibration, save_auto_tuning
 
   conn.execute("DELETE FROM bot_trades")
   conn.execute("DELETE FROM bot_positions")
@@ -20,6 +20,7 @@ def fresh_start_paper_bot(conn: sqlite3.Connection, max_cap: float) -> dict[str,
 
   clear_cheap_leg_cut_cooldowns(conn)
   save_auto_tuning(conn, {})
+  save_adaptive_calibration(conn, {})
   migrate_bot_runtime(conn)
   conn.execute(
     """

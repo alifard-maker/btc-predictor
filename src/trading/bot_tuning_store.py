@@ -13,6 +13,13 @@ CREATE TABLE IF NOT EXISTS bot_auto_tuning (
 );
 """
 
+_ADAPTIVE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS bot_adaptive_calibration (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  json TEXT NOT NULL DEFAULT '{}'
+);
+"""
+
 
 def migrate_auto_tuning(conn: sqlite3.Connection) -> None:
   conn.executescript(_TUNING_SCHEMA)
@@ -20,6 +27,16 @@ def migrate_auto_tuning(conn: sqlite3.Connection) -> None:
   if not row:
     conn.execute(
       "INSERT INTO bot_auto_tuning (id, json) VALUES (1, ?)",
+      (json.dumps({}),),
+    )
+
+
+def migrate_adaptive_calibration(conn: sqlite3.Connection) -> None:
+  conn.executescript(_ADAPTIVE_SCHEMA)
+  row = conn.execute("SELECT json FROM bot_adaptive_calibration WHERE id = 1").fetchone()
+  if not row:
+    conn.execute(
+      "INSERT INTO bot_adaptive_calibration (id, json) VALUES (1, ?)",
       (json.dumps({}),),
     )
 
@@ -40,3 +57,21 @@ def save_auto_tuning(conn: sqlite3.Connection, tuning: dict[str, Any]) -> dict[s
   payload = json.dumps(tuning)
   conn.execute("UPDATE bot_auto_tuning SET json = ? WHERE id = 1", (payload,))
   return tuning
+
+
+def get_adaptive_calibration(conn: sqlite3.Connection) -> dict[str, Any]:
+  migrate_adaptive_calibration(conn)
+  row = conn.execute("SELECT json FROM bot_adaptive_calibration WHERE id = 1").fetchone()
+  if not row:
+    return {}
+  try:
+    return json.loads(row[0] or "{}")
+  except json.JSONDecodeError:
+    return {}
+
+
+def save_adaptive_calibration(conn: sqlite3.Connection, state: dict[str, Any]) -> dict[str, Any]:
+  migrate_adaptive_calibration(conn)
+  payload = json.dumps(state)
+  conn.execute("UPDATE bot_adaptive_calibration SET json = ? WHERE id = 1", (payload,))
+  return state
