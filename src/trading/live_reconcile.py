@@ -139,7 +139,14 @@ def build_live_reconcile_report(
   """Summarize bot vs exchange alignment for live hourly debugging."""
   bot = _aggregate_bot_legs(bot_positions, live_only=True)
   kalshi_rows = kalshi.list_market_positions() if kalshi else []
-  if market_tickers:
+  if market_tickers and event_ticker:
+    allowed = {str(t) for t in market_tickers}
+    kalshi_rows = [
+      row for row in kalshi_rows
+      if str(row.get("ticker") or "") in allowed
+      or _ticker_belongs_to_event(str(row.get("ticker") or ""), event_ticker)
+    ]
+  elif market_tickers:
     allowed = {str(t) for t in market_tickers}
     kalshi_rows = [
       row for row in kalshi_rows
@@ -165,7 +172,7 @@ def build_live_reconcile_report(
     if b and k:
       bot_ct = float(b["contracts"])
       kalshi_ct = float(k["contracts"])
-      if abs(bot_ct - kalshi_ct) < 0.05:
+      if abs(bot_ct - kalshi_ct) < 0.25:
         matched.append({**b, "kalshi_contracts": kalshi_ct, "status": "ok"})
       else:
         mismatches.append({

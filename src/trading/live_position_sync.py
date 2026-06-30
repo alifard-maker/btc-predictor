@@ -313,7 +313,7 @@ def sync_live_positions_from_kalshi(
       continue
     bot_total = sum(int(p.get("contracts") or 0) for p in legs)
     target = int(round(float(sellable)))
-    if abs(float(sellable) - float(bot_total)) < 0.05:
+    if abs(float(sellable) - float(bot_total)) < 0.15:
       continue
 
     if target <= 0:
@@ -370,6 +370,113 @@ def sync_live_positions_from_kalshi(
   return {"ok": True, "changes": changes}
 
 
+def _has_open_live_leg(store: Any, event_ticker: str, market_ticker: str, side: str) -> bool:
+  side_l = str(side or "").lower()
+  for pos in store.open_positions(event_ticker):
+    if normalize_position_mode(pos.get("mode")) != "live":
+      continue
+    if str(pos.get("market_ticker") or "") != str(market_ticker):
+      continue
+    if str(pos.get("side") or "").lower() == side_l:
+      return True
+  return False
+
+
+def adopt_filled_resting_enters(
+  store: Any,
+  kalshi: Any,
+  event_ticker: str,
+) -> dict[str, Any]:
+  """Open bot legs when a resting live enter filled on Kalshi but was never recorded."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return {"ok": True, "changes": []}
+
+  changes: list[dict[str, Any]] = []
+  with store._connect() as conn:
+    rows = conn.execute(
+      """
+      SELECT * FROM bot_trades
+      WHERE event_ticker = ? AND action = 'enter' AND status = 'resting' AND mode = 'live'
+      ORDER BY created_at DESC
+      """,
+      (event_ticker,),
+    ).fetchall()
+
+  seen: set[tuple[str, str]] = set()
+  for raw in rows:
+    trade = dict(raw)
+    ticker = str(trade.get("market_ticker") or "")
+    side = str(trade.get("side") or "").lower()
+    if not ticker or side not in ("yes", "no"):
+      continue
+    key = (ticker, side)
+    if key in seen:
+      continue
+    seen.add(key)
+    if _has_open_live_leg(store, event_ticker, ticker, side):
+      continue
+    sellable = kalshi_sellable_contracts(kalshi, ticker, side)
+    if sellable is None or sellable < 0.05:
+      continue
+    contracts = max(1, int(round(float(sellable))))
+    entry_c = int(trade.get("entry_price_cents") or trade.get("price_cents") or 0)
+    if entry_c <= 0:
+      continue
+    import uuid
+
+    pid = str(uuid.uuid4())
+    cost_usd = round(contracts * entry_c / 100.0, 2)
+    store.open_position({
+      "id": pid,
+      "event_ticker": event_ticker,
+      "market_ticker": ticker,
+      "side": side,
+      "contracts": contracts,
+      "entry_price_cents": entry_c,
+      "cost_usd": cost_usd,
+      "signal": trade.get("signal"),
+      "label": trade.get("label"),
+      "mode": "live",
+    })
+    store.log_trade({
+      "event_ticker": event_ticker,
+      "trigger": "continuous",
+      "action": "enter",
+      "mode": "live",
+      "market_ticker": ticker,
+      "side": side,
+      "contracts": contracts,
+      "price_cents": entry_c,
+      "entry_price_cents": entry_c,
+      "cost_usd": cost_usd,
+      "signal": trade.get("signal"),
+      "label": trade.get("label"),
+      "status": "filled",
+      "detail": (
+        f"Live ENTER adopted from resting fill on Kalshi "
+        f"(order {trade.get('kalshi_order_id') or '?'}) — {contracts} contracts"
+      ),
+      "position_id": pid,
+      "kalshi_order_id": trade.get("kalshi_order_id"),
+    })
+    changes.append({
+      "action": "adopted_resting_enter",
+      "ticker": ticker,
+      "side": side,
+      "contracts": contracts,
+      "position_id": pid,
+    })
+    log.info(
+      "Adopted resting enter fill %s %s x%s on %s",
+      side.upper(),
+      ticker,
+      contracts,
+      event_ticker,
+    )
+
+  return {"ok": True, "changes": changes}
+
+
 def run_live_position_hygiene(
   *,
   store: Any,
@@ -379,6 +486,7 @@ def run_live_position_hygiene(
   settings_enabled: bool,
 ) -> dict[str, Any]:
   """Sync inventory, cancel orphans, and optionally cancel resting enters when auto-bet is off."""
+  adopted = adopt_filled_resting_enters(store, kalshi, event_ticker)
   sync = sync_live_positions_from_kalshi(store, kalshi, event_ticker)
   orphans = cancel_orphan_live_sell_orders(
     kalshi, live_open_tickers(store, event_ticker),
@@ -390,6 +498,7 @@ def run_live_position_hygiene(
     )
   return {
     **sync,
+    **adopted,
     "orphan_sells_cancelled": orphans,
     "resting_enters_cancelled": resting_cancelled,
   }

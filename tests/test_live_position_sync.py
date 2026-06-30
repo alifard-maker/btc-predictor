@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.live_position_sync import (
+  adopt_filled_resting_enters,
   cancel_orphan_live_sell_orders,
   cancel_resting_enter_orders_for_hourly_event,
   effective_kalshi_inventory,
@@ -104,6 +105,33 @@ def test_cancel_resting_enter_orders_for_hourly_event_scoped():
   n = cancel_resting_enter_orders_for_hourly_event(kalshi, "KXTEST-1H", tab)
   assert n == 1
   kalshi.cancel_order.assert_called_once_with("e1")
+
+
+def test_adopt_filled_resting_enter_opens_bot_leg():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "status": "resting",
+      "mode": "live",
+      "market_ticker": "KXBTCD-EV1-T59400",
+      "side": "yes",
+      "contracts": 2,
+      "price_cents": 40,
+      "entry_price_cents": 40,
+      "kalshi_order_id": "ord-rest",
+      "label": "$59,400 or above",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = 2
+    out = adopt_filled_resting_enters(store, kalshi, "EV1")
+    open_pos = store.open_positions("EV1")
+    assert len(open_pos) == 1
+    assert open_pos[0]["contracts"] == 2
+    assert open_pos[0]["entry_price_cents"] == 40
+    assert any(c.get("action") == "adopted_resting_enter" for c in out["changes"])
 
 
 def test_try_live_position_exit_reconciles_when_kalshi_flat():
