@@ -341,7 +341,7 @@ bot_risk:
 
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
 live_resting_exits:
-  enabled: true
+  enabled: false
   cheap_leg_only: true
   bracket_take_profit: true
 

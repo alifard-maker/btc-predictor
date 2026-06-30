@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class LiveRestingExitConfig:
-  enabled: bool = True
+  enabled: bool = False
   cheap_leg_only: bool = True
   bracket_take_profit: bool = True
 
@@ -21,10 +21,15 @@ class LiveRestingExitConfig:
 def live_resting_exit_config(cfg: dict[str, Any] | None) -> LiveRestingExitConfig:
   raw = (cfg or {}).get("live_resting_exits") or {}
   return LiveRestingExitConfig(
-    enabled=bool(raw.get("enabled", True)),
+    enabled=bool(raw.get("enabled", False)),
     cheap_leg_only=bool(raw.get("cheap_leg_only", True)),
     bracket_take_profit=bool(raw.get("bracket_take_profit", True)),
   )
+
+
+def aggressive_exit_limit_cents(bid_cents: int, *, haircut: int = 2) -> int:
+  """Price live exit limits slightly through the bid to improve fill odds."""
+  return max(1, min(99, int(bid_cents) - max(0, int(haircut))))
 
 
 def bracket_take_profit_cents(
@@ -148,6 +153,19 @@ def cancel_resting_orders(kalshi: Any, pos: dict[str, Any]) -> None:
       log.warning("Cancel resting order %s failed: %s", oid, e)
 
 
+def cancel_resting_orders_for_ticker(kalshi: Any, market_ticker: str) -> int:
+  """Cancel all Kalshi resting orders on a market (dedupe before enter/exit)."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return 0
+  cancel_fn = getattr(kalshi, "cancel_resting_orders_for_ticker", None)
+  if not callable(cancel_fn):
+    return 0
+  n = int(cancel_fn(str(market_ticker)) or 0)
+  if n:
+    log.info("Cancelled %s resting order(s) on %s", n, market_ticker)
+  return n
+
+
 def place_live_exit_sell(
   kalshi: Any,
   *,
@@ -155,10 +173,11 @@ def place_live_exit_sell(
   side: str,
   contracts: int,
   limit_cents: int,
-) -> str | None:
+) -> dict[str, Any]:
   """Marketable limit sell when software exit fires in live mode."""
+  empty: dict[str, Any] = {"order_id": None, "fill_count": 0, "remaining_count": 0}
   if not kalshi or not getattr(kalshi, "authenticated", False):
-    return None
+    return empty
   price = max(1, min(99, int(limit_cents)))
   try:
     order = kalshi.create_order(
@@ -169,12 +188,23 @@ def place_live_exit_sell(
       yes_price=price if side == "yes" else None,
       no_price=price if side == "no" else None,
     )
-    oid = _order_id(order)
-    log.info("Live EXIT sell %s ×%s @ %s¢ order %s", side.upper(), contracts, price, oid)
-    return oid
+    from src.data.kalshi import parse_v2_order_response
+
+    parsed = parse_v2_order_response(order)
+    oid = parsed["order_id"]
+    fill_count = int(parsed["fill_count"])
+    log.info(
+      "Live EXIT sell %s ×%s @ %s¢ order %s (%s filled)",
+      side.upper(), contracts, price, oid, fill_count,
+    )
+    return {
+      "order_id": oid,
+      "fill_count": fill_count,
+      "remaining_count": int(parsed["remaining_count"]),
+    }
   except Exception as e:
     log.warning("Live exit sell failed: %s", e)
-    return None
+    return empty
 
 
 def resting_config_for_kind(cfg: dict[str, Any] | None, *, kind: str) -> tuple[CheapLegExitConfig, LiveRestingExitConfig]:

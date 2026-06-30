@@ -10,9 +10,11 @@ from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip
 from src.trading.bot_period_rollover import force_close_period_positions
 from src.trading.live_bracket_orders import (
   cancel_resting_orders,
+  cancel_resting_orders_for_ticker,
   place_live_bracket_orders,
   place_live_exit_sell,
   resting_config_for_kind,
+  aggressive_exit_limit_cents,
 )
 from src.trading.bot_entry_settings import hourly_entry_settings_snapshot
 from src.trading.bot_cheap_leg_cooldown import (
@@ -646,13 +648,42 @@ class HourlyBot:
       live_exit_oid = None
       if pos_mode == "live":
         cancel_resting_orders(self.kalshi, pos)
-        live_exit_oid = place_live_exit_sell(
+        cancel_resting_orders_for_ticker(self.kalshi, str(pos["market_ticker"]))
+        sell_cents = aggressive_exit_limit_cents(int(exit_price))
+        exit_result = place_live_exit_sell(
           self.kalshi,
           market_ticker=str(pos["market_ticker"]),
           side=str(pos["side"]),
           contracts=contracts,
-          limit_cents=exit_price,
+          limit_cents=sell_cents,
         )
+        live_exit_oid = exit_result.get("order_id")
+        fill_count = int(exit_result.get("fill_count") or 0)
+        if fill_count <= 0:
+          self.store.log_trade({
+            "event_ticker": event_ticker,
+            "trigger": "continuous",
+            "action": "exit",
+            "mode": pos_mode,
+            "market_ticker": pos["market_ticker"],
+            "side": pos["side"],
+            "contracts": contracts,
+            "price_cents": sell_cents,
+            "entry_price_cents": entry_c,
+            "exit_price_cents": sell_cents,
+            "cost_usd": 0,
+            "signal": pick.get("signal"),
+            "label": pos.get("label"),
+            "status": "resting",
+            "detail": (
+              f"Live EXIT order {live_exit_oid} (0 filled — resting on Kalshi; "
+              f"{int(exit_result.get('remaining_count') or contracts)} remaining) "
+              f"@ {sell_cents}¢"
+            ),
+            "position_id": pos["id"],
+            "kalshi_order_id": live_exit_oid,
+          })
+          continue
 
       self.store.close_position(pos["id"])
       index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
@@ -1076,6 +1107,7 @@ class HourlyBot:
         "entry_settings": hourly_entry_settings_snapshot(settings),
       })
     try:
+      cancel_resting_orders_for_ticker(self.kalshi, str(pick["ticker"]))
       order = self.kalshi.create_order(
         ticker=str(pick["ticker"]),
         side=side,

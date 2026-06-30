@@ -340,6 +340,35 @@ class KalshiClient:
       "DELETE", f"/portfolio/events/orders/{order_id}", auth=True, critical=True
     )
 
+  def list_resting_orders(self, *, ticker: str | None = None) -> list[dict[str, Any]]:
+    """Open resting orders (V1 list endpoint; works for V2 event orders)."""
+    if not self.authenticated:
+      return []
+    params: dict[str, Any] = {"status": "resting", "limit": 200}
+    if ticker:
+      params["ticker"] = ticker
+    try:
+      data = self.get("/portfolio/orders", params=params, auth=True)
+    except Exception as e:
+      log.warning("Kalshi list resting orders failed: %s", e)
+      return []
+    orders = data.get("orders") if isinstance(data, dict) else None
+    return list(orders) if isinstance(orders, list) else []
+
+  def cancel_resting_orders_for_ticker(self, ticker: str) -> int:
+    """Cancel all resting orders on a market ticker. Returns count cancelled."""
+    cancelled = 0
+    for row in self.list_resting_orders(ticker=ticker):
+      oid = row.get("order_id")
+      if not oid:
+        continue
+      try:
+        self.cancel_order(str(oid))
+        cancelled += 1
+      except Exception as e:
+        log.warning("Cancel resting order %s on %s failed: %s", oid, ticker, e)
+    return cancelled
+
   def portfolio_balance(self, *, fresh: bool = False) -> dict[str, Any] | None:
     """Kalshi cash balance (cents); cached to limit /portfolio/balance polling."""
     if not self.authenticated:

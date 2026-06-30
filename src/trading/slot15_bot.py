@@ -9,9 +9,11 @@ from typing import Any
 from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip_reason, sync_auto_stop_for_risk
 from src.trading.live_bracket_orders import (
   cancel_resting_orders,
+  cancel_resting_orders_for_ticker,
   place_live_bracket_orders,
   place_live_exit_sell,
   resting_config_for_kind,
+  aggressive_exit_limit_cents,
 )
 from src.trading.bot_period_rollover import force_close_period_positions, resolve_rollover_exit_cents
 from src.trading.bot_entry_settings import slot15_entry_settings_snapshot
@@ -527,13 +529,42 @@ class Slot15Bot:
       live_exit_oid = None
       if pos_mode == "live":
         cancel_resting_orders(self.kalshi, pos)
-        live_exit_oid = place_live_exit_sell(
+        cancel_resting_orders_for_ticker(self.kalshi, str(pos["market_ticker"]))
+        sell_cents = aggressive_exit_limit_cents(int(exit_price))
+        exit_result = place_live_exit_sell(
           self.kalshi,
           market_ticker=str(pos["market_ticker"]),
           side=str(pos["side"]),
           contracts=contracts,
-          limit_cents=exit_price,
+          limit_cents=sell_cents,
         )
+        live_exit_oid = exit_result.get("order_id")
+        fill_count = int(exit_result.get("fill_count") or 0)
+        if fill_count <= 0:
+          self.store.log_trade({
+            "event_ticker": slot_key,
+            "trigger": "continuous",
+            "action": "exit",
+            "mode": pos_mode,
+            "market_ticker": pos["market_ticker"],
+            "side": pos["side"],
+            "contracts": contracts,
+            "price_cents": sell_cents,
+            "entry_price_cents": entry_c,
+            "exit_price_cents": sell_cents,
+            "cost_usd": 0,
+            "signal": pos.get("signal"),
+            "label": pos.get("label"),
+            "status": "resting",
+            "detail": (
+              f"Live EXIT order {live_exit_oid} (0 filled — resting on Kalshi; "
+              f"{int(exit_result.get('remaining_count') or contracts)} remaining) "
+              f"@ {sell_cents}¢"
+            ),
+            "position_id": pos["id"],
+            "kalshi_order_id": live_exit_oid,
+          })
+          continue
 
       self.store.close_position(pos["id"])
       leg_alert = assess_slot15_leg_position_alert(
@@ -958,6 +989,7 @@ class Slot15Bot:
         "entry_settings": slot15_entry_settings_snapshot(settings),
       })
     try:
+      cancel_resting_orders_for_ticker(self.kalshi, str(pick["ticker"]))
       order = self.kalshi.create_order(
         ticker=str(pick["ticker"]),
         side=side,

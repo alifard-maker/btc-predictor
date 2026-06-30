@@ -24,6 +24,13 @@ def test_should_place_only_for_cheap_legs():
   assert not should_place_resting_exits(entry_cents=45, cheap_cfg=cheap, resting_cfg=resting)
 
 
+def test_aggressive_exit_limit_cents():
+  from src.trading.live_bracket_orders import aggressive_exit_limit_cents
+
+  assert aggressive_exit_limit_cents(32) == 30
+  assert aggressive_exit_limit_cents(2) == 1
+
+
 def test_place_live_bracket_orders_calls_sell_limits():
   kalshi = MagicMock()
   kalshi.authenticated = True
