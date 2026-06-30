@@ -135,6 +135,8 @@ class KalshiClient:
     self._index_cache: dict[str, tuple[KalshiPriceQuote | None, float]] = {}
     self._brtI_last_good: KalshiPriceQuote | None = None
     self._slot_targets: dict[str, float] = {}
+    self._balance_cache: tuple[dict[str, Any] | None, float] | None = None
+    self._balance_cache_sec = float(kcfg.get("balance_cache_sec", 30))
     pf = cfg.get("price_feed") or {}
     self._brtI_index = kcfg.get("brti_index_id") or pf.get("index_id") or BRTI_INDEX_ID
 
@@ -291,15 +293,44 @@ class KalshiClient:
     """Cancel an open order by ID."""
     return self._request("DELETE", f"/portfolio/orders/{order_id}", auth=True, critical=True)
 
-  def portfolio_balance(self) -> dict[str, Any] | None:
-    """Verify API credentials; returns balance dict or None if not configured."""
+  def portfolio_balance(self, *, fresh: bool = False) -> dict[str, Any] | None:
+    """Kalshi cash balance (cents); cached to limit /portfolio/balance polling."""
     if not self.authenticated:
       return None
+    now_mono = time.monotonic()
+    if (
+      not fresh
+      and self._balance_cache
+      and (now_mono - self._balance_cache[1]) < self._balance_cache_sec
+    ):
+      return self._balance_cache[0]
     try:
-      return self.get("/portfolio/balance", auth=True)
+      bal = self.get("/portfolio/balance", auth=True)
+      self._balance_cache = (bal, now_mono)
+      return bal
     except Exception as e:
       log.warning("Kalshi portfolio balance failed: %s", e)
+      if self._balance_cache:
+        return self._balance_cache[0]
       return None
+
+  @staticmethod
+  def balance_cents_from_payload(bal: dict[str, Any] | None) -> int | None:
+    if not bal:
+      return None
+    raw = bal.get("balance")
+    if raw is None:
+      return None
+    try:
+      return int(raw)
+    except (TypeError, ValueError):
+      return None
+
+  @staticmethod
+  def balance_usd_from_cents(cents: int | None) -> float | None:
+    if cents is None:
+      return None
+    return round(cents / 100.0, 2)
 
   @staticmethod
   def _parse_ts(raw: str) -> datetime:
@@ -644,6 +675,7 @@ class KalshiClient:
 
   def status(self) -> dict[str, Any]:
     bal = self.portfolio_balance() if self.authenticated else None
+    balance_cents = self.balance_cents_from_payload(bal)
     active = self.active_slot15m_market()
     brti = self.fetch_brti_live()
     out: dict[str, Any] = {
@@ -653,7 +685,8 @@ class KalshiClient:
       "base_url": self.base_url,
       "connected": active is not None,
       "brti_live": brti.price if brti else None,
-      "balance_cents": bal.get("balance") if bal else None,
+      "balance_cents": balance_cents,
+      "balance_usd": self.balance_usd_from_cents(balance_cents),
     }
     if active:
       out["active_market"] = active.to_dict()

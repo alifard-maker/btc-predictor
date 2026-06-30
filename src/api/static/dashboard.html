@@ -213,6 +213,7 @@
       </div>
       <div class="meta">
         <div id="edt-clock"><span class="edt-label">Eastern</span><span id="edt-clock-value">—</span></div>
+        <div id="kalshi-balance" class="muted" style="font-size:.72rem" title="Cash balance on your linked Kalshi account (via API)">Kalshi cash —</div>
         <div id="updated">—</div>
         <span class="zoom-controls" title="Pinch on trackpad, or use − / + buttons · ⌘0 to reset">
           <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
@@ -1288,8 +1289,41 @@
       el.innerHTML = parts.map((p) => `<p style="margin:.25rem 0;font-size:.78rem">${p}</p>`).join('');
     }
 
+    let lastKalshiStatus = null;
+
+    function formatKalshiBalance(kalshi) {
+      if (!kalshi || !kalshi.authenticated) return null;
+      if (kalshi.balance_usd != null && kalshi.balance_usd === kalshi.balance_usd) {
+        return '$' + Number(kalshi.balance_usd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
+      if (kalshi.balance_cents != null) {
+        return '$' + (Number(kalshi.balance_cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
+      return null;
+    }
+
+    function renderKalshiBalanceHeader(kalshi) {
+      lastKalshiStatus = kalshi || null;
+      const el = $('kalshi-balance');
+      if (!el) return;
+      const bal = formatKalshiBalance(kalshi);
+      if (!kalshi?.authenticated) {
+        el.textContent = 'Kalshi cash — (API not linked)';
+        el.style.color = 'var(--muted)';
+        return;
+      }
+      if (bal) {
+        el.textContent = 'Kalshi cash ' + bal;
+        el.style.color = '#86efac';
+      } else {
+        el.textContent = 'Kalshi cash — unavailable';
+        el.style.color = 'var(--warn)';
+      }
+    }
+
     function renderStatus(h) {
       if (h.version) $('app-version').textContent = h.version;
+      renderKalshiBalanceHeader(h.kalshi);
       renderBotRiskBanner(h.bot_risk);
       schedulerRunning = !!h.scheduler_running;
       serverDataDir = h.data_dir || '';
@@ -1298,6 +1332,7 @@
       const data = activeTab === 'eth-15m' ? (h.eth_15m || h) : h;
       const series = data.series_ticker || api.series;
       const idx = data.index_id || api.indexLabel;
+      const kalshiBal = formatKalshiBalance(h.kalshi);
       const items = [
         ['API', h.status || data.status || 'ok', (h.status || data.status) === 'ok'],
         ['Scheduler', data.scheduler_running ? 'Running' : 'Stopped', data.scheduler_running],
@@ -1308,6 +1343,7 @@
         ['Vol spike', data.volume_spike_window || '4h', true],
         ['Price feed', data.price_feed || `Kalshi ${idx}`, true],
         ['Kalshi', data.kalshi?.authenticated ? `${series} · ${idx} live` : (data.kalshi?.connected ? `${series} · exchange ticks` : 'No market'), !!data.kalshi?.connected],
+        ['Kalshi cash', kalshiBal || (h.kalshi?.authenticated ? '—' : 'API not linked'), !!kalshiBal],
         ['Live tick', data.live_tick?.source ? `${data.live_tick.source} · ${data.live_tick.age_sec != null ? data.live_tick.age_sec + 's' : '—'}` : '—', !!(data.live_tick && data.live_tick.age_sec != null && data.live_tick.age_sec < 10)],
         ['Settlement', data.settlement_reference || `CF Benchmarks ${idx}`, true],
         ['Schedule', (data.timezone || 'ET') + ' :00/:15/:30/:45 · 2nd @ :04/:19/:34/:49', true],
@@ -2271,6 +2307,15 @@
         </div>`;
     }
 
+    function botLiveKalshiCashHtml(s) {
+      if ((s.mode || 'paper') !== 'live') return '';
+      const bal = formatKalshiBalance(lastKalshiStatus);
+      const text = bal
+        ? `<strong style="color:#86efac">${bal}</strong> in your linked Kalshi account`
+        : '<span class="muted">Kalshi cash unavailable — check API keys</span>';
+      return `<p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Account cash (Kalshi): ${text}. Bot sizing still uses <strong>max at-risk</strong> below, not your full wallet.</p>`;
+    }
+
     async function resetPaperBankroll(period, asset, kind = 'hourly') {
       const url = period === 'hour'
         ? (kind === 'hourly_trial' ? hourlyTrialBotResetBankrollUrl(asset) : hourlyBotResetBankrollUrl(asset))
@@ -3058,6 +3103,7 @@
         </div>
         ${botIntervalPerformanceHtml(bot, 'slot')}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across slots. Max at-risk caps concurrent open exposure.' : 'Slot bankroll = max cap + realized P&amp;L this slot.'} <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
+        ${botLiveKalshiCashHtml(s)}
         ${botPaperBankrollHtml(bot, s, 'slot')}
         ${openPosHtml}
         <div class="bot-row">
@@ -3257,6 +3303,7 @@
         </div>
         ${botIntervalPerformanceHtml(bot, 'hour')}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across hours. Max at-risk caps concurrent open exposure.' : 'Hour bankroll = max cap + realized P&amp;L this hour.'} <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
+        ${botLiveKalshiCashHtml(s)}
         ${botPaperBankrollHtml(bot, s, 'hour')}
         ${openPosHtml}
         <div class="bot-row">

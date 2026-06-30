@@ -31,6 +31,7 @@ kalshi:
   brti_poll_sec: 2
   brti_index_id: BRTI
   brti_max_stale_sec: 5
+  balance_cache_sec: 30
   exchange_tick_cache_sec: 1
   live_fallback_exchange: true
 
