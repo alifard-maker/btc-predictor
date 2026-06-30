@@ -50,6 +50,7 @@ def _live_tab(event="KXTEST-1H", pick=None, regime_allow=True):
       "primary_pick": pick,
     },
     "brti_live": 2500.0,
+    "brti_source": "brti_live",
   }
 
 
@@ -371,6 +372,7 @@ def test_settings_save_does_not_delete_trades():
 def test_remaining_budget_accounts_for_realized_losses():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(max_spend_per_hour_usd=25.0))
     store.log_trade({
       "event_ticker": "EV1",
       "action": "exit",
@@ -384,7 +386,7 @@ def test_remaining_budget_accounts_for_realized_losses():
 def test_remaining_budget_increases_after_win():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
-    store.save_settings(HourlyBotSettings(use_accumulated_profit=True))
+    store.save_settings(HourlyBotSettings(use_accumulated_profit=True, max_spend_per_hour_usd=25.0))
     store.log_trade({
       "event_ticker": "EV1",
       "action": "exit",

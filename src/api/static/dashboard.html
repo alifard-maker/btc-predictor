@@ -600,7 +600,7 @@
         return {
           enabled: !!raw.enabled,
           mode: raw.mode === 'live' ? 'live' : 'paper',
-          [maxKey]: Number(raw[maxKey] ?? 25),
+          [maxKey]: Number(raw[maxKey] ?? 10),
           allow_strong: !!raw.allow_strong,
           allow_actionable: !!raw.allow_actionable,
           use_accumulated_profit: !!raw.use_accumulated_profit,
@@ -2190,7 +2190,7 @@
       return {
         enabled: !!enabledEl.checked,
         mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
-        max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
+        max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '10'),
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
@@ -2231,7 +2231,7 @@
         </div>
         <div class="bot-row">
           <label class="bot-label" title="Max open exposure at once this hour — not cumulative spend">Max at-risk $ / hour
-            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="${saveFn}">
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 10}" style="width:5rem;margin-left:.35rem" onchange="${saveFn}">
           </label>
           <label class="bot-label">STRONG bets
             <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
@@ -2313,7 +2313,7 @@
     function botPaperBankrollHtml(bot, s, periodLabel) {
       if ((s.mode || 'paper') !== 'paper') return '';
       const pb = bot.paper_bankroll || {};
-      const bankroll = Number(bot.hour_bankroll_usd ?? bot.slot_bankroll_usd ?? pb.paper_bankroll_usd ?? s.max_spend_per_hour_usd ?? s.max_spend_per_slot_usd ?? 25);
+      const bankroll = Number(bot.hour_bankroll_usd ?? bot.slot_bankroll_usd ?? pb.paper_bankroll_usd ?? s.max_spend_per_hour_usd ?? s.max_spend_per_slot_usd ?? 10);
       const since = Number(pb.paper_bankroll_since_reset_usd ?? 0);
       const pct = Number(pb.paper_bankroll_since_reset_pct ?? 0);
       const invested = Number(pb.paper_total_invested_usd ?? pb.paper_bankroll_initial_usd ?? bankroll);
@@ -3444,7 +3444,7 @@
       const body = {
         enabled: !!enabledEl.checked,
         mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
-        max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
+        max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '10'),
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,

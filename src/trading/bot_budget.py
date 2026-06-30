@@ -80,3 +80,27 @@ def remaining_budget_usd(
     return concurrent_room
   interval_room = max(0.0, float(max_cap) - float(interval_total_entered_usd))
   return min(concurrent_room, interval_room)
+
+
+def config_max_spend_per_hour(cfg: dict | None) -> float | None:
+  """Read hourly bot max concurrent exposure from asset-scoped config."""
+  if not cfg:
+    return None
+  raw = ((cfg.get("hourly") or {}).get("bot") or {}).get("max_spend_per_hour_usd")
+  if raw is None:
+    return None
+  return float(raw)
+
+
+def sync_max_spend_from_config(store: Any, *, cfg: dict | None = None) -> None:
+  """Clamp stored max spend down to config when config is lower (deploy safety)."""
+  cap = config_max_spend_per_hour(cfg)
+  if cap is None:
+    return
+  settings = store.get_settings()
+  current = float(settings.max_spend_per_hour_usd)
+  if current <= cap:
+    return
+  merged = settings.to_dict()
+  merged["max_spend_per_hour_usd"] = cap
+  store.save_settings(type(settings)(**merged), source="config_sync", cfg=cfg)

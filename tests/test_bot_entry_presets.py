@@ -36,6 +36,15 @@ def test_slot15_aggressive_entry_strategy():
   assert estrat.max_entries_per_cycle == 3
 
 
+def test_hourly_passive_entry_strategy():
+  estrat = effective_bot_entry_strategy({}, kind="hourly", aggressive=False, tuning=None)
+  assert estrat.max_entries_per_cycle == 1
+  assert estrat.max_concurrent_positions == 1
+  assert estrat.allow_scale_in is False
+  assert estrat.allow_barbell is False
+  assert estrat.max_stake_per_entry_usd == 10.0
+
+
 def test_hourly_aggressive_entry_strategy():
   estrat = effective_bot_entry_strategy({}, kind="hourly", aggressive=True, tuning=None)
   assert estrat.max_budget_fraction_per_entry == 0.10

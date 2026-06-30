@@ -15,7 +15,7 @@ from typing import Any
 class HourlyBotSettings:
   enabled: bool = False
   mode: str = "paper"  # paper | live
-  max_spend_per_hour_usd: float = 25.0
+  max_spend_per_hour_usd: float = 10.0
   allow_strong: bool = False
   allow_actionable: bool = False
   continuous: bool = True
@@ -50,7 +50,7 @@ class HourlyBotSettings:
     return cls(
       enabled=bool(raw.get("enabled", False)),
       mode=str(raw.get("mode", "paper")),
-      max_spend_per_hour_usd=float(raw.get("max_spend_per_hour_usd", 25.0)),
+      max_spend_per_hour_usd=float(raw.get("max_spend_per_hour_usd", 10.0)),
       allow_strong=bool(raw.get("allow_strong", False)),
       allow_actionable=bool(raw.get("allow_actionable", False)),
       continuous=bool(raw.get("continuous", True)),

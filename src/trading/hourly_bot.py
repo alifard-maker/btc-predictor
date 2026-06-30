@@ -6,6 +6,7 @@ import logging
 import uuid
 from typing import Any
 
+from src.trading.bot_budget import sync_max_spend_from_config
 from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip_reason, sync_auto_stop_for_risk
 from src.trading.bot_period_rollover import force_close_period_positions
 from src.trading.live_bracket_orders import (
@@ -334,6 +335,7 @@ class HourlyBot:
       return []
 
     settings, prev_period = self.store.sync_period(str(event_ticker), self.store.get_settings())
+    sync_max_spend_from_config(self.store, cfg=cfg)
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
     settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
     if not settings.enabled:

@@ -23,7 +23,7 @@ def normalize_bot_settings(raw: dict | None, max_key: str) -> dict | None:
   return {
     "enabled": bool(raw.get("enabled")),
     "mode": "live" if raw.get("mode") == "live" else "paper",
-    max_key: float(raw.get(max_key, 25)),
+    max_key: float(raw.get(max_key, 10)),
     "allow_strong": bool(raw.get("allow_strong")),
     "allow_actionable": bool(raw.get("allow_actionable")),
     "use_accumulated_profit": bool(raw.get("use_accumulated_profit", False)),
@@ -83,7 +83,7 @@ def test_normalize_defaults():
   assert n["use_accumulated_profit"] is False
   assert n["profit_use_pct"] == 100.0
   assert n["paper_auto_refill"] is True
-  assert n["max_spend_per_hour_usd"] == 25.0
+  assert n["max_spend_per_hour_usd"] == 10.0
 
 
 def test_equal_ignores_extra_keys():
