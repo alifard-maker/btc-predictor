@@ -681,6 +681,29 @@ def test_enrich_open_positions_leg_alert_not_slot_only():
   assert alert["alert"] == "TAKE PROFIT"
   assert alert.get("slot_monitor_alert") == "HOLD"
   assert alert.get("mark_vs_entry_cents") == 3
+  assert enriched[0]["mark_bid_cents"] == 58
+  assert enriched[0]["mark_ask_cents"] == 58
+  assert enriched[0]["mark_price_cents"] == 58
+
+
+def test_enrich_open_positions_mark_bid_ask_spread():
+  from src.trading.slot15_bot import enrich_open_positions_live
+
+  positions = [{
+    "id": "p1",
+    "side": "yes",
+    "entry_price_cents": 55,
+    "contracts": 10,
+    "cost_usd": 5.5,
+    "signal": "LONG",
+  }]
+  tab = _live_tab()
+  tab["kalshi"]["yes_bid"] = 0.36
+  tab["kalshi"]["yes_ask"] = 0.59
+  enriched = enrich_open_positions_live(positions, tab)
+  assert enriched[0]["mark_bid_cents"] == 36
+  assert enriched[0]["mark_ask_cents"] == 59
+  assert enriched[0]["mark_price_cents"] == 36
 
 
 def test_scale_in_second_leg_same_cycle():

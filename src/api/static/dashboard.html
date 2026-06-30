@@ -2432,6 +2432,14 @@
       return parts.join(' / ');
     }
 
+    function botMarkBook(p) {
+      const bid = p.mark_bid_cents;
+      const ask = p.mark_ask_cents;
+      if (bid == null && ask == null) return '—';
+      if (bid != null && ask != null) return `${bid} / ${ask}¢`;
+      return botCents(bid != null ? bid : ask);
+    }
+
     function botPnlUsd(v) {
       if (v == null || v === '') return '—';
       const n = Number(v);
@@ -3081,6 +3089,7 @@
             <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
             <td>${(p.side || '').toUpperCase()} ×${p.contracts ?? '—'}</td>
             <td>${botCents(p.entry_price_cents)}</td>
+            <td style="font-size:.65rem" title="Kalshi bid/ask on held side">${botMarkBook(p)}</td>
             <td>${botCents(p.mark_price_cents)}</td>
             <td class="${markDelta != null && markDelta > 0 ? 'up' : markDelta != null && markDelta < 0 ? 'down' : 'muted'}">${markDelta != null ? `${markDelta >= 0 ? '+' : ''}${markDelta}¢` : '—'}</td>
             <td>${upnl != null ? botPnlUsd(upnl) : '—'}</td>
@@ -3092,14 +3101,15 @@
           <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
           <td>${(p.side || '').toUpperCase()} ×${p.contracts ?? '—'}</td>
           <td>${botCents(p.entry_price_cents)}</td>
+          <td style="font-size:.65rem" title="Kalshi bid/ask on held side">${botMarkBook(p)}</td>
           <td>${botCents(p.mark_price_cents)}</td>
           <td>${upnl != null ? botPnlUsd(upnl) : '—'}</td>
           <td class="${alertCls}">${alert}</td>
         </tr>`;
       }).join('');
       const head = dualView
-        ? `<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Mark Δ</th><th>Unreal. P&amp;L</th><th>Leg alert</th><th>${opts.compareLabel || 'Slot (BRTI)'}</th></tr></thead>`
-        : '<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>';
+        ? `<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Bid/Ask</th><th>Mark</th><th>Mark Δ</th><th>Unreal. P&amp;L</th><th>Leg alert</th><th>${opts.compareLabel || 'Slot (BRTI)'}</th></tr></thead>`
+        : '<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Bid/Ask</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>';
       const title = dualView
         ? `Open positions · leg mark P&amp;L + ${opts.compareLabel || 'slot BRTI'} view`
         : 'Open positions · live mark-to-market';

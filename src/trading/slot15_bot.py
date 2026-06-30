@@ -281,6 +281,8 @@ def enrich_open_positions_live(
     fill = paper_exit_fill(pick=quote, side=str(pos["side"]))
     mark = int(fill["price_cents"]) if fill.get("ok") else _price_cents_for_side(yes_cents, str(pos["side"]))
     row["mark_price_cents"] = mark
+    row["mark_bid_cents"] = fill.get("bid_cents")
+    row["mark_ask_cents"] = fill.get("ask_cents")
     row["unrealized_pnl_usd"] = _unrealized_pnl_usd(pos, mark)
     row["current_signal"] = monitor.get("signal_at_open")
     peaks = {

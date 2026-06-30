@@ -345,8 +345,8 @@ def test_enrich_open_positions_live_mark_to_market():
     "signal": "BUY YES",
     "label": "$2,500+",
     "kalshi_mid": 0.55,
-    "yes_bid": 0.55,
-    "yes_ask": 0.55,
+    "yes_bid": 0.52,
+    "yes_ask": 0.58,
     "edge": 0.08,
   })
   positions = [{
@@ -361,8 +361,10 @@ def test_enrich_open_positions_live_mark_to_market():
   from src.trading.hourly_bot import enrich_open_positions_live
   enriched = enrich_open_positions_live(positions, tab, cfg={"hourly": {"regime": {}}})
   assert len(enriched) == 1
-  assert enriched[0]["mark_price_cents"] == 55
-  assert enriched[0]["unrealized_pnl_usd"] == 1.5
+  assert enriched[0]["mark_price_cents"] == 52
+  assert enriched[0]["mark_bid_cents"] == 52
+  assert enriched[0]["mark_ask_cents"] == 58
+  assert enriched[0]["unrealized_pnl_usd"] == 1.2
   assert enriched[0]["position_alert"]["alert"] in ("HOLD", "TAKE PROFIT", "CUT LOSSES")
 
 

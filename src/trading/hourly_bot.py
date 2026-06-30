@@ -267,6 +267,11 @@ def enrich_open_positions_live(
     if pick:
       exit_fill = paper_exit_fill(pick=pick, side=str(pos["side"]))
       mark = int(exit_fill["price_cents"]) if exit_fill.get("ok") else None
+      row["mark_bid_cents"] = exit_fill.get("bid_cents")
+      row["mark_ask_cents"] = exit_fill.get("ask_cents")
+    else:
+      row["mark_bid_cents"] = None
+      row["mark_ask_cents"] = None
     row["mark_price_cents"] = mark
     row["unrealized_pnl_usd"] = _unrealized_pnl_usd(pos, mark)
     row["current_signal"] = pick.get("signal") if pick else None
