@@ -232,9 +232,11 @@ class KalshiClient:
     except Exception as e:
       if circuit:
         err = str(e)
-        # Wrong index id / client errors must not trip the global circuit for all bots.
-        if "400 Client Error" in err and "/cfbenchmarks/" in path:
-          log.warning("Kalshi cfbenchmarks client error (not tripping circuit): %s", err[:200])
+        # Index passthrough errors must not pause discovery/entries for all bots.
+        if "/cfbenchmarks/" in path and (
+          "400 Client Error" in err or "429" in err or "Too Many Requests" in err
+        ):
+          log.warning("Kalshi cfbenchmarks error (not tripping circuit): %s", err[:200])
         else:
           circuit.record_failure(err)
       raise

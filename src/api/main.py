@@ -66,7 +66,7 @@ def _prediction_to_dict(pred: Prediction, *, asset: str = "btc") -> dict[str, An
     "asset": asset,
   }
   if _loop is not None:
-    quote = _loop.live_price_quote(fresh=True, asset=asset)
+    quote = _loop.live_price_quote(fresh=False, asset=asset)
     if quote is not None:
       out["current_price"] = round(quote.price, 2)
       out["current_price_source"] = quote.source

@@ -370,7 +370,7 @@ class PredictionLoop:
     if tab and tab.get("ok"):
       status["settlement_index"] = build_settlement_index_status(tab, cfg=acfg)
       return
-    quote = self.live_price_quote(fresh=True, asset=asset)
+    quote = self.live_price_quote(fresh=False, asset=asset)
     status["settlement_index"] = build_settlement_index_status(
       None,
       cfg=acfg,
@@ -623,7 +623,7 @@ class PredictionLoop:
 
     ok = bool(slot_key and kalshi_summary and kalshi_summary.get("market_ticker"))
     index_label = index_id_for_cfg(acfg)
-    quote = self.live_price_quote(fresh=True, asset=asset)
+    quote = self.live_price_quote(fresh=False, asset=asset)
     brti_live = round(quote.price, 2) if quote else None
     brti_source = quote.source if quote else monitor.get("current_price_source")
     return {
@@ -771,7 +771,7 @@ class PredictionLoop:
     acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
     if not acfg.get("daily", {}).get("enabled", True):
       return {"ok": False, "error": f"{asset.upper()} hourly predictions disabled"}
-    quote = self.live_price_quote(fresh=True, asset=asset)
+    quote = self.live_price_quote(fresh=False, asset=asset)
     price = quote.price if quote else None
     storage = self.storage if asset == "btc" else self.eth_storage()
     if price is None:
@@ -1454,7 +1454,7 @@ class PredictionLoop:
         log.warning("%s 2nd Chance skipped — no reference for slot %s", asset.upper(), slot_s)
         return None
 
-      live_quote = self.live_price_quote(fresh=True, asset=asset)
+      live_quote = self.live_price_quote(fresh=False, asset=asset)
       current = live_quote.price if live_quote else ref
       df_1m = storage.load("1m")
 
@@ -1835,8 +1835,8 @@ class PredictionLoop:
 
       slot_s = floor_to_15m(pd.Timestamp(datetime.now(timezone.utc)), self.tz)
       kalshi_ref = self._resolve_kalshi_t0(slot_s, asset=asset)
-      open_quote = self.live_price_quote(fresh=True, asset=asset)
-      current_quote = self.live_price_quote(fresh=True, asset=asset)
+      open_quote = self.live_price_quote(fresh=False, asset=asset)
+      current_quote = self.live_price_quote(fresh=False, asset=asset)
       locked = self._locked_slot_reference(slot_s, asset=asset)
       locked_ref = kalshi_ref
       if locked_ref is None and locked:
@@ -1930,7 +1930,7 @@ class PredictionLoop:
     index_id = index_id_for_cfg(acfg)
     max_stale = float(self.cfg.get("kalshi", {}).get("brti_max_stale_sec", 5))
     if self.kalshi.authenticated:
-      live = self.kalshi.fetch_index_live(index_id, fresh=True)
+      live = self.kalshi.fetch_index_live(index_id, fresh=fresh)
       if live is not None:
         return live
       last = self.kalshi.last_index_quote(index_id)
@@ -2034,7 +2034,7 @@ class PredictionLoop:
     df_1m = storage.load("1m")
 
     pred = self._prediction_for_current_slot(asset=asset)
-    live_quote = self.live_price_quote(fresh=True, asset=asset)
+    live_quote = self.live_price_quote(fresh=False, asset=asset)
     current = live_quote.price if live_quote else None
 
     api_ref, ref_source = kalshi.slot_t0_reference(slot_s, fresh=True)
@@ -2202,8 +2202,12 @@ class PredictionLoop:
 
   def poll_brti(self) -> None:
     """Background refresh of live price (BRTI/ERTI or exchange)."""
-    self.live_price_quote(fresh=True, asset="btc")
-    if self._slot15m_enabled("eth"):
+    tick = getattr(self, "_brti_poll_tick", 0) + 1
+    self._brti_poll_tick = tick
+    # Alternate assets each tick to avoid burst 429s on cfbenchmarks.
+    if tick % 2 == 1:
+      self.live_price_quote(fresh=True, asset="btc")
+    elif self._slot15m_enabled("eth"):
       self.live_price_quote(fresh=True, asset="eth")
 
   def status(self) -> dict[str, Any]:
@@ -2222,7 +2226,7 @@ class PredictionLoop:
     fetcher = self.fetcher if asset == "btc" else self.eth_fetcher()
     df_15m = storage.load("15m")
     df_1m = storage.load("1m")
-    live = self.live_price_quote(fresh=True, asset=asset)
+    live = self.live_price_quote(fresh=False, asset=asset)
     live_tick: dict[str, Any] | None = None
     if live:
       live_tick = {

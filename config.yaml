@@ -22,13 +22,13 @@ kalshi:
   cache_sec: 15
   circuit_breaker:
     enabled: true
-    warn_threshold: 2
-    failure_threshold: 5
-    pause_on_429_after: 3
+    warn_threshold: 5
+    failure_threshold: 8
+    pause_on_429_after: 10
     pause_seconds: 30
     pause_seconds_429: 15
-  brti_cache_sec: 0
-  brti_poll_sec: 1
+  brti_cache_sec: 2
+  brti_poll_sec: 2
   brti_index_id: BRTI
   brti_max_stale_sec: 5
   exchange_tick_cache_sec: 1

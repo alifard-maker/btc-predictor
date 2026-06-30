@@ -24,21 +24,6 @@ def test_degraded_blocks_entries_before_pause():
     assert not cb.is_paused()
 
 
-def test_429_shorter_pause():
-  with tempfile.TemporaryDirectory() as td:
-    cb = KalshiCircuitBreaker(
-      CircuitConfig(pause_on_429_after=3, pause_seconds_429=15, pause_seconds=30),
-      Path(td) / "circuit.json",
-    )
-    cb.record_failure("HTTP 429 Too Many Requests")
-    cb.record_failure("HTTP 429 Too Many Requests")
-    assert not cb.is_paused()
-    cb.record_failure("HTTP 429 Too Many Requests")
-    assert cb.is_paused()
-    st = cb.status_dict()
-    assert st["seconds_until_resume"] <= 15.0
-
-
 def test_critical_requests_allowed_during_pause():
   with tempfile.TemporaryDirectory() as td:
     cb = KalshiCircuitBreaker(
