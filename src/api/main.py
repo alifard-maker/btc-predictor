@@ -120,6 +120,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
       log.warning("Hourly rollover settlement backfill skipped: %s", e)
     try:
+      from src.trading.bot_phantom_settlement_cleanup import cleanup_all_phantom_settlement_dbs
+
+      phantom_bf = cleanup_all_phantom_settlement_dbs(data_dir, dry_run=False, cfg=_cfg)
+      if phantom_bf.get("voided_count"):
+        log.info("Phantom period-settlement cleanup on startup: %s", phantom_bf)
+    except Exception as e:
+      log.warning("Phantom period-settlement cleanup skipped: %s", e)
+    try:
       snap = _loop.calibration.snapshot_stats(note="auto bootstrap")
       if snap.get("status") == "ok":
         log.info("Stats snapshot on startup: %s", snap)
@@ -1584,6 +1592,17 @@ def backfill_rollover_settlement(_: None = Depends(_verify_admin)):
   data_dir = Path(_cfg["paths"]["logs"]).parent
   stats = backfill_all_hourly_rollover_dbs(data_dir, dry_run=False, cfg=_cfg)
   return {"status": "ok", **stats}
+
+
+@app.post("/api/admin/backfill-phantom-settlement")
+def backfill_phantom_settlement(_: None = Depends(_verify_admin)):
+  from pathlib import Path
+
+  from src.trading.bot_phantom_settlement_cleanup import cleanup_all_phantom_settlement_dbs
+
+  data_dir = Path(_cfg["paths"]["logs"]).parent
+  stats = cleanup_all_phantom_settlement_dbs(data_dir, dry_run=False, cfg=_cfg)
+  return stats
 
 
 @app.post("/api/admin/backfill-kalshi")

@@ -429,6 +429,74 @@ class KalshiClient:
       out.append(row)
     return out
 
+  def list_fills(
+    self,
+    *,
+    ticker: str | None = None,
+    order_id: str | None = None,
+    limit: int = 200,
+  ) -> list[dict[str, Any]]:
+    """Executed fills for the authenticated member (newest pages first)."""
+    if not self.authenticated:
+      return []
+    params: dict[str, Any] = {"limit": min(int(limit), 200)}
+    if ticker:
+      params["ticker"] = str(ticker)
+    if order_id:
+      params["order_id"] = str(order_id)
+    out: list[dict[str, Any]] = []
+    cursor: str | None = None
+    pages = 0
+    while pages < 5:
+      if cursor:
+        params["cursor"] = cursor
+      try:
+        data = self.get("/portfolio/fills", params=params, auth=True)
+      except Exception as e:
+        log.warning("Kalshi list fills failed: %s", e)
+        break
+      rows = data.get("fills") if isinstance(data, dict) else None
+      if not isinstance(rows, list) or not rows:
+        break
+      out.extend(r for r in rows if isinstance(r, dict))
+      cursor = data.get("cursor") if isinstance(data, dict) else None
+      pages += 1
+      if not cursor or len(out) >= limit:
+        break
+    return out[:limit]
+
+  def list_settlements(
+    self,
+    *,
+    ticker: str | None = None,
+    limit: int = 100,
+  ) -> list[dict[str, Any]]:
+    """Settlement payouts for expired markets."""
+    if not self.authenticated:
+      return []
+    params: dict[str, Any] = {"limit": min(int(limit), 200)}
+    if ticker:
+      params["ticker"] = str(ticker)
+    try:
+      data = self.get("/portfolio/settlements", params=params, auth=True)
+    except Exception as e:
+      log.warning("Kalshi list settlements failed: %s", e)
+      return []
+    rows = data.get("settlements") if isinstance(data, dict) else None
+    return list(rows) if isinstance(rows, list) else []
+
+  def get_market_ticker(self, ticker: str) -> dict[str, Any] | None:
+    """Single market row (status, expiration_value, strikes)."""
+    if not self.enabled:
+      return None
+    try:
+      data = self.get(f"/markets/{ticker}")
+      row = data.get("market") if isinstance(data, dict) else None
+      return row if isinstance(row, dict) else data if isinstance(data, dict) else None
+    except Exception as e:
+      log.warning("Kalshi get market %s failed: %s", ticker, e)
+      return None
+
   def portfolio_balance(self, *, fresh: bool = False) -> dict[str, Any] | None:
     """Kalshi cash balance (cents); cached to limit /portfolio/balance polling."""
     if not self.authenticated:

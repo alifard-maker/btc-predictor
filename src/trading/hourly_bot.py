@@ -869,6 +869,14 @@ class HourlyBot:
   ) -> list[dict[str, Any]]:
     live = tab.get("live") or tab
     results: list[dict[str, Any]] = []
+
+    if settings.auto_stopped:
+      skip = settings.auto_stop_reason or "auto_stopped_budget_exhausted"
+      if skip == "budget_exhausted":
+        skip = "auto_stopped_budget_exhausted"
+      self.store.set_last_skip_reason(skip)
+      return results
+
     gate = risk_gate_skip_reason(bot_key=self._bot_risk_key)
     if gate:
       self.store.set_last_skip_reason(gate)
@@ -893,13 +901,6 @@ class HourlyBot:
     )
     if far_gate:
       self.store.set_last_skip_reason(far_gate)
-      return results
-
-    if settings.auto_stopped:
-      skip = settings.auto_stop_reason or "auto_stopped_budget_exhausted"
-      if skip == "budget_exhausted":
-        skip = "auto_stopped_budget_exhausted"
-      self.store.set_last_skip_reason(skip)
       return results
 
     max_cap = settings.max_spend_per_hour_usd

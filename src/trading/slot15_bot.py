@@ -17,7 +17,7 @@ from src.trading.live_position_sync import (
   run_live_slot_hygiene,
   try_live_position_exit,
 )
-from src.trading.bot_period_rollover import force_close_period_positions, resolve_rollover_exit_cents
+from src.trading.bot_period_rollover import force_close_period_positions
 from src.trading.bot_entry_settings import slot15_entry_settings_snapshot
 from src.trading.bot_cheap_leg_cooldown import (
   cheap_leg_cut_cooldown_seconds,
@@ -350,22 +350,48 @@ class Slot15Bot:
 
     actions: list[dict[str, Any]] = []
     if prev_period:
-      kalshi = tab.get("kalshi") or {}
-      market_ticker = str(kalshi.get("market_ticker") or "") or None
-      yes_cents = _yes_mid_cents(kalshi)
+      kalshi_tab = tab.get("kalshi") or {}
+      market_ticker = str(kalshi_tab.get("market_ticker") or "") or None
+      yes_cents = _yes_mid_cents(kalshi_tab)
+      rollover_notes: dict[str, str] = {}
 
       def _exit_cents(pos: dict[str, Any]) -> int:
-        return resolve_rollover_exit_cents(
+        from src.trading.slot15_settlement import resolve_slot15_rollover_exit_cents
+
+        cents, note = resolve_slot15_rollover_exit_cents(
           pos,
+          kalshi=self.kalshi,
+          slot_key=str(prev_period),
+          market_ticker=str(pos.get("market_ticker") or market_ticker or ""),
           current_market_ticker=market_ticker,
           quote={
-            "yes_bid": kalshi.get("yes_bid"),
-            "yes_ask": kalshi.get("yes_ask"),
-            "yes_mid": kalshi.get("yes_mid"),
+            "yes_bid": kalshi_tab.get("yes_bid"),
+            "yes_ask": kalshi_tab.get("yes_ask"),
+            "yes_mid": kalshi_tab.get("yes_mid"),
           },
           yes_mid_cents=yes_cents,
           price_for_side=_price_cents_for_side,
         )
+        rollover_notes[str(pos["id"])] = note
+        return int(cents)
+
+      def _rollover_detail(pos: dict[str, Any], exit_price: int, _pnl: float) -> str:
+        from src.trading.bot_position_mode import exit_mode_label
+
+        contracts = int(pos["contracts"])
+        entry_c = int(pos["entry_price_cents"])
+        note = rollover_notes.get(str(pos["id"]), "")
+        mode_label = exit_mode_label(pos, settings_mode=settings.mode)
+        if "settled" in note.lower():
+          label = "PERIOD SETTLEMENT"
+        else:
+          label = "PERIOD ROLLOVER"
+        return (
+          f"{mode_label} EXIT ({label}): {pos['side'].upper()} ×{contracts} "
+          f"@ {exit_price}¢ (entry {entry_c}¢) — {note}"
+        )
+
+      from src.trading.slot15_settlement import should_rollover_close_slot15_leg
 
       actions.extend(
         force_close_period_positions(
@@ -374,6 +400,10 @@ class Slot15Bot:
           exit_cents_for_position=_exit_cents,
           settings=settings,
           log_label=f"{self.asset.upper()} 15m",
+          format_detail=_rollover_detail,
+          should_close=lambda pos: should_rollover_close_slot15_leg(
+            pos, prev_period, kalshi=self.kalshi,
+          ),
         )
       )
       settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind="slot15")
@@ -726,6 +756,13 @@ class Slot15Bot:
     *,
     cfg: dict[str, Any] | None = None,
   ) -> list[dict[str, Any]]:
+    if settings.auto_stopped:
+      skip = settings.auto_stop_reason or "auto_stopped_budget_exhausted"
+      if skip == "budget_exhausted":
+        skip = "auto_stopped_budget_exhausted"
+      self.store.set_last_skip_reason(skip)
+      return []
+
     gate = risk_gate_skip_reason(bot_key=self._bot_risk_key)
     if gate:
       self.store.set_last_skip_reason(gate)
@@ -736,13 +773,6 @@ class Slot15Bot:
     )
     if idx_gate:
       self.store.set_last_skip_reason(idx_gate)
-      return []
-
-    if settings.auto_stopped:
-      skip = settings.auto_stop_reason or "auto_stopped_budget_exhausted"
-      if skip == "budget_exhausted":
-        skip = "auto_stopped_budget_exhausted"
-      self.store.set_last_skip_reason(skip)
       return []
 
     kalshi = tab.get("kalshi") or {}

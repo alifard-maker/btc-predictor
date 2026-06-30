@@ -281,8 +281,10 @@ def reconcile_close_stale_live_leg(
   pick: dict[str, Any] | None = None,
   exit_reason: str = "RECONCILED",
   extra_detail: str = "",
+  kalshi: Any | None = None,
 ) -> dict[str, Any]:
   """Close a bot leg when Kalshi has no inventory (settled, sold elsewhere, or already flat)."""
+  from src.trading.kalshi_leg_exit import resolve_kalshi_leg_exit_cents
   from src.trading.paper_execution import leg_pnl_usd
 
   ticker = str(pos["market_ticker"])
@@ -291,7 +293,16 @@ def reconcile_close_stale_live_leg(
   entry_c = int(pos.get("entry_price_cents") or 0)
   pos_mode = normalize_position_mode(pos.get("mode"))
   pick = pick or {}
-  exit_c = _inferred_exit_price_cents(store, str(pos["id"]))
+  inferred = _inferred_exit_price_cents(store, str(pos["id"]))
+  exit_c, source_note = resolve_kalshi_leg_exit_cents(
+    kalshi,
+    market_ticker=ticker,
+    side=side,
+    contracts=contracts,
+    pos=pos,
+    period_key=period_key,
+    inferred_cents=inferred,
+  )
   pnl_rounded = 0.0
   if exit_c is not None and entry_c and contracts:
     pnl_rounded = round(
@@ -306,17 +317,21 @@ def reconcile_close_stale_live_leg(
       2,
     )
   store.close_position(str(pos["id"]))
-  detail = f"Live EXIT reconciled"
+  detail = "Live EXIT reconciled"
   if exit_c is not None:
     detail += f" @ {exit_c}¢"
     if pnl_rounded < -0.005:
       detail += f" (loss ${abs(pnl_rounded):.2f})"
     elif pnl_rounded > 0.005:
       detail += f" (profit ${pnl_rounded:.2f})"
+  elif source_note:
+    detail += " (exit price unknown)"
   detail += (
     f" (no Kalshi inventory for {side.upper()} on {ticker}) — "
     f"closed bot leg"
   )
+  if source_note:
+    detail += f" · {source_note}"
   if extra_detail:
     detail += f" · {extra_detail}"
   log.info(
@@ -407,6 +422,7 @@ def sync_live_positions_from_kalshi(
           store=store,
           pos=pos,
           period_key=event_ticker,
+          kalshi=kalshi,
         )
         changes.append({
           "ticker": ticker,
@@ -609,15 +625,22 @@ def adopt_kalshi_orphan_inventory(
   store: Any,
   kalshi: Any,
   event_ticker: str,
+  *,
+  ticker_belongs: Any | None = None,
 ) -> dict[str, Any]:
   """Open bot legs for Kalshi inventory with no matching bot position (kalshi-only reconcile)."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
 
+  def _belongs(ticker: str, event: str) -> bool:
+    if ticker_belongs is not None:
+      return bool(ticker_belongs(ticker, event))
+    return _ticker_belongs_to_hourly_event(ticker, event)
+
   changes: list[dict[str, Any]] = []
   for row in kalshi.list_market_positions():
     ticker = str(row.get("ticker") or "")
-    if not ticker or not _ticker_belongs_to_hourly_event(ticker, event_ticker):
+    if not ticker or not _belongs(ticker, event_ticker):
       continue
     net = position_net_from_row(row)
     if abs(net) < 0.05:
@@ -763,7 +786,17 @@ def run_live_slot_hygiene(
   market_ticker: str | None,
   settings_enabled: bool,
 ) -> dict[str, Any]:
-  """Sync inventory and cancel orphans for a 15m slot (single market)."""
+  """Sync inventory, adopt orphans, and cancel resting orders for a 15m slot."""
+  def _slot15_belongs(ticker: str, _slot: str) -> bool:
+    return bool(market_ticker) and str(ticker) == str(market_ticker)
+
+  adopted_resting = adopt_filled_resting_enters(store, kalshi, period_key)
+  adopted_orphans = adopt_kalshi_orphan_inventory(
+    store,
+    kalshi,
+    period_key,
+    ticker_belongs=_slot15_belongs if market_ticker else None,
+  )
   sync = sync_live_positions_from_kalshi(store, kalshi, period_key)
   orphans = cancel_orphan_live_sell_orders(
     kalshi, live_open_tickers(store, period_key),
@@ -775,6 +808,8 @@ def run_live_slot_hygiene(
     )
   return {
     **sync,
+    "ok": sync.get("ok", True),
+    "changes": (sync.get("changes") or []) + (adopted_resting.get("changes") or []) + (adopted_orphans.get("changes") or []),
     "orphan_sells_cancelled": orphans,
     "resting_enters_cancelled": resting_cancelled,
   }
@@ -832,6 +867,7 @@ def try_live_position_exit(
       pick=pick,
       exit_reason=exit_reason,
       extra_detail=f"{exit_reason}: {detail_suffix}{extra_detail}",
+      kalshi=kalshi,
     )
 
   sellable_before = sellable

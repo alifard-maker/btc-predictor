@@ -79,12 +79,12 @@ def test_hourly_rollover_detail_says_live_for_live_positions():
     new_event = "KXBTCD-26JUN3000"
     pos = store.open_position({
       "event_ticker": prev_event,
-      "market_ticker": "KXBTCD-T598",
+      "market_ticker": "KXBTCD-26JUN2923-T59899.99",
       "side": "no",
       "contracts": 2,
       "entry_price_cents": 70,
       "cost_usd": 1.40,
-      "label": "$59,800 to 59,899.99",
+      "label": "NO · $59,800 to 59,899.99",
       "mode": "live",
     })
     store.update_position_mark(pos["id"], 50)
