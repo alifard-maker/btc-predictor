@@ -2420,6 +2420,16 @@
       return Number(c) + '¢';
     }
 
+    function botContractsSize(p) {
+      const fp = p && p.contracts_fp;
+      if (fp != null && fp !== '' && Number.isFinite(Number(fp))) {
+        const n = Number(fp);
+        if (Math.abs(n - Math.round(n)) > 0.001) return n.toFixed(1);
+        return String(Math.round(n));
+      }
+      return p && p.contracts != null ? String(p.contracts) : '—';
+    }
+
     function botEntryBook(t) {
       const bid = t.entry_bid_cents;
       const ask = t.entry_ask_cents;
@@ -3087,7 +3097,7 @@
         if (dualView) {
           return `<tr>
             <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
-            <td>${(p.side || '').toUpperCase()} ×${p.contracts ?? '—'}</td>
+            <td>${(p.side || '').toUpperCase()} ×${botContractsSize(p)}</td>
             <td>${botCents(p.entry_price_cents)}</td>
             <td style="font-size:.65rem" title="Kalshi bid/ask on held side">${botMarkBook(p)}</td>
             <td>${botCents(p.mark_price_cents)}</td>
@@ -3099,7 +3109,7 @@
         }
         return `<tr>
           <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
-          <td>${(p.side || '').toUpperCase()} ×${p.contracts ?? '—'}</td>
+          <td>${(p.side || '').toUpperCase()} ×${botContractsSize(p)}</td>
           <td>${botCents(p.entry_price_cents)}</td>
           <td style="font-size:.65rem" title="Kalshi bid/ask on held side">${botMarkBook(p)}</td>
           <td>${botCents(p.mark_price_cents)}</td>

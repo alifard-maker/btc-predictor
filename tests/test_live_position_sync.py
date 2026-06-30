@@ -13,6 +13,7 @@ from src.trading.live_position_sync import (
   cancel_resting_enter_orders_for_hourly_event,
   effective_kalshi_inventory,
   hourly_event_market_tickers_from_tab,
+  kalshi_position_leg,
   kalshi_sellable_contracts,
   order_still_resting,
   reconcile_close_stale_live_leg,
@@ -313,6 +314,52 @@ def test_reconcile_close_stale_live_leg_logs_and_closes():
     assert store.open_positions("EV1") == []
 
 
+def test_kalshi_position_leg_fractional_no_with_exposure():
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.list_market_positions.return_value = [{
+    "ticker": "T-B59450",
+    "position_fp": -2.2,
+    "market_exposure_dollars": 1.63,
+  }]
+  snap = kalshi_position_leg(kalshi, "T-B59450", "no")
+  assert snap is not None
+  assert snap["contracts"] == 2.2
+  assert snap["cost_usd"] == 1.63
+  assert snap["entry_price_cents"] == 74
+
+
+def test_sync_live_positions_fractional_contracts_and_entry():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T-B59450",
+      "side": "no",
+      "contracts": 2,
+      "entry_price_cents": 73,
+      "cost_usd": 1.46,
+      "mode": "live",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.list_market_positions.return_value = [{
+      "ticker": "T-B59450",
+      "position_fp": -2.2,
+      "market_exposure_dollars": 1.63,
+    }]
+    kalshi.get_market_position.return_value = -2.2
+    out = sync_live_positions_from_kalshi(store, kalshi, "EV1")
+    open_pos = store.open_positions("EV1")
+    assert len(open_pos) == 1
+    assert open_pos[0]["contracts_fp"] == 2.2
+    assert open_pos[0]["contracts"] == 2
+    assert open_pos[0]["entry_price_cents"] == 74
+    assert open_pos[0]["cost_usd"] == 1.63
+    assert any(c.get("action") == "synced" for c in out["changes"])
+
+
 def test_sync_live_positions_from_kalshi_updates_contracts_and_merges_duplicates():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
@@ -340,6 +387,11 @@ def test_sync_live_positions_from_kalshi_updates_contracts_and_merges_duplicates
     })
     kalshi = MagicMock()
     kalshi.authenticated = True
+    kalshi.list_market_positions.return_value = [{
+      "ticker": "T1",
+      "position_fp": -5,
+      "market_exposure_dollars": 4.0,
+    }]
     kalshi.get_market_position.return_value = -5
     out = sync_live_positions_from_kalshi(store, kalshi, "EV1")
     open_pos = store.open_positions("EV1")

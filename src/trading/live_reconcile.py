@@ -6,7 +6,7 @@ from typing import Any
 
 from src.trading.bot_position_mode import normalize_position_mode
 from src.data.kalshi import position_net_from_row
-from src.trading.live_position_sync import kalshi_sellable_contracts
+from src.trading.live_position_sync import _position_contracts, kalshi_sellable_contracts
 
 
 def _leg_key(ticker: str, side: str) -> str:
@@ -80,7 +80,7 @@ def _aggregate_bot_legs(positions: list[dict[str, Any]], *, live_only: bool = Tr
         "position_ids": [],
       },
     )
-    row["contracts"] += int(pos.get("contracts") or 0)
+    row["contracts"] = round(row["contracts"] + _position_contracts(pos), 2)
     row["cost_usd"] = round(row["cost_usd"] + float(pos.get("cost_usd") or 0), 2)
     label = pos.get("label")
     if label and label not in row["labels"]:

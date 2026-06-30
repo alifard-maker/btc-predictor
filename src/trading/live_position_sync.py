@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from src.trading.bot_position_mode import normalize_position_mode
+from src.data.kalshi import position_net_from_row
 from src.trading.live_bracket_orders import (
   aggressive_exit_limit_cents,
   cancel_resting_orders,
@@ -14,6 +15,54 @@ from src.trading.live_bracket_orders import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _position_contracts(pos: dict[str, Any]) -> float:
+  fp = pos.get("contracts_fp")
+  if fp is not None:
+    try:
+      return float(fp)
+    except (TypeError, ValueError):
+      pass
+  return float(int(pos.get("contracts") or 0))
+
+
+def kalshi_position_leg(
+  kalshi: Any,
+  market_ticker: str,
+  side: str,
+) -> dict[str, Any] | None:
+  """Contracts, cost, and avg entry from Kalshi market_positions row."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return None
+  side_l = str(side or "").lower()
+  ticker = str(market_ticker)
+  for row in kalshi.list_market_positions():
+    if str(row.get("ticker") or "") != ticker:
+      continue
+    net = position_net_from_row(row)
+    contracts = max(0.0, float(net)) if side_l == "yes" else max(0.0, -float(net))
+    if contracts < 0.05:
+      return None
+    exposure = row.get("market_exposure_dollars")
+    if exposure is None:
+      exposure = row.get("market_exposure")
+    try:
+      cost_usd = abs(float(exposure or 0))
+    except (TypeError, ValueError):
+      cost_usd = 0.0
+    entry_cents: int | None = None
+    if cost_usd > 0 and contracts > 0:
+      entry_cents = max(1, min(99, int(round(100.0 * cost_usd / contracts))))
+    return {
+      "contracts": round(contracts, 2),
+      "cost_usd": round(cost_usd, 2) if cost_usd > 0 else None,
+      "entry_price_cents": entry_cents,
+    }
+  sellable = kalshi_sellable_contracts(kalshi, ticker, side_l)
+  if sellable is None or sellable < 0.05:
+    return None
+  return {"contracts": round(float(sellable), 2), "cost_usd": None, "entry_price_cents": None}
 
 
 def kalshi_sellable_contracts(kalshi: Any, market_ticker: str, side: str) -> float | None:
@@ -308,15 +357,34 @@ def sync_live_positions_from_kalshi(
 
   changes: list[dict[str, Any]] = []
   for (ticker, side), legs in groups.items():
-    sellable = effective_kalshi_inventory(kalshi, ticker, side)
-    if sellable is None:
-      continue
-    bot_total = sum(int(p.get("contracts") or 0) for p in legs)
-    target = int(round(float(sellable)))
-    if abs(float(sellable) - float(bot_total)) < 0.15:
-      continue
+    snap = kalshi_position_leg(kalshi, ticker, side)
+    if snap is None:
+      sellable = effective_kalshi_inventory(kalshi, ticker, side)
+      if sellable is None:
+        continue
+      target_fp = round(float(sellable), 2)
+      cost_usd = None
+      entry_cents = None
+    else:
+      target_fp = float(snap["contracts"])
+      cost_usd = snap.get("cost_usd")
+      entry_cents = snap.get("entry_price_cents")
 
-    if target <= 0:
+    bot_total = sum(_position_contracts(p) for p in legs)
+    if abs(target_fp - bot_total) < 0.05:
+      primary = legs[0]
+      needs_entry = (
+        entry_cents is not None
+        and int(primary.get("entry_price_cents") or 0) != int(entry_cents)
+      )
+      needs_cost = (
+        cost_usd is not None
+        and abs(float(primary.get("cost_usd") or 0) - float(cost_usd)) > 0.02
+      )
+      if not needs_entry and not needs_cost:
+        continue
+
+    if target_fp <= 0:
       for pos in legs:
         if not should_reconcile_close_live_leg(kalshi, store, pos):
           changes.append({
@@ -343,19 +411,26 @@ def sync_live_positions_from_kalshi(
 
     legs.sort(key=lambda p: str(p.get("opened_at") or ""))
     primary = legs[0]
-    entry_c = int(primary.get("entry_price_cents") or 0)
-    new_cost = round(target * entry_c / 100.0, 2) if entry_c else float(primary.get("cost_usd") or 0)
+    entry_c = int(entry_cents or primary.get("entry_price_cents") or 0)
+    if cost_usd is not None and float(cost_usd) > 0:
+      new_cost = round(float(cost_usd), 2)
+    elif entry_c:
+      new_cost = round(target_fp * entry_c / 100.0, 2)
+    else:
+      new_cost = float(primary.get("cost_usd") or 0)
     store.update_position_contracts(
       str(primary["id"]),
-      contracts=target,
+      contracts=max(1, int(round(target_fp))),
+      contracts_fp=target_fp,
       cost_usd=new_cost,
+      entry_price_cents=entry_c if entry_c else None,
     )
     changes.append({
       "ticker": ticker,
       "side": side,
       "action": "synced",
       "from_contracts": bot_total,
-      "to_contracts": target,
+      "to_contracts": target_fp,
       "position_id": str(primary["id"]),
     })
     for extra in legs[1:]:
@@ -418,20 +493,27 @@ def adopt_filled_resting_enters(
     sellable = kalshi_sellable_contracts(kalshi, ticker, side)
     if sellable is None or sellable < 0.05:
       continue
-    contracts = max(1, int(round(float(sellable))))
-    entry_c = int(trade.get("entry_price_cents") or trade.get("price_cents") or 0)
+    snap = kalshi_position_leg(kalshi, ticker, side) or {
+      "contracts": round(float(sellable), 2),
+      "cost_usd": None,
+      "entry_price_cents": int(trade.get("entry_price_cents") or trade.get("price_cents") or 0),
+    }
+    contracts_fp = float(snap["contracts"])
+    contracts = max(1, int(round(contracts_fp)))
+    entry_c = int(snap.get("entry_price_cents") or trade.get("entry_price_cents") or trade.get("price_cents") or 0)
     if entry_c <= 0:
       continue
     import uuid
 
     pid = str(uuid.uuid4())
-    cost_usd = round(contracts * entry_c / 100.0, 2)
+    cost_usd = float(snap.get("cost_usd") or round(contracts_fp * entry_c / 100.0, 2))
     store.open_position({
       "id": pid,
       "event_ticker": event_ticker,
       "market_ticker": ticker,
       "side": side,
       "contracts": contracts,
+      "contracts_fp": contracts_fp,
       "entry_price_cents": entry_c,
       "cost_usd": cost_usd,
       "signal": trade.get("signal"),

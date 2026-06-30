@@ -224,6 +224,8 @@ class Slot15BotStore:
       from src.trading.bot_position_mode import backfill_position_modes
 
       backfill_position_modes(conn)
+    if pos_cols and "contracts_fp" not in pos_cols:
+      conn.execute("ALTER TABLE bot_positions ADD COLUMN contracts_fp REAL")
 
   def _init_db(self) -> None:
     with self._connect() as conn:
@@ -615,6 +617,7 @@ class Slot15BotStore:
       "market_ticker": pos["market_ticker"],
       "side": pos["side"],
       "contracts": int(pos["contracts"]),
+      "contracts_fp": pos.get("contracts_fp"),
       "entry_price_cents": int(pos["entry_price_cents"]),
       "cost_usd": float(pos["cost_usd"]),
       "signal": pos.get("signal"),
@@ -631,11 +634,11 @@ class Slot15BotStore:
       conn.execute(
         """
         INSERT INTO bot_positions (
-          id, event_ticker, market_ticker, side, contracts, entry_price_cents,
+          id, event_ticker, market_ticker, side, contracts, contracts_fp, entry_price_cents,
           cost_usd, signal, label, entry_edge, reference_price, stop_order_id,
           take_profit_order_id, mode, opened_at, status
         ) VALUES (
-          :id, :event_ticker, :market_ticker, :side, :contracts, :entry_price_cents,
+          :id, :event_ticker, :market_ticker, :side, :contracts, :contracts_fp, :entry_price_cents,
           :cost_usd, :signal, :label, :entry_edge, :reference_price, :stop_order_id,
           :take_profit_order_id, :mode, :opened_at, :status
         )
@@ -678,15 +681,26 @@ class Slot15BotStore:
     *,
     contracts: int,
     cost_usd: float,
+    contracts_fp: float | None = None,
+    entry_price_cents: int | None = None,
   ) -> None:
+    sets = ["contracts = ?", "cost_usd = ?"]
+    params: list[Any] = [int(contracts), round(float(cost_usd), 2)]
+    if contracts_fp is not None:
+      sets.append("contracts_fp = ?")
+      params.append(round(float(contracts_fp), 2))
+    if entry_price_cents is not None:
+      sets.append("entry_price_cents = ?")
+      params.append(int(entry_price_cents))
+    params.append(position_id)
     with self._connect() as conn:
       conn.execute(
-        """
+        f"""
         UPDATE bot_positions
-        SET contracts = ?, cost_usd = ?
+        SET {", ".join(sets)}
         WHERE id = ? AND status = 'open'
         """,
-        (int(contracts), round(float(cost_usd), 2), position_id),
+        params,
       )
 
   def update_position_orders(
