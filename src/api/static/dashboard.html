@@ -3087,7 +3087,7 @@
       const slotId = bot.slot_label || ss.event_ticker || bot.event_ticker || '—';
       const assetLabel = asset === 'eth' ? 'ETH' : 'BTC';
       const trades = (bot.recent_trades || []).map((t) => {
-        const st = t.status === 'filled' ? 'up' : t.status === 'skipped' ? 'muted' : 'down';
+        const st = t.status === 'filled' ? 'up' : (t.status === 'skipped' || t.status === 'resting') ? 'muted' : 'down';
         const act = t.action || 'enter';
         const entryC = t.entry_price_cents;
         const exitC = t.exit_price_cents;
@@ -3293,7 +3293,7 @@
       const hourId = hs.event_ticker || bot.event_ticker || '—';
       const assetLabel = asset === 'eth' ? 'ETH' : 'BTC';
       const trades = (bot.recent_trades || []).map((t) => {
-        const st = t.status === 'filled' ? 'up' : t.status === 'skipped' ? 'muted' : 'down';
+        const st = t.status === 'filled' ? 'up' : (t.status === 'skipped' || t.status === 'resting') ? 'muted' : 'down';
         const act = t.action || 'enter';
         const entryC = t.entry_price_cents;
         const exitC = t.exit_price_cents;

@@ -38,6 +38,32 @@ def v2_book_side(*, side: str, action: str) -> str:
   return "ask" if s == "yes" else "bid"
 
 
+def v2_yes_price_cents(*, side: str, leg_price_cents: int) -> int:
+  """V2 order prices are always YES-denominated; invert NO leg prices."""
+  p = max(1, min(99, int(leg_price_cents)))
+  if str(side or "").lower() == "no":
+    return 100 - p
+  return p
+
+
+def parse_v2_order_response(order: dict[str, Any]) -> dict[str, Any]:
+  """Normalize create-order V2 response fields."""
+  body = order.get("order") if isinstance(order.get("order"), dict) else order
+  try:
+    fill_count = float(body.get("fill_count") or 0)
+  except (TypeError, ValueError):
+    fill_count = 0.0
+  try:
+    remaining_count = float(body.get("remaining_count") or 0)
+  except (TypeError, ValueError):
+    remaining_count = 0.0
+  return {
+    "order_id": body.get("order_id") or order.get("order_id"),
+    "fill_count": fill_count,
+    "remaining_count": remaining_count,
+  }
+
+
 def v2_price_dollars(cents: int) -> str:
   """Fixed-point dollar price string for V2 order requests."""
   return f"{int(cents) / 100:.4f}"
@@ -295,12 +321,13 @@ class KalshiClient:
     price_cents = yes_price if str(side).lower() == "yes" else no_price
     if price_cents is None:
       raise ValueError(f"price required for side={side!r}")
+    v2_cents = v2_yes_price_cents(side=side, leg_price_cents=int(price_cents))
     body: dict[str, Any] = {
       "ticker": ticker,
       "client_order_id": client_order_id or str(uuid.uuid4()),
       "side": v2_book_side(side=side, action=action),
       "count": f"{int(count)}.00",
-      "price": v2_price_dollars(int(price_cents)),
+      "price": v2_price_dollars(v2_cents),
       "time_in_force": "good_till_canceled",
       "self_trade_prevention_type": "taker_at_cross",
     }

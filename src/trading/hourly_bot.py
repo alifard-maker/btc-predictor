@@ -1072,13 +1072,42 @@ class HourlyBot:
         yes_price=price_cents if side == "yes" else None,
         no_price=price_cents if side == "no" else None,
       )
-      oid = (order.get("order") or order).get("order_id") or order.get("order_id")
+      from src.data.kalshi import parse_v2_order_response
+
+      parsed = parse_v2_order_response(order)
+      oid = parsed["order_id"]
+      filled = int(parsed["fill_count"])
+      if filled <= 0:
+        return self.store.log_trade({
+          "event_ticker": event_ticker,
+          "trigger": "continuous",
+          "action": "enter",
+          "mode": "live",
+          "market_ticker": pick.get("ticker"),
+          "side": side,
+          "contracts": count,
+          "price_cents": price_cents,
+          "entry_price_cents": price_cents,
+          "cost_usd": 0,
+          "signal": pick.get("signal"),
+          "label": pick.get("label"),
+          "actionable_headline": bet.get("actionable_headline"),
+          "status": "resting",
+          "kalshi_order_id": oid,
+          "detail": (
+            f"Live ENTER order {oid} (0 filled — resting on Kalshi; "
+            f"{int(parsed['remaining_count'])} remaining)"
+          ),
+          "entry_settings": hourly_entry_settings_snapshot(settings),
+        })
+      fill_count = min(filled, count)
+      fill_cost = round(cost_usd * fill_count / count, 2) if count else 0.0
       cheap_cfg, resting_cfg = resting_config_for_kind(cfg, kind="hourly")
       bracket = place_live_bracket_orders(
         self.kalshi,
         market_ticker=str(pick["ticker"]),
         side=side,
-        contracts=count,
+        contracts=fill_count,
         entry_cents=price_cents,
         cheap_cfg=cheap_cfg,
         resting_cfg=resting_cfg,
@@ -1091,9 +1120,9 @@ class HourlyBot:
         "event_ticker": event_ticker,
         "market_ticker": str(pick["ticker"]),
         "side": side,
-        "contracts": count,
+        "contracts": fill_count,
         "entry_price_cents": price_cents,
-        "cost_usd": cost_usd,
+        "cost_usd": fill_cost,
         "signal": pick.get("signal"),
         "label": pick.get("label"),
         "entry_edge": pick.get("edge"),
@@ -1114,17 +1143,17 @@ class HourlyBot:
         "mode": "live",
         "market_ticker": pick.get("ticker"),
         "side": side,
-        "contracts": count,
+        "contracts": fill_count,
         "price_cents": price_cents,
         "entry_price_cents": price_cents,
-        "cost_usd": cost_usd,
+        "cost_usd": fill_cost,
         "signal": pick.get("signal"),
         "label": pick.get("label"),
         "actionable_headline": bet.get("actionable_headline"),
         "status": "filled",
         "kalshi_order_id": oid,
         "position_id": pid,
-        "detail": f"Live ENTER order {oid}{bracket_note}",
+        "detail": f"Live ENTER order {oid} ({fill_count} filled){bracket_note}",
         "entry_settings": hourly_entry_settings_snapshot(settings),
       })
     except Exception as e:
