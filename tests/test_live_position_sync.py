@@ -13,6 +13,7 @@ from src.trading.live_position_sync import (
   hourly_event_market_tickers_from_tab,
   kalshi_sellable_contracts,
   order_still_resting,
+  reconcile_close_stale_live_leg,
   resting_exit_order_id,
   sync_live_positions_from_kalshi,
   try_live_position_exit,
@@ -103,7 +104,7 @@ def test_cancel_resting_enter_orders_for_hourly_event_scoped():
   kalshi.cancel_order.assert_called_once_with("e1")
 
 
-def test_try_live_position_exit_skips_phantom_inventory_without_closing():
+def test_try_live_position_exit_reconciles_when_kalshi_flat():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     store.open_position({
@@ -119,6 +120,7 @@ def test_try_live_position_exit_skips_phantom_inventory_without_closing():
     kalshi = MagicMock()
     kalshi.authenticated = True
     kalshi.get_market_position.return_value = 0
+    kalshi.list_resting_orders.return_value = []
     row = try_live_position_exit(
       kalshi=kalshi,
       store=store,
@@ -134,8 +136,54 @@ def test_try_live_position_exit_skips_phantom_inventory_without_closing():
       extra_detail="",
     )
     assert row is not None
-    assert row["status"] == "skipped"
-    assert store.open_positions("EV1") != []
+    assert row["status"] == "reconciled"
+    assert "reconciled" in row["detail"].lower()
+    assert store.open_positions("EV1") == []
+
+
+def test_sync_live_positions_reconciles_when_kalshi_inventory_zero():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "yes",
+      "contracts": 4,
+      "entry_price_cents": 1,
+      "cost_usd": 0.04,
+      "mode": "live",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = 0
+    kalshi.list_resting_orders.return_value = []
+    out = sync_live_positions_from_kalshi(store, kalshi, "EV1")
+    assert store.open_positions("EV1") == []
+    assert any(c.get("action") == "reconciled_closed" for c in out["changes"])
+
+
+def test_reconcile_close_stale_live_leg_logs_and_closes():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "no",
+      "contracts": 2,
+      "entry_price_cents": 30,
+      "cost_usd": 0.6,
+      "mode": "live",
+      "label": "test leg",
+    })
+    row = reconcile_close_stale_live_leg(
+      store=store,
+      pos=store.open_positions("EV1")[0],
+      period_key="EV1",
+    )
+    assert row["status"] == "reconciled"
+    assert store.open_positions("EV1") == []
 
 
 def test_sync_live_positions_from_kalshi_updates_contracts_and_merges_duplicates():

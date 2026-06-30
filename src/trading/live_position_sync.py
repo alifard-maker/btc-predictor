@@ -144,6 +144,57 @@ def cancel_resting_enter_orders_for_hourly_event(
   return cancelled
 
 
+def reconcile_close_stale_live_leg(
+  *,
+  store: Any,
+  pos: dict[str, Any],
+  period_key: str,
+  pick: dict[str, Any] | None = None,
+  exit_reason: str = "RECONCILED",
+  extra_detail: str = "",
+) -> dict[str, Any]:
+  """Close a bot leg when Kalshi has no inventory (settled, sold elsewhere, or already flat)."""
+  ticker = str(pos["market_ticker"])
+  side = str(pos["side"])
+  contracts = int(pos.get("contracts") or 0)
+  entry_c = int(pos.get("entry_price_cents") or 0)
+  pos_mode = normalize_position_mode(pos.get("mode"))
+  pick = pick or {}
+  store.close_position(str(pos["id"]))
+  detail = (
+    f"Live EXIT reconciled (no Kalshi inventory for {side.upper()} on {ticker}) — "
+    f"closed bot leg"
+  )
+  if extra_detail:
+    detail += f" · {extra_detail}"
+  log.info(
+    "Reconciled closed stale live leg %s %s x%s on %s",
+    side.upper(),
+    ticker,
+    contracts,
+    period_key,
+  )
+  return store.log_trade({
+    "event_ticker": period_key,
+    "trigger": "continuous",
+    "action": "exit",
+    "mode": pos_mode,
+    "market_ticker": ticker,
+    "side": side,
+    "contracts": contracts,
+    "price_cents": entry_c,
+    "entry_price_cents": entry_c,
+    "exit_price_cents": None,
+    "cost_usd": 0,
+    "pnl_usd": 0,
+    "signal": pick.get("signal"),
+    "label": pos.get("label"),
+    "status": "reconciled",
+    "detail": detail,
+    "position_id": pos["id"],
+  })
+
+
 def sync_live_positions_from_kalshi(
   store: Any,
   kalshi: Any,
@@ -171,18 +222,20 @@ def sync_live_positions_from_kalshi(
       continue
 
     if target <= 0:
-      log.warning(
-        "Kalshi inventory 0 for %s %s but bot tracks %s contracts — keeping bot legs open",
-        ticker,
-        side,
-        bot_total,
-      )
-      changes.append({
-        "ticker": ticker,
-        "side": side,
-        "action": "inventory_zero_kept_open",
-        "bot_contracts": bot_total,
-      })
+      cancel_resting_orders_for_ticker(kalshi, ticker)
+      for pos in legs:
+        reconcile_close_stale_live_leg(
+          store=store,
+          pos=pos,
+          period_key=event_ticker,
+        )
+        changes.append({
+          "ticker": ticker,
+          "side": side,
+          "action": "reconciled_closed",
+          "position_id": str(pos["id"]),
+          "bot_contracts": int(pos.get("contracts") or 0),
+        })
       continue
 
     legs.sort(key=lambda p: str(p.get("opened_at") or ""))
@@ -335,33 +388,14 @@ def try_live_position_exit(
   sellable = kalshi_sellable_contracts(kalshi, ticker, side)
   if sellable is not None and sellable <= 0:
     cancel_resting_orders_for_ticker(kalshi, ticker)
-    log.warning(
-      "Live exit skipped — no Kalshi inventory for %s %s (bot leg kept open)",
-      side.upper(),
-      ticker,
+    return reconcile_close_stale_live_leg(
+      store=store,
+      pos=pos,
+      period_key=period_key,
+      pick=pick,
+      exit_reason=exit_reason,
+      extra_detail=f"{exit_reason}: {detail_suffix}{extra_detail}",
     )
-    return store.log_trade({
-      "event_ticker": period_key,
-      "trigger": "continuous",
-      "action": "exit",
-      "mode": pos_mode,
-      "market_ticker": ticker,
-      "side": side,
-      "contracts": contracts,
-      "price_cents": exit_price,
-      "entry_price_cents": entry_c,
-      "exit_price_cents": exit_price,
-      "cost_usd": 0,
-      "pnl_usd": 0,
-      "signal": pick.get("signal"),
-      "label": pos.get("label"),
-      "status": "skipped",
-      "detail": (
-        f"Live EXIT skipped (no Kalshi inventory for {side.upper()} on {ticker}) — "
-        f"bot leg kept open · {exit_reason}: {detail_suffix}{extra_detail}"
-      ),
-      "position_id": pos["id"],
-    })
 
   sellable_before = sellable
   sell_count = float(contracts)
