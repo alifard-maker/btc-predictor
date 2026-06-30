@@ -20,6 +20,18 @@ SPREAD_BUCKETS = (
   (11, 99, "11¢+"),
 )
 
+# Rolling windows ending now (hours) — 60d calendar window unchanged.
+ROLLING_WINDOW_HOURS = (1, 2, 4, 12, 24, 48)
+
+
+def rolling_window_key(hours: float) -> str:
+  h = int(hours)
+  return "last_1h" if h == 1 else f"last_{h}h"
+
+
+def is_trial_bot_kind(kind: str) -> bool:
+  return kind == "hourly_trial"
+
 
 def _bucket_label(value: int | None, buckets: tuple[tuple[int, int, str], ...]) -> str:
   if value is None:
@@ -188,6 +200,39 @@ def build_window_report(
     "by_signal": _signal_rows(closed),
     "gates": {"min_ask_edge_cents": min_ask_edge_cents},
   }
+
+
+def attach_rolling_windows(
+  report: dict[str, Any],
+  *,
+  trades: list[dict[str, Any]],
+  kind: str,
+  asset: str,
+  min_ask_edge_cents: float,
+) -> dict[str, Any]:
+  """Attach standard rolling hour windows ending now (+ prior 4h shift for comparison)."""
+  windows: dict[str, Any] = {}
+  for hours in ROLLING_WINDOW_HOURS:
+    key = rolling_window_key(hours)
+    windows[key] = build_rolling_hours_report(
+      kind=kind,
+      asset=asset,
+      trades=trades,
+      window_hours=float(hours),
+      end_hours_ago=0.0,
+      min_ask_edge_cents=min_ask_edge_cents,
+    )
+  report["rolling_windows"] = windows
+  report["last_60_min"] = windows["last_1h"]
+  report["prior_4h"] = build_rolling_hours_report(
+    kind=kind,
+    asset=asset,
+    trades=trades,
+    window_hours=4,
+    end_hours_ago=1,
+    min_ask_edge_cents=min_ask_edge_cents,
+  )
+  return report
 
 
 def build_rolling_hours_report(
@@ -434,6 +479,91 @@ def build_combined_report(bot_reports: list[dict[str, Any]]) -> dict[str, Any]:
   }
 
 
+def _rolling_block_from_report(report: dict[str, Any], window_key: str) -> dict[str, Any]:
+  windows = report.get("rolling_windows") or {}
+  block = windows.get(window_key)
+  if block is None and window_key == "last_1h":
+    block = report.get("last_60_min")
+  return block or {}
+
+
+def _combined_rolling_summary(reports: list[dict[str, Any]], window_key: str) -> dict[str, Any]:
+  closed = 0
+  pnl = 0.0
+  wins = 0
+  losses = 0
+  loss_pnl = 0.0
+  for report in reports:
+    sm = (_rolling_block_from_report(report, window_key).get("summary") or {})
+    closed += int(sm.get("closed_trades") or 0)
+    pnl += float(sm.get("total_pnl_usd") or 0)
+    wins += int(sm.get("wins") or 0)
+    losses += int(sm.get("loss_count") or sm.get("losses") or 0)
+    loss_pnl += float(sm.get("loss_pnl_usd") or 0)
+  out = {
+    "closed_trades": closed,
+    "total_pnl_usd": round(pnl, 2),
+    "loss_count": losses,
+    "loss_pnl_usd": round(loss_pnl, 2),
+  }
+  if closed:
+    out["win_rate"] = round(wins / closed, 3)
+  return out
+
+
+def _combined_rolling_all(reports: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+  return {
+    rolling_window_key(hours): _combined_rolling_summary(reports, rolling_window_key(hours))
+    for hours in ROLLING_WINDOW_HOURS
+  }
+
+
+def _combined_window_days(reports: list[dict[str, Any]], window_days: int) -> dict[str, Any]:
+  closed = sum(
+    int(r.get("last_60_days", {}).get("summary", {}).get("closed_trades") or 0)
+    for r in reports
+  )
+  pnl = round(
+    sum(
+      float(r.get("last_60_days", {}).get("summary", {}).get("total_pnl_usd") or 0)
+      for r in reports
+    ),
+    2,
+  )
+  wins = sum(
+    int(r.get("last_60_days", {}).get("summary", {}).get("wins") or 0) for r in reports
+  )
+  out = {"closed_trades": closed, "total_pnl_usd": pnl, "window_days": window_days}
+  if closed:
+    out["win_rate"] = round(wins / closed, 3)
+  return out
+
+
+def _combined_prior_shifted_4h(reports: list[dict[str, Any]]) -> dict[str, Any]:
+  """4h window ending 1h ago (legacy comparison vs last hour)."""
+  closed = 0
+  pnl = 0.0
+  wins = 0
+  losses = 0
+  loss_pnl = 0.0
+  for report in reports:
+    sm = (report.get("prior_4h") or {}).get("summary") or {}
+    closed += int(sm.get("closed_trades") or 0)
+    pnl += float(sm.get("total_pnl_usd") or 0)
+    wins += int(sm.get("wins") or 0)
+    losses += int(sm.get("loss_count") or sm.get("losses") or 0)
+    loss_pnl += float(sm.get("loss_pnl_usd") or 0)
+  out = {
+    "closed_trades": closed,
+    "total_pnl_usd": round(pnl, 2),
+    "loss_count": losses,
+    "loss_pnl_usd": round(loss_pnl, 2),
+  }
+  if closed:
+    out["win_rate"] = round(wins / closed, 3)
+  return out
+
+
 def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
   """Collect all four paper bot stores from PredictionLoop."""
   from src.trading.bot_auto_tuning import effective_entry_strategy
@@ -473,57 +603,46 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
       min_ask_edge_cents=float(getattr(estrat, "min_ask_edge_cents", 8)),
     )
     edge = float(getattr(estrat, "min_ask_edge_cents", 8))
-    report["last_60_min"] = build_rolling_hours_report(
-      kind=kind, asset=asset, trades=trades, window_hours=1, end_hours_ago=0, min_ask_edge_cents=edge,
-    )
-    report["prior_4h"] = build_rolling_hours_report(
-      kind=kind, asset=asset, trades=trades, window_hours=4, end_hours_ago=1, min_ask_edge_cents=edge,
+    attach_rolling_windows(
+      report,
+      trades=trades,
+      kind=kind,
+      asset=asset,
+      min_ask_edge_cents=edge,
     )
     reports.append(report)
 
-  def _combined_rolling(key: str) -> dict[str, Any]:
-    closed = sum(int(r.get(key, {}).get("summary", {}).get("closed_trades") or 0) for r in reports)
-    pnl = round(sum(float(r.get(key, {}).get("summary", {}).get("total_pnl_usd") or 0) for r in reports), 2)
-    wins = sum(int(r.get(key, {}).get("summary", {}).get("wins") or 0) for r in reports)
-    losses = sum(int(r.get(key, {}).get("summary", {}).get("loss_count") or 0) for r in reports)
-    loss_pnl = round(
-      sum(float(r.get(key, {}).get("summary", {}).get("loss_pnl_usd") or 0) for r in reports), 2
-    )
-    out = {
-      "closed_trades": closed,
-      "total_pnl_usd": pnl,
-      "loss_count": losses,
-      "loss_pnl_usd": loss_pnl,
-    }
-    if closed:
-      out["win_rate"] = round(wins / closed, 3)
-    return out
+  main_reports = [r for r in reports if not is_trial_bot_kind(str(r.get("kind") or ""))]
+  trial_reports = [r for r in reports if is_trial_bot_kind(str(r.get("kind") or ""))]
 
-  combined_60d = {
-    "closed_trades": sum(
-      int(r.get("last_60_days", {}).get("summary", {}).get("closed_trades") or 0)
-      for r in reports
-    ),
-    "total_pnl_usd": round(
-      sum(
-        float(r.get("last_60_days", {}).get("summary", {}).get("total_pnl_usd") or 0)
-        for r in reports
-      ),
-      2,
-    ),
-  }
-  wins_60 = sum(
-    int(r.get("last_60_days", {}).get("summary", {}).get("wins") or 0) for r in reports
-  )
-  if combined_60d["closed_trades"]:
-    combined_60d["win_rate"] = round(wins_60 / combined_60d["closed_trades"], 3)
+  def _combined_rolling_legacy(key: str) -> dict[str, Any]:
+    return _combined_rolling_summary(main_reports, "last_1h" if key == "last_60_min" else key)
+
+  combined_60d = _combined_window_days(main_reports, 60)
+  combined_rolling = _combined_rolling_all(main_reports)
+  combined_rolling_trial = _combined_rolling_all(trial_reports) if trial_reports else {}
 
   return {
     "ok": True,
     "generated_at": datetime.now(timezone.utc).isoformat(),
     "bots": reports,
-    "combined": build_combined_report(reports),
+    "main_bots": main_reports,
+    "trial_bots": trial_reports,
+    "combined": build_combined_report(main_reports),
+    "combined_trial": build_combined_report(trial_reports) if trial_reports else {
+      "closed_trades": 0,
+      "total_pnl_usd": 0.0,
+      "win_rate": None,
+    },
     "combined_60_days": combined_60d,
-    "combined_last_60_min": _combined_rolling("last_60_min"),
-    "combined_prior_4h": _combined_rolling("prior_4h"),
+    "combined_trial_60_days": _combined_window_days(trial_reports, 60) if trial_reports else {
+      "closed_trades": 0,
+      "total_pnl_usd": 0.0,
+      "win_rate": None,
+      "window_days": 60,
+    },
+    "combined_rolling_windows": combined_rolling,
+    "combined_trial_rolling_windows": combined_rolling_trial,
+    "combined_last_60_min": combined_rolling.get("last_1h") or _combined_rolling_legacy("last_60_min"),
+    "combined_prior_4h": _combined_prior_shifted_4h(main_reports),
   }

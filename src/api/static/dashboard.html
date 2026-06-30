@@ -2631,13 +2631,27 @@
         return;
       }
       const combined = report.combined || {};
+      const combinedTrial = report.combined_trial || {};
       const combined60 = report.combined_60_days || {};
-      const combined60m = report.combined_last_60_min || {};
+      const combinedTrial60 = report.combined_trial_60_days || {};
+      const combinedRolling = report.combined_rolling_windows || {};
+      const combinedTrialRolling = report.combined_trial_rolling_windows || {};
+      const combined60m = report.combined_last_60_min || combinedRolling.last_1h || {};
       const combined4h = report.combined_prior_4h || {};
+      const rollingKeys = [
+        ['last_1h', 'Last 1h'],
+        ['last_2h', 'Last 2h'],
+        ['last_4h', 'Last 4h'],
+        ['last_12h', 'Last 12h'],
+        ['last_24h', 'Last 24h'],
+        ['last_48h', 'Last 48h'],
+      ];
       const combWr = combined.win_rate != null ? `${(combined.win_rate * 100).toFixed(0)}%` : '—';
       const combPnl = combined.total_pnl_usd != null ? botPnlUsd(combined.total_pnl_usd) : '—';
       const comb60Wr = combined60.win_rate != null ? `${(combined60.win_rate * 100).toFixed(0)}%` : '—';
       const comb60Pnl = combined60.total_pnl_usd != null ? botPnlUsd(combined60.total_pnl_usd) : '—';
+      const trialWr = combinedTrial.win_rate != null ? `${(combinedTrial.win_rate * 100).toFixed(0)}%` : '—';
+      const trialPnl = combinedTrial.total_pnl_usd != null ? botPnlUsd(combinedTrial.total_pnl_usd) : '—';
       const rollLine = (label, block) => {
         const sm = block || {};
         const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
@@ -2645,22 +2659,35 @@
         const lossUsd = sm.loss_pnl_usd != null ? botPnlUsd(sm.loss_pnl_usd) : '—';
         return `<div class="perf-stat muted">${label}<strong>${sm.closed_trades ?? 0} exits</strong><span style="display:block;font-size:.62rem;margin-top:.15rem">WR ${wr} · net ${botPnlUsd(sm.total_pnl_usd)} · ${losses} losses ${lossUsd}</span></div>`;
       };
+      const rollingGrid = (blocks) => rollingKeys.map(([key, label]) => rollLine(label, blocks[key])).join('');
       let html = `<div class="perf-grid">
-        <div class="perf-stat muted">All bots closed trades<strong>${combined.closed_trades ?? 0}</strong></div>
-        <div class="perf-stat muted">Combined win rate<strong>${combWr}</strong></div>
-        <div class="perf-stat muted">Combined realized P&amp;L<strong>${combPnl}</strong></div>
+        <div class="perf-stat muted">Main bots closed trades<strong>${combined.closed_trades ?? 0}</strong></div>
+        <div class="perf-stat muted">Main win rate<strong>${combWr}</strong></div>
+        <div class="perf-stat muted">Main realized P&amp;L<strong>${combPnl}</strong></div>
       </div>
-      <p class="muted" style="font-size:.68rem;margin:.5rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Rolling windows (all bots)</p>
+      <p class="muted" style="font-size:.68rem;margin:.5rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Rolling windows — main bots (ending now)</p>
       <div class="perf-grid">
-        ${rollLine('Last 60 min', combined60m)}
-        ${rollLine('Prior 4 hours', combined4h)}
+        ${rollingGrid(combinedRolling)}
       </div>
-      <p class="muted" style="font-size:.68rem;margin:.5rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Last 60 days (all bots)</p>
+      <p class="muted" style="font-size:.62rem;margin:.15rem 0 .35rem">Prior 4h (shifted: ended 1h ago, excludes last hour): ${combined4h.closed_trades ?? 0} exits · ${combined4h.win_rate != null ? `${(combined4h.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(combined4h.total_pnl_usd)}</p>
+      <p class="muted" style="font-size:.68rem;margin:.5rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Last 60 days — main bots</p>
       <div class="perf-grid">
         <div class="perf-stat muted">60d closed<strong>${combined60.closed_trades ?? 0}</strong></div>
         <div class="perf-stat muted">60d win rate<strong>${comb60Wr}</strong></div>
         <div class="perf-stat muted">60d realized P&amp;L<strong>${comb60Pnl}</strong></div>
       </div>`;
+      if ((combinedTrial.closed_trades ?? 0) > 0 || (combinedTrial60.closed_trades ?? 0) > 0) {
+        html += `<p class="muted" style="font-size:.68rem;margin:.65rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Trial bots (experiments — not in main totals)</p>
+        <div class="perf-grid">
+          <div class="perf-stat muted">Trial closed<strong>${combinedTrial.closed_trades ?? 0}</strong></div>
+          <div class="perf-stat muted">Trial win rate<strong>${trialWr}</strong></div>
+          <div class="perf-stat muted">Trial P&amp;L<strong>${trialPnl}</strong></div>
+        </div>
+        <div class="perf-grid" style="margin-top:.35rem">
+          ${rollingGrid(combinedTrialRolling)}
+        </div>
+        <p class="muted" style="font-size:.62rem;margin:.2rem 0 .35rem">Trial 60d: ${combinedTrial60.closed_trades ?? 0} closed · ${combinedTrial60.win_rate != null ? `${(combinedTrial60.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(combinedTrial60.total_pnl_usd)}</p>`;
+      }
 
       const modeTable = (title, byMode) => {
         if (!byMode || !Object.keys(byMode).length) return '';
@@ -2694,16 +2721,21 @@
         const recs = (bot.recommendations || []).map((t) => `<li>${t}</li>`).join('');
         const w60 = bot.last_60_days || {};
         const sm60 = w60.summary || {};
-        const r60 = bot.last_60_min?.summary || {};
-        const r4h = bot.prior_4h?.summary || {};
-        const rollBot = (label, sm) => {
+        const rw = bot.rolling_windows || {};
+        const rollBot = (key, label) => {
+          const sm = (rw[key] || (key === 'last_1h' ? bot.last_60_min : null))?.summary;
           if (!sm || !sm.closed_trades) return `${label}: —`;
           const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
-          const lc = sm.loss_count != null ? sm.loss_count : sm.losses;
-          return `${label}: ${sm.closed_trades} exits · ${wr} WR · ${sm.loss_count != null || sm.losses != null ? `${lc}L` : ''} ${botPnlUsd(sm.total_pnl_usd)}`;
+          return `${label}: ${sm.closed_trades} exits · ${wr} WR · ${botPnlUsd(sm.total_pnl_usd)}`;
         };
-        html += `<div class="perf-bot-block">
-          <p style="margin:0 0 .35rem;font-weight:600">${bot.label || `${bot.asset} ${bot.kind}`}
+        const rollLine = rollingKeys.map(([key, label]) => rollBot(key, label)).join(' · ');
+        const r4h = bot.prior_4h?.summary || {};
+        const prior4h = r4h.closed_trades
+          ? `Prior 4h (shifted): ${r4h.closed_trades} exits · ${r4h.win_rate != null ? `${(r4h.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(r4h.total_pnl_usd)}`
+          : '';
+        const isTrial = bot.kind === 'hourly_trial';
+        html += `<div class="perf-bot-block"${isTrial ? ' style="opacity:.92;border-left:2px solid var(--muted,#888)"' : ''}>
+          <p style="margin:0 0 .35rem;font-weight:600">${bot.label || `${bot.asset} ${bot.kind}`}${isTrial ? ' <span class="muted" style="font-weight:500;font-size:.68rem">(trial — excluded from main totals)</span>' : ''}
             <span class="muted" style="font-weight:400;font-size:.72rem"> · ask-edge gate ≥ ${gate ?? '—'}¢</span></p>
           ${tuneLine}
           <div class="perf-grid">
@@ -2713,7 +2745,7 @@
             <div class="perf-stat muted">Avg / trade<strong>${sm.avg_pnl_usd != null ? botPnlUsd(sm.avg_pnl_usd) : '—'}</strong></div>
           </div>
           <p class="muted" style="font-size:.68rem;margin:.35rem 0 .2rem"><strong>60d:</strong> ${sm60.closed_trades ?? 0} closed · ${sm60.win_rate != null ? `${(sm60.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(sm60.total_pnl_usd)}${sm60.max_drawdown_usd != null ? ` · max DD ${botPnlUsd(sm60.max_drawdown_usd)}` : ''}</p>
-          <p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem"><strong>60m:</strong> ${rollBot('', r60).replace(/^: /, '')} · <strong>4h prior:</strong> ${rollBot('', r4h).replace(/^: /, '')}</p>
+          <p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;line-height:1.45"><strong>Rolling:</strong> ${rollLine}${prior4h ? ` · ${prior4h}` : ''}</p>
           ${modeTable('60d by entry mode (free vs filtered)', w60.by_free_mode)}
           ${bucketTable('By entry price', bot.by_entry_price)}
           ${bucketTable('By spread at entry', bot.by_spread)}
