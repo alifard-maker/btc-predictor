@@ -393,6 +393,35 @@ class KalshiClient:
     except (TypeError, ValueError):
       return 0
 
+  def list_market_positions(self, *, limit: int = 200) -> list[dict[str, Any]]:
+    """All non-flat Kalshi market positions."""
+    if not self.authenticated:
+      return []
+    try:
+      data = self.get(
+        "/portfolio/positions",
+        params={"limit": int(limit), "count_filter": "position"},
+        auth=True,
+      )
+    except Exception as e:
+      log.warning("Kalshi list positions failed: %s", e)
+      return []
+    rows = data.get("market_positions") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+      return []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+      if not isinstance(row, dict):
+        continue
+      try:
+        net = int(float(row.get("position") or 0))
+      except (TypeError, ValueError):
+        continue
+      if net == 0:
+        continue
+      out.append(row)
+    return out
+
   def portfolio_balance(self, *, fresh: bool = False) -> dict[str, Any] | None:
     """Kalshi cash balance (cents); cached to limit /portfolio/balance polling."""
     if not self.authenticated:

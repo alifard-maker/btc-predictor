@@ -1,0 +1,157 @@
+"""Compare bot-tracked live legs vs Kalshi positions and resting orders."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from src.trading.bot_position_mode import normalize_position_mode
+from src.trading.live_position_sync import kalshi_sellable_contracts
+
+
+def _leg_key(ticker: str, side: str) -> str:
+  return f"{ticker}:{str(side).lower()}"
+
+
+def _kalshi_contracts_for_side(net: int, side: str) -> int:
+  s = str(side).lower()
+  if s == "yes":
+    return max(0, int(net))
+  return max(0, -int(net))
+
+
+def _aggregate_bot_legs(positions: list[dict[str, Any]], *, live_only: bool = True) -> dict[str, dict[str, Any]]:
+  out: dict[str, dict[str, Any]] = {}
+  for pos in positions:
+    if live_only and normalize_position_mode(pos.get("mode")) != "live":
+      continue
+    ticker = str(pos.get("market_ticker") or "")
+    side = str(pos.get("side") or "").lower()
+    if not ticker or side not in ("yes", "no"):
+      continue
+    key = _leg_key(ticker, side)
+    row = out.setdefault(
+      key,
+      {
+        "ticker": ticker,
+        "side": side,
+        "contracts": 0,
+        "cost_usd": 0.0,
+        "labels": [],
+        "position_ids": [],
+      },
+    )
+    row["contracts"] += int(pos.get("contracts") or 0)
+    row["cost_usd"] = round(row["cost_usd"] + float(pos.get("cost_usd") or 0), 2)
+    label = pos.get("label")
+    if label and label not in row["labels"]:
+      row["labels"].append(str(label))
+    pid = pos.get("id")
+    if pid:
+      row["position_ids"].append(str(pid))
+  return out
+
+
+def _aggregate_kalshi_positions(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+  out: dict[str, dict[str, Any]] = {}
+  for row in rows:
+    ticker = str(row.get("ticker") or "")
+    if not ticker:
+      continue
+    try:
+      net = int(float(row.get("position") or 0))
+    except (TypeError, ValueError):
+      continue
+    if net == 0:
+      continue
+    side = "yes" if net > 0 else "no"
+    key = _leg_key(ticker, side)
+    out[key] = {
+      "ticker": ticker,
+      "side": side,
+      "contracts": abs(net),
+      "net_position": net,
+      "market_exposure": row.get("market_exposure"),
+    }
+  return out
+
+
+def _resting_sells_by_ticker(kalshi: Any) -> dict[str, list[dict[str, Any]]]:
+  out: dict[str, list[dict[str, Any]]] = {}
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return out
+  for row in kalshi.list_resting_orders():
+    if str(row.get("action") or "").lower() != "sell":
+      continue
+    ticker = str(row.get("ticker") or "")
+    if not ticker:
+      continue
+    out.setdefault(ticker, []).append(row)
+  return out
+
+
+def build_live_reconcile_report(
+  *,
+  bot_positions: list[dict[str, Any]],
+  kalshi: Any,
+  event_ticker: str | None = None,
+) -> dict[str, Any]:
+  """Summarize bot vs exchange alignment for live hourly debugging."""
+  bot = _aggregate_bot_legs(bot_positions, live_only=True)
+  kalshi_rows = kalshi.list_market_positions() if kalshi else []
+  kalshi_legs = _aggregate_kalshi_positions(kalshi_rows)
+  resting_sells = _resting_sells_by_ticker(kalshi)
+
+  matched: list[dict[str, Any]] = []
+  mismatches: list[dict[str, Any]] = []
+  bot_only: list[dict[str, Any]] = []
+  kalshi_only: list[dict[str, Any]] = []
+
+  all_keys = set(bot) | set(kalshi_legs)
+  for key in sorted(all_keys):
+    b = bot.get(key)
+    k = kalshi_legs.get(key)
+    if b and k:
+      if int(b["contracts"]) == int(k["contracts"]):
+        matched.append({**b, "kalshi_contracts": k["contracts"], "status": "ok"})
+      else:
+        mismatches.append({
+          **b,
+          "kalshi_contracts": k["contracts"],
+          "delta": int(b["contracts"]) - int(k["contracts"]),
+          "status": "count_mismatch",
+        })
+    elif b:
+      sellable = kalshi_sellable_contracts(kalshi, b["ticker"], b["side"]) if kalshi else None
+      bot_only.append({**b, "kalshi_sellable": sellable, "status": "bot_only"})
+    elif k:
+      kalshi_only.append({**k, "status": "kalshi_only"})
+
+  orphan_sells: list[dict[str, Any]] = []
+  bot_tickers = {b["ticker"] for b in bot.values()}
+  for ticker, orders in resting_sells.items():
+    if ticker in bot_tickers:
+      continue
+    for o in orders:
+      orphan_sells.append({
+        "ticker": ticker,
+        "order_id": o.get("order_id"),
+        "side": o.get("side"),
+        "remaining_count": o.get("remaining_count"),
+        "yes_price": o.get("yes_price"),
+      })
+
+  aligned = not mismatches and not bot_only and not kalshi_only and not orphan_sells
+  return {
+    "ok": aligned,
+    "event_ticker": event_ticker,
+    "bot_live_legs": len(bot),
+    "kalshi_legs": len(kalshi_legs),
+    "bot_live_contracts": sum(int(v["contracts"]) for v in bot.values()),
+    "kalshi_contracts": sum(int(v["contracts"]) for v in kalshi_legs.values()),
+    "matched": matched,
+    "mismatches": mismatches,
+    "bot_only": bot_only,
+    "kalshi_only": kalshi_only,
+    "orphan_resting_sells": orphan_sells,
+    "resting_sell_count": sum(len(v) for v in resting_sells.values()),
+  }

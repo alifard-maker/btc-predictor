@@ -452,7 +452,34 @@ class PredictionLoop:
     self._attach_settlement_index_status(status, tab, asset=asset)
     self._attach_bot_daily_loss(status, kind=kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
+    if status.get("settings", {}).get("mode") == "live" and kalshi and kalshi.authenticated:
+      from src.trading.live_reconcile import build_live_reconcile_report
+
+      status["live_reconcile"] = build_live_reconcile_report(
+        bot_positions=list(status.get("open_positions") or []),
+        kalshi=kalshi,
+        event_ticker=event_ticker,
+      )
     return status
+
+  def hourly_live_reconcile(self, asset: str, *, kind: str = "hourly") -> dict[str, Any]:
+    store = self.hourly_bot_store(asset, kind=kind)
+    kalshi = self._kalshi_for(asset)
+    if asset == "btc":
+      tab = self.daily_prediction()
+    else:
+      tab = self.eth_hourly_prediction()
+    event_ticker = None
+    if tab and tab.get("ok"):
+      event_ticker = (tab.get("event") or {}).get("event_ticker")
+    positions = store.open_positions(str(event_ticker)) if event_ticker else []
+    from src.trading.live_reconcile import build_live_reconcile_report
+
+    return build_live_reconcile_report(
+      bot_positions=positions,
+      kalshi=kalshi,
+      event_ticker=event_ticker,
+    )
 
   def hourly_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     return self.hourly_bot_status(asset, tab, kind="hourly_trial")

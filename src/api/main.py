@@ -821,6 +821,20 @@ def hourly_bot_status(_: None = Depends(_session_user)):
   return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
 
 
+@app.get("/api/hourly/bot/live-reconcile")
+def hourly_bot_live_reconcile(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.hourly_live_reconcile("btc")
+
+
+@app.get("/api/hourly-trial/bot/live-reconcile")
+def hourly_trial_bot_live_reconcile(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.hourly_live_reconcile("btc", kind="hourly_trial")
+
+
 @app.post("/api/hourly/bot/settings")
 async def hourly_bot_settings(request: Request, _: None = Depends(_session_user)):
   if _loop is None:
