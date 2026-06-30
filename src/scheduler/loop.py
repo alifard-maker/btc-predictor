@@ -357,6 +357,27 @@ class PredictionLoop:
     except (TypeError, ValueError):
       pass
 
+  def _attach_settlement_index_status(
+    self,
+    status: dict[str, Any],
+    tab: dict[str, Any] | None,
+    *,
+    asset: str,
+  ) -> None:
+    from src.trading.bot_settlement_index_gate import build_settlement_index_status
+
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    if tab and tab.get("ok"):
+      status["settlement_index"] = build_settlement_index_status(tab, cfg=acfg)
+      return
+    quote = self.live_price_quote(fresh=True, asset=asset)
+    status["settlement_index"] = build_settlement_index_status(
+      None,
+      cfg=acfg,
+      price=quote.price if quote else None,
+      source=quote.source if quote else None,
+    )
+
   def hourly_bot_status(
     self,
     asset: str,
@@ -428,6 +449,7 @@ class PredictionLoop:
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
     status["adaptive_calibration"] = store.get_adaptive_calibration()
+    self._attach_settlement_index_status(status, tab, asset=asset)
     self._attach_bot_daily_loss(status, kind=kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
     return status
@@ -600,6 +622,10 @@ class PredictionLoop:
         )
 
     ok = bool(slot_key and kalshi_summary and kalshi_summary.get("market_ticker"))
+    index_label = index_id_for_cfg(acfg)
+    quote = self.live_price_quote(fresh=True, asset=asset)
+    brti_live = round(quote.price, 2) if quote else None
+    brti_source = quote.source if quote else monitor.get("current_price_source")
     return {
       "ok": ok,
       "asset": asset,
@@ -611,6 +637,9 @@ class PredictionLoop:
       "bet_assessment": bet_assessment,
       "paper_max_spread_cents": paper_max_spread_cents,
       "probe_no_trade": probe_no_trade,
+      "brti_live": brti_live,
+      "brti_source": brti_source,
+      "index_id": index_label,
     }
 
   def slot15_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -680,6 +709,7 @@ class PredictionLoop:
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
     status["adaptive_calibration"] = store.get_adaptive_calibration()
+    self._attach_settlement_index_status(status, tab, asset=asset)
     self._attach_bot_daily_loss(status, kind="slot15", asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
     return status

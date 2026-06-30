@@ -377,6 +377,11 @@ bot_adaptive_calibration:
   price_buckets: true
   spread_buckets: false
 
+# Live trial: require CF Benchmarks BRTI/ERTI before placing live entries (paper may use exchange fallback)
+live_settlement_index:
+  enabled: true
+  require_for_live_entries: true
+
 # Ethereum — 15m slots (KXETH15M) + hourly (KXETHD/KXETH), CF Benchmarks ERTI
 eth:
   enabled: true

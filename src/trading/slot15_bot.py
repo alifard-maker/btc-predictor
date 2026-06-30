@@ -29,6 +29,7 @@ from src.trading.bot_adaptive_calibration import (
   record_adaptive_probe_exit,
   run_adaptive_calibration_for_store,
 )
+from src.trading.bot_settlement_index_gate import live_settlement_index_skip_reason
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
   evaluate_slot15_contract_exits,
@@ -657,6 +658,13 @@ class Slot15Bot:
     gate = risk_gate_skip_reason(bot_key=self._bot_risk_key)
     if gate:
       self.store.set_last_skip_reason(gate)
+      return []
+
+    idx_gate = live_settlement_index_skip_reason(
+      tab, cfg=cfg, mode=settings.mode, asset=self.asset,
+    )
+    if idx_gate:
+      self.store.set_last_skip_reason(idx_gate)
       return []
 
     if settings.auto_stopped:

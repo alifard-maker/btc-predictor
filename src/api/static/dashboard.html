@@ -2395,6 +2395,8 @@
       if (raw === 'scale_in_max_legs') return 'scale-in max legs reached';
       if (raw === 'scale_in_side_mismatch') return 'scale-in side mismatch';
       if (raw.startsWith('scale_in_edge_not_improved:')) return 'scale-in needs better ask edge';
+      if (raw === 'settlement_index_unavailable') return 'BRTI/ERTI unavailable';
+      if (raw.startsWith('settlement_index_not_live:')) return 'not on settlement index';
       const labels = {
         max_concurrent_positions: 'position slots full',
         fully_deployed: 'budget fully deployed',
@@ -2451,6 +2453,8 @@
       if (!raw) return '';
       const labels = {
         daily_loss_cap: 'Daily loss cap hit for this bot — new entries paused until tomorrow (ET). Use Resume entries today to override.',
+        settlement_index_unavailable: 'Live entries blocked — settlement index (BRTI/ERTI) unavailable. Check Kalshi API keys on Railway.',
+        settlement_index_not_live: 'Live entries blocked — price feed is not BRTI/ERTI (exchange fallback). Fix Kalshi auth before live trial.',
         kalshi_api_degraded: 'Kalshi API degraded — new entries blocked proactively; exits still run.',
         kalshi_api_paused: 'Kalshi API cooling down after errors — discovery throttled; sell/cancel still allowed.',
         auto_bet_off: 'Auto-bet is off on the server (toggle may be out of sync — flip Auto-bet off then on).',
@@ -2499,7 +2503,24 @@
         return `Ask-edge ${cents} below min_ask_edge_cents — model prob minus ask-implied too thin.`;
       }
       if (raw.startsWith('missing_price:')) return `No Kalshi/model price for ${raw.slice('missing_price:'.length)}.`;
+      if (raw.startsWith('settlement_index_not_live:')) {
+        const src = raw.slice('settlement_index_not_live:'.length);
+        return `Live entries blocked — settlement index required but feed is ${refSourceLabel(src)}. Exits still run.`;
+      }
       return labels[raw] || raw;
+    }
+
+    function settlementIndexWarningHtml(bot) {
+      if (!bot || (bot.settings || {}).mode !== 'live') return '';
+      const si = bot.settlement_index || {};
+      if (si.ok) {
+        const id = si.index_id || bot.index_label || 'BRTI';
+        const src = refSourceLabel(si.source || `${id.toLowerCase()}_live`);
+        return `<p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem;padding:.4rem .55rem;background:rgba(34,197,94,.1);border-radius:6px;border:1px solid rgba(34,197,94,.25)"><strong>Settlement index OK:</strong> ${id} via ${src}${si.price != null ? ` · $${Number(si.price).toLocaleString()}` : ''} — live entries allowed.</p>`;
+      }
+      const id = si.index_id || bot.index_label || 'BRTI/ERTI';
+      const src = si.source ? refSourceLabel(si.source) : 'unavailable';
+      return `<p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem;padding:.45rem .55rem;background:rgba(239,68,68,.1);border-radius:6px;border:1px solid rgba(239,68,68,.3)"><strong>Live entry guard:</strong> ${id} feed not active (${src}). Live entries are blocked until Kalshi CF Benchmarks index is live. Paper mode unaffected. Exits still run.</p>`;
     }
 
     function botSkipReasonHtml(bot) {
@@ -3016,10 +3037,12 @@
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'slot', 'slot15', asset);
       const skipHtml = botSkipReasonHtml(bot);
+      const settlementIndexHtml = settlementIndexWarningHtml(bot);
       const watchHtml = botEntryWatchHtml(bot, 'slot', freeMode);
       const serverBanner = botServerBanner(bot, s);
       statusWrap.innerHTML = `
         ${serverBanner}
+        ${settlementIndexHtml}
         ${autoStopHtml}
         ${watchHtml}
         ${skipHtml}
@@ -3213,10 +3236,12 @@
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'hour', kind, asset);
       const skipHtml = botSkipReasonHtml(bot);
+      const settlementIndexHtml = settlementIndexWarningHtml(bot);
       const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode);
       const serverBanner = botServerBanner(bot, s);
       statusWrap.innerHTML = `
         ${serverBanner}
+        ${settlementIndexHtml}
         ${autoStopHtml}
         ${watchHtml}
         ${skipHtml}
