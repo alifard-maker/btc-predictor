@@ -85,6 +85,11 @@ def _print_snapshot(bot: dict, recon: dict, kalshi: dict, *, bot_kind: str) -> b
   if skip:
     print(f"    Skip: {skip}")
 
+  stake = bot.get("stake_cap_utilization") or (bot.get("hour_summary") or {}).get("stake_cap_utilization")
+  if stake and stake.get("summary_line"):
+    bind = "BINDING" if stake.get("cap_binding") else "ok"
+    print(f"    Stake cap [{bind}]: {stake['summary_line']}")
+
   if recon.get("ok"):
     print("    Reconcile: OK (bot and Kalshi match)")
   elif recon:

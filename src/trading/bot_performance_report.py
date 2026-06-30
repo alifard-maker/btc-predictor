@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from src.trading.entry_strategy import EntryStrategyConfig
+from src.trading.stake_cap_utilization import compute_stake_cap_utilization
+
 PRICE_BUCKETS = (
   (1, 20, "1–20¢"),
   (21, 40, "21–40¢"),
@@ -420,11 +423,21 @@ def build_bot_performance_report(
   asset: str,
   trades: list[dict[str, Any]],
   min_ask_edge_cents: float = 8.0,
+  estrat: EntryStrategyConfig | None = None,
+  max_spend_usd: float | None = None,
 ) -> dict[str, Any]:
   """Build report for one bot store trade list."""
   enters = [t for t in trades if t.get("action") == "enter" and t.get("status") == "filled"]
   closed = _closed_round_trips(trades)
   sm = _summary(closed, enters)
+  stake_cap: dict[str, Any] | None = None
+  if estrat is not None and max_spend_usd is not None and max_spend_usd > 0:
+    stake_cap = compute_stake_cap_utilization(
+      trades,
+      estrat=estrat,
+      max_spend_usd=max_spend_usd,
+      mode="live",
+    )
   by_price = _aggregate_bucket(
     closed,
     lambda r: _bucket_label(r.get("entry_price_cents"), PRICE_BUCKETS),
@@ -448,7 +461,11 @@ def build_bot_performance_report(
       "avg_pnl_usd": round(sum(pnls) / n, 2) if n else None,
     })
 
-  return {
+  recs = _recommendations(sm, by_price, by_spread, min_ask_edge_cents=min_ask_edge_cents)
+  if stake_cap and stake_cap.get("summary_line"):
+    recs = [stake_cap["summary_line"], *recs]
+
+  out: dict[str, Any] = {
     "kind": kind,
     "asset": asset,
     "label": (
@@ -460,12 +477,15 @@ def build_bot_performance_report(
     "by_entry_price": by_price,
     "by_spread": by_spread,
     "by_signal": signal_rows,
-    "recommendations": _recommendations(sm, by_price, by_spread, min_ask_edge_cents=min_ask_edge_cents),
+    "recommendations": recs,
     "gates": {
       "min_ask_edge_cents": min_ask_edge_cents,
       "note": "Entries now require model_prob − ask_implied ≥ min_ask_edge_cents.",
     },
   }
+  if stake_cap is not None:
+    out["stake_cap_utilization"] = stake_cap
+  return out
 
 
 def build_combined_report(bot_reports: list[dict[str, Any]]) -> dict[str, Any]:
@@ -587,12 +607,20 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
     tuning = store.get_auto_tuning()
     entry_kind = "hourly" if kind == "hourly_trial" else kind
     estrat = effective_entry_strategy(acfg, kind=entry_kind, tuning=tuning)
+    settings = store.get_settings()
+    max_spend = float(
+      getattr(settings, "max_spend_per_hour_usd", None)
+      or getattr(settings, "max_spend_per_slot_usd", 0)
+      or 0
+    )
     trades = store.list_trades(limit=5000)
     report = build_bot_performance_report(
       kind=kind,
       asset=asset,
       trades=trades,
       min_ask_edge_cents=float(getattr(estrat, "min_ask_edge_cents", 8)),
+      estrat=estrat,
+      max_spend_usd=max_spend,
     )
     report["auto_tuning"] = tuning
     report["last_60_days"] = build_window_report(

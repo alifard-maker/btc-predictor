@@ -449,6 +449,27 @@ class PredictionLoop:
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
     status["adaptive_calibration"] = store.get_adaptive_calibration()
+    settings = store.get_settings()
+    from src.trading.stake_cap_utilization import compute_stake_cap_utilization
+
+    stake_trades = status.get("hour_trades") or []
+    if not stake_trades:
+      stake_trades = [
+        t for t in (status.get("recent_trades") or [])
+        if t.get("action") == "enter" and t.get("status") == "filled"
+      ]
+    stake_cap = compute_stake_cap_utilization(
+      stake_trades,
+      estrat=estrat,
+      max_spend_usd=float(settings.max_spend_per_hour_usd),
+      mode=str(settings.mode),
+    )
+    status["stake_cap_utilization"] = stake_cap
+    if hs:
+      hs = dict(hs)
+      hs["stake_cap_utilization"] = stake_cap
+      status["hourly_summary"] = hs
+      status["hour_summary"] = hs
     self._attach_settlement_index_status(status, tab, asset=asset)
     self._attach_bot_daily_loss(status, kind=kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
@@ -752,6 +773,27 @@ class PredictionLoop:
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
     status["adaptive_calibration"] = store.get_adaptive_calibration()
+    settings = store.get_settings()
+    from src.trading.stake_cap_utilization import compute_stake_cap_utilization
+
+    stake_trades = status.get("slot_trades") or []
+    if not stake_trades:
+      stake_trades = [
+        t for t in (status.get("recent_trades") or [])
+        if t.get("action") == "enter" and t.get("status") == "filled"
+      ]
+    stake_cap = compute_stake_cap_utilization(
+      stake_trades,
+      estrat=estrat,
+      max_spend_usd=float(settings.max_spend_per_slot_usd),
+      mode=str(settings.mode),
+    )
+    status["stake_cap_utilization"] = stake_cap
+    ss = status.get("slot_summary")
+    if ss:
+      ss = dict(ss)
+      ss["stake_cap_utilization"] = stake_cap
+      status["slot_summary"] = ss
     self._attach_settlement_index_status(status, tab, asset=asset)
     self._attach_bot_daily_loss(status, kind="slot15", asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
