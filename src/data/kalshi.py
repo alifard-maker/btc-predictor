@@ -6,6 +6,7 @@ import base64
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,20 @@ DEFAULT_SERIES = "KXBTC15M"
 BRTI_INDEX_ID = "BRTI"
 ETH_INDEX_ID = "ETHUSD_RTI"  # Kalshi/CF Benchmarks API id (not "ERTI")
 _ETH_INDEX_ALIASES = frozenset({"ERTI", "ETHUSDRTI", "ETHUSD_RTI"})
+
+
+def v2_book_side(*, side: str, action: str) -> str:
+  """Map legacy yes/no + buy/sell to Kalshi V2 bid/ask book side."""
+  s = str(side or "").lower()
+  a = str(action or "buy").lower()
+  if a == "buy":
+    return "bid" if s == "yes" else "ask"
+  return "ask" if s == "yes" else "bid"
+
+
+def v2_price_dollars(cents: int) -> str:
+  """Fixed-point dollar price string for V2 order requests."""
+  return f"{int(cents) / 100:.4f}"
 
 
 def index_slug(index_id: str) -> str:
@@ -273,25 +288,30 @@ class KalshiClient:
     no_price: int | None = None,
     order_type: str = "limit",
     action: str = "buy",
+    client_order_id: str | None = None,
   ) -> dict[str, Any]:
-    """Place a limit order on Kalshi (requires authenticated client)."""
+    """Place a limit order on Kalshi via V2 event-order API (requires auth)."""
+    del order_type  # V2 create endpoint is limit-only; kept for caller compatibility.
+    price_cents = yes_price if str(side).lower() == "yes" else no_price
+    if price_cents is None:
+      raise ValueError(f"price required for side={side!r}")
     body: dict[str, Any] = {
       "ticker": ticker,
-      "action": action,
-      "side": side,
-      "count": int(count),
-      "type": order_type,
+      "client_order_id": client_order_id or str(uuid.uuid4()),
+      "side": v2_book_side(side=side, action=action),
+      "count": f"{int(count)}.00",
+      "price": v2_price_dollars(int(price_cents)),
+      "time_in_force": "good_till_canceled",
+      "self_trade_prevention_type": "taker_at_cross",
     }
-    if side == "yes" and yes_price is not None:
-      body["yes_price"] = int(yes_price)
-    if side == "no" and no_price is not None:
-      body["no_price"] = int(no_price)
-    critical = action == "sell"
-    return self.post("/portfolio/orders", json_body=body, auth=True, critical=critical)
+    critical = str(action).lower() == "sell"
+    return self.post("/portfolio/events/orders", json_body=body, auth=True, critical=critical)
 
   def cancel_order(self, order_id: str) -> dict[str, Any]:
     """Cancel an open order by ID."""
-    return self._request("DELETE", f"/portfolio/orders/{order_id}", auth=True, critical=True)
+    return self._request(
+      "DELETE", f"/portfolio/events/orders/{order_id}", auth=True, critical=True
+    )
 
   def portfolio_balance(self, *, fresh: bool = False) -> dict[str, Any] | None:
     """Kalshi cash balance (cents); cached to limit /portfolio/balance polling."""
