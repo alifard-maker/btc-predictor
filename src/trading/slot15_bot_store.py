@@ -337,15 +337,19 @@ class Slot15BotStore:
       contracts=int(contracts),
     )
 
-  def _realized_pnl_usd(self, event_ticker: str) -> float:
+  def _realized_pnl_usd(self, event_ticker: str, mode: str | None = None) -> float:
+    clause, params = "", []
+    if mode:
+      clause = " AND mode = ?"
+      params = [mode]
     with self._connect() as conn:
       exits = conn.execute(
-        """
+        f"""
         SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
         FROM bot_trades
-        WHERE event_ticker = ? AND action = 'exit' AND status = 'filled'
+        WHERE event_ticker = ? AND action = 'exit' AND status = 'filled'{clause}
         """,
-        (event_ticker,),
+        [event_ticker, *params],
       ).fetchall()
     total = 0.0
     for r in exits:
@@ -698,46 +702,60 @@ class Slot15BotStore:
         pass
     return out
 
-  def slot_interval_summary(self, event_ticker: str) -> dict[str, Any]:
+  def slot_interval_summary(
+    self,
+    event_ticker: str,
+    *,
+    mode: str | None = None,
+  ) -> dict[str, Any]:
     """Per-slot stats. total_entered_usd sums all enter fills (can exceed max at-risk with churn)."""
+    from src.trading.bot_mode_stats import interval_summary_row
+    from src.trading.bot_position_mode import normalize_position_mode
+
     with self._connect() as conn:
-      row = conn.execute(
-        """
-        SELECT
-          COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN COALESCE(pnl_usd, 0) ELSE 0 END), 0) AS realized_pnl_usd,
-          COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
-          COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS exit_count,
-          COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN COALESCE(cost_usd, 0) ELSE 0 END), 0) AS total_entered_usd
-        FROM bot_trades
-        WHERE event_ticker = ?
-        """,
-        (event_ticker,),
-      ).fetchone()
-    exposure = self.open_exposure_usd(event_ticker)
+      row = interval_summary_row(conn, event_ticker, mode=mode)
     open_pos = self.open_positions(event_ticker)
+    if mode:
+      want = normalize_position_mode(mode)
+      open_pos = [p for p in open_pos if normalize_position_mode(p.get("mode")) == want]
+    exposure = round(sum(float(p.get("cost_usd") or 0) for p in open_pos), 2)
+    exit_count = int(row["exit_count"] or 0)
     realized = round(float(row["realized_pnl_usd"] or 0), 2)
-    if int(row["exit_count"] or 0) > 0 and realized == 0:
-      realized = self._realized_pnl_usd(event_ticker)
+    if exit_count > 0 and realized == 0:
+      realized = self._realized_pnl_usd(event_ticker, mode=mode)
     return {
       "event_ticker": event_ticker,
+      "mode": mode,
       "realized_pnl_usd": realized,
       "enter_count": int(row["enter_count"] or 0),
-      "exit_count": int(row["exit_count"] or 0),
+      "exit_count": exit_count,
       "total_entered_usd": round(float(row["total_entered_usd"] or 0), 2),
       "open_exposure_usd": exposure,
       "open_position_count": len(open_pos),
       "net_result_usd": realized,
     }
 
-  def interval_performance(self, current_event_ticker: str | None = None) -> dict[str, Any]:
+  def interval_performance(
+    self,
+    current_event_ticker: str | None = None,
+    *,
+    mode: str | None = None,
+  ) -> dict[str, Any]:
     from src.trading.bot_interval_stats import compute_interval_performance
 
     with self._connect() as conn:
       return compute_interval_performance(
         conn,
         current_event_ticker=current_event_ticker,
-        realized_pnl_fn=self._realized_pnl_usd,
+        realized_pnl_fn=lambda event: self._realized_pnl_usd(event, mode=mode),
+        mode=mode,
       )
+
+  def mode_performance_summary(self, mode: str) -> dict[str, Any]:
+    from src.trading.bot_mode_stats import mode_performance_summary
+
+    with self._connect() as conn:
+      return mode_performance_summary(conn, mode)
 
   def log_trade(self, trade: dict[str, Any]) -> dict[str, Any]:
     tid = trade.get("id") or str(uuid.uuid4())
@@ -870,10 +888,19 @@ class Slot15BotStore:
       else max_cap
     )
     open_pos = self.open_positions(event_ticker) if event_ticker else []
-    slot_summary = self.slot_interval_summary(event_ticker) if event_ticker else None
+    from src.trading.bot_position_mode import normalize_position_mode
+
+    mode = normalize_position_mode(settings.mode)
+    open_pos = [p for p in open_pos if normalize_position_mode(p.get("mode")) == mode]
+    slot_summary = (
+      self.slot_interval_summary(event_ticker, mode=mode) if event_ticker else None
+    )
     auto_stop_row = self.last_auto_stop_trade() if settings.auto_stopped else None
     paper_state = (
       self.get_paper_state_dict(max_cap) if settings.mode == "paper" else None
+    )
+    live_performance = (
+      self.mode_performance_summary("live") if settings.mode == "live" else None
     )
     return {
       "settings": settings.to_dict(),
@@ -887,8 +914,9 @@ class Slot15BotStore:
       "open_positions": open_pos,
       "open_position_count": len(open_pos),
       "slot_summary": slot_summary,
-      "interval_performance": self.interval_performance(event_ticker),
+      "interval_performance": self.interval_performance(event_ticker, mode=mode),
       "paper_bankroll": paper_state,
+      "live_performance": live_performance,
       "auto_stopped": settings.auto_stopped,
       "auto_stop_reason": settings.auto_stop_reason or (
         auto_stop_row.get("detail") if auto_stop_row else None

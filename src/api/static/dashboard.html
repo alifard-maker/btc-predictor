@@ -2252,13 +2252,19 @@
         </div>`;
     }
 
-    function botIntervalPerformanceHtml(bot, periodLabel) {
+    function botIntervalPerformanceHtml(bot, s, periodLabel) {
+      const settings = s || bot.settings || {};
       const ip = bot.interval_performance || {};
+      const modeLabel = (settings.mode || 'paper').toUpperCase();
       const profits = Number(ip.profit_intervals ?? 0);
       const losses = Number(ip.loss_intervals ?? 0);
       const breakeven = Number(ip.breakeven_intervals ?? 0);
       const scored = Number(ip.intervals_scored ?? 0);
-      if (scored === 0 && !ip.current_interval) return '';
+      const lp = bot.live_performance || {};
+      const hasLiveHistory = (settings.mode === 'live') && (
+        Number(lp.enter_count ?? 0) > 0 || Number(lp.exit_count ?? 0) > 0
+      );
+      if (scored === 0 && !ip.current_interval && !hasLiveHistory) return '';
       const unit = periodLabel === 'hour' ? 'hours' : 'slots';
       const unitSingular = periodLabel === 'hour' ? 'hour' : 'slot';
       const bePart = breakeven > 0 ? ` · ${breakeven} breakeven` : '';
@@ -2278,10 +2284,30 @@
       }
       return `
         <div class="bot-row" style="padding:.25rem .15rem .35rem;border-top:1px solid rgba(148,163,184,.12);margin-top:.15rem">
-          <div class="bot-stat"><span class="muted" title="Completed ${unit} with net closed P&amp;L — independent of bankroll balance">Interval record (all time)</span><strong><span class="up">${profits} profit</span> / <span class="down">${losses} loss</span>${bePart}</strong><span class="muted" style="font-size:.64rem">${currentPart}</span></div>
+          <div class="bot-stat"><span class="muted" title="Completed ${unit} with net closed P&amp;L for ${modeLabel} trades only">Interval record (${modeLabel.toLowerCase()})</span><strong><span class="up">${profits} profit</span> / <span class="down">${losses} loss</span>${bePart}</strong><span class="muted" style="font-size:.64rem">${currentPart}</span></div>
           ${scored > 0 ? `<div class="bot-stat"><span class="muted">Net across scored ${unit}</span><strong class="${netCls}">${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(2)}</strong></div>` : ''}
           ${scored > 0 ? `<div class="bot-stat"><span class="muted">Win rate</span><strong>${winRate}</strong></div>` : ''}
         </div>`;
+    }
+
+    function botLivePerformanceHtml(bot, s, periodLabel) {
+      if ((s.mode || 'paper') !== 'live') return '';
+      const lp = bot.live_performance || {};
+      const realized = Number(lp.realized_all_time_usd ?? 0);
+      const entered = Number(lp.total_entered_all_time_usd ?? 0);
+      const roi = Number(lp.roi_vs_entered_pct ?? 0);
+      const exits = Number(lp.exit_count ?? 0);
+      const enters = Number(lp.enter_count ?? 0);
+      const realizedCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
+      const roiCls = roi > 0 ? 'up' : roi < 0 ? 'down' : 'muted';
+      return `
+        <div class="bot-row" style="padding:.35rem .15rem .15rem">
+          <div class="bot-stat"><span class="muted" title="Closed live exits since first live trade">Live realized (all time)</span><strong class="${realizedCls}">${realized >= 0 ? '+' : ''}$${realized.toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Sum of all live enter fills logged by the bot">Live $ entered (all time)</span><strong>$${entered.toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Closed P&amp;L vs cumulative live entry cost">Live ROI vs entered</span><strong class="${roiCls}">${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%</strong></div>
+          <div class="bot-stat"><span class="muted">Live enters / exits</span><strong>${enters} / ${exits}</strong></div>
+        </div>
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Live stats count <strong>only LIVE-mode</strong> trades. Paper history is excluded while you are in live mode.</p>`;
     }
 
     function botPaperBankrollHtml(bot, s, periodLabel) {
@@ -3131,7 +3157,7 @@
         ${autoStopHtml}
         ${watchHtml}
         ${skipHtml}
-        <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
+        <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · <strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}</strong> P&amp;L for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Slot total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Realized (closed)</span><strong class="${realizedCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)}</strong></div>
@@ -3141,9 +3167,10 @@
           <div class="bot-stat"><span class="muted">Enters / Exits this slot</span><strong>${ss.enter_count ?? 0} / ${ss.exit_count ?? 0}</strong></div>
           <div class="bot-stat"><span class="muted" title="Sum of all enter fills this slot — can exceed max at-risk when positions rotate">Cumulative $ entered (slot)</span><strong>$${Number(ss.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
-        ${botIntervalPerformanceHtml(bot, 'slot')}
-        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across slots. Max at-risk caps concurrent open exposure.' : 'Slot bankroll = max cap + realized P&amp;L this slot.'} <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
+        ${botIntervalPerformanceHtml(bot, s, 'slot')}
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across slots. Max at-risk caps concurrent open exposure.' : 'Slot bankroll = max cap + realized P&amp;L this slot (live only).' } <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
         ${botLiveKalshiCashHtml(s)}
+        ${botLivePerformanceHtml(bot, s, 'slot')}
         ${botPaperBankrollHtml(bot, s, 'slot')}
         ${openPosHtml}
         <div class="bot-row">
@@ -3337,7 +3364,7 @@
         ${autoStopHtml}
         ${watchHtml}
         ${skipHtml}
-        <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · P&amp;L below is for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
+        <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · <strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}</strong> P&amp;L for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Hour total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Realized (closed)</span><strong class="${realizedCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)}</strong></div>
@@ -3347,9 +3374,10 @@
           <div class="bot-stat"><span class="muted">Enters / Exits this hour</span><strong>${hs.enter_count ?? 0} / ${hs.exit_count ?? 0}</strong></div>
           <div class="bot-stat"><span class="muted" title="Sum of all enter fills this hour — can exceed max at-risk when positions rotate">Cumulative $ entered (hour)</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
-        ${botIntervalPerformanceHtml(bot, 'hour')}
-        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across hours. Max at-risk caps concurrent open exposure.' : 'Hour bankroll = max cap + realized P&amp;L this hour.'} <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
+        ${botIntervalPerformanceHtml(bot, s, 'hour')}
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across hours. Max at-risk caps concurrent open exposure.' : 'Hour bankroll = max cap + realized P&amp;L this hour (live only).' } <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
         ${botLiveKalshiCashHtml(s)}
+        ${botLivePerformanceHtml(bot, s, 'hour')}
         ${botPaperBankrollHtml(bot, s, 'hour')}
         ${openPosHtml}
         <div class="bot-row">

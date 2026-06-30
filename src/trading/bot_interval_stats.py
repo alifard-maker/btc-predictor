@@ -24,6 +24,7 @@ def compute_interval_performance(
   *,
   current_event_ticker: str | None,
   realized_pnl_fn: Callable[[str], float] | None = None,
+  mode: str | None = None,
 ) -> dict[str, Any]:
   """
   Count completed intervals (hours/slots) as profit or loss from closed exit P&L.
@@ -31,8 +32,14 @@ def compute_interval_performance(
   The active interval is reported separately and excluded from all-time W/L counts
   until it rolls over.
   """
+  mode_clause = ""
+  mode_params: list[Any] = []
+  if mode:
+    mode_clause = " AND mode = ?"
+    mode_params = [mode]
+
   rows = conn.execute(
-    """
+    f"""
     SELECT
       event_ticker,
       COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN COALESCE(pnl_usd, 0) ELSE 0 END), 0) AS realized_pnl_usd,
@@ -40,10 +47,11 @@ def compute_interval_performance(
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
       MIN(created_at) AS first_trade_at
     FROM bot_trades
-    WHERE action NOT IN ('auto_stop', 'paper_refill')
+    WHERE action NOT IN ('auto_stop', 'paper_refill'){mode_clause}
     GROUP BY event_ticker
     ORDER BY first_trade_at ASC
     """,
+    mode_params,
   ).fetchall()
 
   profit_count = 0
@@ -91,6 +99,7 @@ def compute_interval_performance(
   win_rate_pct = round(100.0 * profit_count / scored, 1) if scored else None
 
   return {
+    "mode": mode,
     "profit_intervals": profit_count,
     "loss_intervals": loss_count,
     "breakeven_intervals": breakeven_count,
