@@ -278,3 +278,19 @@ def test_tail_entry_soft_mode_requires_higher_edge():
   pick2 = _pick("T", model_prob=0.80, ask=0.15)
   ok2, _, _ = passes_tail_entry_gate(pick2, "yes", 15, estrat)
   assert ok2
+
+
+def test_cap_live_entry_contracts_clamps_for_small_hourly_cap():
+  from src.trading.entry_strategy import EntryStrategyConfig, cap_live_entry_contracts
+
+  estrat = EntryStrategyConfig(
+    max_stake_per_entry_usd=1.50,
+    max_budget_fraction_per_entry=0.30,
+    max_contracts_per_entry=4,
+  )
+  assert cap_live_entry_contracts(
+    count=12,
+    price_cents=28,
+    max_spend_per_hour_usd=5.0,
+    estrat=estrat,
+  ) == 4

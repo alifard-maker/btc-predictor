@@ -15,7 +15,6 @@ from src.trading.live_bracket_orders import (
   resting_config_for_kind,
 )
 from src.trading.live_position_sync import (
-  kalshi_sellable_contracts,
   order_still_resting,
   try_live_position_exit,
 )
@@ -43,6 +42,7 @@ from src.trading.bot_profit_exit import (
   evaluate_slot15_contract_exits,
   effective_hourly_trial_settings,
   position_hold_seconds,
+  _hold_time_ok,
 )
 from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
 from src.trading.bot_entry_presets import (
@@ -51,6 +51,7 @@ from src.trading.bot_entry_presets import (
 )
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
+  cap_live_entry_contracts,
   correlation_block_reason,
   entry_budget_usd,
   passes_ask_edge_gate,
@@ -77,6 +78,7 @@ log = logging.getLogger(__name__)
 
 # Skip CUT LOSSES paper-exit when mark-to-market loss is below this (avoids regime churn at ~0 P&L).
 CUT_LOSS_EXIT_MIN_LOSS_USD = 0.05
+LIVE_CUT_LOSS_EXIT_MIN_LOSS_USD = 0.20
 
 
 def bet_qualifies(
@@ -560,7 +562,20 @@ class HourlyBot:
     )
     if cheap_reason:
       return cheap_reason, cheap_detail
-    if kind == "CUT LOSSES" and _should_paper_exit(alert, unrealized):
+    if kind == "CUT LOSSES":
+      if unrealized is None:
+        return None, ""
+      min_loss = (
+        LIVE_CUT_LOSS_EXIT_MIN_LOSS_USD
+        if settings.mode == "live"
+        else CUT_LOSS_EXIT_MIN_LOSS_USD
+      )
+      if unrealized >= -min_loss:
+        return None, ""
+      if settings.mode == "live" and not _hold_time_ok(
+        settings.min_hold_seconds, position_hold_seconds(pos),
+      ):
+        return None, ""
       return "CUT LOSSES", str(alert.get("detail", ""))
     reason, detail = evaluate_adaptive_profit_exit(
       settings=settings,
@@ -1047,6 +1062,13 @@ class HourlyBot:
           last_reason = f"missing_price:{market_ticker}"
           continue
         count = _contracts_for_budget(stake, price_cents)
+        if settings.mode == "live":
+          count = cap_live_entry_contracts(
+            count=count,
+            price_cents=price_cents,
+            max_spend_per_hour_usd=float(settings.max_spend_per_hour_usd),
+            estrat=estrat_entry,
+          )
         if count <= 0:
           last_reason = "budget_too_small_for_contract"
           continue
@@ -1190,9 +1212,6 @@ class HourlyBot:
           "entry_settings": hourly_entry_settings_snapshot(settings),
         })
       fill_count = min(filled, count)
-      sellable = kalshi_sellable_contracts(self.kalshi, str(pick["ticker"]), side)
-      if sellable is not None and sellable > fill_count:
-        fill_count = min(int(round(float(sellable))), count)
       fill_cost = round(cost_usd * fill_count / count, 2) if count else 0.0
       cheap_cfg, resting_cfg = resting_config_for_kind(cfg, kind="hourly")
       bracket = place_live_bracket_orders(

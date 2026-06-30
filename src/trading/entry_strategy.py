@@ -33,6 +33,7 @@ class EntryStrategyConfig:
   scale_in_max_legs_per_ticker: int = 2
   scale_in_min_unrealized_pnl_usd: float = 0.05
   scale_in_min_ask_edge_improvement_cents: float = 0.0
+  max_contracts_per_entry: int = 0
 
   @classmethod
   def from_bot_cfg(cls, bot_cfg: dict[str, Any] | None) -> EntryStrategyConfig:
@@ -64,6 +65,7 @@ class EntryStrategyConfig:
       scale_in_min_ask_edge_improvement_cents=float(
         raw.get("scale_in_min_ask_edge_improvement_cents", 0.0)
       ),
+      max_contracts_per_entry=int(raw.get("max_contracts_per_entry", 0)),
     )
 
 
@@ -402,6 +404,48 @@ def cap_entry_stake_usd(
   return round(max(0.0, stake), 2)
 
 
+def live_entry_stake_cap_usd(
+  *,
+  max_spend_per_hour_usd: float,
+  estrat: EntryStrategyConfig,
+) -> float:
+  """Per-entry USD cap for live hourly trial (fraction of hour max at-risk)."""
+  hour = max(0.0, float(max_spend_per_hour_usd))
+  return min(
+    float(estrat.max_stake_per_entry_usd),
+    hour * float(estrat.max_budget_fraction_per_entry),
+    hour * 0.35,
+  )
+
+
+def cap_live_entry_contracts(
+  *,
+  count: int,
+  price_cents: int,
+  max_spend_per_hour_usd: float,
+  estrat: EntryStrategyConfig,
+) -> int:
+  """Clamp live entry size for small hourly caps."""
+  if count <= 0 or price_cents <= 0:
+    return 0
+  stake_cap = live_entry_stake_cap_usd(
+    max_spend_per_hour_usd=max_spend_per_hour_usd,
+    estrat=estrat,
+  )
+  by_budget = _contracts_for_budget_usd(stake_cap, price_cents)
+  capped = min(int(count), int(by_budget))
+  max_ct = int(estrat.max_contracts_per_entry)
+  if max_ct > 0:
+    capped = min(capped, max_ct)
+  return max(0, capped)
+
+
+def _contracts_for_budget_usd(remaining_usd: float, price_cents: int) -> int:
+  if price_cents <= 0 or remaining_usd <= 0:
+    return 0
+  return max(0, int(remaining_usd // (price_cents / 100.0)))
+
+
 def entry_budget_usd(
   *,
   estrat: EntryStrategyConfig,
@@ -411,7 +455,6 @@ def entry_budget_usd(
   side: str,
   entries_left: int = 1,
 ) -> float:
-  """Kelly-sized stake capped by remaining budget; splits across basket entries when configured."""
   entries_left = max(1, int(entries_left))
   if estrat.enabled and estrat.max_entries_per_cycle > 1:
     basket_cap = remaining_usd / entries_left

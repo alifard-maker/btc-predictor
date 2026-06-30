@@ -30,7 +30,7 @@ class HourlyBotSettings:
   trail_giveback_usd: float = 0.0
   min_take_profit_pct: float = 0.10
   max_take_profit_pct: float = 0.40
-  min_hold_seconds: int = 30
+  min_hold_seconds: int = 120
   profit_exit_cooldown_seconds: int = 60
   auto_stop_on_budget_exhausted: bool = True
   auto_stopped: bool = False
@@ -65,7 +65,7 @@ class HourlyBotSettings:
       trail_giveback_usd=float(raw.get("trail_giveback_usd", 0.0)),
       min_take_profit_pct=float(raw.get("min_take_profit_pct", 0.10)),
       max_take_profit_pct=float(raw.get("max_take_profit_pct", 0.40)),
-      min_hold_seconds=int(raw.get("min_hold_seconds", 30)),
+      min_hold_seconds=int(raw.get("min_hold_seconds", 120)),
       profit_exit_cooldown_seconds=int(raw.get("profit_exit_cooldown_seconds", 60)),
       auto_stop_on_budget_exhausted=bool(raw.get("auto_stop_on_budget_exhausted", True)),
       auto_stopped=bool(raw.get("auto_stopped", False)),

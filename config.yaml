@@ -141,8 +141,9 @@ intra_slot:
       tail_entry_min_ask_edge_cents: 12
       max_entries_per_cycle: 1
       max_concurrent_positions: 1
-      max_budget_fraction_per_entry: 0.55
-      max_stake_per_entry_usd: 10
+      max_budget_fraction_per_entry: 0.30
+      max_stake_per_entry_usd: 1.50
+      max_contracts_per_entry: 4
       correlation_guard: false
     probe_no_trade:
       enabled: false
@@ -246,7 +247,7 @@ hourly:
     trail_arm_profit_usd: 0.50
     min_take_profit_pct: 0.10
     max_take_profit_pct: 0.40
-    min_hold_seconds: 30
+    min_hold_seconds: 120
     min_hours_to_settle_for_entry: 0.25  # block new legs in last 15m of hour (FREE mode too)
     profit_exit_cooldown_seconds: 60
     cheap_leg_max_entry_cents: 20
@@ -269,8 +270,9 @@ hourly:
       tail_entry_min_ask_edge_cents: 15
       max_entries_per_cycle: 2
       max_concurrent_positions: 12
-      max_budget_fraction_per_entry: 0.55
-      max_stake_per_entry_usd: 10
+      max_budget_fraction_per_entry: 0.30
+      max_stake_per_entry_usd: 1.50
+      max_contracts_per_entry: 4
       correlation_guard: true
       allow_barbell: true
       barbell_min_strike_gap_pct: 0.20
@@ -473,7 +475,7 @@ eth:
       trail_arm_profit_usd: 0.50
       min_take_profit_pct: 0.10
       max_take_profit_pct: 0.40
-      min_hold_seconds: 30
+      min_hold_seconds: 120
       profit_exit_cooldown_seconds: 60
       cheap_leg_max_entry_cents: 20
       cheap_leg_cut_loss_cents: 10
@@ -495,8 +497,9 @@ eth:
         tail_entry_min_ask_edge_cents: 18
         max_entries_per_cycle: 2
         max_concurrent_positions: 12
-        max_budget_fraction_per_entry: 0.55
-        max_stake_per_entry_usd: 10
+        max_budget_fraction_per_entry: 0.30
+        max_stake_per_entry_usd: 1.50
+        max_contracts_per_entry: 4
         correlation_guard: true
         allow_barbell: true
         barbell_min_strike_gap_pct: 0.20
