@@ -69,11 +69,19 @@ def kalshi_sellable_contracts(kalshi: Any, market_ticker: str, side: str) -> flo
   """Contracts held on Kalshi for this leg; None when the API is unavailable."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return None
-  net = kalshi.get_market_position(str(market_ticker))
+  side_l = str(side or "").lower()
+  ticker = str(market_ticker)
+  for row in kalshi.list_market_positions():
+    if str(row.get("ticker") or "") != ticker:
+      continue
+    net = position_net_from_row(row)
+    if side_l == "yes":
+      return max(0.0, float(net))
+    return max(0.0, -float(net))
+  net = kalshi.get_market_position(ticker)
   if net is None:
     return None
-  s = str(side or "").lower()
-  if s == "yes":
+  if side_l == "yes":
     return max(0.0, float(net))
   return max(0.0, -float(net))
 
@@ -559,6 +567,151 @@ def adopt_filled_resting_enters(
   return {"ok": True, "changes": changes}
 
 
+def _hourly_event_time_suffix(event_ticker: str) -> str | None:
+  parts = str(event_ticker).split("-", 1)
+  if len(parts) != 2 or not parts[1]:
+    return None
+  return parts[1]
+
+
+def _ticker_belongs_to_hourly_event(ticker: str, event_ticker: str) -> bool:
+  """True when a market ticker belongs to the current hourly event (KXBTCD + KXBTC siblings)."""
+  t = str(ticker)
+  e = str(event_ticker)
+  if t == e or t.startswith(f"{e}-"):
+    return True
+  suffix = _hourly_event_time_suffix(e)
+  if not suffix:
+    return False
+  sibling_prefixes: tuple[str, ...] = ()
+  if e.startswith("KXBTCD-"):
+    sibling_prefixes = ("KXBTC-",)
+  elif e.startswith("KXETHD-"):
+    sibling_prefixes = ("KXETH-",)
+  for prefix in sibling_prefixes:
+    root = f"{prefix}{suffix}"
+    if t == root or t.startswith(f"{root}-"):
+      return True
+  return False
+
+
+def _recent_enter_trade_meta(
+  store: Any,
+  event_ticker: str,
+  market_ticker: str,
+  side: str,
+) -> dict[str, Any]:
+  with store._connect() as conn:
+    row = conn.execute(
+      """
+      SELECT label, signal, entry_price_cents, price_cents FROM bot_trades
+      WHERE event_ticker = ? AND market_ticker = ? AND side = ?
+        AND action = 'enter' AND mode = 'live'
+      ORDER BY created_at DESC LIMIT 1
+      """,
+      (event_ticker, market_ticker, side),
+    ).fetchone()
+  if not row:
+    return {}
+  return {
+    "label": row[0],
+    "signal": row[1],
+    "entry_price_cents": row[2],
+    "price_cents": row[3],
+  }
+
+
+def adopt_kalshi_orphan_inventory(
+  store: Any,
+  kalshi: Any,
+  event_ticker: str,
+) -> dict[str, Any]:
+  """Open bot legs for Kalshi inventory with no matching bot position (kalshi-only reconcile)."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return {"ok": True, "changes": []}
+
+  changes: list[dict[str, Any]] = []
+  for row in kalshi.list_market_positions():
+    ticker = str(row.get("ticker") or "")
+    if not ticker or not _ticker_belongs_to_hourly_event(ticker, event_ticker):
+      continue
+    net = position_net_from_row(row)
+    if abs(net) < 0.05:
+      continue
+    side = "yes" if net > 0 else "no"
+    if _has_open_live_leg(store, event_ticker, ticker, side):
+      continue
+    snap = kalshi_position_leg(kalshi, ticker, side)
+    if snap is None:
+      continue
+    contracts_fp = float(snap["contracts"])
+    if contracts_fp < 0.05:
+      continue
+    meta = _recent_enter_trade_meta(store, event_ticker, ticker, side)
+    entry_c = int(
+      snap.get("entry_price_cents")
+      or meta.get("entry_price_cents")
+      or meta.get("price_cents")
+      or 0,
+    )
+    if entry_c <= 0:
+      continue
+    import uuid
+
+    contracts = max(1, int(round(contracts_fp)))
+    pid = str(uuid.uuid4())
+    cost_usd = float(snap.get("cost_usd") or round(contracts_fp * entry_c / 100.0, 2))
+    store.open_position({
+      "id": pid,
+      "event_ticker": event_ticker,
+      "market_ticker": ticker,
+      "side": side,
+      "contracts": contracts,
+      "contracts_fp": contracts_fp,
+      "entry_price_cents": entry_c,
+      "cost_usd": cost_usd,
+      "signal": meta.get("signal"),
+      "label": meta.get("label"),
+      "mode": "live",
+    })
+    store.log_trade({
+      "event_ticker": event_ticker,
+      "trigger": "continuous",
+      "action": "enter",
+      "mode": "live",
+      "market_ticker": ticker,
+      "side": side,
+      "contracts": contracts,
+      "price_cents": entry_c,
+      "entry_price_cents": entry_c,
+      "cost_usd": cost_usd,
+      "signal": meta.get("signal"),
+      "label": meta.get("label"),
+      "status": "filled",
+      "detail": (
+        f"Live ENTER adopted from Kalshi inventory "
+        f"(kalshi-only reconcile) — {contracts_fp} contracts"
+      ),
+      "position_id": pid,
+    })
+    changes.append({
+      "action": "adopted_kalshi_orphan",
+      "ticker": ticker,
+      "side": side,
+      "contracts": contracts_fp,
+      "position_id": pid,
+    })
+    log.info(
+      "Adopted kalshi-only inventory %s %s x%s on %s",
+      side.upper(),
+      ticker,
+      contracts_fp,
+      event_ticker,
+    )
+
+  return {"ok": True, "changes": changes}
+
+
 def run_live_position_hygiene(
   *,
   store: Any,
@@ -568,7 +721,8 @@ def run_live_position_hygiene(
   settings_enabled: bool,
 ) -> dict[str, Any]:
   """Sync inventory, cancel orphans, and optionally cancel resting enters when auto-bet is off."""
-  adopted = adopt_filled_resting_enters(store, kalshi, event_ticker)
+  adopted_resting = adopt_filled_resting_enters(store, kalshi, event_ticker)
+  adopted_orphans = adopt_kalshi_orphan_inventory(store, kalshi, event_ticker)
   sync = sync_live_positions_from_kalshi(store, kalshi, event_ticker)
   orphans = cancel_orphan_live_sell_orders(
     kalshi, live_open_tickers(store, event_ticker),
@@ -578,9 +732,11 @@ def run_live_position_hygiene(
     resting_cancelled = cancel_resting_enter_orders_for_hourly_event(
       kalshi, event_ticker, tab,
     )
+  adopted_changes = (adopted_resting.get("changes") or []) + (adopted_orphans.get("changes") or [])
   return {
     **sync,
-    **adopted,
+    "ok": sync.get("ok", True),
+    "changes": (sync.get("changes") or []) + adopted_changes,
     "orphan_sells_cancelled": orphans,
     "resting_enters_cancelled": resting_cancelled,
   }

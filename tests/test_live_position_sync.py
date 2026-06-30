@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.live_position_sync import (
   adopt_filled_resting_enters,
+  adopt_kalshi_orphan_inventory,
   cancel_orphan_live_sell_orders,
   cancel_resting_enter_orders_for_hourly_event,
   effective_kalshi_inventory,
@@ -133,6 +134,39 @@ def test_adopt_filled_resting_enter_opens_bot_leg():
     assert open_pos[0]["contracts"] == 2
     assert open_pos[0]["entry_price_cents"] == 40
     assert any(c.get("action") == "adopted_resting_enter" for c in out["changes"])
+
+
+def test_adopt_kalshi_orphan_inventory_opens_untracked_leg():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "KXBTCD-26JUN3006",
+      "action": "enter",
+      "status": "filled",
+      "mode": "live",
+      "market_ticker": "KXBTCD-26JUN3006-T59399.99",
+      "side": "no",
+      "contracts": 2,
+      "price_cents": 82,
+      "entry_price_cents": 82,
+      "label": "$59,400 or above",
+      "signal": "BUY NO",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.list_market_positions.return_value = [{
+      "ticker": "KXBTCD-26JUN3006-T59399.99",
+      "position_fp": -2.0,
+      "market_exposure_dollars": 1.64,
+    }]
+    kalshi.get_market_position.return_value = -2.0
+    out = adopt_kalshi_orphan_inventory(store, kalshi, "KXBTCD-26JUN3006")
+    open_pos = store.open_positions("KXBTCD-26JUN3006")
+    assert len(open_pos) == 1
+    assert open_pos[0]["contracts_fp"] == 2.0
+    assert open_pos[0]["entry_price_cents"] == 82
+    assert open_pos[0]["label"] == "$59,400 or above"
+    assert any(c.get("action") == "adopted_kalshi_orphan" for c in out["changes"])
 
 
 def test_try_live_position_exit_reconciles_when_kalshi_flat():
