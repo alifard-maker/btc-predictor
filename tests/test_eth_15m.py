@@ -21,10 +21,10 @@ def base_cfg():
 def test_asset_cfg_eth_kalshi_15m(base_cfg):
   eth = asset_cfg(base_cfg, "eth")
   assert eth["kalshi"]["series_ticker"] == "KXETH15M"
-  assert eth["kalshi"]["brti_index_id"] == "ERTI"
+  assert eth["kalshi"]["brti_index_id"] == "ETHUSD_RTI"
   assert eth["paths"]["db"].endswith("eth/logs/predictions.db")
   assert "eth" in eth["paths"]["candles"]
-  assert index_id_for_cfg(eth) == "ERTI"
+  assert index_id_for_cfg(eth) == "ETHUSD_RTI"
 
 
 def test_asset_cfg_btc_kalshi_unchanged(base_cfg):
@@ -36,20 +36,20 @@ def test_asset_cfg_btc_kalshi_unchanged(base_cfg):
 def test_kalshi_client_eth_labels():
   cfg = {
     "price_feed": {
-      "label": "Kalshi CF Benchmarks ERTI",
-      "index_id": "ERTI",
-      "settlement_reference": "CF Benchmarks ERTI (Kalshi KXETH15M)",
+      "label": "Kalshi CF Benchmarks ETHUSD_RTI",
+      "index_id": "ETHUSD_RTI",
+      "settlement_reference": "CF Benchmarks ETHUSD_RTI (Kalshi KXETH15M)",
     },
     "kalshi": {
       "enabled": False,
       "series_ticker": "KXETH15M",
-      "brti_index_id": "ERTI",
+      "brti_index_id": "ETHUSD_RTI",
     },
   }
   client = KalshiClient(cfg)
   assert client.series_ticker == "KXETH15M"
-  assert client._brtI_index == "ERTI"
-  assert "ERTI" in client.price_feed_label()
+  assert client._brtI_index == "ETHUSD_RTI"
+  assert "ETHUSD_RTI" in client.price_feed_label()
   assert "KXETH15M" in client.settlement_reference_label()
   assert client._index_target_source() == "kalshi_erti_target"
 

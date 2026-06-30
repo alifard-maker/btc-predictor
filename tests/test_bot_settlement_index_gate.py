@@ -43,7 +43,7 @@ def test_slot15_tab_monitor_source():
     "brti_source": "erti_live",
     "brti_live": 2500.5,
   }
-  cfg = {"live_settlement_index": {"enabled": True}, "kalshi": {"brti_index_id": "ERTI"}}
+  cfg = {"live_settlement_index": {"enabled": True}, "kalshi": {"brti_index_id": "ETHUSD_RTI"}}
   assert live_settlement_index_skip_reason(tab, cfg=cfg, mode="live", asset="eth") is None
 
 

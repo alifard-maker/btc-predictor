@@ -24,7 +24,23 @@ log = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 DEFAULT_SERIES = "KXBTC15M"
 BRTI_INDEX_ID = "BRTI"
-ERTI_INDEX_ID = "ERTI"
+ETH_INDEX_ID = "ETHUSD_RTI"  # Kalshi/CF Benchmarks API id (not "ERTI")
+_ETH_INDEX_ALIASES = frozenset({"ERTI", "ETHUSDRTI", "ETHUSD_RTI"})
+
+
+def index_slug(index_id: str) -> str:
+  """Short slug for source labels (brti, erti, …)."""
+  idx = str(index_id or "").upper()
+  if idx in _ETH_INDEX_ALIASES:
+    return "erti"
+  if idx == BRTI_INDEX_ID:
+    return "brti"
+  return idx.lower().replace("-", "_")
+
+
+def index_live_source(index_id: str) -> str:
+  """Canonical live-tick source for settlement gates and dashboard."""
+  return f"{index_slug(index_id)}_live"
 
 
 @dataclass(frozen=True)
@@ -133,7 +149,7 @@ class KalshiClient:
     return f"CF Benchmarks {self._brtI_index} (Kalshi {self.series_ticker} settlement)"
 
   def _index_target_source(self) -> str:
-    return f"kalshi_{self._brtI_index.lower()}_target"
+    return f"kalshi_{index_slug(self._brtI_index)}_target"
 
   def _load_private_key(self, kcfg: dict[str, Any]) -> None:
     pem = kcfg.get("private_key", "")
@@ -215,7 +231,12 @@ class KalshiClient:
       return resp.json()
     except Exception as e:
       if circuit:
-        circuit.record_failure(str(e))
+        err = str(e)
+        # Wrong index id / client errors must not trip the global circuit for all bots.
+        if "400 Client Error" in err and "/cfbenchmarks/" in path:
+          log.warning("Kalshi cfbenchmarks client error (not tripping circuit): %s", err[:200])
+        else:
+          circuit.record_failure(err)
       raise
 
   def get(
@@ -395,7 +416,7 @@ class KalshiClient:
     if not self.authenticated:
       return None
     idx = (index_id or self._brtI_index).upper()
-    source = f"{idx.lower()}_live"
+    source = index_live_source(idx)
     now_mono = time.monotonic()
     cached = self._index_cache.get(idx)
     if not fresh and cached and (now_mono - cached[1]) < self._brtI_cache_sec:

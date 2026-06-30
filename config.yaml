@@ -393,13 +393,13 @@ eth:
     - bitstamp
   price_feed:
     live: kalshi
-    label: Kalshi CF Benchmarks ERTI
-    index_id: ERTI
-    settlement_reference: CF Benchmarks ERTI (Kalshi KXETHD / KXETH / KXETH15M)
+    label: Kalshi CF Benchmarks ETHUSD_RTI
+    index_id: ETHUSD_RTI
+    settlement_reference: CF Benchmarks ETHUSD_RTI (Kalshi KXETHD / KXETH / KXETH15M)
   kalshi:
     enabled: true
     series_ticker: KXETH15M
-    brti_index_id: ERTI
+    brti_index_id: ETHUSD_RTI
   intra_slot:
     bot:
       cheap_leg_cut_cooldown_seconds: 180

@@ -31,7 +31,7 @@ def test_asset_cfg_eth_overrides(base_cfg):
   assert eth["daily"]["threshold_series"] == ["KXETHD"]
   assert eth["daily"]["range_series"] == ["KXETH"]
   assert "eth" in eth["paths"]["candles"]
-  assert index_id_for_cfg(eth) == "ERTI"
+  assert index_id_for_cfg(eth) == "ETHUSD_RTI"
 
 
 def test_asset_cfg_btc_unchanged(base_cfg):
