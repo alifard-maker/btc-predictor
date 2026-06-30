@@ -1,4 +1,7 @@
-"""Align ETH hourly bot persisted settings with BTC hourly (same toggles and risk caps)."""
+"""Align ETH hourly bot persisted settings with BTC hourly (risk caps and filters only).
+
+Mode (paper/live), Auto-bet (enabled), and auto-stop state are per-bot and never copied.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +12,34 @@ from src.trading.hourly_bot_store import HourlyBotSettings
 
 log = logging.getLogger(__name__)
 
+# Fields mirrored BTC → ETH on startup. Never include mode/enabled/auto-stop.
+_ALIGN_FIELDS = (
+  "max_spend_per_hour_usd",
+  "allow_strong",
+  "allow_actionable",
+  "use_accumulated_profit",
+  "profit_use_pct",
+  "paper_auto_refill",
+  "aggressive_entries",
+  "take_profit_enabled",
+  "take_profit_mode",
+  "take_profit_pct",
+  "take_profit_usd",
+  "trail_arm_profit_pct",
+  "trail_giveback_pct",
+  "trail_arm_profit_usd",
+  "trail_giveback_usd",
+  "min_take_profit_pct",
+  "max_take_profit_pct",
+  "min_hold_seconds",
+  "profit_exit_cooldown_seconds",
+  "reentry_cooldown_seconds",
+  "auto_stop_on_budget_exhausted",
+)
+
 
 def align_eth_hourly_settings_from_btc(loop: Any) -> dict[str, Any]:
-  """Copy BTC hourly bot_settings to ETH when they differ."""
+  """Copy selected BTC hourly bot_settings fields to ETH when they differ."""
   from src.assets import asset_enabled
 
   if not asset_enabled(loop.cfg, "eth"):
@@ -24,12 +52,13 @@ def align_eth_hourly_settings_from_btc(loop: Any) -> dict[str, Any]:
   btc_dict = btc.to_dict()
   eth_dict = eth.to_dict()
 
-  if btc_dict == eth_dict:
+  changed = [k for k in _ALIGN_FIELDS if btc_dict.get(k) != eth_dict.get(k)]
+  if not changed:
     return {"aligned": False, "changed": []}
 
-  changed = [k for k in btc_dict if btc_dict.get(k) != eth_dict.get(k)]
+  merged = {**eth_dict, **{k: btc_dict[k] for k in changed}}
   eth_store.save_settings(
-    HourlyBotSettings.from_dict(btc_dict),
+    HourlyBotSettings.from_dict(merged),
     source="btc_hourly_align",
     cfg=loop._eth_cfg or loop.cfg,
   )
@@ -38,4 +67,4 @@ def align_eth_hourly_settings_from_btc(loop: Any) -> dict[str, Any]:
     len(changed),
     ", ".join(changed),
   )
-  return {"aligned": True, "changed": changed, "settings": btc_dict}
+  return {"aligned": True, "changed": changed, "settings": {k: merged[k] for k in changed}}
