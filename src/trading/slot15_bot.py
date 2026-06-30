@@ -51,6 +51,11 @@ from src.trading.entry_strategy import (
   entry_budget_usd,
   passes_tail_entry_gate,
 )
+from src.trading.live_entry_price import (
+  format_live_entry_execution_detail,
+  live_entry_pricing_from_cfg,
+  resolve_live_entry_price,
+)
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
@@ -942,9 +947,22 @@ class Slot15Bot:
           last_reason = fill_reason or "tail_entry_blocked"
           continue
       else:
-        price_cents = _price_cents_for_side(yes_cents, side)
-        if price_cents is None:
+        pricing = live_entry_pricing_from_cfg(
+          cfg, kind="slot15", aggressive=settings.aggressive_entries
+        )
+        live_resolved = resolve_live_entry_price(
+          pick_kelly, side, pricing=pricing, estrat=estrat_entry
+        )
+        price_raw = live_resolved.get("price_cents")
+        if price_raw is None:
           last_reason = "missing_kalshi_mid"
+          continue
+        price_cents = int(price_raw)
+        ok_fill, fill_reason, _ = passes_tail_entry_gate(
+          pick_kelly, side, price_cents, estrat_entry
+        )
+        if not ok_fill:
+          last_reason = fill_reason or "tail_entry_blocked"
           continue
         count = _contracts_for_budget(stake, price_cents)
         if settings.mode == "live":
@@ -957,6 +975,7 @@ class Slot15Bot:
         if count <= 0:
           last_reason = "budget_too_small_for_contract"
           continue
+        live_entry_detail = format_live_entry_execution_detail(live_resolved)
 
       cost_usd = round(count * price_cents / 100.0, 2)
       pid = str(uuid.uuid4())
@@ -975,7 +994,17 @@ class Slot15Bot:
 
       if settings.mode == "live":
         result = self._place_live_enter(
-          slot_key, pick, side, count, price_cents, cost_usd, bet, settings, pid, cfg=cfg
+          slot_key,
+          pick,
+          side,
+          count,
+          price_cents,
+          cost_usd,
+          bet,
+          settings,
+          pid,
+          cfg=cfg,
+          entry_execution_detail=live_entry_detail,
         )
       else:
         self.store.open_position({
@@ -1050,7 +1079,9 @@ class Slot15Bot:
     pid: str,
     *,
     cfg: dict[str, Any] | None = None,
+    entry_execution_detail: str | None = None,
   ) -> dict[str, Any]:
+    exec_note = f" · {entry_execution_detail}" if entry_execution_detail else ""
     if not self.kalshi or not getattr(self.kalshi, "authenticated", False):
       return self.store.log_trade({
         "event_ticker": slot_key,
@@ -1099,7 +1130,7 @@ class Slot15Bot:
           "kalshi_order_id": oid,
           "detail": (
             f"Live ENTER order {oid} (0 filled — resting on Kalshi; "
-            f"{int(parsed['remaining_count'])} remaining)"
+            f"{int(parsed['remaining_count'])} remaining){exec_note}"
           ),
           "entry_settings": slot15_entry_settings_snapshot(settings),
         })
@@ -1156,7 +1187,7 @@ class Slot15Bot:
         "status": "filled",
         "kalshi_order_id": oid,
         "position_id": pid,
-        "detail": f"Live ENTER order {oid} ({fill_count} filled){bracket_note}",
+        "detail": f"Live ENTER order {oid} ({fill_count} filled){bracket_note}{exec_note}",
         "entry_settings": slot15_entry_settings_snapshot(settings),
       })
     except Exception as e:
