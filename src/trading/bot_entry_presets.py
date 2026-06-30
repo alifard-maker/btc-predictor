@@ -35,16 +35,16 @@ _SLOT15_AGGRESSIVE_ENTRY: dict[str, Any] = {
 _HOURLY_PASSIVE_ENTRY: dict[str, Any] = {
   "kelly_fraction": 0.15,
   "max_budget_fraction_per_entry": 0.55,
-  "max_entries_per_cycle": 1,
-  "max_concurrent_positions": 1,
+  "max_entries_per_cycle": 2,
+  "max_concurrent_positions": 12,
   "max_stake_per_entry_usd": 10.0,
-  "allow_scale_in": False,
+  "allow_scale_in": True,
   "scale_in_max_legs_per_ticker": 2,
   "scale_in_min_unrealized_pnl_usd": 0.05,
   "min_ask_edge_cents": 8.0,
   "correlation_guard": True,
   "risk_adjusted_ranking": True,
-  "allow_barbell": False,
+  "allow_barbell": True,
 }
 
 _HOURLY_AGGRESSIVE_ENTRY: dict[str, Any] = {
