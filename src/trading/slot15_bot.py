@@ -17,8 +17,11 @@ from src.trading.bot_period_rollover import force_close_period_positions, resolv
 from src.trading.bot_entry_settings import slot15_entry_settings_snapshot
 from src.trading.bot_cheap_leg_cooldown import (
   cheap_leg_cut_cooldown_seconds,
+  cut_loss_label_cooldown_seconds,
   is_cheap_leg_cut_reason,
+  is_label_cut_cooldown_reason,
   resolve_exit_cooldown_seconds,
+  resolve_label_reentry_cooldown_seconds,
 )
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
@@ -571,18 +574,33 @@ class Slot15Bot:
       record_exit_and_maybe_cap(
         pnl_rounded, kind="slot15", asset=self.asset, store=self.store, cfg=cfg,
       )
+      hours_to_settle = (
+        float(seconds_remaining) / 3600.0
+        if seconds_remaining is not None
+        else None
+      )
       cooldown = resolve_exit_cooldown_seconds(
-        settings, exit_reason, cfg, bot_kind="slot15",
+        settings,
+        exit_reason,
+        cfg,
+        bot_kind="slot15",
+        hours_to_settle=hours_to_settle,
       )
       self.store.record_exit_cooldown(
         slot_key, pos["market_ticker"], cooldown_seconds=cooldown
       )
-      if is_cheap_leg_cut_reason(exit_reason):
+      if is_label_cut_cooldown_reason(exit_reason):
+        label_cd = resolve_label_reentry_cooldown_seconds(
+          exit_reason,
+          cfg,
+          bot_kind="slot15",
+          hours_to_settle=hours_to_settle,
+        )
         self.store.record_cheap_leg_cut_cooldown(
           slot_key,
           label=pos.get("label"),
           market_ticker=pos["market_ticker"],
-          cooldown_seconds=cooldown,
+          cooldown_seconds=label_cd,
         )
       results.append(row)
 
@@ -674,7 +692,10 @@ class Slot15Bot:
         last_reason = f"reentry_cooldown:{market_ticker}"
         continue
 
-      cheap_cut_cd = cheap_leg_cut_cooldown_seconds(cfg, kind="slot15")
+      cheap_cut_cd = max(
+        cheap_leg_cut_cooldown_seconds(cfg, kind="slot15"),
+        cut_loss_label_cooldown_seconds(cfg, kind="slot15"),
+      )
       if self.store.is_in_cheap_leg_cut_cooldown(
         slot_key,
         label=pick.get("label"),

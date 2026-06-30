@@ -17,8 +17,11 @@ from src.trading.live_bracket_orders import (
 from src.trading.bot_entry_settings import hourly_entry_settings_snapshot
 from src.trading.bot_cheap_leg_cooldown import (
   cheap_leg_cut_cooldown_seconds,
+  cut_loss_label_cooldown_seconds,
   is_cheap_leg_cut_reason,
+  is_label_cut_cooldown_reason,
   resolve_exit_cooldown_seconds,
+  resolve_label_reentry_cooldown_seconds,
 )
 from src.trading.bot_profit_exit import (
   AdaptiveExitContext,
@@ -682,17 +685,27 @@ class HourlyBot:
         pnl_rounded, kind="hourly", asset=self.asset, store=self.store, cfg=cfg,
       )
       cooldown = resolve_exit_cooldown_seconds(
-        settings, exit_reason, cfg, bot_kind=self.kind,
+        settings,
+        exit_reason,
+        cfg,
+        bot_kind=self.kind,
+        hours_to_settle=float(hours_left) if hours_left is not None else None,
       )
       self.store.record_exit_cooldown(
         event_ticker, pos["market_ticker"], cooldown_seconds=cooldown
       )
-      if is_cheap_leg_cut_reason(exit_reason):
+      if is_label_cut_cooldown_reason(exit_reason):
+        label_cd = resolve_label_reentry_cooldown_seconds(
+          exit_reason,
+          cfg,
+          bot_kind=self.kind,
+          hours_to_settle=float(hours_left) if hours_left is not None else None,
+        )
         self.store.record_cheap_leg_cut_cooldown(
           event_ticker,
           label=pos.get("label"),
           market_ticker=pos["market_ticker"],
-          cooldown_seconds=cooldown,
+          cooldown_seconds=label_cd,
         )
       results.append(row)
 
@@ -793,8 +806,9 @@ class HourlyBot:
         last_reason = f"reentry_cooldown:{market_ticker}"
         continue
 
-      cheap_cut_cd = cheap_leg_cut_cooldown_seconds(
-        cfg, kind="hourly",
+      cheap_cut_cd = max(
+        cheap_leg_cut_cooldown_seconds(cfg, kind="hourly"),
+        cut_loss_label_cooldown_seconds(cfg, kind="hourly"),
       )
       if self.store.is_in_cheap_leg_cut_cooldown(
         event_ticker,

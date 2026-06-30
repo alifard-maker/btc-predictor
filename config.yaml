@@ -247,6 +247,8 @@ hourly:
     cheap_leg_max_entry_cents: 20
     cheap_leg_cut_loss_cents: 10
     cheap_leg_cut_cooldown_seconds: 300
+    cut_loss_label_cooldown_seconds: 600
+    cut_loss_late_hour_min_hours: 0.167
     near_strike_cut_min_hours: 0.083
     near_strike_tolerance_usd: 3.0
     entry_strategy:
@@ -442,6 +444,8 @@ eth:
       cheap_leg_max_entry_cents: 20
       cheap_leg_cut_loss_cents: 10
       cheap_leg_cut_cooldown_seconds: 300
+      cut_loss_label_cooldown_seconds: 600
+      cut_loss_late_hour_min_hours: 0.167
       near_strike_cut_min_hours: 0.083
       near_strike_tolerance_usd: 3.0
       entry_strategy:

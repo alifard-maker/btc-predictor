@@ -9,6 +9,9 @@ import sqlite3
 
 # Default: 5 minutes — longer than passive/aggressive re-entry presets (120s / 30s).
 DEFAULT_CHEAP_LEG_CUT_COOLDOWN_SECONDS = 300
+# Default: 10 minutes on event+label after CUT LOSSES (hourly); longer late in the hour.
+DEFAULT_CUT_LOSS_LABEL_COOLDOWN_SECONDS = 600
+DEFAULT_CUT_LOSS_LATE_HOUR_MIN_HOURS = 10.0 / 60.0
 
 _CHEAP_LEG_CUT_COOLDOWNS_DDL = """
 CREATE TABLE IF NOT EXISTS cheap_leg_cut_cooldowns (
@@ -23,6 +26,11 @@ CREATE TABLE IF NOT EXISTS cheap_leg_cut_cooldowns (
 
 def is_cheap_leg_cut_reason(reason: str | None) -> bool:
   return reason == "CHEAP LEG CUT LOSS"
+
+
+def is_label_cut_cooldown_reason(reason: str | None) -> bool:
+  """Exits that block re-entry on the same event + label identity."""
+  return is_cheap_leg_cut_reason(reason) or reason == "CUT LOSSES"
 
 
 def market_identity_label(label: str | None, market_ticker: str) -> str:
@@ -44,12 +52,59 @@ def cheap_leg_cut_cooldown_seconds(cfg: dict[str, Any] | None, *, kind: str) -> 
   )
 
 
+def _bot_cfg_for_kind(cfg: dict[str, Any] | None, kind: str) -> dict[str, Any]:
+  if not cfg:
+    return {}
+  if kind == "hourly":
+    return (cfg.get("hourly") or {}).get("bot") or {}
+  return (cfg.get("intra_slot") or {}).get("bot") or {}
+
+
+def cut_loss_label_cooldown_seconds(
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str,
+  hours_to_settle: float | None = None,
+) -> int:
+  """Re-entry cooldown on event+label after CUT LOSSES; rest-of-hour when late."""
+  bot_cfg = _bot_cfg_for_kind(cfg, kind)
+  base = int(
+    bot_cfg.get("cut_loss_label_cooldown_seconds", DEFAULT_CUT_LOSS_LABEL_COOLDOWN_SECONDS)
+  )
+  late_min = float(
+    bot_cfg.get("cut_loss_late_hour_min_hours", DEFAULT_CUT_LOSS_LATE_HOUR_MIN_HOURS)
+  )
+  if hours_to_settle is not None and hours_to_settle < late_min:
+    rest = int(max(0.0, hours_to_settle) * 3600.0) + 30
+    return max(base, rest)
+  return base
+
+
+def resolve_label_reentry_cooldown_seconds(
+  exit_reason: str | None,
+  cfg: dict[str, Any] | None,
+  *,
+  bot_kind: str,
+  hours_to_settle: float | None = None,
+) -> int:
+  """Cooldown stored on event+label after cheap-leg or CUT LOSSES exits."""
+  cfg_kind = "slot15" if bot_kind == "slot15" else "hourly"
+  if is_cheap_leg_cut_reason(exit_reason):
+    return cheap_leg_cut_cooldown_seconds(cfg, kind=cfg_kind)
+  if exit_reason == "CUT LOSSES":
+    return cut_loss_label_cooldown_seconds(
+      cfg, kind=cfg_kind, hours_to_settle=hours_to_settle,
+    )
+  return 0
+
+
 def resolve_exit_cooldown_seconds(
   settings: Any,
   exit_reason: str | None,
   cfg: dict[str, Any] | None,
   *,
   bot_kind: str,
+  hours_to_settle: float | None = None,
 ) -> int:
   """Cooldown to persist on exit; cheap-leg cuts use a fixed longer window."""
   from src.trading.bot_profit_exit import is_profit_exit_reason
@@ -57,6 +112,12 @@ def resolve_exit_cooldown_seconds(
   if is_cheap_leg_cut_reason(exit_reason):
     cfg_kind = "slot15" if bot_kind == "slot15" else "hourly"
     return cheap_leg_cut_cooldown_seconds(cfg, kind=cfg_kind)
+  if exit_reason == "CUT LOSSES":
+    cfg_kind = "slot15" if bot_kind == "slot15" else "hourly"
+    label_cd = cut_loss_label_cooldown_seconds(
+      cfg, kind=cfg_kind, hours_to_settle=hours_to_settle,
+    )
+    return max(int(settings.reentry_cooldown_seconds), label_cd)
   if is_profit_exit_reason(exit_reason):
     return int(settings.profit_exit_cooldown_seconds)
   return int(settings.reentry_cooldown_seconds)

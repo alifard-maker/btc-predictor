@@ -12,6 +12,7 @@ from src.trading.bot_cheap_leg_cooldown import (
   is_cheap_leg_cut_reason,
   market_identity_label,
   resolve_exit_cooldown_seconds,
+  resolve_label_reentry_cooldown_seconds,
 )
 from src.trading.hourly_bot import HourlyBot
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
@@ -52,7 +53,48 @@ def test_resolve_exit_cooldown_seconds_ignores_aggressive_reentry():
   ) == 30
   assert resolve_exit_cooldown_seconds(
     settings, "CUT LOSSES", cfg, bot_kind="hourly",
-  ) == 30
+  ) == 600
+
+
+def test_cut_loss_late_hour_label_cooldown_covers_rest_of_hour():
+  from src.trading.bot_cheap_leg_cooldown import cut_loss_label_cooldown_seconds
+
+  cfg = {"hourly": {"bot": {"cut_loss_label_cooldown_seconds": 600}}}
+  # 6 minutes left → at least 6*60+30 = 390s
+  cd = cut_loss_label_cooldown_seconds(cfg, kind="hourly", hours_to_settle=0.10)
+  assert cd >= 390
+
+
+def test_cut_loss_records_label_cooldown_blocking_reentry():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    cfg = {
+      "hourly": {
+        "bot": {
+          "cut_loss_label_cooldown_seconds": 600,
+          "cut_loss_late_hour_min_hours": 0.167,
+        },
+      },
+    }
+    label_cd = resolve_label_reentry_cooldown_seconds(
+      "CUT LOSSES",
+      cfg,
+      bot_kind="hourly",
+      hours_to_settle=0.10,
+    )
+    assert label_cd >= 390
+    store.record_cheap_leg_cut_cooldown(
+      "KXETHD-TEST",
+      label="$1,610 or above",
+      market_ticker="KXETHD-TEST-T1610",
+      cooldown_seconds=label_cd,
+    )
+    assert store.is_in_cheap_leg_cut_cooldown(
+      "KXETHD-TEST",
+      label="$1,610 or above",
+      market_ticker="KXETHD-TEST-T1610",
+      cooldown_seconds=label_cd,
+    )
 
 
 def test_store_cheap_leg_cut_cooldown_blocks_and_expires():
