@@ -159,7 +159,10 @@ def build_live_reconcile_report(
 
   orphan_sells: list[dict[str, Any]] = []
   bot_tickers = {b["ticker"] for b in bot.values()}
+  allowed_tickers = {str(t) for t in market_tickers} if market_tickers else None
   for ticker, orders in resting_sells.items():
+    if allowed_tickers is not None and ticker not in allowed_tickers:
+      continue
     if ticker in bot_tickers:
       continue
     for o in orders:

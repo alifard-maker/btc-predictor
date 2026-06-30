@@ -144,6 +144,56 @@ def cancel_resting_enter_orders_for_hourly_event(
   return cancelled
 
 
+def resting_sell_contracts(kalshi: Any, market_ticker: str, side: str) -> float:
+  """Contracts tied up in unfilled resting sells for one leg."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return 0.0
+  total = 0.0
+  side_l = str(side or "").lower()
+  ticker = str(market_ticker)
+  for row in kalshi.list_resting_orders():
+    if str(row.get("action") or "").lower() != "sell":
+      continue
+    if str(row.get("ticker") or "") != ticker:
+      continue
+    if str(row.get("side") or "").lower() != side_l:
+      continue
+    rem = row.get("remaining_count")
+    if rem is None:
+      rem = row.get("count")
+    try:
+      total += max(0.0, float(rem or 0))
+    except (TypeError, ValueError):
+      continue
+  return total
+
+
+def effective_kalshi_inventory(kalshi: Any, market_ticker: str, side: str) -> float | None:
+  """Sellable inventory plus contracts in resting exit sells (API may report 0 while sell rests)."""
+  sellable = kalshi_sellable_contracts(kalshi, market_ticker, side)
+  if sellable is None:
+    return None
+  resting = resting_sell_contracts(kalshi, market_ticker, side)
+  return max(float(sellable), float(resting))
+
+
+def has_pending_bot_exit(kalshi: Any, store: Any, position_id: str) -> bool:
+  pending_oid = resting_exit_order_id(store, position_id)
+  return bool(pending_oid and order_still_resting(kalshi, pending_oid))
+
+
+def should_reconcile_close_live_leg(kalshi: Any, store: Any, pos: dict[str, Any]) -> bool:
+  """Only reconcile-close when Kalshi is truly flat (no position and no resting exit)."""
+  if has_pending_bot_exit(kalshi, store, str(pos["id"])):
+    return False
+  ticker = str(pos["market_ticker"])
+  side = str(pos["side"])
+  if resting_sell_contracts(kalshi, ticker, side) > 0.05:
+    return False
+  sellable = kalshi_sellable_contracts(kalshi, ticker, side)
+  return sellable is not None and sellable <= 0
+
+
 def reconcile_close_stale_live_leg(
   *,
   store: Any,
@@ -213,7 +263,7 @@ def sync_live_positions_from_kalshi(
 
   changes: list[dict[str, Any]] = []
   for (ticker, side), legs in groups.items():
-    sellable = kalshi_sellable_contracts(kalshi, ticker, side)
+    sellable = effective_kalshi_inventory(kalshi, ticker, side)
     if sellable is None:
       continue
     bot_total = sum(int(p.get("contracts") or 0) for p in legs)
@@ -222,8 +272,16 @@ def sync_live_positions_from_kalshi(
       continue
 
     if target <= 0:
-      cancel_resting_orders_for_ticker(kalshi, ticker)
       for pos in legs:
+        if not should_reconcile_close_live_leg(kalshi, store, pos):
+          changes.append({
+            "ticker": ticker,
+            "side": side,
+            "action": "inventory_pending_exit",
+            "position_id": str(pos["id"]),
+            "bot_contracts": int(pos.get("contracts") or 0),
+          })
+          continue
         reconcile_close_stale_live_leg(
           store=store,
           pos=pos,
@@ -387,7 +445,10 @@ def try_live_position_exit(
   side = str(pos["side"])
   sellable = kalshi_sellable_contracts(kalshi, ticker, side)
   if sellable is not None and sellable <= 0:
-    cancel_resting_orders_for_ticker(kalshi, ticker)
+    if resting_sell_contracts(kalshi, ticker, side) > 0.05:
+      return None
+    if not should_reconcile_close_live_leg(kalshi, store, pos):
+      return None
     return reconcile_close_stale_live_leg(
       store=store,
       pos=pos,

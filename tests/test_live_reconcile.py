@@ -109,3 +109,26 @@ def test_reconcile_filters_kalshi_positions_to_market_tickers():
   )
   assert report["ok"] is True
   assert report["kalshi_legs"] == 1
+
+
+def test_reconcile_flags_orphan_resting_sell_when_bot_flat():
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.list_market_positions.return_value = []
+  kalshi.list_resting_orders.return_value = [
+    {
+      "order_id": "sell-1",
+      "action": "sell",
+      "ticker": "KXBTC15M-T1",
+      "side": "yes",
+      "remaining_count": 4,
+      "yes_price": 31,
+    }
+  ]
+  report = build_live_reconcile_report(
+    bot_positions=[],
+    kalshi=kalshi,
+    market_tickers={"KXBTC15M-T1"},
+  )
+  assert report["ok"] is False
+  assert len(report["orphan_resting_sells"]) == 1

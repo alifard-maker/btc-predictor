@@ -10,11 +10,13 @@ from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.live_position_sync import (
   cancel_orphan_live_sell_orders,
   cancel_resting_enter_orders_for_hourly_event,
+  effective_kalshi_inventory,
   hourly_event_market_tickers_from_tab,
   kalshi_sellable_contracts,
   order_still_resting,
   reconcile_close_stale_live_leg,
   resting_exit_order_id,
+  resting_sell_contracts,
   sync_live_positions_from_kalshi,
   try_live_position_exit,
   verify_kalshi_exit_fill,
@@ -161,6 +163,91 @@ def test_sync_live_positions_reconciles_when_kalshi_inventory_zero():
     out = sync_live_positions_from_kalshi(store, kalshi, "EV1")
     assert store.open_positions("EV1") == []
     assert any(c.get("action") == "reconciled_closed" for c in out["changes"])
+
+
+def test_sync_does_not_reconcile_when_resting_exit_sell_open():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "yes",
+      "contracts": 4,
+      "entry_price_cents": 24,
+      "cost_usd": 0.96,
+      "mode": "live",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = 0
+    kalshi.list_resting_orders.return_value = [
+      {
+        "order_id": "sell-1",
+        "action": "sell",
+        "ticker": "T1",
+        "side": "yes",
+        "remaining_count": 4,
+      }
+    ]
+    out = sync_live_positions_from_kalshi(store, kalshi, "EV1")
+    assert len(store.open_positions("EV1")) == 1
+    assert not any(c.get("action") == "reconciled_closed" for c in out["changes"])
+
+
+def test_try_live_position_exit_waits_when_resting_sell_open():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "yes",
+      "contracts": 4,
+      "entry_price_cents": 24,
+      "cost_usd": 0.96,
+      "mode": "live",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = 0
+    kalshi.list_resting_orders.return_value = [
+      {
+        "order_id": "sell-1",
+        "action": "sell",
+        "ticker": "T1",
+        "side": "yes",
+        "remaining_count": 4,
+      }
+    ]
+    out = try_live_position_exit(
+      kalshi=kalshi,
+      store=store,
+      pos=store.open_positions("EV1")[0],
+      period_key="EV1",
+      exit_price=31,
+      contracts=4,
+      entry_c=24,
+      pos_mode="live",
+      pick={"signal": "BUY YES"},
+      exit_reason="PROFIT TARGET",
+      detail_suffix="test",
+      extra_detail="",
+    )
+    assert out is None
+    assert store.open_positions("EV1") != []
+
+
+def test_resting_sell_contracts_counts_remaining_sells():
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.list_resting_orders.return_value = [
+    {"action": "sell", "ticker": "T1", "side": "yes", "remaining_count": 3},
+    {"action": "buy", "ticker": "T1", "side": "yes", "remaining_count": 4},
+    {"action": "sell", "ticker": "T2", "side": "yes", "remaining_count": 1},
+  ]
+  assert resting_sell_contracts(kalshi, "T1", "yes") == 3
+  assert effective_kalshi_inventory(kalshi, "T1", "yes") == 3
 
 
 def test_reconcile_close_stale_live_leg_logs_and_closes():
