@@ -111,11 +111,18 @@ def build_live_reconcile_report(
   bot_positions: list[dict[str, Any]],
   kalshi: Any,
   event_ticker: str | None = None,
+  market_tickers: set[str] | None = None,
 ) -> dict[str, Any]:
   """Summarize bot vs exchange alignment for live hourly debugging."""
   bot = _aggregate_bot_legs(bot_positions, live_only=True)
   kalshi_rows = kalshi.list_market_positions() if kalshi else []
-  if event_ticker:
+  if market_tickers:
+    allowed = {str(t) for t in market_tickers}
+    kalshi_rows = [
+      row for row in kalshi_rows
+      if str(row.get("ticker") or "") in allowed
+    ]
+  elif event_ticker:
     kalshi_rows = [
       row for row in kalshi_rows
       if _ticker_belongs_to_event(str(row.get("ticker") or ""), event_ticker)

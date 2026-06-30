@@ -239,6 +239,60 @@ def run_live_position_hygiene(
   }
 
 
+def cancel_resting_enter_orders_for_market_tickers(
+  kalshi: Any,
+  market_tickers: set[str],
+) -> int:
+  """Cancel unfilled resting BUY orders on specific market tickers only."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return 0
+  allowed = {str(t) for t in market_tickers if t}
+  if not allowed:
+    return 0
+  cancelled = 0
+  for row in kalshi.list_resting_orders():
+    if str(row.get("action") or "").lower() != "buy":
+      continue
+    ticker = str(row.get("ticker") or "")
+    if ticker not in allowed:
+      continue
+    oid = row.get("order_id")
+    if not oid:
+      continue
+    try:
+      kalshi.cancel_order(str(oid))
+      cancelled += 1
+      log.info("Cancelled resting enter %s on %s", oid, ticker)
+    except Exception as e:
+      log.warning("Cancel resting enter %s on %s failed: %s", oid, ticker, e)
+  return cancelled
+
+
+def run_live_slot_hygiene(
+  *,
+  store: Any,
+  kalshi: Any,
+  period_key: str,
+  market_ticker: str | None,
+  settings_enabled: bool,
+) -> dict[str, Any]:
+  """Sync inventory and cancel orphans for a 15m slot (single market)."""
+  sync = sync_live_positions_from_kalshi(store, kalshi, period_key)
+  orphans = cancel_orphan_live_sell_orders(
+    kalshi, live_open_tickers(store, period_key),
+  )
+  resting_cancelled = 0
+  if not settings_enabled and market_ticker:
+    resting_cancelled = cancel_resting_enter_orders_for_market_tickers(
+      kalshi, {str(market_ticker)},
+    )
+  return {
+    **sync,
+    "orphan_sells_cancelled": orphans,
+    "resting_enters_cancelled": resting_cancelled,
+  }
+
+
 def verify_kalshi_exit_fill(
   *,
   sellable_before: float | None,

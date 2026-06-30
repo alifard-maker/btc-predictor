@@ -13,8 +13,8 @@ from src.trading.live_bracket_orders import (
   resting_config_for_kind,
 )
 from src.trading.live_position_sync import (
-  cancel_orphan_live_sell_orders,
-  live_open_tickers,
+  order_still_resting,
+  run_live_slot_hygiene,
   try_live_position_exit,
 )
 from src.trading.bot_period_rollover import force_close_period_positions, resolve_rollover_exit_cents
@@ -46,7 +46,11 @@ from src.trading.bot_entry_presets import (
   effective_bot_entry_strategy,
 )
 from src.trading.bot_scale_in import evaluate_scale_in
-from src.trading.entry_strategy import entry_budget_usd, passes_tail_entry_gate
+from src.trading.entry_strategy import (
+  cap_live_entry_contracts,
+  entry_budget_usd,
+  passes_tail_entry_gate,
+)
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
@@ -61,6 +65,7 @@ from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
 log = logging.getLogger(__name__)
 
 CUT_LOSS_EXIT_MIN_LOSS_USD = 0.05
+LIVE_CUT_LOSS_EXIT_MIN_LOSS_USD = 0.20
 
 _ACTIONABLE_LONG = frozenset({
   Signal.LONG.value,
@@ -319,13 +324,20 @@ class Slot15Bot:
     settings, prev_period = self.store.sync_period(str(slot_key), self.store.get_settings())
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
     settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind="slot15")
+    market_ticker = None
+    if tab.get("ok"):
+      market_ticker = str((tab.get("kalshi") or {}).get("market_ticker") or "") or None
     if (
       settings.mode == "live"
       and self.kalshi
       and getattr(self.kalshi, "authenticated", False)
     ):
-      cancel_orphan_live_sell_orders(
-        self.kalshi, live_open_tickers(self.store, str(slot_key)),
+      run_live_slot_hygiene(
+        store=self.store,
+        kalshi=self.kalshi,
+        period_key=str(slot_key),
+        market_ticker=market_ticker,
+        settings_enabled=bool(settings.enabled),
       )
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
@@ -466,7 +478,11 @@ class Slot15Bot:
       exit_ctx=exit_ctx,
       cfg=cfg,
       include_monitor_fallback=True,
-      cut_loss_min_usd=CUT_LOSS_EXIT_MIN_LOSS_USD,
+      cut_loss_min_usd=(
+        LIVE_CUT_LOSS_EXIT_MIN_LOSS_USD
+        if settings.mode == "live"
+        else CUT_LOSS_EXIT_MIN_LOSS_USD
+      ),
     )
 
   def _process_exits(
@@ -559,7 +575,8 @@ class Slot15Bot:
           continue
         live_exit_oid = live_out["live_exit_oid"]
         exit_price = int(live_out["sell_cents"])
-        contracts = int(live_out["sell_count"])
+        verified_exit = int(live_out["fill_count"])
+        contracts = verified_exit
         pnl_rounded = round(
           float(
             leg_pnl_usd(
@@ -572,7 +589,19 @@ class Slot15Bot:
           2,
         )
 
-      self.store.close_position(pos["id"])
+      if pos_mode == "live":
+        remaining_ct = int(pos["contracts"]) - int(contracts)
+        if remaining_ct > 0:
+          entry_c = int(pos["entry_price_cents"])
+          self.store.update_position_contracts(
+            str(pos["id"]),
+            contracts=remaining_ct,
+            cost_usd=round(remaining_ct * entry_c / 100.0, 2),
+          )
+        else:
+          self.store.close_position(pos["id"])
+      else:
+        self.store.close_position(pos["id"])
       leg_alert = assess_slot15_leg_position_alert(
         pos=pos,
         mark_cents=exit_price,
@@ -886,6 +915,13 @@ class Slot15Bot:
           last_reason = "missing_kalshi_mid"
           continue
         count = _contracts_for_budget(stake, price_cents)
+        if settings.mode == "live":
+          count = cap_live_entry_contracts(
+            count=count,
+            price_cents=price_cents,
+            max_spend_per_hour_usd=float(settings.max_spend_per_slot_usd),
+            estrat=estrat_entry,
+          )
         if count <= 0:
           last_reason = "budget_too_small_for_contract"
           continue
@@ -995,7 +1031,11 @@ class Slot15Bot:
         "entry_settings": slot15_entry_settings_snapshot(settings),
       })
     try:
-      cancel_resting_orders_for_ticker(self.kalshi, str(pick["ticker"]))
+      ticker = str(pick["ticker"])
+      prior = self.store.latest_resting_enter(slot_key, ticker, mode="live")
+      if prior and order_still_resting(self.kalshi, str(prior.get("kalshi_order_id") or "")):
+        return prior
+      cancel_resting_orders_for_ticker(self.kalshi, ticker)
       order = self.kalshi.create_order(
         ticker=str(pick["ticker"]),
         side=side,

@@ -81,3 +81,31 @@ def test_reconcile_filters_kalshi_positions_to_event():
   assert report["ok"] is True
   assert report["kalshi_legs"] == 1
   assert report["kalshi_contracts"] == 1
+
+
+def test_reconcile_filters_kalshi_positions_to_market_tickers():
+  bot_positions = [
+    {
+      "id": "p1",
+      "mode": "live",
+      "market_ticker": "KXBTC15M-T1",
+      "side": "yes",
+      "contracts": 1,
+      "cost_usd": 0.5,
+      "label": "15m up",
+    }
+  ]
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.list_market_positions.return_value = [
+    {"ticker": "KXBTC15M-T1", "position_fp": "1.00"},
+    {"ticker": "KXBTC15M-T2", "position_fp": "3.00"},
+  ]
+  kalshi.list_resting_orders.return_value = []
+  report = build_live_reconcile_report(
+    bot_positions=bot_positions,
+    kalshi=kalshi,
+    market_tickers={"KXBTC15M-T1"},
+  )
+  assert report["ok"] is True
+  assert report["kalshi_legs"] == 1

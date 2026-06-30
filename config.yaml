@@ -115,7 +115,7 @@ intra_slot:
     trail_giveback_usd: 0.05
     min_take_profit_pct: 0.05
     max_take_profit_pct: 0.20
-    min_hold_seconds: 15
+    min_hold_seconds: 90
     cheap_leg_max_entry_cents: 20
     cheap_leg_cut_loss_cents: 10
     cheap_leg_cut_cooldown_seconds: 180

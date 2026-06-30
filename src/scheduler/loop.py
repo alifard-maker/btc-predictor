@@ -739,6 +739,22 @@ class PredictionLoop:
     self._attach_settlement_index_status(status, tab, asset=asset)
     self._attach_bot_daily_loss(status, kind="slot15", asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
+    if status.get("settings", {}).get("mode") == "live" and kalshi and kalshi.authenticated:
+      from src.trading.live_reconcile import build_live_reconcile_report
+
+      market_tickers: set[str] = set()
+      if tab and tab.get("ok"):
+        mt = (tab.get("kalshi") or {}).get("market_ticker")
+        if mt:
+          market_tickers.add(str(mt))
+      for pos in status.get("open_positions") or []:
+        if pos.get("market_ticker"):
+          market_tickers.add(str(pos["market_ticker"]))
+      status["live_reconcile"] = build_live_reconcile_report(
+        bot_positions=list(status.get("open_positions") or []),
+        kalshi=kalshi,
+        market_tickers=market_tickers or None,
+      )
     return status
 
   def _ensure_slot_prediction_current(self, asset: str) -> None:

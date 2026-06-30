@@ -33,11 +33,16 @@ def _login(session: requests.Session, base: str, password: str) -> None:
     raise RuntimeError(f"login failed: {r.status_code} {r.text[:200]}")
 
 
-def _fetch(session: requests.Session, base: str) -> tuple[dict, dict, dict]:
-  bot = session.get(f"{base}/api/hourly/bot", timeout=30).json()
+def _fetch(session: requests.Session, base: str, *, bot: str) -> tuple[dict, dict, dict]:
+  if bot == "slot15":
+    status = session.get(f"{base}/api/slot15/bot", timeout=30).json()
+    recon = status.get("live_reconcile") or {}
+    kalshi = session.get(f"{base}/api/kalshi/status", timeout=30).json()
+    return status, recon, kalshi
+  bot_status = session.get(f"{base}/api/hourly/bot", timeout=30).json()
   recon = session.get(f"{base}/api/hourly/bot/live-reconcile", timeout=30).json()
   kalshi = session.get(f"{base}/api/kalshi/status", timeout=30).json()
-  return bot, recon, kalshi
+  return bot_status, recon, kalshi
 
 
 def _fmt_leg(row: dict) -> str:
@@ -46,17 +51,30 @@ def _fmt_leg(row: dict) -> str:
   return f"{row.get('side', '?').upper()} {label} x{row.get('contracts', '?')}"
 
 
-def _print_snapshot(bot: dict, recon: dict, kalshi: dict) -> bool:
+def _print_snapshot(bot: dict, recon: dict, kalshi: dict, *, bot_kind: str) -> bool:
   ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
   settings = bot.get("settings") or {}
   mode = settings.get("mode", "?")
-  cap = settings.get("max_spend_per_hour_usd", "?")
+  if bot_kind == "slot15":
+    cap = settings.get("max_spend_per_slot_usd", "?")
+    label = "BTC 15m"
+    trades = bot.get("slot_trades") or bot.get("recent_trades") or []
+    slot_id = bot.get("slot_label") or (bot.get("slot_summary") or {}).get("event_ticker") or "—"
+    header_extra = f"slot {slot_id}"
+  else:
+    cap = settings.get("max_spend_per_hour_usd", "?")
+    label = "BTC hourly"
+    trades = bot.get("hour_trades") or bot.get("recent_trades") or []
+    header_extra = ""
   exposure = bot.get("open_exposure_live_usd", bot.get("open_exposure_usd", 0))
   cash = kalshi.get("balance_usd")
   brti = kalshi.get("brti_live")
   open_n = bot.get("open_position_count", len(bot.get("open_positions") or []))
 
-  print(f"\n=== {ts} | BTC hourly {mode.upper()} | cap ${cap} | at-risk ${exposure} | {open_n} bot legs ===")
+  print(
+    f"\n=== {ts} | {label} {mode.upper()} | cap ${cap} | at-risk ${exposure} | "
+    f"{open_n} bot legs {header_extra} ==="
+  )
   if brti is not None:
     print(f"    BRTI ${float(brti):,.2f} | Kalshi cash ${cash}")
 
@@ -69,7 +87,7 @@ def _print_snapshot(bot: dict, recon: dict, kalshi: dict) -> bool:
 
   if recon.get("ok"):
     print("    Reconcile: OK (bot and Kalshi match)")
-  else:
+  elif recon:
     print("    Reconcile: MISMATCH")
     for row in recon.get("mismatches") or []:
       print(
@@ -84,7 +102,6 @@ def _print_snapshot(bot: dict, recon: dict, kalshi: dict) -> bool:
     for row in recon.get("orphan_resting_sells") or []:
       print(f"      ORPHAN SELL: {row.get('ticker')} order {row.get('order_id')}")
 
-  trades = bot.get("hour_trades") or bot.get("recent_trades") or []
   for t in trades[:3]:
     if t.get("mode") != "live":
       continue
@@ -92,12 +109,13 @@ def _print_snapshot(bot: dict, recon: dict, kalshi: dict) -> bool:
       f"    Last: {t.get('action')} {t.get('status')} {t.get('label') or t.get('market_ticker')} "
       f"— {(t.get('detail') or '')[:90]}"
     )
-  return not recon.get("ok", True)
+  return bool(recon) and not recon.get("ok", True)
 
 
 def main() -> int:
   parser = argparse.ArgumentParser(description="Monitor live bot vs Kalshi alignment")
   parser.add_argument("--base", default=DEFAULT_BASE)
+  parser.add_argument("--bot", choices=("hourly", "slot15"), default="hourly")
   parser.add_argument("--watch", action="store_true", help="Poll every N seconds")
   parser.add_argument("--interval", type=float, default=15.0)
   args = parser.parse_args()
@@ -112,8 +130,8 @@ def main() -> int:
 
   while True:
     try:
-      bot, recon, kalshi = _fetch(session, args.base)
-      mismatch = _print_snapshot(bot, recon, kalshi)
+      bot, recon, kalshi = _fetch(session, args.base, bot=args.bot)
+      mismatch = _print_snapshot(bot, recon, kalshi, bot_kind=args.bot)
       if mismatch:
         print("    >>> Action: check Kalshi Orders tab; cancel orphan sells if any.")
     except Exception as e:

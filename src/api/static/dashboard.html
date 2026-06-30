@@ -2373,7 +2373,7 @@
     async function clearBotHistory(period, asset, kind = 'hourly') {
       const url = period === 'hour'
         ? (kind === 'hourly_trial' ? hourlyTrialBotClearHistoryUrl(asset) : hourlyBotClearHistoryUrl(asset))
-        : slot15BotFreshStartUrl(asset);
+        : slot15BotClearHistoryUrl(asset);
       const label = kind === 'hourly_trial' ? 'hourly trial' : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Clear ${asset.toUpperCase()} ${label} bot history?\n\nRemoves trade log and open bot legs from the server DB. Does not touch your Kalshi account or wallet.`)) return;
       try {
@@ -3166,6 +3166,10 @@
 
     function slot15BotFreshStartUrl(asset) {
       return asset === 'eth' ? '/api/eth/15m/bot/fresh-start' : '/api/slot15/bot/fresh-start';
+    }
+
+    function slot15BotClearHistoryUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m/bot/clear-history' : '/api/slot15/bot/clear-history';
     }
 
     function readSlot15BotSettingsFromDom(asset) {

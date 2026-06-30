@@ -863,13 +863,21 @@ def _hourly_bot_fresh_start(store, tab_fn, asset: str, *, kind: str = "hourly"):
   return _hourly_bot_clear_history(store, tab_fn, asset, kind=kind)
 
 
-def _slot15_bot_fresh_start(store, tab_fn, asset: str):
+def _slot15_bot_clear_history(store, tab_fn, asset: str):
+  from src.trading.bot_risk_state import bot_risk_key, get_bot_risk_coordinator
+
   settings = store.get_settings()
-  if settings.mode != "paper":
-    raise HTTPException(400, "Fresh start is only available in paper mode")
-  store.fresh_start_paper(settings.max_spend_per_slot_usd)
+  cap = float(settings.max_spend_per_slot_usd)
+  store.clear_history(cap, mode=str(settings.mode or "paper"))
+  coord = get_bot_risk_coordinator()
+  if coord:
+    coord.reset_bot_daily_pnl(bot_risk_key("slot15", asset))
   tab = tab_fn()
   return _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+
+
+def _slot15_bot_fresh_start(store, tab_fn, asset: str):
+  return _slot15_bot_clear_history(store, tab_fn, asset)
 
 
 def _override_daily_cap_hourly(asset: str, *, kind: str = "hourly") -> dict[str, Any]:
@@ -1243,6 +1251,13 @@ def slot15_bot_fresh_start(_: None = Depends(_session_user)):
   return _slot15_bot_fresh_start(_loop.slot15_bot_store("btc"), lambda: _loop._slot15_tab("btc"), "btc")
 
 
+@app.post("/api/slot15/bot/clear-history")
+def slot15_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _slot15_bot_clear_history(_loop.slot15_bot_store("btc"), lambda: _loop._slot15_tab("btc"), "btc")
+
+
 @app.post("/api/slot15/bot/override-daily-cap")
 def slot15_bot_override_daily_cap(_: None = Depends(_session_user)):
   if _loop is None:
@@ -1314,6 +1329,15 @@ def eth_slot15_bot_fresh_start(_: None = Depends(_session_user)):
   if _loop.eth_calibration is None:
     raise HTTPException(503, "ETH 15m disabled")
   return _slot15_bot_fresh_start(_loop.slot15_bot_store("eth"), lambda: _loop._slot15_tab("eth"), "eth")
+
+
+@app.post("/api/eth/15m/bot/clear-history")
+def eth_slot15_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _slot15_bot_clear_history(_loop.slot15_bot_store("eth"), lambda: _loop._slot15_tab("eth"), "eth")
 
 
 @app.post("/api/eth/15m/bot/override-daily-cap")

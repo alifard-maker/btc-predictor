@@ -30,7 +30,7 @@ class Slot15BotSettings:
   trail_giveback_usd: float = 0.0
   min_take_profit_pct: float = 0.10
   max_take_profit_pct: float = 0.40
-  min_hold_seconds: int = 30
+  min_hold_seconds: int = 90
   profit_exit_cooldown_seconds: int = 60
   auto_stop_on_budget_exhausted: bool = True
   auto_stopped: bool = False
@@ -65,7 +65,7 @@ class Slot15BotSettings:
       trail_giveback_usd=float(raw.get("trail_giveback_usd", 0.0)),
       min_take_profit_pct=float(raw.get("min_take_profit_pct", 0.10)),
       max_take_profit_pct=float(raw.get("max_take_profit_pct", 0.40)),
-      min_hold_seconds=int(raw.get("min_hold_seconds", 30)),
+      min_hold_seconds=int(raw.get("min_hold_seconds", 90)),
       profit_exit_cooldown_seconds=int(raw.get("profit_exit_cooldown_seconds", 60)),
       auto_stop_on_budget_exhausted=bool(raw.get("auto_stop_on_budget_exhausted", True)),
       auto_stopped=bool(raw.get("auto_stopped", False)),
@@ -423,6 +423,31 @@ class Slot15BotStore:
     self.set_last_skip_reason(None)
     return paper
 
+  def fresh_start_live(self, *, preserve_settings: bool = True) -> None:
+    from src.trading.bot_fresh_start import fresh_start_live_bot
+
+    settings = self.get_settings()
+    with self._connect() as conn:
+      fresh_start_live_bot(conn)
+    self._position_peaks.clear()
+    self._last_period_key = None
+    if preserve_settings:
+      updated = {
+        **settings.to_dict(),
+        "auto_stopped": False,
+        "auto_stop_reason": None,
+      }
+      self.save_settings(Slot15BotSettings.from_dict(updated))
+    else:
+      self.save_settings(Slot15BotSettings())
+    self.set_last_skip_reason(None)
+
+  def clear_history(self, max_cap: float, *, mode: str) -> dict[str, Any] | None:
+    if mode == "paper":
+      return self.fresh_start_paper(max_cap)
+    self.fresh_start_live(preserve_settings=True)
+    return None
+
   def refill_paper_bankroll(self, max_cap: float) -> dict[str, Any]:
     from src.trading.paper_bankroll import refill_paper_bankroll
 
@@ -647,6 +672,23 @@ class Slot15BotStore:
         (int(mark_cents), position_id),
       )
 
+  def update_position_contracts(
+    self,
+    position_id: str,
+    *,
+    contracts: int,
+    cost_usd: float,
+  ) -> None:
+    with self._connect() as conn:
+      conn.execute(
+        """
+        UPDATE bot_positions
+        SET contracts = ?, cost_usd = ?
+        WHERE id = ? AND status = 'open'
+        """,
+        (int(contracts), round(float(cost_usd), 2), position_id),
+      )
+
   def update_position_orders(
     self,
     position_id: str,
@@ -850,6 +892,25 @@ class Slot15BotStore:
     except Exception:
       pass
     return enriched
+
+  def latest_resting_enter(
+    self,
+    event_ticker: str,
+    market_ticker: str,
+    *,
+    mode: str = "live",
+  ) -> dict[str, Any] | None:
+    with self._connect() as conn:
+      row = conn.execute(
+        """
+        SELECT * FROM bot_trades
+        WHERE event_ticker = ? AND market_ticker = ? AND action = 'enter'
+          AND status = 'resting' AND mode = ?
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (event_ticker, market_ticker, mode),
+      ).fetchone()
+    return self._enrich_trade(dict(row)) if row else None
 
   def list_trades(self, *, limit: int = 30, event_ticker: str | None = None) -> list[dict[str, Any]]:
     with self._connect() as conn:
