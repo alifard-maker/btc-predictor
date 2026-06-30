@@ -112,14 +112,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
       log.warning("NO exit P&L backfill skipped: %s", e)
     try:
-      from src.trading.bot_hourly_settings_align import align_eth_hourly_settings_from_btc
-
-      align_stats = align_eth_hourly_settings_from_btc(_loop)
-      if align_stats.get("aligned"):
-        log.info("ETH hourly settings aligned from BTC: %s", align_stats)
-    except Exception as e:
-      log.warning("ETH hourly settings align skipped: %s", e)
-    try:
       from src.trading.bot_rollover_settlement_backfill import backfill_all_hourly_rollover_dbs
 
       rollover_bf = backfill_all_hourly_rollover_dbs(data_dir, dry_run=False, cfg=_cfg)

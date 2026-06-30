@@ -1,4 +1,4 @@
-"""ETH hourly bot settings alignment with BTC hourly."""
+"""Hourly bot settings are not mirrored between BTC and ETH."""
 
 from __future__ import annotations
 
@@ -9,60 +9,21 @@ from src.trading.bot_hourly_settings_align import align_eth_hourly_settings_from
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 
 
-def test_align_eth_hourly_settings_from_btc(tmp_path: Path):
-  btc_store = HourlyBotStore(tmp_path / "hourly_bot_btc.db")
-  eth_store = HourlyBotStore(tmp_path / "hourly_bot_eth.db")
-  btc_store.save_settings(
-    HourlyBotSettings(enabled=True, use_accumulated_profit=False, max_spend_per_hour_usd=100.0)
-  )
-  eth_store.save_settings(
-    HourlyBotSettings(enabled=True, use_accumulated_profit=True, max_spend_per_hour_usd=100.0)
-  )
-
-  loop = MagicMock()
-  loop.cfg = {"eth": {"enabled": True}}
-  loop._eth_cfg = loop.cfg
-  loop.hourly_bot_store = lambda asset: btc_store if asset == "btc" else eth_store
-
-  stats = align_eth_hourly_settings_from_btc(loop)
-  assert stats["aligned"] is True
-  assert "use_accumulated_profit" in stats["changed"]
-  assert eth_store.get_settings().use_accumulated_profit is False
-
-
-def test_align_does_not_copy_mode_or_enabled(tmp_path: Path):
+def test_align_is_noop(tmp_path: Path):
   btc_store = HourlyBotStore(tmp_path / "hourly_bot_btc.db")
   eth_store = HourlyBotStore(tmp_path / "hourly_bot_eth.db")
   btc_store.save_settings(
     HourlyBotSettings(enabled=True, mode="live", max_spend_per_hour_usd=10.0)
   )
   eth_store.save_settings(
-    HourlyBotSettings(enabled=False, mode="paper", max_spend_per_hour_usd=10.0)
+    HourlyBotSettings(enabled=False, mode="paper", max_spend_per_hour_usd=100.0)
   )
 
   loop = MagicMock()
-  loop.cfg = {"eth": {"enabled": True}}
-  loop._eth_cfg = loop.cfg
-  loop.hourly_bot_store = lambda asset: btc_store if asset == "btc" else eth_store
-
   stats = align_eth_hourly_settings_from_btc(loop)
+  assert stats["skipped"] is True
+
   eth = eth_store.get_settings()
   assert eth.mode == "paper"
   assert eth.enabled is False
-  assert stats.get("aligned") is False or "mode" not in stats.get("changed", [])
-
-
-def test_align_eth_hourly_settings_idempotent(tmp_path: Path):
-  btc_store = HourlyBotStore(tmp_path / "hourly_bot_btc.db")
-  eth_store = HourlyBotStore(tmp_path / "hourly_bot_eth.db")
-  settings = HourlyBotSettings(enabled=True, use_accumulated_profit=False)
-  btc_store.save_settings(settings)
-  eth_store.save_settings(settings)
-
-  loop = MagicMock()
-  loop.cfg = {"eth": {"enabled": True}}
-  loop._eth_cfg = loop.cfg
-  loop.hourly_bot_store = lambda asset: btc_store if asset == "btc" else eth_store
-
-  stats = align_eth_hourly_settings_from_btc(loop)
-  assert stats["aligned"] is False
+  assert eth.max_spend_per_hour_usd == 100.0
