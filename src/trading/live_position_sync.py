@@ -16,21 +16,17 @@ from src.trading.live_bracket_orders import (
 log = logging.getLogger(__name__)
 
 
-def kalshi_sellable_contracts(kalshi: Any, market_ticker: str, side: str) -> int | None:
+def kalshi_sellable_contracts(kalshi: Any, market_ticker: str, side: str) -> float | None:
   """Contracts held on Kalshi for this leg; None when the API is unavailable."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return None
   net = kalshi.get_market_position(str(market_ticker))
   if net is None:
     return None
-  try:
-    net_i = int(net)
-  except (TypeError, ValueError):
-    return 0
   s = str(side or "").lower()
   if s == "yes":
-    return max(0, net)
-  return max(0, -net)
+    return max(0.0, float(net))
+  return max(0.0, -float(net))
 
 
 def resting_exit_order_id(store: Any, position_id: str) -> str | None:
@@ -145,19 +141,22 @@ def try_live_position_exit(
     log.warning("Live position reconciled (no Kalshi inventory): %s", ticker)
     return row
 
-  sell_count = contracts
+  sell_count = float(contracts)
   if sellable is not None:
-    sell_count = min(contracts, sellable)
-  if sell_count <= 0:
+    sell_count = min(float(contracts), float(sellable))
+  if sell_count < 0.01:
     return None
 
   cancel_resting_orders_for_ticker(kalshi, ticker)
   sell_cents = aggressive_exit_limit_cents(int(exit_price))
+  sell_int = max(1, int(sell_count)) if sell_count >= 0.99 else 0
+  if sell_int <= 0:
+    return None
   exit_result = place_live_exit_sell(
     kalshi,
     market_ticker=ticker,
     side=side,
-    contracts=sell_count,
+    contracts=sell_int,
     limit_cents=sell_cents,
   )
   live_exit_oid = exit_result.get("order_id")

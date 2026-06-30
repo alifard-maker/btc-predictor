@@ -64,6 +64,19 @@ def parse_v2_order_response(order: dict[str, Any]) -> dict[str, Any]:
   }
 
 
+def position_net_from_row(row: dict[str, Any]) -> float:
+  """Net YES contracts from a Kalshi market_positions row (negative = NO)."""
+  raw = row.get("position_fp")
+  if raw is None:
+    raw = row.get("position")
+  if raw is None:
+    return 0.0
+  try:
+    return float(raw)
+  except (TypeError, ValueError):
+    return 0.0
+
+
 def v2_price_dollars(cents: int) -> str:
   """Fixed-point dollar price string for V2 order requests."""
   return f"{int(cents) / 100:.4f}"
@@ -369,14 +382,14 @@ class KalshiClient:
         log.warning("Cancel resting order %s on %s failed: %s", oid, ticker, e)
     return cancelled
 
-  def get_market_position(self, ticker: str) -> int | None:
+  def get_market_position(self, ticker: str) -> float | None:
     """Net YES position for one market (negative = NO). None on API error."""
     if not self.authenticated:
       return None
     try:
       data = self.get(
         "/portfolio/positions",
-        params={"ticker": str(ticker), "limit": 1, "count_filter": "position"},
+        params={"ticker": str(ticker), "limit": 1},
         auth=True,
       )
     except Exception as e:
@@ -384,14 +397,11 @@ class KalshiClient:
       return None
     rows = data.get("market_positions") if isinstance(data, dict) else None
     if not rows:
-      return 0
+      return 0.0
     row = rows[0] if isinstance(rows[0], dict) else None
     if not row:
-      return 0
-    try:
-      return int(float(row.get("position") or 0))
-    except (TypeError, ValueError):
-      return 0
+      return 0.0
+    return position_net_from_row(row)
 
   def list_market_positions(self, *, limit: int = 200) -> list[dict[str, Any]]:
     """All non-flat Kalshi market positions."""
@@ -400,7 +410,7 @@ class KalshiClient:
     try:
       data = self.get(
         "/portfolio/positions",
-        params={"limit": int(limit), "count_filter": "position"},
+        params={"limit": int(limit)},
         auth=True,
       )
     except Exception as e:
@@ -413,11 +423,8 @@ class KalshiClient:
     for row in rows:
       if not isinstance(row, dict):
         continue
-      try:
-        net = int(float(row.get("position") or 0))
-      except (TypeError, ValueError):
-        continue
-      if net == 0:
+      net = position_net_from_row(row)
+      if abs(net) < 0.005:
         continue
       out.append(row)
     return out

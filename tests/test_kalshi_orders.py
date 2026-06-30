@@ -83,11 +83,18 @@ def test_cancel_order_uses_v2_events_endpoint():
   )
 
 
+def test_position_net_from_row_prefers_fp():
+  from src.data.kalshi import position_net_from_row
+
+  assert position_net_from_row({"position_fp": "-5.93"}) == -5.93
+  assert position_net_from_row({"position": -2}) == -2.0
+
+
 def test_get_market_position_reads_portfolio_positions():
   client = KalshiClient({"kalshi": {"key_id": "k", "private_key": ""}})
   client._private_key = MagicMock()
-  with patch.object(client, "get", return_value={"market_positions": [{"ticker": "T1", "position": 2}]}) as get:
+  with patch.object(client, "get", return_value={"market_positions": [{"ticker": "T1", "position_fp": "2.00"}]}) as get:
     net = client.get_market_position("T1")
-  assert net == 2
+  assert net == 2.0
   get.assert_called_once()
   assert get.call_args[0][0] == "/portfolio/positions"

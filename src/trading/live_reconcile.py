@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.trading.bot_position_mode import normalize_position_mode
+from src.data.kalshi import position_net_from_row
 from src.trading.live_position_sync import kalshi_sellable_contracts
 
 
@@ -12,11 +13,11 @@ def _leg_key(ticker: str, side: str) -> str:
   return f"{ticker}:{str(side).lower()}"
 
 
-def _kalshi_contracts_for_side(net: int, side: str) -> int:
+def _kalshi_contracts_for_side(net: float, side: str) -> float:
   s = str(side).lower()
   if s == "yes":
-    return max(0, int(net))
-  return max(0, -int(net))
+    return max(0.0, float(net))
+  return max(0.0, -float(net))
 
 
 def _aggregate_bot_legs(positions: list[dict[str, Any]], *, live_only: bool = True) -> dict[str, dict[str, Any]]:
@@ -58,19 +59,19 @@ def _aggregate_kalshi_positions(rows: list[dict[str, Any]]) -> dict[str, dict[st
     if not ticker:
       continue
     try:
-      net = int(float(row.get("position") or 0))
+      net = position_net_from_row(row)
     except (TypeError, ValueError):
       continue
-    if net == 0:
+    if abs(net) < 0.005:
       continue
     side = "yes" if net > 0 else "no"
     key = _leg_key(ticker, side)
     out[key] = {
       "ticker": ticker,
       "side": side,
-      "contracts": abs(net),
+      "contracts": round(abs(net), 2),
       "net_position": net,
-      "market_exposure": row.get("market_exposure"),
+      "market_exposure": row.get("market_exposure_dollars") or row.get("market_exposure"),
     }
   return out
 
@@ -111,13 +112,15 @@ def build_live_reconcile_report(
     b = bot.get(key)
     k = kalshi_legs.get(key)
     if b and k:
-      if int(b["contracts"]) == int(k["contracts"]):
-        matched.append({**b, "kalshi_contracts": k["contracts"], "status": "ok"})
+      bot_ct = float(b["contracts"])
+      kalshi_ct = float(k["contracts"])
+      if abs(bot_ct - kalshi_ct) < 0.05:
+        matched.append({**b, "kalshi_contracts": kalshi_ct, "status": "ok"})
       else:
         mismatches.append({
           **b,
-          "kalshi_contracts": k["contracts"],
-          "delta": int(b["contracts"]) - int(k["contracts"]),
+          "kalshi_contracts": kalshi_ct,
+          "delta": round(bot_ct - kalshi_ct, 2),
           "status": "count_mismatch",
         })
     elif b:

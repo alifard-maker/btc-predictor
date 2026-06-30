@@ -21,7 +21,7 @@ def test_reconcile_ok_when_bot_matches_kalshi():
   ]
   kalshi = MagicMock()
   kalshi.authenticated = True
-  kalshi.list_market_positions.return_value = [{"ticker": "T1", "position": -2}]
+  kalshi.list_market_positions.return_value = [{"ticker": "T1", "position_fp": "-2.00"}]
   kalshi.list_resting_orders.return_value = []
   report = build_live_reconcile_report(bot_positions=bot_positions, kalshi=kalshi)
   assert report["ok"] is True
