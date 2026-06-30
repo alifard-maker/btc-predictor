@@ -14,6 +14,7 @@ from src.trading.live_position_sync import (
   kalshi_sellable_contracts,
   order_still_resting,
   resting_exit_order_id,
+  sync_live_positions_from_kalshi,
   try_live_position_exit,
 )
 
@@ -101,7 +102,7 @@ def test_cancel_resting_enter_orders_for_hourly_event_scoped():
   kalshi.cancel_order.assert_called_once_with("e1")
 
 
-def test_try_live_position_exit_reconciles_phantom_inventory():
+def test_try_live_position_exit_skips_phantom_inventory_without_closing():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     store.open_position({
@@ -132,8 +133,44 @@ def test_try_live_position_exit_reconciles_phantom_inventory():
       extra_detail="",
     )
     assert row is not None
-    assert row["status"] == "reconciled"
-    assert store.open_positions("EV1") == []
+    assert row["status"] == "skipped"
+    assert store.open_positions("EV1") != []
+
+
+def test_sync_live_positions_from_kalshi_updates_contracts_and_merges_duplicates():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "no",
+      "contracts": 1,
+      "entry_price_cents": 80,
+      "cost_usd": 0.8,
+      "mode": "live",
+      "opened_at": "2026-01-01T00:00:00+00:00",
+    })
+    store.open_position({
+      "id": "p2",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "no",
+      "contracts": 1,
+      "entry_price_cents": 80,
+      "cost_usd": 0.8,
+      "mode": "live",
+      "opened_at": "2026-01-01T00:01:00+00:00",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = -5
+    out = sync_live_positions_from_kalshi(store, kalshi, "EV1")
+    open_pos = store.open_positions("EV1")
+    assert len(open_pos) == 1
+    assert open_pos[0]["contracts"] == 5
+    assert open_pos[0]["cost_usd"] == 4.0
+    assert any(c.get("action") == "synced" for c in out["changes"])
 
 
 def test_try_live_position_exit_skips_when_pending_resting_exit():

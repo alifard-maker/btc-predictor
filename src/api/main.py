@@ -846,18 +846,21 @@ async def hourly_bot_settings(request: Request, _: None = Depends(_session_user)
   return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
 
 
-def _hourly_bot_fresh_start(store, tab_fn, asset: str, *, kind: str = "hourly"):
+def _hourly_bot_clear_history(store, tab_fn, asset: str, *, kind: str = "hourly"):
   from src.trading.bot_risk_state import bot_risk_key, get_bot_risk_coordinator
 
   settings = store.get_settings()
-  if settings.mode != "paper":
-    raise HTTPException(400, "Fresh start is only available in paper mode")
-  store.fresh_start_paper(settings.max_spend_per_hour_usd, preserve_settings=True)
+  cap = float(settings.max_spend_per_hour_usd)
+  store.clear_history(cap, mode=str(settings.mode or "paper"))
   coord = get_bot_risk_coordinator()
   if coord:
     coord.reset_bot_daily_pnl(bot_risk_key(kind, asset))
   tab = tab_fn()
   return _loop.hourly_bot_status(asset, tab if tab.get("ok") else None, kind=kind)
+
+
+def _hourly_bot_fresh_start(store, tab_fn, asset: str, *, kind: str = "hourly"):
+  return _hourly_bot_clear_history(store, tab_fn, asset, kind=kind)
 
 
 def _slot15_bot_fresh_start(store, tab_fn, asset: str):
@@ -913,6 +916,13 @@ def hourly_bot_fresh_start(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return _hourly_bot_fresh_start(_loop.hourly_bot_store("btc"), _loop.daily_prediction, "btc")
+
+
+@app.post("/api/hourly/bot/clear-history")
+def hourly_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_clear_history(_loop.hourly_bot_store("btc"), _loop.daily_prediction, "btc")
 
 
 @app.post("/api/hourly/bot/override-daily-cap")
@@ -1003,6 +1013,13 @@ def eth_hourly_bot_fresh_start(_: None = Depends(_session_user)):
   return _hourly_bot_fresh_start(_loop.hourly_bot_store("eth"), _loop.eth_hourly_prediction, "eth")
 
 
+@app.post("/api/eth/hourly/bot/clear-history")
+def eth_hourly_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_clear_history(_loop.hourly_bot_store("eth"), _loop.eth_hourly_prediction, "eth")
+
+
 @app.post("/api/eth/hourly/bot/override-daily-cap")
 def eth_hourly_bot_override_daily_cap(_: None = Depends(_session_user)):
   if _loop is None:
@@ -1063,6 +1080,18 @@ def hourly_trial_bot_fresh_start(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return _hourly_bot_fresh_start(
+    _loop.hourly_trial_bot_store("btc"),
+    _loop.daily_prediction,
+    "btc",
+    kind="hourly_trial",
+  )
+
+
+@app.post("/api/hourly-trial/bot/clear-history")
+def hourly_trial_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_clear_history(
     _loop.hourly_trial_bot_store("btc"),
     _loop.daily_prediction,
     "btc",
@@ -1133,6 +1162,18 @@ def eth_hourly_trial_bot_fresh_start(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return _hourly_bot_fresh_start(
+    _loop.hourly_trial_bot_store("eth"),
+    _loop.eth_hourly_prediction,
+    "eth",
+    kind="hourly_trial",
+  )
+
+
+@app.post("/api/eth/hourly-trial/bot/clear-history")
+def eth_hourly_trial_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_clear_history(
     _loop.hourly_trial_bot_store("eth"),
     _loop.eth_hourly_prediction,
     "eth",

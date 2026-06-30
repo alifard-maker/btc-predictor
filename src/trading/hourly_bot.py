@@ -15,9 +15,7 @@ from src.trading.live_bracket_orders import (
   resting_config_for_kind,
 )
 from src.trading.live_position_sync import (
-  cancel_orphan_live_sell_orders,
-  cancel_resting_enter_orders_for_hourly_event,
-  live_open_tickers,
+  kalshi_sellable_contracts,
   try_live_position_exit,
 )
 from src.trading.bot_entry_settings import hourly_entry_settings_snapshot
@@ -346,13 +344,15 @@ class HourlyBot:
       and self.kalshi
       and getattr(self.kalshi, "authenticated", False)
     ):
-      cancel_orphan_live_sell_orders(
-        self.kalshi, live_open_tickers(self.store, str(event_ticker)),
+      from src.trading.live_position_sync import run_live_position_hygiene
+
+      run_live_position_hygiene(
+        store=self.store,
+        kalshi=self.kalshi,
+        event_ticker=str(event_ticker),
+        tab=tab,
+        settings_enabled=bool(settings.enabled),
       )
-      if not settings.enabled:
-        cancel_resting_enter_orders_for_hourly_event(
-          self.kalshi, str(event_ticker), tab,
-        )
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []
@@ -1172,6 +1172,9 @@ class HourlyBot:
           "entry_settings": hourly_entry_settings_snapshot(settings),
         })
       fill_count = min(filled, count)
+      sellable = kalshi_sellable_contracts(self.kalshi, str(pick["ticker"]), side)
+      if sellable is not None and sellable > fill_count:
+        fill_count = min(int(round(float(sellable))), count)
       fill_cost = round(cost_usd * fill_count / count, 2) if count else 0.0
       cheap_cfg, resting_cfg = resting_config_for_kind(cfg, kind="hourly")
       bracket = place_live_bracket_orders(

@@ -409,6 +409,33 @@ class HourlyBotStore:
     self.set_last_skip_reason(None)
     return paper
 
+  def fresh_start_live(self, *, preserve_settings: bool = True) -> None:
+    """Clear trade log and open positions; keep live settings and Kalshi account untouched."""
+    from src.trading.bot_fresh_start import fresh_start_live_bot
+
+    settings = self.get_settings()
+    with self._connect() as conn:
+      fresh_start_live_bot(conn)
+    self._position_peaks.clear()
+    self._last_period_key = None
+    if preserve_settings:
+      updated = {
+        **settings.to_dict(),
+        "auto_stopped": False,
+        "auto_stop_reason": None,
+      }
+      self.save_settings(HourlyBotSettings.from_dict(updated))
+    else:
+      self.save_settings(HourlyBotSettings())
+    self.set_last_skip_reason(None)
+
+  def clear_history(self, max_cap: float, *, mode: str) -> dict[str, Any] | None:
+    """Clear bot history; paper mode also resets bankroll to max_cap."""
+    if mode == "paper":
+      return self.fresh_start_paper(max_cap, preserve_settings=True)
+    self.fresh_start_live(preserve_settings=True)
+    return None
+
   def refill_paper_bankroll(self, max_cap: float) -> dict[str, Any]:
     from src.trading.paper_bankroll import refill_paper_bankroll
 
@@ -639,6 +666,23 @@ class HourlyBotStore:
       conn.execute(
         "UPDATE bot_positions SET last_mark_cents = ? WHERE id = ? AND status = 'open'",
         (int(mark_cents), position_id),
+      )
+
+  def update_position_contracts(
+    self,
+    position_id: str,
+    *,
+    contracts: int,
+    cost_usd: float,
+  ) -> None:
+    with self._connect() as conn:
+      conn.execute(
+        """
+        UPDATE bot_positions
+        SET contracts = ?, cost_usd = ?
+        WHERE id = ? AND status = 'open'
+        """,
+        (int(contracts), round(float(cost_usd), 2), position_id),
       )
 
   def update_position_orders(

@@ -2057,6 +2057,10 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/fresh-start' : '/api/hourly/bot/fresh-start';
     }
 
+    function hourlyBotClearHistoryUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly/bot/clear-history' : '/api/hourly/bot/clear-history';
+    }
+
     function hourlyBotStatusUrl(asset, kind = 'hourly') {
       if (kind === 'hourly_trial') {
         return asset === 'eth' ? '/api/eth/hourly-trial/bot' : '/api/hourly-trial/bot';
@@ -2074,6 +2078,10 @@
 
     function hourlyTrialBotFreshStartUrl(asset) {
       return asset === 'eth' ? '/api/eth/hourly-trial/bot/fresh-start' : '/api/hourly-trial/bot/fresh-start';
+    }
+
+    function hourlyTrialBotClearHistoryUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly-trial/bot/clear-history' : '/api/hourly-trial/bot/clear-history';
     }
 
     function mergeHourSummary(prev, next, eventTicker) {
@@ -2333,13 +2341,16 @@
         </div>`;
     }
 
-    function botLiveKalshiCashHtml(s) {
+    function botLiveKalshiCashHtml(s, bot) {
       if ((s.mode || 'paper') !== 'live') return '';
       const bal = formatKalshiBalance(lastKalshiStatus);
       const text = bal
         ? `<strong style="color:#86efac">${bal}</strong> in your linked Kalshi account`
         : '<span class="muted">Kalshi cash unavailable — check API keys</span>';
-      return `<p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Account cash (Kalshi): ${text}. Bot sizing still uses <strong>max at-risk</strong> below, not your full wallet.</p>`;
+      const asset = bot?.asset || 'btc';
+      const kind = bot?.bot_kind || 'hourly';
+      const clearBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.35rem" onclick="clearBotHistory('hour', '${asset}', '${kind}')">Clear history</button>`;
+      return `<p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Account cash (Kalshi): ${text}. Bot sizing still uses <strong>max at-risk</strong> below, not your full wallet.${clearBtn}</p>`;
     }
 
     async function resetPaperBankroll(period, asset, kind = 'hourly') {
@@ -2359,12 +2370,29 @@
       }
     }
 
+    async function clearBotHistory(period, asset, kind = 'hourly') {
+      const url = period === 'hour'
+        ? (kind === 'hourly_trial' ? hourlyTrialBotClearHistoryUrl(asset) : hourlyBotClearHistoryUrl(asset))
+        : slot15BotFreshStartUrl(asset);
+      const label = kind === 'hourly_trial' ? 'hourly trial' : (period === 'hour' ? 'hourly' : '15m');
+      if (!confirm(`Clear ${asset.toUpperCase()} ${label} bot history?\n\nRemoves trade log and open bot legs from the server DB. Does not touch your Kalshi account or wallet.`)) return;
+      try {
+        const res = await fetch(url, { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        const bot = await res.json();
+        if (period === 'hour') renderHourlyBot(bot, asset, kind);
+        else renderSlot15Bot(bot, asset);
+      } catch (e) {
+        showError('Clear history: ' + e.message);
+      }
+    }
+
     async function freshStartPaperBot(period, asset, kind = 'hourly') {
       const url = period === 'hour'
         ? (kind === 'hourly_trial' ? hourlyTrialBotFreshStartUrl(asset) : hourlyBotFreshStartUrl(asset))
         : slot15BotFreshStartUrl(asset);
       const label = kind === 'hourly_trial' ? 'hourly trial' : (period === 'hour' ? 'hourly' : '15m');
-      if (!confirm(`Fresh start ${asset.toUpperCase()} ${label} paper bot?\n\nThis clears the trade log, open positions, cooldowns, and resets bankroll to max at-risk.`)) return;
+      if (!confirm(`Fresh start ${asset.toUpperCase()} ${label} paper bot?\n\nClears trade log, open positions, cooldowns, and resets bankroll to max at-risk.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
@@ -3281,7 +3309,7 @@
         </div>
         ${botIntervalPerformanceHtml(bot, s, 'slot')}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across slots. Max at-risk caps concurrent open exposure.' : 'Slot bankroll = max cap + realized P&amp;L this slot (live only).' } <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
-        ${botLiveKalshiCashHtml(s)}
+        ${botLiveKalshiCashHtml(s, bot)}
         ${botLivePerformanceHtml(bot, s, 'slot')}
         ${botPaperBankrollHtml(bot, s, 'slot')}
         ${openPosHtml}
@@ -3293,7 +3321,7 @@
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
-        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log shows filled + reconciled/skipped by default. Use <strong>Fresh start</strong> to clear history.</p>
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log shows filled + skipped by default. Use <strong>Clear history</strong> (live) or <strong>Fresh start</strong> (paper) to wipe the server log.</p>
         ${tradeLogHtml}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
@@ -3476,7 +3504,7 @@
         </div>
         ${botIntervalPerformanceHtml(bot, s, 'hour')}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across hours. Max at-risk caps concurrent open exposure.' : 'Hour bankroll = max cap + realized P&amp;L this hour (live only).' } <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
-        ${botLiveKalshiCashHtml(s)}
+        ${botLiveKalshiCashHtml(s, bot)}
         ${botLivePerformanceHtml(bot, s, 'hour')}
         ${botPaperBankrollHtml(bot, s, 'hour')}
         ${openPosHtml}
@@ -3488,7 +3516,7 @@
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
-        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log shows filled + reconciled/skipped by default. Use <strong>Fresh start</strong> to clear history.</p>
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log shows filled + skipped by default. Use <strong>Clear history</strong> (live) or <strong>Fresh start</strong> (paper) to wipe the server log.</p>
         ${tradeLogHtml}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);

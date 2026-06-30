@@ -144,6 +144,101 @@ def cancel_resting_enter_orders_for_hourly_event(
   return cancelled
 
 
+def sync_live_positions_from_kalshi(
+  store: Any,
+  kalshi: Any,
+  event_ticker: str,
+) -> dict[str, Any]:
+  """Align open live bot legs with Kalshi inventory (contracts + merge duplicates)."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return {"ok": True, "changes": []}
+
+  groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+  for pos in store.open_positions(event_ticker):
+    if normalize_position_mode(pos.get("mode")) != "live":
+      continue
+    key = (str(pos["market_ticker"]), str(pos.get("side") or "").lower())
+    groups.setdefault(key, []).append(pos)
+
+  changes: list[dict[str, Any]] = []
+  for (ticker, side), legs in groups.items():
+    sellable = kalshi_sellable_contracts(kalshi, ticker, side)
+    if sellable is None:
+      continue
+    bot_total = sum(int(p.get("contracts") or 0) for p in legs)
+    target = int(round(float(sellable)))
+    if abs(float(sellable) - float(bot_total)) < 0.05:
+      continue
+
+    if target <= 0:
+      log.warning(
+        "Kalshi inventory 0 for %s %s but bot tracks %s contracts — keeping bot legs open",
+        ticker,
+        side,
+        bot_total,
+      )
+      changes.append({
+        "ticker": ticker,
+        "side": side,
+        "action": "inventory_zero_kept_open",
+        "bot_contracts": bot_total,
+      })
+      continue
+
+    legs.sort(key=lambda p: str(p.get("opened_at") or ""))
+    primary = legs[0]
+    entry_c = int(primary.get("entry_price_cents") or 0)
+    new_cost = round(target * entry_c / 100.0, 2) if entry_c else float(primary.get("cost_usd") or 0)
+    store.update_position_contracts(
+      str(primary["id"]),
+      contracts=target,
+      cost_usd=new_cost,
+    )
+    changes.append({
+      "ticker": ticker,
+      "side": side,
+      "action": "synced",
+      "from_contracts": bot_total,
+      "to_contracts": target,
+      "position_id": str(primary["id"]),
+    })
+    for extra in legs[1:]:
+      store.close_position(str(extra["id"]))
+      changes.append({
+        "ticker": ticker,
+        "side": side,
+        "action": "merged_duplicate",
+        "position_id": str(extra["id"]),
+      })
+
+  return {"ok": True, "changes": changes}
+
+
+def run_live_position_hygiene(
+  *,
+  store: Any,
+  kalshi: Any,
+  event_ticker: str,
+  tab: dict[str, Any],
+  settings_enabled: bool,
+) -> dict[str, Any]:
+  """Sync inventory, cancel orphans, and optionally cancel resting enters when auto-bet is off."""
+  sync = sync_live_positions_from_kalshi(store, kalshi, event_ticker)
+  orphans = cancel_orphan_live_sell_orders(
+    kalshi, live_open_tickers(store, event_ticker),
+  )
+  resting_cancelled = 0
+  if not settings_enabled:
+    resting_cancelled = cancel_resting_enter_orders_for_hourly_event(
+      kalshi, event_ticker, tab,
+    )
+  return {
+    **sync,
+    "orphan_sells_cancelled": orphans,
+    "resting_enters_cancelled": resting_cancelled,
+  }
+
+
 def try_live_position_exit(
   *,
   kalshi: Any,
@@ -171,12 +266,12 @@ def try_live_position_exit(
   sellable = kalshi_sellable_contracts(kalshi, ticker, side)
   if sellable is not None and sellable <= 0:
     cancel_resting_orders_for_ticker(kalshi, ticker)
-    store.close_position(pos["id"])
-    detail = (
-      f"Live EXIT reconciled (no Kalshi inventory for {side.upper()} on {ticker}) — "
-      f"closed bot leg only · {exit_reason}: {detail_suffix}{extra_detail}"
+    log.warning(
+      "Live exit skipped — no Kalshi inventory for %s %s (bot leg kept open)",
+      side.upper(),
+      ticker,
     )
-    row = store.log_trade({
+    return store.log_trade({
       "event_ticker": period_key,
       "trigger": "continuous",
       "action": "exit",
@@ -191,15 +286,25 @@ def try_live_position_exit(
       "pnl_usd": 0,
       "signal": pick.get("signal"),
       "label": pos.get("label"),
-      "status": "reconciled",
-      "detail": detail,
+      "status": "skipped",
+      "detail": (
+        f"Live EXIT skipped (no Kalshi inventory for {side.upper()} on {ticker}) — "
+        f"bot leg kept open · {exit_reason}: {detail_suffix}{extra_detail}"
+      ),
       "position_id": pos["id"],
     })
-    log.warning("Live position reconciled (no Kalshi inventory): %s", ticker)
-    return row
 
   sell_count = float(contracts)
   if sellable is not None:
+    if sellable > contracts + 0.05:
+      entry_c = int(pos.get("entry_price_cents") or entry_c)
+      synced = int(round(float(sellable)))
+      store.update_position_contracts(
+        str(pos["id"]),
+        contracts=synced,
+        cost_usd=round(synced * entry_c / 100.0, 2),
+      )
+      contracts = synced
     sell_count = min(float(contracts), float(sellable))
   if sell_count < 0.01:
     return None

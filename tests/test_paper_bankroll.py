@@ -149,6 +149,34 @@ def test_fresh_start_clears_trades_and_resets_bankroll():
     assert store.get_auto_tuning() == {}
 
 
+def test_fresh_start_live_clears_history_keeps_settings():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(mode="live", max_spend_per_hour_usd=3.0))
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "mode": "live",
+      "status": "filled",
+      "cost_usd": 1.5,
+    })
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "no",
+      "contracts": 2,
+      "entry_price_cents": 75,
+      "cost_usd": 1.5,
+      "mode": "live",
+    })
+    store.fresh_start_live(preserve_settings=True)
+    assert store.list_trades() == []
+    assert store.open_positions("EV1") == []
+    assert store.get_settings().mode == "live"
+    assert store.get_settings().max_spend_per_hour_usd == 3.0
+
+
 def test_fresh_start_can_restore_dashboard_defaults():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
