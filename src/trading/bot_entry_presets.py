@@ -34,12 +34,12 @@ _SLOT15_AGGRESSIVE_ENTRY: dict[str, Any] = {
 # --- Hourly passive = current hourly.bot defaults ---
 _HOURLY_PASSIVE_ENTRY: dict[str, Any] = {
   "kelly_fraction": 0.15,
-  "max_budget_fraction_per_entry": 0.55,
-  "max_entries_per_cycle": 2,
+  "max_budget_fraction_per_entry": 0.30,
+  "max_entries_per_cycle": 4,
   "max_concurrent_positions": 12,
   "max_stake_per_entry_usd": 10.0,
   "allow_scale_in": True,
-  "scale_in_max_legs_per_ticker": 2,
+  "scale_in_max_legs_per_ticker": 4,
   "scale_in_min_unrealized_pnl_usd": 0.05,
   "min_ask_edge_cents": 8.0,
   "correlation_guard": True,
@@ -50,10 +50,10 @@ _HOURLY_PASSIVE_ENTRY: dict[str, Any] = {
 _HOURLY_AGGRESSIVE_ENTRY: dict[str, Any] = {
   "kelly_fraction": 0.45,
   "max_budget_fraction_per_entry": 0.10,
-  "max_entries_per_cycle": 3,
+  "max_entries_per_cycle": 5,
   "max_concurrent_positions": 12,
   "allow_scale_in": True,
-  "scale_in_max_legs_per_ticker": 6,
+  "scale_in_max_legs_per_ticker": 8,
   "scale_in_min_unrealized_pnl_usd": 0.05,
   "min_ask_edge_cents": 5.0,
   "correlation_guard": False,

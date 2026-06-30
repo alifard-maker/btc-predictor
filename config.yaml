@@ -230,7 +230,7 @@ hourly:
   bot:
     enabled: false
     mode: paper
-    max_spend_per_hour_usd: 10
+    max_spend_per_hour_usd: 15
     allow_strong: false
     allow_actionable: false
     use_accumulated_profit: false
@@ -268,16 +268,16 @@ hourly:
       tail_entry_max_cents: 20
       tail_entry_block: false
       tail_entry_min_ask_edge_cents: 15
-      max_entries_per_cycle: 2
+      max_entries_per_cycle: 4
       max_concurrent_positions: 12
-      max_budget_fraction_per_entry: 0.30
-      max_stake_per_entry_usd: 1.50
-      max_contracts_per_entry: 4
+      max_budget_fraction_per_entry: 0.25
+      max_stake_per_entry_usd: 3.50
+      max_contracts_per_entry: 6
       correlation_guard: true
       allow_barbell: true
       barbell_min_strike_gap_pct: 0.20
       allow_scale_in: true
-      scale_in_max_legs_per_ticker: 2
+      scale_in_max_legs_per_ticker: 4
       scale_in_min_unrealized_pnl_usd: 0.05
     trial:
       continuous_enabled: true
