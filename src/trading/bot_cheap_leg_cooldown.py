@@ -105,6 +105,7 @@ def resolve_exit_cooldown_seconds(
   *,
   bot_kind: str,
   hours_to_settle: float | None = None,
+  mode: str = "paper",
 ) -> int:
   """Cooldown to persist on exit; cheap-leg cuts use a fixed longer window."""
   from src.trading.bot_profit_exit import is_profit_exit_reason
@@ -119,7 +120,13 @@ def resolve_exit_cooldown_seconds(
     )
     return max(int(settings.reentry_cooldown_seconds), label_cd)
   if is_profit_exit_reason(exit_reason):
-    return int(settings.profit_exit_cooldown_seconds)
+    from src.trading.bot_live_exit import live_profit_exit_cooldown_seconds
+
+    base = int(settings.profit_exit_cooldown_seconds)
+    if mode == "live" and cfg is not None:
+      kind = "slot15" if bot_kind == "slot15" else "hourly"
+      return live_profit_exit_cooldown_seconds(base, cfg, kind=kind)
+    return base
   return int(settings.reentry_cooldown_seconds)
 
 

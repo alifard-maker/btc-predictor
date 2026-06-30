@@ -46,7 +46,6 @@ from src.trading.bot_profit_exit import (
   evaluate_slot15_contract_exits,
   effective_hourly_trial_settings,
   position_hold_seconds,
-  _hold_time_ok,
 )
 from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
 from src.trading.bot_entry_presets import (
@@ -54,6 +53,12 @@ from src.trading.bot_entry_presets import (
   effective_bot_entry_strategy,
 )
 from src.trading.live_inventory_guards import apply_live_inventory_guards
+from src.trading.bot_live_exit import (
+  allow_live_cut_loss,
+  apply_live_exit_entry_guards,
+  live_cut_loss_min_usd,
+  overlay_live_profit_settings,
+)
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
   cap_live_entry_contracts,
@@ -91,7 +96,6 @@ log = logging.getLogger(__name__)
 
 # Skip CUT LOSSES paper-exit when mark-to-market loss is below this (avoids regime churn at ~0 P&L).
 CUT_LOSS_EXIT_MIN_LOSS_USD = 0.05
-LIVE_CUT_LOSS_EXIT_MIN_LOSS_USD = 0.20
 
 
 def bet_qualifies(
@@ -373,6 +377,8 @@ class HourlyBot:
         event_ticker=str(event_ticker),
         tab=tab,
         settings_enabled=bool(settings.enabled),
+        cfg=cfg,
+        kind=self.kind if self.kind != "hourly_trial" else "hourly",
       )
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
@@ -580,24 +586,45 @@ class HourlyBot:
       bot_cfg=cfg,
     )
     if cheap_reason:
+      if settings.mode == "live" and not allow_live_cut_loss(
+        exit_reason=cheap_reason,
+        unrealized_usd=unrealized,
+        pos=pos,
+        settings_min_hold=settings.min_hold_seconds,
+        cfg=cfg,
+        kind="hourly",
+      ):
+        return None, ""
       return cheap_reason, cheap_detail
     if kind == "CUT LOSSES":
       if unrealized is None:
         return None, ""
       min_loss = (
-        LIVE_CUT_LOSS_EXIT_MIN_LOSS_USD
+        live_cut_loss_min_usd(cfg, kind="hourly")
         if settings.mode == "live"
         else CUT_LOSS_EXIT_MIN_LOSS_USD
       )
       if unrealized >= -min_loss:
         return None, ""
-      if settings.mode == "live" and not _hold_time_ok(
-        settings.min_hold_seconds, position_hold_seconds(pos),
+      if settings.mode == "live" and not allow_live_cut_loss(
+        exit_reason="CUT LOSSES",
+        unrealized_usd=unrealized,
+        pos=pos,
+        settings_min_hold=settings.min_hold_seconds,
+        cfg=cfg,
+        kind="hourly",
       ):
         return None, ""
       return "CUT LOSSES", str(alert.get("detail", ""))
+    profit_settings = (
+      overlay_live_profit_settings(
+        settings, pos, cfg, mode=settings.mode, kind="hourly",
+      )
+      if settings.mode == "live"
+      else settings
+    )
     reason, detail = evaluate_adaptive_profit_exit(
-      settings=settings,
+      settings=profit_settings,
       unrealized_usd=unrealized,
       cost_usd=float(pos.get("cost_usd") or 0),
       peaks=peaks,
@@ -726,6 +753,8 @@ class HourlyBot:
           exit_reason=exit_reason,
           detail_suffix=str(detail_suffix),
           extra_detail=f" · {vet_line}",
+          cfg=cfg,
+          kind=self.kind if self.kind != "hourly_trial" else "hourly",
         )
         if live_out is None:
           continue
@@ -812,6 +841,7 @@ class HourlyBot:
         cfg,
         bot_kind=self.kind,
         hours_to_settle=float(hours_left) if hours_left is not None else None,
+        mode=settings.mode,
       )
       self.store.record_exit_cooldown(
         event_ticker, pos["market_ticker"], cooldown_seconds=cooldown
@@ -931,6 +961,9 @@ class HourlyBot:
       tuning=self.store.get_auto_tuning(),
     )
     estrat = apply_live_inventory_guards(
+      estrat, cfg, mode=settings.mode, kind=self.kind if self.kind != "hourly_trial" else "hourly",
+    )
+    estrat = apply_live_exit_entry_guards(
       estrat, cfg, mode=settings.mode, kind=self.kind if self.kind != "hourly_trial" else "hourly",
     )
     ranked = rank_hourly_candidates(candidates, estrat=estrat)

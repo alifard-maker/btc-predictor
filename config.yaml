@@ -145,6 +145,20 @@ intra_slot:
       max_stake_per_entry_usd: 1.50
       max_contracts_per_entry: 4
       correlation_guard: false
+    live_exit:
+      cut_loss_min_usd: 0.20
+      cut_loss_min_hold_seconds: 90
+      block_cut_when_profitable: true
+      cheap_leg_cut_min_hold_seconds: 60
+      cheap_leg_cut_min_loss_usd: 0.12
+      block_tail_entries: true
+      tail_block_max_cents: 20
+      reconcile_min_position_age_seconds: 30
+      reconcile_grace_after_exit_seconds: 60
+      take_profit_usd: 0.08
+      profit_exit_cooldown_seconds: 20
+      mid_price_take_profit_usd: 0.06
+      mid_price_max_entry_cents: 50
     probe_no_trade:
       enabled: false
       min_prob: 0.58
@@ -293,6 +307,20 @@ hourly:
       max_concurrent_positions: 4
       max_entries_per_cycle: 2
       allow_scale_in: false
+    live_exit:
+      cut_loss_min_usd: 0.20
+      cut_loss_min_hold_seconds: 120
+      block_cut_when_profitable: true
+      cheap_leg_cut_min_hold_seconds: 90
+      cheap_leg_cut_min_loss_usd: 0.15
+      block_tail_entries: true
+      tail_block_max_cents: 20
+      reconcile_min_position_age_seconds: 45
+      reconcile_grace_after_exit_seconds: 90
+      take_profit_usd: 0.08
+      profit_exit_cooldown_seconds: 30
+      mid_price_take_profit_usd: 0.08
+      mid_price_max_entry_cents: 60
     trial:
       continuous_enabled: true
       poll_seconds: 10

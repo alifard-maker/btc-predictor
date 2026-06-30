@@ -239,7 +239,14 @@ def has_pending_bot_exit(kalshi: Any, store: Any, position_id: str) -> bool:
   return bool(pending_oid and order_still_resting(kalshi, pending_oid))
 
 
-def should_reconcile_close_live_leg(kalshi: Any, store: Any, pos: dict[str, Any]) -> bool:
+def should_reconcile_close_live_leg(
+  kalshi: Any,
+  store: Any,
+  pos: dict[str, Any],
+  *,
+  cfg: dict[str, Any] | None = None,
+  kind: str = "hourly",
+) -> bool:
   """Only reconcile-close when Kalshi is truly flat (no position and no resting exit)."""
   if has_pending_bot_exit(kalshi, store, str(pos["id"])):
     return False
@@ -248,7 +255,14 @@ def should_reconcile_close_live_leg(kalshi: Any, store: Any, pos: dict[str, Any]
   if resting_sell_contracts(kalshi, ticker, side) > 0.05:
     return False
   sellable = kalshi_sellable_contracts(kalshi, ticker, side)
-  return sellable is not None and sellable <= 0
+  if sellable is None or sellable > 0:
+    return False
+  if cfg is not None:
+    from src.trading.bot_live_exit import reconcile_close_blocked
+
+    if reconcile_close_blocked(store, pos, cfg, kind=kind) is not None:
+      return False
+  return True
 
 
 def _inferred_exit_price_cents(store: Any, position_id: str) -> int | None:
@@ -282,8 +296,15 @@ def reconcile_close_stale_live_leg(
   exit_reason: str = "RECONCILED",
   extra_detail: str = "",
   kalshi: Any | None = None,
+  cfg: dict[str, Any] | None = None,
+  kind: str = "hourly",
 ) -> dict[str, Any]:
   """Close a bot leg when Kalshi has no inventory (settled, sold elsewhere, or already flat)."""
+  from src.trading.bot_live_exit import (
+    inferred_exit_from_recent_trade,
+    live_exit_config,
+    recent_exit_trade,
+  )
   from src.trading.kalshi_leg_exit import resolve_kalshi_leg_exit_cents
   from src.trading.paper_execution import leg_pnl_usd
 
@@ -294,6 +315,17 @@ def reconcile_close_stale_live_leg(
   pos_mode = normalize_position_mode(pos.get("mode"))
   pick = pick or {}
   inferred = _inferred_exit_price_cents(store, str(pos["id"]))
+  if inferred is None:
+    live_exit = live_exit_config(cfg, kind=kind)
+    recent = recent_exit_trade(
+      store,
+      event_ticker=period_key,
+      market_ticker=ticker,
+      side=side,
+      position_id=str(pos.get("id") or ""),
+      max_age_seconds=live_exit.reconcile_grace_after_exit_seconds,
+    )
+    inferred = inferred_exit_from_recent_trade(recent)
   exit_c, source_note = resolve_kalshi_leg_exit_cents(
     kalshi,
     market_ticker=ticker,
@@ -366,6 +398,9 @@ def sync_live_positions_from_kalshi(
   store: Any,
   kalshi: Any,
   event_ticker: str,
+  *,
+  cfg: dict[str, Any] | None = None,
+  kind: str = "hourly",
 ) -> dict[str, Any]:
   """Align open live bot legs with Kalshi inventory (contracts + merge duplicates)."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
@@ -409,7 +444,7 @@ def sync_live_positions_from_kalshi(
 
     if target_fp <= 0:
       for pos in legs:
-        if not should_reconcile_close_live_leg(kalshi, store, pos):
+        if not should_reconcile_close_live_leg(kalshi, store, pos, cfg=cfg, kind=kind):
           changes.append({
             "ticker": ticker,
             "side": side,
@@ -423,6 +458,8 @@ def sync_live_positions_from_kalshi(
           pos=pos,
           period_key=event_ticker,
           kalshi=kalshi,
+          cfg=cfg,
+          kind=kind,
         )
         changes.append({
           "ticker": ticker,
@@ -726,11 +763,15 @@ def run_live_position_hygiene(
   event_ticker: str,
   tab: dict[str, Any],
   settings_enabled: bool,
+  cfg: dict[str, Any] | None = None,
+  kind: str = "hourly",
 ) -> dict[str, Any]:
   """Sync inventory, cancel orphans, and optionally cancel resting enters when auto-bet is off."""
   adopted_resting = adopt_filled_resting_enters(store, kalshi, event_ticker)
   adopted_orphans = adopt_kalshi_orphan_inventory(store, kalshi, event_ticker)
-  sync = sync_live_positions_from_kalshi(store, kalshi, event_ticker)
+  sync = sync_live_positions_from_kalshi(
+    store, kalshi, event_ticker, cfg=cfg, kind=kind,
+  )
   orphans = cancel_orphan_live_sell_orders(
     kalshi, live_open_tickers(store, event_ticker),
   )
@@ -785,6 +826,7 @@ def run_live_slot_hygiene(
   period_key: str,
   market_ticker: str | None,
   settings_enabled: bool,
+  cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   """Sync inventory, adopt orphans, and cancel resting orders for a 15m slot."""
   def _slot15_belongs(ticker: str, _slot: str) -> bool:
@@ -797,7 +839,9 @@ def run_live_slot_hygiene(
     period_key,
     ticker_belongs=_slot15_belongs if market_ticker else None,
   )
-  sync = sync_live_positions_from_kalshi(store, kalshi, period_key)
+  sync = sync_live_positions_from_kalshi(
+    store, kalshi, period_key, cfg=cfg, kind="slot15",
+  )
   orphans = cancel_orphan_live_sell_orders(
     kalshi, live_open_tickers(store, period_key),
   )
@@ -844,6 +888,8 @@ def try_live_position_exit(
   exit_reason: str,
   detail_suffix: str,
   extra_detail: str,
+  cfg: dict[str, Any] | None = None,
+  kind: str = "hourly",
 ) -> dict[str, Any] | None:
   """Place or skip a live Kalshi exit. Returns a trade row when logged."""
   cancel_resting_orders(kalshi, pos)
@@ -858,7 +904,7 @@ def try_live_position_exit(
   if sellable is not None and sellable <= 0:
     if resting_sell_contracts(kalshi, ticker, side) > 0.05:
       return None
-    if not should_reconcile_close_live_leg(kalshi, store, pos):
+    if not should_reconcile_close_live_leg(kalshi, store, pos, cfg=cfg, kind=kind):
       return None
     return reconcile_close_stale_live_leg(
       store=store,
@@ -868,6 +914,8 @@ def try_live_position_exit(
       exit_reason=exit_reason,
       extra_detail=f"{exit_reason}: {detail_suffix}{extra_detail}",
       kalshi=kalshi,
+      cfg=cfg,
+      kind=kind,
     )
 
   sellable_before = sellable

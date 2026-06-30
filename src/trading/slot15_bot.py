@@ -46,6 +46,12 @@ from src.trading.bot_entry_presets import (
   effective_bot_entry_strategy,
 )
 from src.trading.live_inventory_guards import apply_live_inventory_guards
+from src.trading.bot_live_exit import (
+  allow_live_cut_loss,
+  apply_live_exit_entry_guards,
+  live_cut_loss_min_usd,
+  overlay_live_profit_settings,
+)
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
   cap_live_entry_contracts,
@@ -71,7 +77,6 @@ from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
 log = logging.getLogger(__name__)
 
 CUT_LOSS_EXIT_MIN_LOSS_USD = 0.05
-LIVE_CUT_LOSS_EXIT_MIN_LOSS_USD = 0.20
 
 _ACTIONABLE_LONG = frozenset({
   Signal.LONG.value,
@@ -346,6 +351,7 @@ class Slot15Bot:
         period_key=str(slot_key),
         market_ticker=market_ticker,
         settings_enabled=bool(settings.enabled),
+        cfg=cfg,
       )
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
@@ -505,23 +511,45 @@ class Slot15Bot:
     mark_cents: int | None = None,
     cfg: dict[str, Any] | None = None,
   ) -> tuple[str | None, str]:
-    return evaluate_slot15_contract_exits(
+    profit_settings = (
+      overlay_live_profit_settings(
+        settings, pos, cfg, mode=settings.mode, kind="slot15",
+      )
+      if settings.mode == "live"
+      else settings
+    )
+    reason, detail = evaluate_slot15_contract_exits(
       pos=pos,
       mark_cents=mark_cents,
       unrealized_usd=unrealized,
       monitor=monitor,
       peaks=peaks,
       hold_seconds=position_hold_seconds(pos),
-      settings=settings,
+      settings=profit_settings,
       exit_ctx=exit_ctx,
       cfg=cfg,
       include_monitor_fallback=True,
       cut_loss_min_usd=(
-        LIVE_CUT_LOSS_EXIT_MIN_LOSS_USD
+        live_cut_loss_min_usd(cfg, kind="slot15")
         if settings.mode == "live"
         else CUT_LOSS_EXIT_MIN_LOSS_USD
       ),
     )
+    if (
+      reason
+      and settings.mode == "live"
+      and reason in ("CUT LOSSES", "CHEAP LEG CUT LOSS")
+      and not allow_live_cut_loss(
+        exit_reason=reason,
+        unrealized_usd=unrealized,
+        pos=pos,
+        settings_min_hold=settings.min_hold_seconds,
+        cfg=cfg,
+        kind="slot15",
+      )
+    ):
+      return None, ""
+    return reason, detail
 
   def _process_exits(
     self,
@@ -605,6 +633,8 @@ class Slot15Bot:
           exit_reason=exit_reason,
           detail_suffix=str(detail_suffix),
           extra_detail="",
+          cfg=cfg,
+          kind="slot15",
         )
         if live_out is None:
           continue
@@ -700,6 +730,7 @@ class Slot15Bot:
         cfg,
         bot_kind="slot15",
         hours_to_settle=hours_to_settle,
+        mode=settings.mode,
       )
       self.store.record_exit_cooldown(
         slot_key, pos["market_ticker"], cooldown_seconds=cooldown
@@ -812,6 +843,7 @@ class Slot15Bot:
       tuning=self.store.get_auto_tuning(),
     )
     estrat = apply_live_inventory_guards(estrat, cfg, mode=settings.mode, kind="slot15")
+    estrat = apply_live_exit_entry_guards(estrat, cfg, mode=settings.mode, kind="slot15")
     entries_this_cycle = 0
     max_entries = estrat.max_entries_per_cycle if estrat.enabled else 1
 
