@@ -45,6 +45,7 @@ from src.trading.bot_entry_presets import (
   apply_bot_runtime_settings,
   effective_bot_entry_strategy,
 )
+from src.trading.live_inventory_guards import apply_live_inventory_guards
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
   cap_live_entry_contracts,
@@ -810,6 +811,7 @@ class Slot15Bot:
       aggressive=settings.aggressive_entries,
       tuning=self.store.get_auto_tuning(),
     )
+    estrat = apply_live_inventory_guards(estrat, cfg, mode=settings.mode, kind="slot15")
     entries_this_cycle = 0
     max_entries = estrat.max_entries_per_cycle if estrat.enabled else 1
 

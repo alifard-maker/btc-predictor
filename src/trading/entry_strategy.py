@@ -34,6 +34,9 @@ class EntryStrategyConfig:
   scale_in_min_unrealized_pnl_usd: float = 0.05
   scale_in_min_ask_edge_improvement_cents: float = 0.0
   max_contracts_per_entry: int = 0
+  correlation_min_strike_gap_pct: float = 0.08
+  max_same_side_threshold_legs: int = 0
+  max_same_side_range_legs: int = 0
 
   @classmethod
   def from_bot_cfg(cls, bot_cfg: dict[str, Any] | None) -> EntryStrategyConfig:
@@ -66,6 +69,9 @@ class EntryStrategyConfig:
         raw.get("scale_in_min_ask_edge_improvement_cents", 0.0)
       ),
       max_contracts_per_entry=int(raw.get("max_contracts_per_entry", 0)),
+      correlation_min_strike_gap_pct=float(raw.get("correlation_min_strike_gap_pct", 0.08)),
+      max_same_side_threshold_legs=int(raw.get("max_same_side_threshold_legs", 0)),
+      max_same_side_range_legs=int(raw.get("max_same_side_range_legs", 0)),
     )
 
 
@@ -89,6 +95,19 @@ def threshold_strike(pick: dict[str, Any] | None) -> float | None:
   if st == "less" and pick.get("cap_strike") is not None:
     return float(pick["cap_strike"])
   return None
+
+
+def range_band_mid(pick: dict[str, Any] | None) -> float | None:
+  """Midpoint of a between-strike range band."""
+  if not pick:
+    return None
+  if str(pick.get("strike_type") or "") != "between":
+    return None
+  floor_s = pick.get("floor_strike")
+  cap_s = pick.get("cap_strike")
+  if floor_s is None or cap_s is None:
+    return None
+  return (float(floor_s) + float(cap_s)) / 2.0
 
 
 def side_from_pick_signal(signal: str | None) -> str | None:
@@ -334,13 +353,16 @@ def correlation_block_reason(
   if not estrat.enabled or not estrat.correlation_guard:
     return None
   new_strike = threshold_strike(new_pick)
+  new_mid = range_band_mid(new_pick)
   new_type = str(new_pick.get("strike_type") or "")
+  min_gap = estrat.correlation_min_strike_gap_pct
 
   for pos in open_positions:
     ticker = str(pos.get("market_ticker") or "")
     ex_pick = resolve_pick(ticker) if resolve_pick else None
     ex_side = str(pos.get("side") or "")
     ex_strike = threshold_strike(ex_pick)
+    ex_mid = range_band_mid(ex_pick)
     ex_type = str((ex_pick or {}).get("strike_type") or "")
 
     if estrat.allow_barbell and is_barbell_pair(
@@ -360,9 +382,20 @@ def correlation_block_reason(
       and ex_strike is not None
       and new_strike is not None
       and ref_price
-      and _strike_gap_pct(ex_strike, new_strike, ref_price) < 0.08
+      and _strike_gap_pct(ex_strike, new_strike, ref_price) < min_gap
     ):
       return "correlated_same_side_strikes"
+
+    if (
+      ex_side == new_side
+      and ex_type == "between"
+      and new_type == "between"
+      and ex_mid is not None
+      and new_mid is not None
+      and ref_price
+      and _strike_gap_pct(ex_mid, new_mid, ref_price) < min_gap
+    ):
+      return "correlated_same_side_range_bands"
 
     if (
       ex_side == "yes"
@@ -385,6 +418,28 @@ def correlation_block_reason(
       and new_strike < ex_strike
     ):
       return "opposing_threshold_hedge"
+
+  if estrat.max_same_side_threshold_legs > 0 and new_type == "greater":
+    threshold_count = 0
+    for pos in open_positions:
+      if str(pos.get("side") or "") != new_side:
+        continue
+      ex_pick = resolve_pick(str(pos.get("market_ticker") or "")) if resolve_pick else None
+      if str((ex_pick or {}).get("strike_type") or "") == "greater":
+        threshold_count += 1
+    if threshold_count >= estrat.max_same_side_threshold_legs:
+      return "max_same_side_threshold_legs"
+
+  if estrat.max_same_side_range_legs > 0 and new_type == "between":
+    range_count = 0
+    for pos in open_positions:
+      if str(pos.get("side") or "") != new_side:
+        continue
+      ex_pick = resolve_pick(str(pos.get("market_ticker") or "")) if resolve_pick else None
+      if str((ex_pick or {}).get("strike_type") or "") == "between":
+        range_count += 1
+    if range_count >= estrat.max_same_side_range_legs:
+      return "max_same_side_range_legs"
 
   return None
 

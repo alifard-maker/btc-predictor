@@ -294,3 +294,98 @@ def test_cap_live_entry_contracts_clamps_for_small_hourly_cap():
     max_spend_per_hour_usd=5.0,
     estrat=estrat,
   ) == 4
+
+
+def _range_pick(
+  ticker: str,
+  *,
+  signal: str = "BUY NO",
+  floor: float = 58000.0,
+  cap: float = 58100.0,
+):
+  return {
+    "ticker": ticker,
+    "signal": signal,
+    "contract_type": "range",
+    "strike_type": "between",
+    "floor_strike": floor,
+    "cap_strike": cap,
+    "edge": 0.10,
+    "model_prob": 0.30,
+    "yes_bid": 0.35,
+    "yes_ask": 0.38,
+    "kalshi_mid": 0.38,
+  }
+
+
+def test_correlation_blocks_adjacent_threshold_yes_at_018_gap():
+  estrat = EntryStrategyConfig(
+    correlation_guard=True,
+    correlation_min_strike_gap_pct=0.18,
+    allow_barbell=False,
+  )
+  open_pos = [{"side": "yes", "market_ticker": "LOW"}]
+  ex_pick = _pick("LOW", signal="BUY YES", floor=58000.0)
+  new_pick = _pick("HIGH", signal="BUY YES", floor=58100.0)
+
+  def resolve(ticker: str):
+    return ex_pick if ticker == "LOW" else new_pick
+
+  reason = correlation_block_reason(
+    open_pos,
+    new_pick,
+    "yes",
+    resolve_pick=resolve,
+    ref_price=58300.0,
+    estrat=estrat,
+  )
+  assert reason == "correlated_same_side_strikes"
+
+
+def test_correlation_blocks_adjacent_range_no_bands():
+  estrat = EntryStrategyConfig(
+    correlation_guard=True,
+    correlation_min_strike_gap_pct=0.18,
+    allow_barbell=False,
+  )
+  open_pos = [{"side": "no", "market_ticker": "RANGE-A"}]
+  ex_pick = _range_pick("RANGE-A", floor=58000.0, cap=58100.0)
+  new_pick = _range_pick("RANGE-B", floor=58100.0, cap=58200.0)
+
+  def resolve(ticker: str):
+    return ex_pick if ticker == "RANGE-A" else new_pick
+
+  reason = correlation_block_reason(
+    open_pos,
+    new_pick,
+    "no",
+    resolve_pick=resolve,
+    ref_price=58300.0,
+    estrat=estrat,
+  )
+  assert reason == "correlated_same_side_range_bands"
+
+
+def test_max_same_side_threshold_legs_blocks_second_yes():
+  estrat = EntryStrategyConfig(
+    correlation_guard=True,
+    correlation_min_strike_gap_pct=0.01,
+    max_same_side_threshold_legs=1,
+    allow_barbell=False,
+  )
+  open_pos = [{"side": "yes", "market_ticker": "LOW"}]
+  ex_pick = _pick("LOW", signal="BUY YES", floor=57000.0)
+  new_pick = _pick("HIGH", signal="BUY YES", floor=59000.0)
+
+  def resolve(ticker: str):
+    return ex_pick if ticker == "LOW" else new_pick
+
+  reason = correlation_block_reason(
+    open_pos,
+    new_pick,
+    "yes",
+    resolve_pick=resolve,
+    ref_price=58300.0,
+    estrat=estrat,
+  )
+  assert reason == "max_same_side_threshold_legs"

@@ -284,6 +284,15 @@ hourly:
       allow_scale_in: true
       scale_in_max_legs_per_ticker: 4
       scale_in_min_unrealized_pnl_usd: 0.05
+    live_inventory:
+      enabled: true
+      force_correlation_guard: true
+      correlation_min_strike_gap_pct: 0.18
+      max_same_side_threshold_legs: 1
+      max_same_side_range_legs: 1
+      max_concurrent_positions: 4
+      max_entries_per_cycle: 2
+      allow_scale_in: false
     trial:
       continuous_enabled: true
       poll_seconds: 10

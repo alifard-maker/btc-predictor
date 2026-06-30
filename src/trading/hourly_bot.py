@@ -53,6 +53,7 @@ from src.trading.bot_entry_presets import (
   apply_bot_runtime_settings,
   effective_bot_entry_strategy,
 )
+from src.trading.live_inventory_guards import apply_live_inventory_guards
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
   cap_live_entry_contracts,
@@ -928,6 +929,9 @@ class HourlyBot:
       kind=self.kind,
       aggressive=settings.aggressive_entries,
       tuning=self.store.get_auto_tuning(),
+    )
+    estrat = apply_live_inventory_guards(
+      estrat, cfg, mode=settings.mode, kind=self.kind if self.kind != "hourly_trial" else "hourly",
     )
     ranked = rank_hourly_candidates(candidates, estrat=estrat)
     if not ranked:

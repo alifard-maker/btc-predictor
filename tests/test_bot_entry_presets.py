@@ -50,8 +50,9 @@ def test_hourly_aggressive_entry_strategy():
   estrat = effective_bot_entry_strategy({}, kind="hourly", aggressive=True, tuning=None)
   assert estrat.max_budget_fraction_per_entry == 0.10
   assert estrat.max_entries_per_cycle == 5
+  assert estrat.max_concurrent_positions == 6
   assert estrat.scale_in_max_legs_per_ticker == 8
-  assert estrat.correlation_guard is False
+  assert estrat.correlation_guard is True
 
 
 def test_runtime_cooldowns_passive_vs_aggressive():
