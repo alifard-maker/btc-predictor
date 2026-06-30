@@ -112,6 +112,40 @@ def test_entry_budget_caps_at_10pct_when_aggressive_preset():
   assert stake == 10.0
 
 
+def test_entry_budget_hard_cap_per_order():
+  estrat = EntryStrategyConfig(
+    enabled=True,
+    kelly_enabled=False,
+    max_stake_per_entry_usd=10.0,
+  )
+  pick = _pick("T", model_prob=0.80, ask=0.40)
+  stake = entry_budget_usd(
+    estrat=estrat,
+    bankroll_usd=100.0,
+    remaining_usd=50.0,
+    pick=pick,
+    side="yes",
+  )
+  assert stake == 10.0
+
+
+def test_entry_budget_hard_cap_not_below_remaining():
+  estrat = EntryStrategyConfig(
+    enabled=True,
+    kelly_enabled=False,
+    max_stake_per_entry_usd=10.0,
+  )
+  pick = _pick("T", model_prob=0.80, ask=0.40)
+  stake = entry_budget_usd(
+    estrat=estrat,
+    bankroll_usd=5.0,
+    remaining_usd=3.0,
+    pick=pick,
+    side="yes",
+  )
+  assert stake == 3.0
+
+
 def test_hourly_multi_entry_two_strikes():
   cfg = {
     "hourly": {
@@ -181,7 +215,7 @@ def test_entry_budget_falls_back_when_kelly_disabled():
     pick=_pick("Z"),
     side="yes",
   )
-  assert stake == 18.0
+  assert stake == 10.0
 
 
 def test_ask_edge_gate_blocks_thin_edge():

@@ -142,6 +142,7 @@ intra_slot:
       max_entries_per_cycle: 1
       max_concurrent_positions: 1
       max_budget_fraction_per_entry: 0.55
+      max_stake_per_entry_usd: 10
       correlation_guard: false
     probe_no_trade:
       enabled: false
@@ -269,6 +270,7 @@ hourly:
       max_entries_per_cycle: 2
       max_concurrent_positions: 12
       max_budget_fraction_per_entry: 0.55
+      max_stake_per_entry_usd: 10
       correlation_guard: true
       allow_barbell: true
       barbell_min_strike_gap_pct: 0.20
@@ -494,6 +496,7 @@ eth:
         max_entries_per_cycle: 2
         max_concurrent_positions: 12
         max_budget_fraction_per_entry: 0.55
+        max_stake_per_entry_usd: 10
         correlation_guard: true
         allow_barbell: true
         barbell_min_strike_gap_pct: 0.20

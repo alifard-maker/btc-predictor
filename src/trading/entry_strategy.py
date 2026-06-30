@@ -21,6 +21,7 @@ class EntryStrategyConfig:
   max_entries_per_cycle: int = 2
   max_concurrent_positions: int = 3
   max_budget_fraction_per_entry: float = 0.55
+  max_stake_per_entry_usd: float = 10.0
   correlation_guard: bool = True
   allow_barbell: bool = True
   barbell_min_strike_gap_pct: float = 0.20
@@ -49,6 +50,7 @@ class EntryStrategyConfig:
       max_entries_per_cycle=int(raw.get("max_entries_per_cycle", 2)),
       max_concurrent_positions=int(raw.get("max_concurrent_positions", 3)),
       max_budget_fraction_per_entry=float(raw.get("max_budget_fraction_per_entry", 0.55)),
+      max_stake_per_entry_usd=float(raw.get("max_stake_per_entry_usd", 10.0)),
       correlation_guard=bool(raw.get("correlation_guard", True)),
       allow_barbell=bool(raw.get("allow_barbell", True)),
       barbell_min_strike_gap_pct=float(raw.get("barbell_min_strike_gap_pct", 0.20)),
@@ -385,6 +387,21 @@ def correlation_block_reason(
   return None
 
 
+def cap_entry_stake_usd(
+  stake_usd: float,
+  *,
+  estrat: EntryStrategyConfig,
+  basket_cap: float,
+  remaining_usd: float,
+) -> float:
+  """Apply per-order, basket, and remaining budget caps to an entry stake."""
+  stake = min(float(stake_usd), float(basket_cap), float(remaining_usd))
+  hard_cap = float(estrat.max_stake_per_entry_usd)
+  if hard_cap > 0:
+    stake = min(stake, hard_cap)
+  return round(max(0.0, stake), 2)
+
+
 def entry_budget_usd(
   *,
   estrat: EntryStrategyConfig,
@@ -402,12 +419,16 @@ def entry_budget_usd(
     basket_cap = remaining_usd
 
   if not estrat.enabled or not estrat.kelly_enabled:
-    return min(remaining_usd, basket_cap)
+    return cap_entry_stake_usd(
+      remaining_usd, estrat=estrat, basket_cap=basket_cap, remaining_usd=remaining_usd,
+    )
 
   p = win_prob_for_side(pick, side)
   ask = ask_cents_for_side(pick, side)
   if p is None or ask is None:
-    return min(remaining_usd, basket_cap)
+    return cap_entry_stake_usd(
+      remaining_usd, estrat=estrat, basket_cap=basket_cap, remaining_usd=remaining_usd,
+    )
 
   stake = kelly_stake_usd(
     bankroll_usd=bankroll_usd,
@@ -420,4 +441,6 @@ def entry_budget_usd(
   )
   if stake <= 0:
     stake = remaining_usd
-  return min(stake, basket_cap, remaining_usd)
+  return cap_entry_stake_usd(
+    stake, estrat=estrat, basket_cap=basket_cap, remaining_usd=remaining_usd,
+  )
