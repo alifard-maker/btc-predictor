@@ -13,10 +13,25 @@ from src.trading.bot_performance_report import (
 )
 
 
-def adaptive_calibration_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
-  raw = (cfg or {}).get("bot_adaptive_calibration") or {}
+def _bot_cfg_for_kind(cfg: dict[str, Any] | None, kind: str) -> dict[str, Any]:
+  if not cfg:
+    return {}
+  if kind in ("hourly", "hourly_trial"):
+    return (cfg.get("hourly") or {}).get("bot") or {}
+  return (cfg.get("intra_slot") or {}).get("bot") or {}
+
+
+def adaptive_calibration_cfg(cfg: dict[str, Any] | None, *, kind: str = "hourly") -> dict[str, Any]:
+  """Merge global + per-bot overrides. Slot15 defaults off; hourly defaults on."""
+  global_raw = (cfg or {}).get("bot_adaptive_calibration") or {}
+  bot_raw = _bot_cfg_for_kind(cfg, kind).get("bot_adaptive_calibration") or {}
+  raw = {**global_raw, **bot_raw}
+  if kind == "slot15":
+    enabled = bool(bot_raw.get("enabled", False))
+  else:
+    enabled = bool(raw.get("enabled", True))
   return {
-    "enabled": bool(raw.get("enabled", True)),
+    "enabled": enabled,
     "short_window_hours": float(raw.get("short_window_hours", 4)),
     "long_window_hours": float(raw.get("long_window_hours", 24)),
     "short_min_trades": int(raw.get("short_min_trades", 4)),
@@ -145,15 +160,37 @@ def _should_tighten(stats: dict[str, Any], *, min_trades: int, max_wr: float, mi
   return float(wr) < max_wr + 0.12
 
 
+def _effective_bucket(
+  bucket: dict[str, Any] | None,
+  *,
+  now: datetime,
+  acfg: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+  """Resolve stored bucket state, promoting expired pauses to probing."""
+  b = dict(bucket or _default_bucket_state())
+  mode = str(b.get("state") or "normal")
+  if mode == "paused":
+    until = _parse_ts(b.get("paused_until"))
+    if until is not None and now >= until:
+      b["state"] = "probing"
+      if b.get("probe_entries_remaining") is None:
+        b["probe_entries_remaining"] = acfg["probe_max_entries"]
+      b["paused_until"] = None
+      b["updated_at"] = now.isoformat()
+      mode = "probing"
+  return mode, b
+
+
 def refresh_adaptive_buckets(
   trades: list[dict[str, Any]],
   state: dict[str, Any] | None,
   cfg: dict[str, Any] | None,
   *,
+  kind: str = "hourly",
   now: datetime | None = None,
 ) -> dict[str, Any]:
   """Recompute bucket states from trade log."""
-  acfg = adaptive_calibration_cfg(cfg)
+  acfg = adaptive_calibration_cfg(cfg, kind=kind)
   now = now or datetime.now(timezone.utc)
   if not acfg["enabled"]:
     return state or {"enabled": False, "buckets": {}}
@@ -239,6 +276,7 @@ def refresh_adaptive_buckets(
 
   return {
     "enabled": True,
+    "kind": kind,
     "refreshed_at": now.isoformat(),
     "buckets": buckets,
   }
@@ -250,11 +288,12 @@ def adaptive_entry_allowed(
   entry_price_cents: int | None,
   entry_spread_cents: int | None,
   cfg: dict[str, Any] | None,
+  kind: str = "hourly",
   aggressive: bool = False,
   now: datetime | None = None,
 ) -> tuple[bool, str | None, float]:
   """Return (ok, skip_reason, extra_min_ask_edge_cents)."""
-  acfg = adaptive_calibration_cfg(cfg)
+  acfg = adaptive_calibration_cfg(cfg, kind=kind)
   if not acfg["enabled"]:
     return True, None, 0.0
   if aggressive and not acfg["apply_in_aggressive_mode"]:
@@ -272,20 +311,13 @@ def adaptive_entry_allowed(
 
   extra_edge = 0.0
   for key in keys:
-    b = buckets.get(key) or {}
-    mode = str(b.get("state") or "normal")
+    mode, b = _effective_bucket(buckets.get(key), now=now, acfg=acfg)
     if mode == "paused":
       until = _parse_ts(b.get("paused_until"))
-      if until is not None and now >= until:
-        mode = "probing"
-      elif until is None or now < until:
+      if until is None or now < until:
         return False, f"adaptive_bucket_paused:{key}", 0.0
     if mode == "probing":
-      remaining = int(
-        b.get("probe_entries_remaining")
-        if b.get("probe_entries_remaining") is not None
-        else acfg["probe_max_entries"]
-      )
+      remaining = int(b.get("probe_entries_remaining") or 0)
       if remaining <= 0:
         return False, f"adaptive_probe_exhausted:{key}", 0.0
     if mode == "tightened":
@@ -300,16 +332,18 @@ def record_adaptive_probe_entry(
   entry_price_cents: int | None,
   entry_spread_cents: int | None,
   cfg: dict[str, Any] | None,
+  kind: str = "hourly",
 ) -> dict[str, Any]:
   """Decrement probe allowance when a probing bucket entry is placed."""
-  acfg = adaptive_calibration_cfg(cfg)
+  acfg = adaptive_calibration_cfg(cfg, kind=kind)
   state = dict(state or {"buckets": {}})
   buckets = dict(state.get("buckets") or {})
+  now = datetime.now(timezone.utc)
   for key in _entry_bucket_keys(entry_price_cents, entry_spread_cents, acfg):
-    b = dict(buckets.get(key) or _default_bucket_state())
-    if str(b.get("state")) == "probing":
+    mode, b = _effective_bucket(buckets.get(key), now=now, acfg=acfg)
+    if mode == "probing":
       b["probe_entries_remaining"] = max(0, int(b.get("probe_entries_remaining") or 0) - 1)
-      b["updated_at"] = datetime.now(timezone.utc).isoformat()
+      b["updated_at"] = now.isoformat()
       buckets[key] = b
   state["buckets"] = buckets
   return state
@@ -322,15 +356,16 @@ def record_adaptive_probe_exit(
   entry_spread_cents: int | None,
   pnl_usd: float,
   cfg: dict[str, Any] | None,
+  kind: str = "hourly",
 ) -> dict[str, Any]:
   """After a probe-window exit, resume or re-pause the bucket."""
-  acfg = adaptive_calibration_cfg(cfg)
+  acfg = adaptive_calibration_cfg(cfg, kind=kind)
   state = dict(state or {"buckets": {}})
   buckets = dict(state.get("buckets") or {})
   now = datetime.now(timezone.utc)
   for key in _entry_bucket_keys(entry_price_cents, entry_spread_cents, acfg):
-    b = dict(buckets.get(key) or _default_bucket_state())
-    if str(b.get("state")) != "probing":
+    mode, b = _effective_bucket(buckets.get(key), now=now, acfg=acfg)
+    if mode != "probing":
       continue
     if float(pnl_usd) > 0:
       b["state"] = "normal"
@@ -365,20 +400,22 @@ def run_adaptive_calibration_for_store(
   store: Any,
   *,
   cfg: dict[str, Any] | None,
+  kind: str = "hourly",
 ) -> dict[str, Any]:
   """Refresh adaptive bucket state from a bot store trade log."""
-  acfg = adaptive_calibration_cfg(cfg)
+  acfg = adaptive_calibration_cfg(cfg, kind=kind)
   if not acfg["enabled"]:
-    return {"ok": False, "reason": "adaptive_calibration_disabled"}
+    return {"ok": False, "reason": "adaptive_calibration_disabled", "kind": kind}
   previous = store.get_adaptive_calibration()
   trades = store.list_trades(limit=5000)
-  updated = refresh_adaptive_buckets(trades, previous, cfg)
+  updated = refresh_adaptive_buckets(trades, previous, cfg, kind=kind)
   store.save_adaptive_calibration(updated)
   paused = sum(1 for b in (updated.get("buckets") or {}).values() if b.get("state") == "paused")
   probing = sum(1 for b in (updated.get("buckets") or {}).values() if b.get("state") == "probing")
   tightened = sum(1 for b in (updated.get("buckets") or {}).values() if b.get("state") == "tightened")
   return {
     "ok": True,
+    "kind": kind,
     "paused_buckets": paused,
     "probing_buckets": probing,
     "tightened_buckets": tightened,

@@ -128,6 +128,8 @@ intra_slot:
     reassess_neutral_take_profit: true
     reassess_neutral_band: 0.07
     reassess_neutral_min_unrealized_usd: 0.05
+    bot_adaptive_calibration:
+      enabled: false   # 15m: opt-in only (hour-scale bucket memory hurts bet frequency)
     entry_strategy:
       enabled: true
       kelly_enabled: true
@@ -354,7 +356,7 @@ bot_auto_tune:
   ask_edge_step: 1
   kelly_step: 0.02
 
-# Closed-loop bucket calibration: pause losing entry-price buckets, probe later
+# Closed-loop bucket calibration: pause losing entry-price buckets, probe later (hourly bots)
 bot_adaptive_calibration:
   enabled: true
   refresh_interval_minutes: 30
@@ -398,6 +400,8 @@ eth:
       cheap_leg_cut_cooldown_seconds: 180
       leg_stop_loss_cents: 8
       leg_stop_gate_min_remaining_seconds: 180
+      bot_adaptive_calibration:
+        enabled: false
   daily:
     enabled: true
     threshold_series: [KXETHD]

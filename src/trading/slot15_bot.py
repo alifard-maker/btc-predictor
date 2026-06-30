@@ -626,9 +626,10 @@ class Slot15Bot:
       entry_spread_cents=None,
       pnl_usd=pnl_usd,
       cfg=cfg,
+      kind="slot15",
     )
     self.store.save_adaptive_calibration(state)
-    run_adaptive_calibration_for_store(self.store, cfg=cfg)
+    run_adaptive_calibration_for_store(self.store, cfg=cfg, kind="slot15")
 
   def _adaptive_after_enter(
     self,
@@ -641,6 +642,7 @@ class Slot15Bot:
       entry_price_cents=entry_price_cents,
       entry_spread_cents=entry_spread_cents,
       cfg=cfg,
+      kind="slot15",
     )
     self.store.save_adaptive_calibration(state)
 
@@ -753,6 +755,7 @@ class Slot15Bot:
         entry_price_cents=est_adaptive,
         entry_spread_cents=None,
         cfg=cfg,
+        kind="slot15",
         aggressive=settings.aggressive_entries,
       )
       if not ok_adapt:

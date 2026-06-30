@@ -1616,7 +1616,7 @@ class PredictionLoop:
       if asset == "eth" and kind == "slot15" and not self._slot15m_enabled("eth"):
         continue
       try:
-        out = run_adaptive_calibration_for_store(store, cfg=bot_cfg)
+        out = run_adaptive_calibration_for_store(store, cfg=bot_cfg, kind=kind)
         out["kind"] = kind
         out["asset"] = asset
         results.append(out)
