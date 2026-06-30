@@ -650,6 +650,25 @@ def eth_hourly_late_call_now(
   return out
 
 
+def _maybe_close_paper_positions_on_live_switch(
+  store,
+  *,
+  current_mode: str,
+  new_mode: str,
+  body: dict[str, Any],
+) -> int:
+  if current_mode != "paper" or new_mode != "live":
+    return 0
+  if not body.get("close_paper_positions", True):
+    return 0
+  event_ticker = body.get("event_ticker") or getattr(store, "_last_period_key", None)
+  if not event_ticker:
+    return 0
+  from src.trading.bot_period_rollover import close_paper_positions_for_period
+
+  return len(close_paper_positions_for_period(store, event_ticker))
+
+
 def _apply_hourly_bot_settings(
   store,
   body: dict[str, Any],
@@ -710,11 +729,20 @@ def _apply_hourly_bot_settings(
     raise HTTPException(400, "max_spend_per_hour_usd must be >= 0")
   if not 0 <= settings.profit_use_pct <= 100:
     raise HTTPException(400, "profit_use_pct must be between 0 and 100")
+  closed_paper = _maybe_close_paper_positions_on_live_switch(
+    store,
+    current_mode=current.mode,
+    new_mode=mode,
+    body=body,
+  )
   old_cap = current.max_spend_per_hour_usd
   store.save_settings(settings, source="dashboard", cfg=cfg or _cfg)
   if settings.max_spend_per_hour_usd > old_cap:
     store.sync_paper_cap_on_max_increase(old_cap, settings.max_spend_per_hour_usd)
-  return settings.to_dict()
+  out = settings.to_dict()
+  if closed_paper:
+    out["paper_positions_closed"] = closed_paper
+  return out
 
 
 def _apply_slot15_bot_settings(
@@ -777,11 +805,20 @@ def _apply_slot15_bot_settings(
     raise HTTPException(400, "max_spend_per_slot_usd must be >= 0")
   if not 0 <= settings.profit_use_pct <= 100:
     raise HTTPException(400, "profit_use_pct must be between 0 and 100")
+  closed_paper = _maybe_close_paper_positions_on_live_switch(
+    store,
+    current_mode=current.mode,
+    new_mode=mode,
+    body=body,
+  )
   old_cap = current.max_spend_per_slot_usd
   store.save_settings(settings, source="dashboard", cfg=cfg or _cfg)
   if settings.max_spend_per_slot_usd > old_cap:
     store.sync_paper_cap_on_max_increase(old_cap, settings.max_spend_per_slot_usd)
-  return settings.to_dict()
+  out = settings.to_dict()
+  if closed_paper:
+    out["paper_positions_closed"] = closed_paper
+  return out
 
 
 @app.get("/api/hourly/bot")

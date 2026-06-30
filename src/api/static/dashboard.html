@@ -2385,6 +2385,44 @@
       return `<span class="${cls}">${n >= 0 ? '+' : ''}$${n.toFixed(2)}</span>`;
     }
 
+    function botModeBadge(mode) {
+      const m = (mode || 'paper').toLowerCase();
+      const cls = m === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
+      return `<span class="${cls}" style="font-size:.68rem;letter-spacing:.03em">${m.toUpperCase()}</span>`;
+    }
+
+    function botAtRiskHtml(bot) {
+      const live = Number(bot?.open_exposure_live_usd ?? 0);
+      const paper = Number(bot?.open_exposure_paper_usd ?? 0);
+      const total = Number(bot?.open_exposure_usd ?? (live + paper));
+      if (live > 0 && paper > 0) {
+        return `$${live.toFixed(2)} live · $${paper.toFixed(2)} paper`;
+      }
+      if (live > 0) return `$${live.toFixed(2)} live`;
+      if (paper > 0) return `$${paper.toFixed(2)} paper`;
+      return `$${total.toFixed(2)}`;
+    }
+
+    function confirmPaperCloseBeforeLive(bot, periodLabel) {
+      const paperExp = Number(bot?.open_exposure_paper_usd ?? 0);
+      const paperN = (bot?.open_positions || []).filter(
+        (p) => (p.mode || 'paper').toLowerCase() === 'paper'
+      ).length;
+      if (paperExp <= 0 && paperN <= 0) return true;
+      const nLabel = paperN > 0 ? `${paperN} paper position(s)` : 'Paper exposure';
+      return confirm(
+        `${nLabel} open this ${periodLabel} ($${paperExp.toFixed(2)} at risk). ` +
+        'Switching to LIVE will close them at current marks. Continue?'
+      );
+    }
+
+    function attachLiveSwitchBody(body, bot) {
+      if (body.mode !== 'live') return body;
+      body.close_paper_positions = true;
+      if (bot?.event_ticker) body.event_ticker = bot.event_ticker;
+      return body;
+    }
+
     function botAutoStopBanner(bot, periodLabel, kind, asset) {
       if (!bot || !bot.auto_stopped) return '';
       const raw = bot.auto_stop_reason || '';
@@ -3061,6 +3099,7 @@
           <td>${time(t.created_at)}</td>
           <td class="${evtCls}" style="font-size:.65rem">${evt}</td>
           <td>${act}</td>
+          <td>${botModeBadge(t.mode)}</td>
           <td class="${st}">${t.status}</td>
           <td style="font-size:.68rem">${mkt}</td>
           <td>${botCents(entryC)}</td>
@@ -3109,13 +3148,13 @@
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
           <div class="bot-stat"><span class="muted" title="${s.mode === 'paper' ? 'Persistent paper capital' : 'Max cap + realized P&amp;L this slot'}">${s.mode === 'paper' ? 'Paper bankroll' : 'Slot bankroll'}</span><strong>$${Number(bot.slot_bankroll_usd ?? (Number(s.max_spend_per_slot_usd || 25) + realized)).toFixed(2)}</strong></div>
-          <div class="bot-stat"><span class="muted">At risk now</span><strong>$${Number(exposure).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">At risk now</span><strong>${botAtRiskHtml(bot)}</strong></div>
           <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
         <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log persists across setting changes. Use <strong>Fresh start</strong> to clear it.</p>
-        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Slot</th><th>Action</th><th>Status</th><th>Signal</th><th>Entry</th><th>Book @ entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
+        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Slot</th><th>Action</th><th>Mode</th><th>Status</th><th>Signal</th><th>Entry</th><th>Book @ entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
     }
@@ -3133,6 +3172,10 @@
       }
       if (targetId === `bot-live-${p}` && live.checked) {
         paper.checked = false;
+        if (!confirmPaperCloseBeforeLive(lastSlot15BotStatus[asset], 'slot')) {
+          revertBotModeToPaper(p);
+          return;
+        }
         const pwd = promptLivePassword();
         if (!pwd) {
           revertBotModeToPaper(p);
@@ -3164,6 +3207,7 @@
         aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
       if (body.mode === 'live' && livePassword) body.live_password = livePassword;
+      attachLiveSwitchBody(body, lastSlot15BotStatus[asset]);
       const previousKnown = lastKnownBotSettings[key];
       pendingBotPatch[key] = normalizeBotSettings(body, maxKey);
       try {
@@ -3261,6 +3305,7 @@
           <td>${time(t.created_at)}</td>
           <td class="${evtCls}" style="font-size:.65rem">${evt}</td>
           <td>${act}</td>
+          <td>${botModeBadge(t.mode)}</td>
           <td class="${st}">${t.status}</td>
           <td style="font-size:.68rem">${mkt}</td>
           <td>${botCents(entryC)}</td>
@@ -3309,13 +3354,13 @@
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
           <div class="bot-stat"><span class="muted" title="${s.mode === 'paper' ? 'Persistent paper capital' : 'Max cap + realized P&amp;L this hour'}">${s.mode === 'paper' ? 'Paper bankroll' : 'Hour bankroll'}</span><strong>$${Number(bot.hour_bankroll_usd ?? (Number(s.max_spend_per_hour_usd || 25) + realized)).toFixed(2)}</strong></div>
-          <div class="bot-stat"><span class="muted">At risk now</span><strong>$${Number(exposure).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">At risk now</span><strong>${botAtRiskHtml(bot)}</strong></div>
           <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
         <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log persists across setting changes. Use <strong>Fresh start</strong> to clear it.</p>
-        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Hour</th><th>Action</th><th>Status</th><th>Contract</th><th>Entry</th><th>Book @ entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
+        ${trades ? `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Hour</th><th>Action</th><th>Mode</th><th>Status</th><th>Contract</th><th>Entry</th><th>Book @ entry</th><th>Exit</th><th>P&amp;L</th><th>Detail</th></tr></thead><tbody>${trades}</tbody></table></div>` : `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${emptyLog}</p>`}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
     }
@@ -3334,6 +3379,11 @@
       }
       if (targetId === `bot-live-${p}` && live.checked) {
         paper.checked = false;
+        const botCache = kind === 'hourly_trial' ? lastHourlyTrialBotStatus : lastBotStatus;
+        if (!confirmPaperCloseBeforeLive(botCache[asset], 'hour')) {
+          revertBotModeToPaper(p);
+          return;
+        }
         const pwd = promptLivePassword();
         if (!pwd) {
           revertBotModeToPaper(p);
@@ -3374,6 +3424,8 @@
         aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
       if (body.mode === 'live' && livePassword) body.live_password = livePassword;
+      const botCache = kind === 'hourly_trial' ? lastHourlyTrialBotStatus : lastBotStatus;
+      attachLiveSwitchBody(body, botCache[asset]);
       const previousKnown = lastKnownBotSettings[key];
       pendingBotPatch[key] = normalizeBotSettings(body, maxKey);
       try {

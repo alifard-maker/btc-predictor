@@ -219,6 +219,11 @@ class Slot15BotStore:
     for col in ("stop_order_id", "take_profit_order_id"):
       if pos_cols and col not in pos_cols:
         conn.execute(f"ALTER TABLE bot_positions ADD COLUMN {col} TEXT")
+    if pos_cols and "mode" not in pos_cols:
+      conn.execute("ALTER TABLE bot_positions ADD COLUMN mode TEXT NOT NULL DEFAULT 'paper'")
+      from src.trading.bot_position_mode import backfill_position_modes
+
+      backfill_position_modes(conn)
 
   def _init_db(self) -> None:
     with self._connect() as conn:
@@ -299,9 +304,24 @@ class Slot15BotStore:
       ).fetchall()
     return [dict(r) for r in rows]
 
-  def open_exposure_usd(self, event_ticker: str) -> float:
+  def open_exposure_usd(self, event_ticker: str, mode: str | None = None) -> float:
     positions = self.open_positions(event_ticker)
+    if mode:
+      from src.trading.bot_position_mode import normalize_position_mode
+
+      want = normalize_position_mode(mode)
+      positions = [p for p in positions if normalize_position_mode(p.get("mode")) == want]
     return round(sum(float(p.get("cost_usd") or 0) for p in positions), 2)
+
+  def open_exposure_by_mode_usd(self, event_ticker: str) -> dict[str, float]:
+    from src.trading.bot_position_mode import exposure_by_mode
+
+    paper, live, total = exposure_by_mode(self.open_positions(event_ticker))
+    return {
+      "paper": paper,
+      "live": live,
+      "total": total,
+    }
 
   def _exit_pnl_from_prices(row: dict[str, Any]) -> float | None:
     from src.trading.paper_execution import leg_pnl_usd
@@ -465,7 +485,7 @@ class Slot15BotStore:
       max_cap=max_slot,
       paper_bankroll_usd=paper,
       interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
-      open_exposure_usd=self.open_exposure_usd(event_ticker),
+      open_exposure_usd=self.open_exposure_usd(event_ticker, mode=settings.mode),
       interval_total_entered_usd=self._interval_total_entered_usd(event_ticker),
     )
 
@@ -574,6 +594,7 @@ class Slot15BotStore:
       "reference_price": pos.get("reference_price"),
       "stop_order_id": pos.get("stop_order_id"),
       "take_profit_order_id": pos.get("take_profit_order_id"),
+      "mode": pos.get("mode") or "paper",
       "opened_at": now,
       "status": "open",
     }
@@ -583,11 +604,11 @@ class Slot15BotStore:
         INSERT INTO bot_positions (
           id, event_ticker, market_ticker, side, contracts, entry_price_cents,
           cost_usd, signal, label, entry_edge, reference_price, stop_order_id,
-          take_profit_order_id, opened_at, status
+          take_profit_order_id, mode, opened_at, status
         ) VALUES (
           :id, :event_ticker, :market_ticker, :side, :contracts, :entry_price_cents,
           :cost_usd, :signal, :label, :entry_edge, :reference_price, :stop_order_id,
-          :take_profit_order_id, :opened_at, :status
+          :take_profit_order_id, :mode, :opened_at, :status
         )
         """,
         row,
@@ -831,7 +852,12 @@ class Slot15BotStore:
 
   def status(self, event_ticker: str | None = None) -> dict[str, Any]:
     settings = self.get_settings()
-    exposure = self.open_exposure_usd(event_ticker) if event_ticker else 0.0
+    exposure_split = self.open_exposure_by_mode_usd(event_ticker) if event_ticker else {
+      "paper": 0.0,
+      "live": 0.0,
+      "total": 0.0,
+    }
+    exposure = exposure_split["total"]
     max_cap = settings.max_spend_per_slot_usd
     bankroll = (
       self.slot_bankroll_usd(event_ticker, max_cap, settings)
@@ -853,6 +879,8 @@ class Slot15BotStore:
       "settings": settings.to_dict(),
       "event_ticker": event_ticker,
       "open_exposure_usd": round(exposure, 2),
+      "open_exposure_paper_usd": exposure_split["paper"],
+      "open_exposure_live_usd": exposure_split["live"],
       "slot_bankroll_usd": round(bankroll, 2),
       "remaining_usd": round(remaining, 2),
       "max_spend_per_slot_usd": max_cap,

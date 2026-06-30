@@ -51,6 +51,55 @@ def resolve_rollover_exit_cents(
   return int(pos["entry_price_cents"])
 
 
+def close_paper_positions_for_period(
+  store: Any,
+  event_ticker: str,
+) -> list[dict[str, Any]]:
+  """Close paper-tagged open legs when switching to live (current hour/slot only)."""
+  from src.trading.bot_position_mode import normalize_position_mode
+
+  results: list[dict[str, Any]] = []
+  for pos in store.open_positions(event_ticker):
+    if normalize_position_mode(pos.get("mode")) != "paper":
+      continue
+    entry_c = int(pos["entry_price_cents"])
+    contracts = int(pos["contracts"])
+    exit_price = int(pos.get("last_mark_cents") or entry_c)
+    pnl = exit_pnl_usd(
+      side=str(pos["side"]),
+      contracts=contracts,
+      entry_cents=entry_c,
+      exit_cents=exit_price,
+    )
+    store.close_position(pos["id"])
+    detail = (
+      f"Paper EXIT (SWITCH TO LIVE): {pos['side'].upper()} ×{contracts} "
+      f"@ {exit_price}¢ (entry {entry_c}¢) — closed paper leg before live mode"
+    )
+    row = store.log_trade({
+      "event_ticker": event_ticker,
+      "trigger": "mode_switch",
+      "action": "exit",
+      "mode": "paper",
+      "market_ticker": pos.get("market_ticker"),
+      "side": pos["side"],
+      "contracts": contracts,
+      "price_cents": exit_price,
+      "entry_price_cents": entry_c,
+      "exit_price_cents": exit_price,
+      "cost_usd": 0,
+      "pnl_usd": pnl,
+      "signal": pos.get("signal"),
+      "label": pos.get("label"),
+      "status": "filled",
+      "detail": detail,
+      "position_id": pos["id"],
+    })
+    log.info("Paper leg closed on live switch: %s", detail)
+    results.append(row)
+  return results
+
+
 def force_close_period_positions(
   store: Any,
   prev_period_key: str,
@@ -80,11 +129,14 @@ def force_close_period_positions(
         f"Paper EXIT (PERIOD ROLLOVER): {pos['side'].upper()} ×{contracts} "
         f"@ {exit_price}¢ (entry {entry_c}¢) — forced close at {log_label} end"
       )
+    from src.trading.bot_position_mode import normalize_position_mode
+
+    pos_mode = normalize_position_mode(pos.get("mode") or settings.mode)
     row = store.log_trade({
       "event_ticker": prev_period_key,
       "trigger": "period_rollover",
       "action": "exit",
-      "mode": settings.mode,
+      "mode": pos_mode,
       "market_ticker": pos.get("market_ticker"),
       "side": pos["side"],
       "contracts": contracts,

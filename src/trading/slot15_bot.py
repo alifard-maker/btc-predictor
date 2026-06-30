@@ -520,9 +520,12 @@ class Slot15Bot:
       )
 
       pnl_rounded = round(pnl, 2)
-      mode_label = "Paper" if settings.mode == "paper" else "Live"
+      from src.trading.bot_position_mode import normalize_position_mode
+
+      pos_mode = normalize_position_mode(pos.get("mode"))
+      mode_label = "Live" if pos_mode == "live" else "Paper"
       live_exit_oid = None
-      if settings.mode == "live":
+      if pos_mode == "live":
         cancel_resting_orders(self.kalshi, pos)
         live_exit_oid = place_live_exit_sell(
           self.kalshi,
@@ -560,7 +563,7 @@ class Slot15Bot:
         "event_ticker": slot_key,
         "trigger": "continuous",
         "action": "exit",
-        "mode": settings.mode,
+        "mode": pos_mode,
         "market_ticker": pos["market_ticker"],
         "side": pos["side"],
         "contracts": contracts,
@@ -882,6 +885,7 @@ class Slot15Bot:
           "label": pick.get("label"),
           "entry_edge": pick.get("edge"),
           "reference_price": ref,
+          "mode": "paper",
         })
         detail = (
           f"Paper ENTER: {side.upper()} ×{count} @ {price_cents}¢ "
@@ -988,6 +992,7 @@ class Slot15Bot:
         "entry_edge": pick.get("edge"),
         "stop_order_id": bracket.get("stop_order_id"),
         "take_profit_order_id": bracket.get("take_profit_order_id"),
+        "mode": "live",
       })
       bracket_note = ""
       if bracket.get("stop_order_id") or bracket.get("take_profit_order_id"):
