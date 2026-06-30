@@ -42,8 +42,8 @@ def compute_interval_performance(
     f"""
     SELECT
       event_ticker,
-      COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN COALESCE(pnl_usd, 0) ELSE 0 END), 0) AS realized_pnl_usd,
-      COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS exit_count,
+      COALESCE(SUM(CASE WHEN action = 'exit' AND status IN ('filled', 'reconciled') THEN COALESCE(pnl_usd, 0) ELSE 0 END), 0) AS realized_pnl_usd,
+      COALESCE(SUM(CASE WHEN action = 'exit' AND status IN ('filled', 'reconciled') THEN 1 ELSE 0 END), 0) AS exit_count,
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
       MIN(created_at) AS first_trade_at
     FROM bot_trades

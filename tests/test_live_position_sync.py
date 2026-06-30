@@ -264,12 +264,24 @@ def test_reconcile_close_stale_live_leg_logs_and_closes():
       "mode": "live",
       "label": "test leg",
     })
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "status": "resting",
+      "position_id": "p1",
+      "contracts": 2,
+      "entry_price_cents": 30,
+      "exit_price_cents": 18,
+      "price_cents": 18,
+    })
     row = reconcile_close_stale_live_leg(
       store=store,
       pos=store.open_positions("EV1")[0],
       period_key="EV1",
     )
     assert row["status"] == "reconciled"
+    assert row["pnl_usd"] == -0.24
+    assert "loss" in row["detail"].lower()
     assert store.open_positions("EV1") == []
 
 

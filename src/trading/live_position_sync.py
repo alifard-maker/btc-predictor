@@ -194,6 +194,28 @@ def should_reconcile_close_live_leg(kalshi: Any, store: Any, pos: dict[str, Any]
   return sellable is not None and sellable <= 0
 
 
+def _inferred_exit_price_cents(store: Any, position_id: str) -> int | None:
+  """Best-effort exit price from a recent resting/filled exit row for this leg."""
+  with store._connect() as conn:
+    row = conn.execute(
+      """
+      SELECT exit_price_cents, price_cents FROM bot_trades
+      WHERE position_id = ? AND action = 'exit'
+        AND status IN ('resting', 'filled')
+        AND COALESCE(exit_price_cents, price_cents) IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+      """,
+      (position_id,),
+    ).fetchone()
+  if not row:
+    return None
+  val = row[0] if row[0] is not None else row[1]
+  try:
+    return int(val)
+  except (TypeError, ValueError):
+    return None
+
+
 def reconcile_close_stale_live_leg(
   *,
   store: Any,
@@ -204,15 +226,38 @@ def reconcile_close_stale_live_leg(
   extra_detail: str = "",
 ) -> dict[str, Any]:
   """Close a bot leg when Kalshi has no inventory (settled, sold elsewhere, or already flat)."""
+  from src.trading.paper_execution import leg_pnl_usd
+
   ticker = str(pos["market_ticker"])
   side = str(pos["side"])
   contracts = int(pos.get("contracts") or 0)
   entry_c = int(pos.get("entry_price_cents") or 0)
   pos_mode = normalize_position_mode(pos.get("mode"))
   pick = pick or {}
+  exit_c = _inferred_exit_price_cents(store, str(pos["id"]))
+  pnl_rounded = 0.0
+  if exit_c is not None and entry_c and contracts:
+    pnl_rounded = round(
+      float(
+        leg_pnl_usd(
+          entry_price_cents=entry_c,
+          mark_or_exit_cents=exit_c,
+          contracts=contracts,
+        )
+        or 0.0,
+      ),
+      2,
+    )
   store.close_position(str(pos["id"]))
-  detail = (
-    f"Live EXIT reconciled (no Kalshi inventory for {side.upper()} on {ticker}) — "
+  detail = f"Live EXIT reconciled"
+  if exit_c is not None:
+    detail += f" @ {exit_c}¢"
+    if pnl_rounded < -0.005:
+      detail += f" (loss ${abs(pnl_rounded):.2f})"
+    elif pnl_rounded > 0.005:
+      detail += f" (profit ${pnl_rounded:.2f})"
+  detail += (
+    f" (no Kalshi inventory for {side.upper()} on {ticker}) — "
     f"closed bot leg"
   )
   if extra_detail:
@@ -232,11 +277,11 @@ def reconcile_close_stale_live_leg(
     "market_ticker": ticker,
     "side": side,
     "contracts": contracts,
-    "price_cents": entry_c,
+    "price_cents": exit_c if exit_c is not None else entry_c,
     "entry_price_cents": entry_c,
-    "exit_price_cents": None,
+    "exit_price_cents": exit_c,
     "cost_usd": 0,
-    "pnl_usd": 0,
+    "pnl_usd": pnl_rounded,
     "signal": pick.get("signal"),
     "label": pos.get("label"),
     "status": "reconciled",

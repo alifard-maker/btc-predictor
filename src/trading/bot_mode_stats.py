@@ -5,6 +5,9 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+# Exits that close a leg and contribute to interval realized P&L.
+REALIZED_EXIT_STATUS_SQL = "status IN ('filled', 'reconciled')"
+
 
 def _mode_clause(mode: str | None, *, prefix: str = "") -> tuple[str, list[Any]]:
   if not mode:
@@ -22,9 +25,9 @@ def interval_summary_row(
   row = conn.execute(
     f"""
     SELECT
-      COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN COALESCE(pnl_usd, 0) ELSE 0 END), 0) AS realized_pnl_usd,
+      COALESCE(SUM(CASE WHEN action = 'exit' AND {REALIZED_EXIT_STATUS_SQL} THEN COALESCE(pnl_usd, 0) ELSE 0 END), 0) AS realized_pnl_usd,
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
-      COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS exit_count,
+      COALESCE(SUM(CASE WHEN action = 'exit' AND {REALIZED_EXIT_STATUS_SQL} THEN 1 ELSE 0 END), 0) AS exit_count,
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN COALESCE(cost_usd, 0) ELSE 0 END), 0) AS total_entered_usd,
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'resting' THEN 1 ELSE 0 END), 0) AS resting_enter_count,
       COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'resting' THEN 1 ELSE 0 END), 0) AS resting_exit_count
@@ -56,10 +59,10 @@ def mode_performance_summary(
   row = conn.execute(
     """
     SELECT
-      COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN COALESCE(pnl_usd, 0) ELSE 0 END), 0) AS realized_all_time_usd,
+      COALESCE(SUM(CASE WHEN action = 'exit' AND status IN ('filled', 'reconciled') THEN COALESCE(pnl_usd, 0) ELSE 0 END), 0) AS realized_all_time_usd,
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN COALESCE(cost_usd, 0) ELSE 0 END), 0) AS total_entered_all_time_usd,
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
-      COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS exit_count,
+      COALESCE(SUM(CASE WHEN action = 'exit' AND status IN ('filled', 'reconciled') THEN 1 ELSE 0 END), 0) AS exit_count,
       MIN(created_at) AS first_trade_at
     FROM bot_trades
     WHERE mode = ?

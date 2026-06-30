@@ -347,7 +347,7 @@ class Slot15BotStore:
         f"""
         SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
         FROM bot_trades
-        WHERE event_ticker = ? AND action = 'exit' AND status = 'filled'{clause}
+        WHERE event_ticker = ? AND action = 'exit' AND status IN ('filled', 'reconciled'){clause}
         """,
         [event_ticker, *params],
       ).fetchall()
