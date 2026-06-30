@@ -10,12 +10,14 @@ from src.trading.bot_budget import sync_max_spend_from_config
 from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip_reason, sync_auto_stop_for_risk
 from src.trading.bot_period_rollover import force_close_period_positions
 from src.trading.live_bracket_orders import (
-  cancel_resting_orders,
   cancel_resting_orders_for_ticker,
   place_live_bracket_orders,
-  place_live_exit_sell,
   resting_config_for_kind,
-  aggressive_exit_limit_cents,
+)
+from src.trading.live_position_sync import (
+  cancel_orphan_live_sell_orders,
+  live_open_tickers,
+  try_live_position_exit,
 )
 from src.trading.bot_entry_settings import hourly_entry_settings_snapshot
 from src.trading.bot_cheap_leg_cooldown import (
@@ -338,6 +340,14 @@ class HourlyBot:
     sync_max_spend_from_config(self.store, cfg=cfg)
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
     settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
+    if (
+      settings.mode == "live"
+      and self.kalshi
+      and getattr(self.kalshi, "authenticated", False)
+    ):
+      cancel_orphan_live_sell_orders(
+        self.kalshi, live_open_tickers(self.store, str(event_ticker)),
+      )
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []
@@ -649,59 +659,70 @@ class HourlyBot:
       mode_label = "Live" if pos_mode == "live" else "Paper"
       live_exit_oid = None
       if pos_mode == "live":
-        cancel_resting_orders(self.kalshi, pos)
-        cancel_resting_orders_for_ticker(self.kalshi, str(pos["market_ticker"]))
-        sell_cents = aggressive_exit_limit_cents(int(exit_price))
-        exit_result = place_live_exit_sell(
-          self.kalshi,
-          market_ticker=str(pos["market_ticker"]),
-          side=str(pos["side"]),
-          contracts=contracts,
-          limit_cents=sell_cents,
+        index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
+        exit_context = build_hourly_exit_context(
+          pos=pos,
+          pick=pick,
+          tab=tab,
+          live_price=float(price) if price is not None else None,
+          unrealized_pnl_usd=unrealized,
+          exit_reason=exit_reason,
+          position_alert=alert,
+          standard_hourly_alert=standard_alert,
+          bot_kind=self.kind,
+          hours_to_settle=float(hours_left) if hours_left is not None else None,
         )
-        live_exit_oid = exit_result.get("order_id")
-        fill_count = int(exit_result.get("fill_count") or 0)
-        if fill_count <= 0:
-          self.store.log_trade({
-            "event_ticker": event_ticker,
-            "trigger": "continuous",
-            "action": "exit",
-            "mode": pos_mode,
-            "market_ticker": pos["market_ticker"],
-            "side": pos["side"],
-            "contracts": contracts,
-            "price_cents": sell_cents,
-            "entry_price_cents": entry_c,
-            "exit_price_cents": sell_cents,
-            "cost_usd": 0,
-            "signal": pick.get("signal"),
-            "label": pos.get("label"),
-            "status": "resting",
-            "detail": (
-              f"Live EXIT order {live_exit_oid} (0 filled — resting on Kalshi; "
-              f"{int(exit_result.get('remaining_count') or contracts)} remaining) "
-              f"@ {sell_cents}¢"
-            ),
-            "position_id": pos["id"],
-            "kalshi_order_id": live_exit_oid,
-          })
+        vet_line = format_hourly_exit_context_detail(exit_context)
+        live_out = try_live_position_exit(
+          kalshi=self.kalshi,
+          store=self.store,
+          pos=pos,
+          period_key=event_ticker,
+          exit_price=int(exit_price),
+          contracts=contracts,
+          entry_c=entry_c,
+          pos_mode=pos_mode,
+          pick=pick,
+          exit_reason=exit_reason,
+          detail_suffix=str(detail_suffix),
+          extra_detail=f" · {vet_line}",
+        )
+        if live_out is None:
           continue
+        if "exit_result" not in live_out:
+          results.append(live_out)
+          continue
+        live_exit_oid = live_out["live_exit_oid"]
+        exit_price = int(live_out["sell_cents"])
+        contracts = int(live_out["sell_count"])
+        pnl_rounded = round(
+          float(
+            leg_pnl_usd(
+              entry_price_cents=entry_c,
+              mark_or_exit_cents=exit_price,
+              contracts=contracts,
+            )
+            or 0.0,
+          ),
+          2,
+        )
 
       self.store.close_position(pos["id"])
-      index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
-      exit_context = build_hourly_exit_context(
-        pos=pos,
-        pick=pick,
-        tab=tab,
-        live_price=float(price) if price is not None else None,
-        unrealized_pnl_usd=unrealized,
-        exit_reason=exit_reason,
-        position_alert=alert,
-        standard_hourly_alert=standard_alert,
-        bot_kind=self.kind,
-        hours_to_settle=float(hours_left) if hours_left is not None else None,
-      )
-      vet_line = format_hourly_exit_context_detail(exit_context)
+      if pos_mode != "live":
+        index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
+        exit_context = build_hourly_exit_context(
+          pos=pos,
+          pick=pick,
+          tab=tab,
+          live_price=float(price) if price is not None else None,
+          unrealized_pnl_usd=unrealized,
+          exit_reason=exit_reason,
+          position_alert=alert,
+          standard_hourly_alert=standard_alert,
+          bot_kind=self.kind,
+          hours_to_settle=float(hours_left) if hours_left is not None else None,
+        )
+        vet_line = format_hourly_exit_context_detail(exit_context)
       detail = (
         f"{mode_label} EXIT ({exit_reason}): {pos['side'].upper()} ×{contracts} "
         f"@ {exit_price}¢ (entry {entry_c}¢) — {detail_suffix} · {vet_line}"

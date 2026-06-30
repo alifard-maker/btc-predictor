@@ -81,3 +81,13 @@ def test_cancel_order_uses_v2_events_endpoint():
   req.assert_called_once_with(
     "DELETE", "/portfolio/events/orders/ord-1", auth=True, critical=True
   )
+
+
+def test_get_market_position_reads_portfolio_positions():
+  client = KalshiClient({"kalshi": {"key_id": "k", "private_key": ""}})
+  client._private_key = MagicMock()
+  with patch.object(client, "get", return_value={"market_positions": [{"ticker": "T1", "position": 2}]}) as get:
+    net = client.get_market_position("T1")
+  assert net == 2
+  get.assert_called_once()
+  assert get.call_args[0][0] == "/portfolio/positions"

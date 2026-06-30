@@ -8,12 +8,14 @@ from typing import Any
 
 from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip_reason, sync_auto_stop_for_risk
 from src.trading.live_bracket_orders import (
-  cancel_resting_orders,
   cancel_resting_orders_for_ticker,
   place_live_bracket_orders,
-  place_live_exit_sell,
   resting_config_for_kind,
-  aggressive_exit_limit_cents,
+)
+from src.trading.live_position_sync import (
+  cancel_orphan_live_sell_orders,
+  live_open_tickers,
+  try_live_position_exit,
 )
 from src.trading.bot_period_rollover import force_close_period_positions, resolve_rollover_exit_cents
 from src.trading.bot_entry_settings import slot15_entry_settings_snapshot
@@ -317,6 +319,14 @@ class Slot15Bot:
     settings, prev_period = self.store.sync_period(str(slot_key), self.store.get_settings())
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
     settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind="slot15")
+    if (
+      settings.mode == "live"
+      and self.kalshi
+      and getattr(self.kalshi, "authenticated", False)
+    ):
+      cancel_orphan_live_sell_orders(
+        self.kalshi, live_open_tickers(self.store, str(slot_key)),
+      )
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
       return []
@@ -528,43 +538,39 @@ class Slot15Bot:
       mode_label = "Live" if pos_mode == "live" else "Paper"
       live_exit_oid = None
       if pos_mode == "live":
-        cancel_resting_orders(self.kalshi, pos)
-        cancel_resting_orders_for_ticker(self.kalshi, str(pos["market_ticker"]))
-        sell_cents = aggressive_exit_limit_cents(int(exit_price))
-        exit_result = place_live_exit_sell(
-          self.kalshi,
-          market_ticker=str(pos["market_ticker"]),
-          side=str(pos["side"]),
+        live_out = try_live_position_exit(
+          kalshi=self.kalshi,
+          store=self.store,
+          pos=pos,
+          period_key=str(slot_key),
+          exit_price=int(exit_price),
           contracts=contracts,
-          limit_cents=sell_cents,
+          entry_c=entry_c,
+          pos_mode=pos_mode,
+          pick={"signal": monitor.get("signal_at_open") or pos.get("signal")},
+          exit_reason=exit_reason,
+          detail_suffix=str(detail_suffix),
+          extra_detail="",
         )
-        live_exit_oid = exit_result.get("order_id")
-        fill_count = int(exit_result.get("fill_count") or 0)
-        if fill_count <= 0:
-          self.store.log_trade({
-            "event_ticker": slot_key,
-            "trigger": "continuous",
-            "action": "exit",
-            "mode": pos_mode,
-            "market_ticker": pos["market_ticker"],
-            "side": pos["side"],
-            "contracts": contracts,
-            "price_cents": sell_cents,
-            "entry_price_cents": entry_c,
-            "exit_price_cents": sell_cents,
-            "cost_usd": 0,
-            "signal": pos.get("signal"),
-            "label": pos.get("label"),
-            "status": "resting",
-            "detail": (
-              f"Live EXIT order {live_exit_oid} (0 filled — resting on Kalshi; "
-              f"{int(exit_result.get('remaining_count') or contracts)} remaining) "
-              f"@ {sell_cents}¢"
-            ),
-            "position_id": pos["id"],
-            "kalshi_order_id": live_exit_oid,
-          })
+        if live_out is None:
           continue
+        if "exit_result" not in live_out:
+          results.append(live_out)
+          continue
+        live_exit_oid = live_out["live_exit_oid"]
+        exit_price = int(live_out["sell_cents"])
+        contracts = int(live_out["sell_count"])
+        pnl_rounded = round(
+          float(
+            leg_pnl_usd(
+              entry_price_cents=entry_c,
+              mark_or_exit_cents=exit_price,
+              contracts=contracts,
+            )
+            or 0.0,
+          ),
+          2,
+        )
 
       self.store.close_position(pos["id"])
       leg_alert = assess_slot15_leg_position_alert(

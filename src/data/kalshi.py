@@ -369,6 +369,30 @@ class KalshiClient:
         log.warning("Cancel resting order %s on %s failed: %s", oid, ticker, e)
     return cancelled
 
+  def get_market_position(self, ticker: str) -> int | None:
+    """Net YES position for one market (negative = NO). None on API error."""
+    if not self.authenticated:
+      return None
+    try:
+      data = self.get(
+        "/portfolio/positions",
+        params={"ticker": str(ticker), "limit": 1, "count_filter": "position"},
+        auth=True,
+      )
+    except Exception as e:
+      log.warning("Kalshi get position for %s failed: %s", ticker, e)
+      return None
+    rows = data.get("market_positions") if isinstance(data, dict) else None
+    if not rows:
+      return 0
+    row = rows[0] if isinstance(rows[0], dict) else None
+    if not row:
+      return 0
+    try:
+      return int(float(row.get("position") or 0))
+    except (TypeError, ValueError):
+      return 0
+
   def portfolio_balance(self, *, fresh: bool = False) -> dict[str, Any] | None:
     """Kalshi cash balance (cents); cached to limit /portfolio/balance polling."""
     if not self.authenticated:
