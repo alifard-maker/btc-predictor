@@ -52,3 +52,25 @@ class HourlyRegimeFilter:
 
     block = len(reasons) >= self.min_reasons_to_block
     return HourlyRegimeDecision(allow_trade=not block, reasons=reasons)
+
+
+def min_hours_to_settle_for_entry(cfg: dict[str, Any] | None) -> float:
+  """Minimum time left before hourly bot may open new legs (always enforced)."""
+  hourly = (cfg or {}).get("hourly") or {}
+  bot = hourly.get("bot") or {}
+  if "min_hours_to_settle_for_entry" in bot:
+    return float(bot["min_hours_to_settle_for_entry"])
+  regime = hourly.get("regime") or {}
+  return float(regime.get("min_hours_to_settle", 0.25))
+
+
+def entry_too_close_to_settle_skip_reason(
+  hours_to_settle: float | None,
+  cfg: dict[str, Any] | None,
+) -> str | None:
+  if hours_to_settle is None:
+    return None
+  min_h = min_hours_to_settle_for_entry(cfg)
+  if float(hours_to_settle) < min_h:
+    return "too_late_for_new_entries"
+  return None

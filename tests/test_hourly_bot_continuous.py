@@ -616,6 +616,49 @@ def test_skips_when_no_book_quotes_available():
     assert store.last_skip_reason() == "no_liquidity"
 
 
+def test_skips_new_entries_too_close_to_settle_even_in_free_mode():
+  """FREE mode ignores regime but must not open legs in the last minutes of the hour."""
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(regime_allow=True)
+    tab["live"]["hours_to_settle"] = 0.05
+    cfg = {
+      "hourly": {
+        "regime": {"min_hours_to_settle": 0.25},
+        "bot": {"min_hours_to_settle_for_entry": 0.25},
+        "intrahour": {"enabled": False},
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    assert actions == []
+    assert store.last_skip_reason() == "too_late_for_new_entries"
+
+
+def test_allows_entries_when_enough_time_to_settle():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(regime_allow=True)
+    tab["live"]["hours_to_settle"] = 0.5
+    cfg = {
+      "hourly": {
+        "regime": {"min_hours_to_settle": 0.25},
+        "bot": {"min_hours_to_settle_for_entry": 0.25},
+        "intrahour": {"enabled": False},
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    assert len(actions) == 1
+    assert actions[0]["action"] == "enter"
+
+
 def test_profit_target_exit_on_hold_alert():
   """30% mark gain on $10 leg exits at 25% threshold even when alert is HOLD."""
   with tempfile.TemporaryDirectory() as tmp:

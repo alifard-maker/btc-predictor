@@ -57,6 +57,7 @@ from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 from src.trading.hourly_exit_context import build_hourly_exit_context, format_hourly_exit_context_detail
 from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
 from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+from src.trading.hourly_regime import entry_too_close_to_settle_skip_reason
 from src.trading.hourly_trial_position_alert import assess_hourly_trial_leg_position_alert
 from src.trading.paper_execution import (
   entry_quote_log_fields,
@@ -774,6 +775,13 @@ class HourlyBot:
     )
     if idx_gate:
       self.store.set_last_skip_reason(idx_gate)
+      return results
+
+    settle_gate = entry_too_close_to_settle_skip_reason(
+      live.get("hours_to_settle"), cfg,
+    )
+    if settle_gate:
+      self.store.set_last_skip_reason(settle_gate)
       return results
 
     if settings.auto_stopped:
