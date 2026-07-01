@@ -32,8 +32,20 @@ def rolling_window_key(hours: float) -> str:
   return "last_1h" if h == 1 else f"last_{h}h"
 
 
+def _bot_report_label(kind: str, asset: str) -> str:
+  labels = {
+    "hourly_trial": f"{asset.upper()} Hourly Trial",
+    "hourly_trial_rally": f"{asset.upper()} Hourly Trial — Rally",
+    "hourly_trial_soft": f"{asset.upper()} Hourly Trial — Soft",
+    "hourly": f"{asset.upper()} Hourly",
+  }
+  return labels.get(kind, f"{asset.upper()} {kind}")
+
+
 def is_trial_bot_kind(kind: str) -> bool:
-  return kind == "hourly_trial"
+  from src.backtest.mechanics_profiles import is_hourly_trial_kind
+
+  return is_hourly_trial_kind(kind)
 
 
 def _bucket_label(value: int | None, buckets: tuple[tuple[int, int, str], ...]) -> str:
@@ -468,11 +480,7 @@ def build_bot_performance_report(
   out: dict[str, Any] = {
     "kind": kind,
     "asset": asset,
-    "label": (
-      f"{asset.upper()} Hourly Trial" if kind == "hourly_trial"
-      else f"{asset.upper()} Hourly" if kind == "hourly"
-      else f"{asset.upper()} {kind}"
-    ),
+    "label": _bot_report_label(kind, asset),
     "summary": sm,
     "by_entry_price": by_price,
     "by_spread": by_spread,
@@ -592,6 +600,8 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
   specs = (
     ("hourly", "btc", loop.hourly_bot_store("btc"), loop.cfg),
     ("hourly_trial", "btc", loop.hourly_trial_bot_store("btc"), loop.cfg),
+    ("hourly_trial_rally", "btc", loop.hourly_trial_rally_bot_store("btc"), loop.cfg),
+    ("hourly_trial_soft", "btc", loop.hourly_trial_soft_bot_store("btc"), loop.cfg),
     ("hourly", "eth", loop.hourly_bot_store("eth"), loop._eth_cfg or loop.cfg),
     ("hourly_trial", "eth", loop.hourly_trial_bot_store("eth"), loop._eth_cfg or loop.cfg),
     ("slot15", "btc", loop.slot15_bot_store("btc"), loop._acfg_15m("btc")),
@@ -604,8 +614,10 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
           continue
       except Exception:
         pass
+    from src.backtest.mechanics_profiles import entry_kind_for_bot
+
     tuning = store.get_auto_tuning()
-    entry_kind = "hourly" if kind == "hourly_trial" else kind
+    entry_kind = entry_kind_for_bot(kind)
     estrat = effective_entry_strategy(acfg, kind=entry_kind, tuning=tuning)
     settings = store.get_settings()
     max_spend = float(

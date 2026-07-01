@@ -442,7 +442,9 @@ class Slot15LegExitConfig:
 def _leg_exit_bot_cfg(cfg: dict[str, Any] | None, *, bot_kind: str) -> dict[str, Any]:
   if not cfg:
     return {}
-  if bot_kind == "hourly_trial":
+  from src.backtest.mechanics_profiles import is_hourly_trial_kind
+
+  if is_hourly_trial_kind(bot_kind):
     trial = (cfg.get("hourly") or {}).get("bot") or {}
     return dict(trial.get("trial") or {})
   return (cfg.get("intra_slot") or {}).get("bot") or {}
@@ -791,8 +793,10 @@ def evaluate_slot15_contract_exits(
   standard_hourly_alert: str | None = None,
 ) -> tuple[str | None, str]:
   """Contract-first exit chain for 15m / hourly-trial bots; optional slot-monitor fallback last."""
+  from src.backtest.mechanics_profiles import is_hourly_trial_kind
+
   leg_cfg = leg_exit_config(cfg, bot_kind=bot_kind)
-  gate_hourly = bot_kind == "hourly_trial"
+  gate_hourly = is_hourly_trial_kind(bot_kind)
   hours_to_settle = (
     float(exit_ctx.seconds_remaining) / 3600.0
     if exit_ctx.seconds_remaining is not None
@@ -828,7 +832,7 @@ def evaluate_slot15_contract_exits(
   if reason:
     return reason, detail
 
-  if bot_kind == "hourly_trial":
+  if is_hourly_trial_kind(bot_kind):
     reason, detail = evaluate_hourly_trial_neutral_take_profit(
       pos,
       unrealized_usd,

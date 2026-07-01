@@ -242,6 +242,8 @@ class PredictionLoop:
     stores: list[Any] = [
       self.hourly_bot_store("btc"),
       self.hourly_trial_bot_store("btc"),
+      self.hourly_trial_rally_bot_store("btc"),
+      self.hourly_trial_soft_bot_store("btc"),
       self.slot15_bot_store("btc"),
     ]
     if asset_enabled(self.cfg, "eth"):
@@ -298,6 +300,25 @@ class PredictionLoop:
   def _hourly_bot_key(self, kind: str, asset: str) -> str:
     return f"{kind}:{asset.lower()}"
 
+  def _hourly_bot_db_name(self, kind: str, asset: str) -> str:
+    if kind == "hourly_trial":
+      return f"hourly_trial_bot_{asset}.db"
+    if kind == "hourly_trial_rally":
+      return f"hourly_trial_rally_bot_{asset}.db"
+    if kind == "hourly_trial_soft":
+      return f"hourly_trial_soft_bot_{asset}.db"
+    return f"hourly_bot_{asset}.db"
+
+  def _hourly_bot_label(self, kind: str, label_asset: str) -> str:
+    labels = {
+      "hourly_trial": f"{label_asset} Hourly Trial",
+      "hourly_trial_rally": f"{label_asset} Hourly Trial — Rally",
+      "hourly_trial_soft": f"{label_asset} Hourly Trial — Soft",
+    }
+    if kind in labels:
+      return labels[kind]
+    return f"{label_asset} Hourly"
+
   def hourly_bot_store(self, asset: str, *, kind: str = "hourly"):
     asset = asset.lower()
     key = self._hourly_bot_key(kind, asset)
@@ -306,12 +327,18 @@ class PredictionLoop:
 
       acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
       logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
-      db_name = f"hourly_trial_bot_{asset}.db" if kind == "hourly_trial" else f"hourly_bot_{asset}.db"
+      db_name = self._hourly_bot_db_name(kind, asset)
       self._hourly_bot_stores[key] = HourlyBotStore(logs / db_name)
     return self._hourly_bot_stores[key]
 
   def hourly_trial_bot_store(self, asset: str):
     return self.hourly_bot_store(asset, kind="hourly_trial")
+
+  def hourly_trial_rally_bot_store(self, asset: str):
+    return self.hourly_bot_store(asset, kind="hourly_trial_rally")
+
+  def hourly_trial_soft_bot_store(self, asset: str):
+    return self.hourly_bot_store(asset, kind="hourly_trial_soft")
 
   def hourly_bot(self, asset: str, *, kind: str = "hourly"):
     asset = asset.lower()
@@ -326,6 +353,12 @@ class PredictionLoop:
 
   def hourly_trial_bot(self, asset: str):
     return self.hourly_bot(asset, kind="hourly_trial")
+
+  def hourly_trial_rally_bot(self, asset: str):
+    return self.hourly_bot(asset, kind="hourly_trial_rally")
+
+  def hourly_trial_soft_bot(self, asset: str):
+    return self.hourly_bot(asset, kind="hourly_trial_soft")
 
   def eth_hourly_bot_store(self):
     return self.hourly_bot_store("eth")
@@ -397,9 +430,13 @@ class PredictionLoop:
     status["asset"] = asset
     status["bot_kind"] = kind
     label_asset = "ETH" if asset == "eth" else "BTC"
-    status["bot_label"] = (
-      f"{label_asset} Hourly Trial" if kind == "hourly_trial" else f"{label_asset} Hourly"
-    )
+    status["bot_label"] = self._hourly_bot_label(kind, label_asset)
+    from src.backtest.mechanics_profiles import PROFILE_LABELS, mechanics_profile_for_kind
+
+    profile = mechanics_profile_for_kind(kind)
+    if profile:
+      status["mechanics_profile"] = profile
+      status["mechanics_profile_label"] = PROFILE_LABELS.get(profile, profile)
     status["recent_trades"] = store.list_trades(limit=100)
     status["hour_trades"] = (
       store.list_trades(limit=50, event_ticker=event_ticker) if event_ticker else []
@@ -521,6 +558,12 @@ class PredictionLoop:
   def hourly_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     return self.hourly_bot_status(asset, tab, kind="hourly_trial")
 
+  def hourly_trial_rally_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+    return self.hourly_bot_status(asset, tab, kind="hourly_trial_rally")
+
+  def hourly_trial_soft_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+    return self.hourly_bot_status(asset, tab, kind="hourly_trial_soft")
+
   def eth_hourly_trial_bot_status(self, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     return self.hourly_trial_bot_status("eth", tab)
 
@@ -564,7 +607,9 @@ class PredictionLoop:
       if tab.get("ok"):
         self.hourly_bot(asset, kind=kind).run_continuous_cycle(tab, cfg=acfg)
     except Exception as e:
-      label = "hourly trial" if kind == "hourly_trial" else "hourly"
+      from src.backtest.mechanics_profiles import is_hourly_trial_kind
+
+      label = "hourly trial" if is_hourly_trial_kind(kind) else "hourly"
       log.exception("%s %s bot continuous cycle failed: %s", asset.upper(), label, e)
     finally:
       store.record_cycle(active=active)
@@ -579,6 +624,12 @@ class PredictionLoop:
 
   def run_hourly_trial_bot_continuous(self) -> None:
     self._run_hourly_bot_continuous("btc", kind="hourly_trial")
+
+  def run_hourly_trial_rally_bot_continuous(self) -> None:
+    self._run_hourly_bot_continuous("btc", kind="hourly_trial_rally")
+
+  def run_hourly_trial_soft_bot_continuous(self) -> None:
+    self._run_hourly_bot_continuous("btc", kind="hourly_trial_soft")
 
   def run_eth_hourly_trial_bot_continuous(self) -> None:
     if not asset_enabled(self.cfg, "eth"):
@@ -1816,6 +1867,26 @@ class PredictionLoop:
           "interval",
           seconds=poll_sec,
           id="hourly_trial_bot_continuous_btc",
+          max_instances=1,
+        )
+      trial_rally_cfg = bot_cfg.get("trial_rally") or {}
+      if trial_rally_cfg.get("continuous_enabled", False):
+        poll_sec = int(trial_rally_cfg.get("poll_seconds", bot_cfg.get("poll_seconds", 10)))
+        scheduler.add_job(
+          self.run_hourly_trial_rally_bot_continuous,
+          "interval",
+          seconds=poll_sec,
+          id="hourly_trial_rally_bot_continuous_btc",
+          max_instances=1,
+        )
+      trial_soft_cfg = bot_cfg.get("trial_soft") or {}
+      if trial_soft_cfg.get("continuous_enabled", False):
+        poll_sec = int(trial_soft_cfg.get("poll_seconds", bot_cfg.get("poll_seconds", 10)))
+        scheduler.add_job(
+          self.run_hourly_trial_soft_bot_continuous,
+          "interval",
+          seconds=poll_sec,
+          id="hourly_trial_soft_bot_continuous_btc",
           max_instances=1,
         )
     if asset_enabled(self.cfg, "eth"):

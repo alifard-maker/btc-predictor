@@ -10,6 +10,18 @@ from src.trading.live_entry_price import LiveEntryPricingConfig
 
 MechanicsProfile = Literal["legacy", "mechanical_fixes", "current", "rally_only", "soft_rally"]
 
+HOURLY_TRIAL_KINDS = frozenset({
+  "hourly_trial",
+  "hourly_trial_rally",
+  "hourly_trial_soft",
+})
+
+_KIND_MECHANICS_PROFILE: dict[str, MechanicsProfile] = {
+  "hourly_trial": "current",
+  "hourly_trial_rally": "rally_only",
+  "hourly_trial_soft": "soft_rally",
+}
+
 PROFILE_LABELS: dict[str, str] = {
   "legacy": "Legacy (pre-084d7d1: cross-spread, no inventory/adaptive caps)",
   "mechanical_fixes": "Mechanical fixes only (084d7d1, no adaptive)",
@@ -17,6 +29,26 @@ PROFILE_LABELS: dict[str, str] = {
   "rally_only": "Rally-only (adaptive: entries only in rally mode; defense sits out)",
   "soft_rally": "Soft rally (rally mode full; defense: 1 YES threshold 40-80¢, edge≥15¢)",
 }
+
+
+def is_hourly_trial_kind(kind: str) -> bool:
+  return kind in HOURLY_TRIAL_KINDS
+
+
+def mechanics_profile_for_kind(kind: str) -> MechanicsProfile | None:
+  return _KIND_MECHANICS_PROFILE.get(kind)
+
+
+def entry_kind_for_bot(kind: str) -> str:
+  """Entry strategy / live guards use hourly mechanics for all trial bot kinds."""
+  return "hourly" if is_hourly_trial_kind(kind) else kind
+
+
+def cfg_with_profile_for_kind(cfg: dict[str, Any], kind: str) -> dict[str, Any]:
+  profile = mechanics_profile_for_kind(kind)
+  if profile:
+    return apply_mechanics_profile(cfg, profile)
+  return cfg
 
 
 def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> dict[str, Any]:

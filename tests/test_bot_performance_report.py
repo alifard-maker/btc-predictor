@@ -106,6 +106,8 @@ def test_rolling_hours_report_windows():
   assert rolling_window_key(1) == "last_1h"
   assert rolling_window_key(48) == "last_48h"
   assert is_trial_bot_kind("hourly_trial")
+  assert is_trial_bot_kind("hourly_trial_rally")
+  assert is_trial_bot_kind("hourly_trial_soft")
   assert not is_trial_bot_kind("hourly")
 
   now = datetime.now(timezone.utc)

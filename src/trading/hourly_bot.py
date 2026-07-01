@@ -94,6 +94,11 @@ from src.trading.hourly_regime import (
   entry_too_far_from_settle_skip_reason,
 )
 from src.trading.hourly_trial_position_alert import assess_hourly_trial_leg_position_alert
+from src.backtest.mechanics_profiles import (
+  cfg_with_profile_for_kind,
+  entry_kind_for_bot,
+  is_hourly_trial_kind,
+)
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
@@ -296,7 +301,7 @@ def enrich_open_positions_live(
   price = tab.get("brti_live") or live.get("current_price")
   hours_left = live.get("hours_to_settle")
   seconds_remaining = float(hours_left) * 3600.0 if hours_left is not None else None
-  is_trial = bot_kind == "hourly_trial"
+  is_trial = is_hourly_trial_kind(bot_kind)
   out: list[dict[str, Any]] = []
 
   for pos in positions:
@@ -382,6 +387,10 @@ class HourlyBot:
       self.store.set_last_skip_reason("missing_event_ticker")
       return []
 
+    if cfg is not None:
+      cfg = cfg_with_profile_for_kind(cfg, self.kind)
+    entry_kind = entry_kind_for_bot(self.kind)
+
     settings, prev_period = self.store.sync_period(str(event_ticker), self.store.get_settings())
     sync_max_spend_from_config(self.store, cfg=cfg)
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
@@ -400,7 +409,7 @@ class HourlyBot:
         tab=tab,
         settings_enabled=bool(settings.enabled),
         cfg=cfg,
-        kind=self.kind if self.kind != "hourly_trial" else "hourly",
+        kind=entry_kind,
       )
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")
@@ -568,7 +577,7 @@ class HourlyBot:
     standard_hourly_alert: str | None = None,
   ) -> tuple[str | None, str]:
     """Return (exit_reason, detail_suffix) or (None, '') if position should stay open."""
-    if self.kind == "hourly_trial":
+    if is_hourly_trial_kind(self.kind):
       trial_settings = effective_hourly_trial_settings(settings, cfg)
       return evaluate_slot15_contract_exits(
         pos=pos,
@@ -582,7 +591,7 @@ class HourlyBot:
         cfg=cfg,
         include_monitor_fallback=False,
         cut_loss_min_usd=CUT_LOSS_EXIT_MIN_LOSS_USD,
-        bot_kind="hourly_trial",
+        bot_kind=self.kind,
         pick=pick,
         live_price=live_price,
         standard_hourly_alert=standard_hourly_alert,
@@ -684,7 +693,7 @@ class HourlyBot:
 
       unrealized = _unrealized_pnl_usd(pos, exit_price)
       standard_alert = None
-      if self.kind == "hourly_trial":
+      if is_hourly_trial_kind(self.kind):
         standard = assess_held_hourly_position_alert(
           pos=pos,
           pick=pick,
@@ -776,7 +785,7 @@ class HourlyBot:
           detail_suffix=str(detail_suffix),
           extra_detail=f" · {vet_line}",
           cfg=cfg,
-          kind=self.kind if self.kind != "hourly_trial" else "hourly",
+          kind=entry_kind_for_bot(self.kind),
         )
         if live_out is None:
           continue
@@ -999,11 +1008,11 @@ class HourlyBot:
       tuning=self.store.get_auto_tuning(),
     )
     estrat = apply_live_inventory_guards(
-      estrat, cfg, mode=settings.mode, kind=self.kind if self.kind != "hourly_trial" else "hourly",
+      estrat, cfg, mode=settings.mode, kind=entry_kind_for_bot(self.kind),
     )
     estrat = apply_adaptive_passive_guards(estrat, adaptive, cfg)
     estrat = apply_live_exit_entry_guards(
-      estrat, cfg, mode=settings.mode, kind=self.kind if self.kind != "hourly_trial" else "hourly",
+      estrat, cfg, mode=settings.mode, kind=entry_kind_for_bot(self.kind),
     )
     ranked = rank_hourly_candidates(candidates, estrat=estrat)
     if not ranked:

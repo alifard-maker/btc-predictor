@@ -45,10 +45,13 @@ def live_entry_pricing_from_cfg(
     pricing = LiveEntryPricingConfig()
   elif kind == "slot15":
     pricing = LiveEntryPricingConfig.from_bot_cfg((cfg.get("slot15") or {}).get("bot"))
-  elif kind in ("hourly", "hourly_trial"):
-    pricing = LiveEntryPricingConfig.from_bot_cfg((cfg.get("hourly") or {}).get("bot"))
   else:
-    pricing = LiveEntryPricingConfig.from_bot_cfg(cfg.get("bot"))
+    from src.backtest.mechanics_profiles import entry_kind_for_bot
+
+    if entry_kind_for_bot(kind) == "hourly":
+      pricing = LiveEntryPricingConfig.from_bot_cfg((cfg.get("hourly") or {}).get("bot"))
+    else:
+      pricing = LiveEntryPricingConfig.from_bot_cfg(cfg.get("bot"))
   if aggressive:
     pricing = replace(pricing, cross_spread_min_edge_cents=10.0)
   else:

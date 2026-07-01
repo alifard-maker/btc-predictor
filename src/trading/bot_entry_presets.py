@@ -94,7 +94,9 @@ def effective_bot_entry_strategy(
   tuning: dict[str, Any] | None = None,
 ) -> EntryStrategyConfig:
   """Entry strategy from config, then passive/aggressive preset; auto-tune only when passive."""
-  entry_kind = kind if kind != "hourly_trial" else "hourly"
+  from src.backtest.mechanics_profiles import entry_kind_for_bot
+
+  entry_kind = entry_kind_for_bot(kind)
   base = entry_strategy_from_cfg(cfg, kind=entry_kind)
   preset_kind = "slot15" if kind == "slot15" else "hourly"
   estrat = replace(base, **_entry_preset_map(preset_kind, aggressive))

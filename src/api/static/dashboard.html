@@ -500,8 +500,18 @@
       </div>
       <div class="card" id="btc-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
         <h2>BTC Hourly Trial</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same entries and market data as <strong>BTC hourly</strong> above, but exits use <strong>15m-style contract-first logic</strong> (+3¢ take-profit, −4¢ stop, leg trail). Separate paper bankroll and trade log for A/B comparison.</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>production ENTRY mechanics</strong> (<code>current</code> adaptive — same entry gates as live BTC Hourly above). Exits use <strong>15m-style leg TP/stop</strong> (+3¢ / −4¢, leg trail) for A/B vs live hourly exits.</p>
         <div id="btc-hourly-trial-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="btc-hourly-trial-rally-bot-card" style="border-color:rgba(234,88,12,.35)">
+        <h2>BTC Hourly Trial — Rally</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>rally-only</strong> entry profile — adaptive entries only in rally mode; defense sits out entirely. Same leg TP/stop exits as other trials. $15/hr max at-risk (set below).</p>
+        <div id="btc-hourly-trial-rally-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="btc-hourly-trial-soft-bot-card" style="border-color:rgba(14,165,233,.35)">
+        <h2>BTC Hourly Trial — Soft</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>soft rally</strong> entry profile — full rally entries; defense limited to 1 YES threshold leg (40–80¢ mid) with edge ≥15¢. Same leg TP/stop exits.</p>
+        <div id="btc-hourly-trial-soft-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="hourly-guide-card">
         <h2>How to read this tab</h2>
@@ -667,7 +677,20 @@
     let slot15FetchGen = 0;
     let hourlyGuideCheatOpen = false;
     const lastBotStatus = { btc: null, eth: null };
-    const lastHourlyTrialBotStatus = { btc: null, eth: null };
+    const lastHourlyTrialBotStatusByKey = {};
+    const HOURLY_TRIAL_KINDS = new Set(['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft']);
+    function isHourlyTrialKind(kind) { return HOURLY_TRIAL_KINDS.has(kind); }
+    function hourlyTrialKindsForAsset(asset) {
+      return asset === 'btc'
+        ? ['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft']
+        : ['hourly_trial'];
+    }
+    function getTrialBotCache(kind, asset) {
+      return lastHourlyTrialBotStatusByKey[botUiKey(kind, asset)] || null;
+    }
+    function setTrialBotCache(kind, asset, data) {
+      lastHourlyTrialBotStatusByKey[botUiKey(kind, asset)] = data;
+    }
     const lastSlot15BotStatus = { btc: null, eth: null };
     const lastKnownBotSettings = {};
     const pendingBotPatch = {};
@@ -1635,12 +1658,14 @@
           lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_hour_usd');
         }
         if (cached) renderHourlyBot(cached, asset);
-        const trialCached = lastHourlyTrialBotStatus[asset];
-        const trialKey = botUiKey('hourly_trial', asset);
-        if (trialCached?.settings && !pendingBotPatch[trialKey]) {
-          lastKnownBotSettings[trialKey] = normalizeBotSettings(trialCached.settings, 'max_spend_per_hour_usd');
+        for (const trialKind of hourlyTrialKindsForAsset(asset)) {
+          const trialCached = getTrialBotCache(trialKind, asset);
+          const trialKey = botUiKey(trialKind, asset);
+          if (trialCached?.settings && !pendingBotPatch[trialKey]) {
+            lastKnownBotSettings[trialKey] = normalizeBotSettings(trialCached.settings, 'max_spend_per_hour_usd');
+          }
+          if (trialCached) renderHourlyBot(trialCached, asset, trialKind);
         }
-        if (trialCached) renderHourlyBot(trialCached, asset, 'hourly_trial');
         loadDaily();
         return;
       }
@@ -2062,26 +2087,74 @@
     }
 
     function hourlyBotStatusUrl(asset, kind = 'hourly') {
-      if (kind === 'hourly_trial') {
-        return asset === 'eth' ? '/api/eth/hourly-trial/bot' : '/api/hourly-trial/bot';
-      }
+      if (isHourlyTrialKind(kind)) return hourlyTrialBotStatusUrl(asset, kind);
       return asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
     }
 
-    function hourlyTrialBotSettingsUrl(asset) {
-      return asset === 'eth' ? '/api/eth/hourly-trial/bot/settings' : '/api/hourly-trial/bot/settings';
+    const HOURLY_TRIAL_API = {
+      hourly_trial: '/api/hourly-trial/bot',
+      hourly_trial_rally: '/api/hourly-trial-rally/bot',
+      hourly_trial_soft: '/api/hourly-trial-soft/bot',
+    };
+    const ETH_HOURLY_TRIAL_API = {
+      hourly_trial: '/api/eth/hourly-trial/bot',
+    };
+    const HOURLY_TRIAL_SETTINGS_API = {
+      hourly_trial: '/api/hourly-trial/bot/settings',
+      hourly_trial_rally: '/api/hourly-trial-rally/bot/settings',
+      hourly_trial_soft: '/api/hourly-trial-soft/bot/settings',
+    };
+    const ETH_HOURLY_TRIAL_SETTINGS_API = {
+      hourly_trial: '/api/eth/hourly-trial/bot/settings',
+    };
+    const HOURLY_TRIAL_RESET_API = {
+      hourly_trial: '/api/hourly-trial/bot/reset-bankroll',
+      hourly_trial_rally: '/api/hourly-trial-rally/bot/reset-bankroll',
+      hourly_trial_soft: '/api/hourly-trial-soft/bot/reset-bankroll',
+    };
+    const ETH_HOURLY_TRIAL_RESET_API = {
+      hourly_trial: '/api/eth/hourly-trial/bot/reset-bankroll',
+    };
+    const HOURLY_TRIAL_FRESH_API = {
+      hourly_trial: '/api/hourly-trial/bot/fresh-start',
+      hourly_trial_rally: '/api/hourly-trial-rally/bot/fresh-start',
+      hourly_trial_soft: '/api/hourly-trial-soft/bot/fresh-start',
+    };
+    const ETH_HOURLY_TRIAL_FRESH_API = {
+      hourly_trial: '/api/eth/hourly-trial/bot/fresh-start',
+    };
+    const HOURLY_TRIAL_CLEAR_API = {
+      hourly_trial: '/api/hourly-trial/bot/clear-history',
+      hourly_trial_rally: '/api/hourly-trial-rally/bot/clear-history',
+      hourly_trial_soft: '/api/hourly-trial-soft/bot/clear-history',
+    };
+    const ETH_HOURLY_TRIAL_CLEAR_API = {
+      hourly_trial: '/api/eth/hourly-trial/bot/clear-history',
+    };
+
+    function hourlyTrialBotStatusUrl(asset, kind = 'hourly_trial') {
+      if (asset === 'eth') return ETH_HOURLY_TRIAL_API[kind] || ETH_HOURLY_TRIAL_API.hourly_trial;
+      return HOURLY_TRIAL_API[kind] || HOURLY_TRIAL_API.hourly_trial;
     }
 
-    function hourlyTrialBotResetBankrollUrl(asset) {
-      return asset === 'eth' ? '/api/eth/hourly-trial/bot/reset-bankroll' : '/api/hourly-trial/bot/reset-bankroll';
+    function hourlyTrialBotSettingsUrl(asset, kind = 'hourly_trial') {
+      if (asset === 'eth') return ETH_HOURLY_TRIAL_SETTINGS_API[kind] || ETH_HOURLY_TRIAL_SETTINGS_API.hourly_trial;
+      return HOURLY_TRIAL_SETTINGS_API[kind] || HOURLY_TRIAL_SETTINGS_API.hourly_trial;
     }
 
-    function hourlyTrialBotFreshStartUrl(asset) {
-      return asset === 'eth' ? '/api/eth/hourly-trial/bot/fresh-start' : '/api/hourly-trial/bot/fresh-start';
+    function hourlyTrialBotResetBankrollUrl(asset, kind = 'hourly_trial') {
+      if (asset === 'eth') return ETH_HOURLY_TRIAL_RESET_API[kind] || ETH_HOURLY_TRIAL_RESET_API.hourly_trial;
+      return HOURLY_TRIAL_RESET_API[kind] || HOURLY_TRIAL_RESET_API.hourly_trial;
     }
 
-    function hourlyTrialBotClearHistoryUrl(asset) {
-      return asset === 'eth' ? '/api/eth/hourly-trial/bot/clear-history' : '/api/hourly-trial/bot/clear-history';
+    function hourlyTrialBotFreshStartUrl(asset, kind = 'hourly_trial') {
+      if (asset === 'eth') return ETH_HOURLY_TRIAL_FRESH_API[kind] || ETH_HOURLY_TRIAL_FRESH_API.hourly_trial;
+      return HOURLY_TRIAL_FRESH_API[kind] || HOURLY_TRIAL_FRESH_API.hourly_trial;
+    }
+
+    function hourlyTrialBotClearHistoryUrl(asset, kind = 'hourly_trial') {
+      if (asset === 'eth') return ETH_HOURLY_TRIAL_CLEAR_API[kind] || ETH_HOURLY_TRIAL_CLEAR_API.hourly_trial;
+      return HOURLY_TRIAL_CLEAR_API[kind] || HOURLY_TRIAL_CLEAR_API.hourly_trial;
     }
 
     function mergeHourSummary(prev, next, eventTicker) {
@@ -2142,13 +2215,28 @@
       return merged;
     }
 
-    function mergeHourlyTrialBotStatus(asset, incoming) {
+    function botForceKey(kind, asset) {
+      return isHourlyTrialKind(kind) ? botUiKey(kind, asset) : asset;
+    }
+
+    function hourlyTrialKindLabel(kind) {
+      if (kind === 'hourly_trial_rally') return 'hourly trial rally';
+      if (kind === 'hourly_trial_soft') return 'hourly trial soft';
+      if (kind === 'hourly_trial') return 'hourly trial';
+      return kind;
+    }
+
+    function hourlyBotCache(kind, asset) {
+      return isHourlyTrialKind(kind) ? getTrialBotCache(kind, asset) : lastBotStatus[asset];
+    }
+
+    function mergeHourlyTrialBotStatus(asset, incoming, kind = 'hourly_trial') {
       if (!incoming || !incoming.ok || (incoming.asset && incoming.asset !== asset)) {
-        return lastHourlyTrialBotStatus[asset];
+        return getTrialBotCache(kind, asset);
       }
-      const prev = lastHourlyTrialBotStatus[asset];
+      const prev = getTrialBotCache(kind, asset);
       if (!prev) {
-        lastHourlyTrialBotStatus[asset] = incoming;
+        setTrialBotCache(kind, asset, incoming);
         return incoming;
       }
       const eventTicker = incoming.event_ticker
@@ -2161,33 +2249,39 @@
         ...prev,
         ...incoming,
         event_ticker: eventTicker,
-        settings: mergeBotSettingsForCache('hourly_trial', asset, incoming.settings, prev.settings),
+        settings: mergeBotSettingsForCache(kind, asset, incoming.settings, prev.settings),
         hour_summary: mergedHs,
         hourly_summary: mergedHs,
         open_positions: incoming.open_positions ?? prev.open_positions,
         recent_trades: incoming.recent_trades ?? prev.recent_trades,
       };
-      lastHourlyTrialBotStatus[asset] = merged;
+      setTrialBotCache(kind, asset, merged);
       return merged;
     }
 
     const botForceSettingsRender = { btc: true, eth: true };
-    const hourlyTrialForceSettingsRender = { btc: true, eth: true };
+    const hourlyTrialForceSettingsRender = {};
     const slot15BotForceSettingsRender = { btc: true, eth: true };
 
     function botDomPrefix(kind, asset) {
       if (kind === 'slot15') return `slot15-${asset}`;
-      if (kind === 'hourly_trial') return `trial-${asset}`;
+      if (kind === 'hourly_trial_rally') return `trial-rally-${asset}`;
+      if (kind === 'hourly_trial_soft') return `trial-soft-${asset}`;
+      if (isHourlyTrialKind(kind)) return `trial-${asset}`;
       return asset;
     }
 
     function hourlyBotSettingsWrapId(kind, asset) {
-      if (kind === 'hourly_trial') return `${asset}-hourly-trial-bot-settings`;
+      if (kind === 'hourly_trial_rally') return `${asset}-hourly-trial-rally-bot-settings`;
+      if (kind === 'hourly_trial_soft') return `${asset}-hourly-trial-soft-bot-settings`;
+      if (isHourlyTrialKind(kind)) return `${asset}-hourly-trial-bot-settings`;
       return `${asset}-hourly-bot-settings`;
     }
 
     function hourlyBotPanelId(kind, asset) {
-      if (kind === 'hourly_trial') return `${asset}-hourly-trial-bot`;
+      if (kind === 'hourly_trial_rally') return `${asset}-hourly-trial-rally-bot`;
+      if (kind === 'hourly_trial_soft') return `${asset}-hourly-trial-soft-bot`;
+      if (isHourlyTrialKind(kind)) return `${asset}-hourly-trial-bot`;
       return `${asset}-hourly-bot`;
     }
 
@@ -2216,14 +2310,14 @@
 
     function botSettingsHtml(asset, s, kind = 'hourly') {
       const p = botDomPrefix(kind, asset);
-      const saveFn = kind === 'hourly_trial'
-        ? `saveHourlyTrialBotSettings('${asset}')`
+      const saveFn = isHourlyTrialKind(kind)
+        ? `saveHourlyTrialBotSettings('${asset}', undefined, '${kind}')`
         : `saveHourlyBotSettings('${asset}')`;
-      const modeFn = kind === 'hourly_trial'
-        ? `onBotModeToggle('${asset}', event, 'hourly_trial')`
+      const modeFn = isHourlyTrialKind(kind)
+        ? `onBotModeToggle('${asset}', event, '${kind}')`
         : `onBotModeToggle('${asset}', event)`;
-      const profitsFn = kind === 'hourly_trial'
-        ? `onBotUseProfitsToggle('${asset}', 'hourly_trial')`
+      const profitsFn = isHourlyTrialKind(kind)
+        ? `onBotUseProfitsToggle('${asset}', '${kind}')`
         : `onBotUseProfitsToggle('${asset}', 'hourly')`;
       return `
         <div class="bot-row">
@@ -2355,9 +2449,9 @@
 
     async function resetPaperBankroll(period, asset, kind = 'hourly') {
       const url = period === 'hour'
-        ? (kind === 'hourly_trial' ? hourlyTrialBotResetBankrollUrl(asset) : hourlyBotResetBankrollUrl(asset))
+        ? (isHourlyTrialKind(kind) ? hourlyTrialBotResetBankrollUrl(asset, kind) : hourlyBotResetBankrollUrl(asset))
         : slot15BotResetBankrollUrl(asset);
-      const label = kind === 'hourly_trial' ? 'hourly trial' : (period === 'hour' ? 'hourly' : '15m');
+      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Reset ${asset.toUpperCase()} ${label} paper bankroll to max at-risk cap? Trade log is kept.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
@@ -2372,9 +2466,9 @@
 
     async function clearBotHistory(period, asset, kind = 'hourly') {
       const url = period === 'hour'
-        ? (kind === 'hourly_trial' ? hourlyTrialBotClearHistoryUrl(asset) : hourlyBotClearHistoryUrl(asset))
+        ? (isHourlyTrialKind(kind) ? hourlyTrialBotClearHistoryUrl(asset, kind) : hourlyBotClearHistoryUrl(asset))
         : slot15BotClearHistoryUrl(asset);
-      const label = kind === 'hourly_trial' ? 'hourly trial' : (period === 'hour' ? 'hourly' : '15m');
+      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Clear ${asset.toUpperCase()} ${label} bot history?\n\nRemoves trade log and open bot legs from the server DB. Does not touch your Kalshi account or wallet.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
@@ -2389,9 +2483,9 @@
 
     async function freshStartPaperBot(period, asset, kind = 'hourly') {
       const url = period === 'hour'
-        ? (kind === 'hourly_trial' ? hourlyTrialBotFreshStartUrl(asset) : hourlyBotFreshStartUrl(asset))
+        ? (isHourlyTrialKind(kind) ? hourlyTrialBotFreshStartUrl(asset, kind) : hourlyBotFreshStartUrl(asset))
         : slot15BotFreshStartUrl(asset);
-      const label = kind === 'hourly_trial' ? 'hourly trial' : (period === 'hour' ? 'hourly' : '15m');
+      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Fresh start ${asset.toUpperCase()} ${label} paper bot?\n\nClears trade log, open positions, cooldowns, and resets bankroll to max at-risk.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
@@ -2549,7 +2643,7 @@
       botRestingTradesVisible[key] = !botRestingTradesVisible[key];
       const cache = kind === 'slot15'
         ? lastSlot15BotStatus[asset]
-        : (kind === 'hourly_trial' ? lastHourlyTrialBotStatus : lastBotStatus)[asset];
+        : hourlyBotCache(kind, asset);
       if (!cache) return;
       if (kind === 'slot15') renderSlot15Bot(cache, asset);
       else renderHourlyBot(cache, asset, kind);
@@ -2643,19 +2737,21 @@
         'hourly:btc': '/api/hourly/bot/override-daily-cap',
         'hourly:eth': '/api/eth/hourly/bot/override-daily-cap',
         'hourly_trial:btc': '/api/hourly-trial/bot/override-daily-cap',
+        'hourly_trial_rally:btc': '/api/hourly-trial-rally/bot/override-daily-cap',
+        'hourly_trial_soft:btc': '/api/hourly-trial-soft/bot/override-daily-cap',
         'hourly_trial:eth': '/api/eth/hourly-trial/bot/override-daily-cap',
         'slot15:btc': '/api/slot15/bot/override-daily-cap',
         'slot15:eth': '/api/eth/15m/bot/override-daily-cap',
       };
       const path = paths[`${kind}:${asset}`];
       if (!path) return;
-      const kindLabel = kind === 'hourly_trial' ? 'hourly trial' : (kind === 'hourly' ? 'hourly' : '15m');
+      const kindLabel = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (kind === 'hourly' ? 'hourly' : '15m');
       if (!confirm(`Resume ${asset.toUpperCase()} ${kindLabel} entries for the rest of today?\n\nDaily loss is still tracked; the $ cap will not block this bot until tomorrow (ET).`)) return;
       try {
         const res = await fetch(path, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
-        if (kind === 'hourly' || kind === 'hourly_trial') renderHourlyBot(bot, asset, kind);
+        if (kind === 'hourly' || isHourlyTrialKind(kind)) renderHourlyBot(bot, asset, kind);
         else renderSlot15Bot(bot, asset);
         const h = await get('/api/health');
         if (h) renderStatus(h);
@@ -2851,13 +2947,14 @@
         : readBotSettingsFromDom(asset, kind);
       const lastKnown = lastKnownBotSettings[key];
       const patchConfirmed = settingsPatchConfirmed[key];
-      const needStructure = !botSettingsDomReady[key] && (!domSettings || forceFlags[asset]);
+      const forceKey = botForceKey(kind, asset);
+      const needStructure = !botSettingsDomReady[key] && (!domSettings || forceFlags[forceKey]);
 
       if (needStructure) {
         settingsWrap.innerHTML = kind === 'slot15'
           ? slot15BotSettingsHtml(asset, serverSettings)
           : botSettingsHtml(asset, serverSettings, kind);
-        forceFlags[asset] = false;
+        forceFlags[forceKey] = false;
         botSettingsDomReady[key] = true;
         const norm = normalizeBotSettings(serverSettings, maxKey);
         lastKnownBotSettings[key] = norm;
@@ -3036,7 +3133,7 @@
         const prior4h = r4h.closed_trades
           ? `Prior 4h (shifted): ${r4h.closed_trades} exits · ${r4h.win_rate != null ? `${(r4h.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(r4h.total_pnl_usd)}`
           : '';
-        const isTrial = bot.kind === 'hourly_trial';
+        const isTrial = isHourlyTrialKind(bot.kind);
         html += `<div class="perf-bot-block"${isTrial ? ' style="opacity:.92;border-left:2px solid var(--muted,#888)"' : ''}>
           <p style="margin:0 0 .35rem;font-weight:600">${bot.label || `${bot.asset} ${bot.kind}`}${isTrial ? ' <span class="muted" style="font-weight:500;font-size:.68rem">(trial — excluded from main totals)</span>' : ''}
             <span class="muted" style="font-weight:400;font-size:.72rem"> · ask-edge gate ≥ ${gate ?? '—'}¢</span></p>
@@ -3440,14 +3537,14 @@
     }
 
     function renderHourlyBot(bot, asset, kind = 'hourly') {
-      const isTrial = kind === 'hourly_trial';
+      const isTrial = isHourlyTrialKind(kind);
       const el = $(hourlyBotPanelId(kind, asset));
       if (!el) return;
       const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
       if (activeTab !== tab) return;
       if (bot && bot.asset && bot.asset !== asset) return;
       if (bot && bot.ok) {
-        bot = (isTrial ? mergeHourlyTrialBotStatus(asset, bot) : mergeBotStatus(asset, bot)) || bot;
+        bot = (isTrial ? mergeHourlyTrialBotStatus(asset, bot, kind) : mergeBotStatus(asset, bot)) || bot;
       }
       if (!bot || !bot.ok) {
         const statusWrap = $(`${hourlyBotPanelId(kind, asset)}-status`);
@@ -3456,7 +3553,8 @@
           statusWrap.innerHTML = msg;
         } else {
           el.innerHTML = msg;
-          (isTrial ? hourlyTrialForceSettingsRender : botForceSettingsRender)[asset] = true;
+          const forceKey = botForceKey(kind, asset);
+          (isTrial ? hourlyTrialForceSettingsRender : botForceSettingsRender)[forceKey] = true;
         }
         return;
       }
@@ -3554,16 +3652,16 @@
       const live = $(`bot-live-${p}`);
       if (!paper || !live) return;
       const targetId = ev?.target?.id;
-      const saveFn = kind === 'hourly_trial' ? saveHourlyTrialBotSettings : saveHourlyBotSettings;
+      const saveFn = isHourlyTrialKind(kind) ? saveHourlyTrialBotSettings : saveHourlyBotSettings;
       if (targetId === `bot-paper-${p}` && paper.checked) {
         live.checked = false;
-        saveFn(asset);
+        saveFn(asset, undefined, kind);
         return;
       }
       if (targetId === `bot-live-${p}` && live.checked) {
         paper.checked = false;
-        const botCache = kind === 'hourly_trial' ? lastHourlyTrialBotStatus : lastBotStatus;
-        if (!confirmPaperCloseBeforeLive(botCache[asset], 'hour')) {
+        const botCache = hourlyBotCache(kind, asset);
+        if (!confirmPaperCloseBeforeLive(botCache, 'hour')) {
           revertBotModeToPaper(p);
           return;
         }
@@ -3572,11 +3670,11 @@
           revertBotModeToPaper(p);
           return;
         }
-        saveFn(asset, pwd);
+        saveFn(asset, pwd, kind);
         return;
       }
       if (!paper.checked && !live.checked) paper.checked = true;
-      saveFn(asset);
+      saveFn(asset, undefined, kind);
     }
 
     function onBotUseProfitsToggle(asset, kind) {
@@ -3585,7 +3683,7 @@
       const useProfits = !!$(`bot-use-profits-${p}`)?.checked;
       if (pctEl) pctEl.disabled = !useProfits;
       if (kind === 'slot15') saveSlot15BotSettings(asset);
-      else if (kind === 'hourly_trial') saveHourlyTrialBotSettings(asset);
+      else if (isHourlyTrialKind(kind)) saveHourlyTrialBotSettings(asset, undefined, kind);
       else saveHourlyBotSettings(asset);
     }
 
@@ -3607,12 +3705,12 @@
         aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
       if (body.mode === 'live' && livePassword) body.live_password = livePassword;
-      const botCache = kind === 'hourly_trial' ? lastHourlyTrialBotStatus : lastBotStatus;
-      attachLiveSwitchBody(body, botCache[asset]);
+      const botCache = hourlyBotCache(kind, asset);
+      attachLiveSwitchBody(body, botCache);
       const previousKnown = lastKnownBotSettings[key];
       pendingBotPatch[key] = normalizeBotSettings(body, maxKey);
       try {
-        const settingsUrl = kind === 'hourly_trial' ? hourlyTrialBotSettingsUrl(asset) : hourlyBotSettingsUrl(asset);
+        const settingsUrl = isHourlyTrialKind(kind) ? hourlyTrialBotSettingsUrl(asset, kind) : hourlyBotSettingsUrl(asset);
         const res = await fetch(settingsUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3625,7 +3723,8 @@
           if (res.status === 403) {
             showError('Wrong Password - Denied Access');
             revertBotModeToPaper(p);
-            (kind === 'hourly_trial' ? hourlyTrialForceSettingsRender : botForceSettingsRender)[asset] = true;
+            const forceKey = botForceKey(kind, asset);
+            (isHourlyTrialKind(kind) ? hourlyTrialForceSettingsRender : botForceSettingsRender)[forceKey] = true;
             return false;
           }
           showError('Bot settings: ' + msg);
@@ -3647,8 +3746,8 @@
       }
     }
 
-    function saveHourlyTrialBotSettings(asset, livePassword) {
-      return saveHourlyBotSettings(asset, livePassword, 'hourly_trial');
+    function saveHourlyTrialBotSettings(asset, livePassword, kind = 'hourly_trial') {
+      return saveHourlyBotSettings(asset, livePassword, kind);
     }
 
     function renderDaily(data) {
@@ -3842,12 +3941,14 @@
       const api = hourlyApiFor(tabAtStart);
       const asset = tabAtStart === 'eth-hourly' ? 'eth' : 'btc';
       try {
-        const [d, cal, hist, botDirect, trialDirect] = await Promise.all([
+        const trialKinds = hourlyTrialKindsForAsset(asset);
+        const trialFetches = trialKinds.map((k) => get(hourlyBotStatusUrl(asset, k)).catch(() => null));
+        const [d, cal, hist, botDirect, ...trialDirects] = await Promise.all([
           get(api.prediction),
           get(api.calibration).catch(() => ({ summary: {} })),
           get(api.history).catch(() => []),
           get(hourlyBotStatusUrl(asset)).catch(() => null),
-          get(hourlyBotStatusUrl(asset, 'hourly_trial')).catch(() => null),
+          ...trialFetches,
         ]);
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         hourlyRenderTab = tabAtStart;
@@ -3872,21 +3973,27 @@
         }
         bot = mergeBotStatus(asset, bot);
         if (bot) d.bot = bot;
-        let trialBot = trialDirect;
-        if (trialBot) trialBot = mergeHourlyTrialBotStatus(asset, trialBot);
         renderDaily(d);
         renderHourlyCalibration(cal);
         renderHourlyHistory(hist);
-        if (activeTab === tabAtStart) renderHourlyBot(trialBot, asset, 'hourly_trial');
+        if (activeTab === tabAtStart) {
+          trialKinds.forEach((trialKind, i) => {
+            let trialBot = trialDirects[i];
+            if (trialBot) trialBot = mergeHourlyTrialBotStatus(asset, trialBot, trialKind);
+            renderHourlyBot(trialBot, asset, trialKind);
+          });
+        }
       } catch (e) {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         hourlyRenderTab = tabAtStart;
         const cached = lastBotStatus[asset];
-        const trialCached = lastHourlyTrialBotStatus[asset];
         renderDaily({ ok: false, error: e.message, bot: cached || undefined });
         renderHourlyCalibration({});
         renderHourlyHistory([]);
-        if (trialCached) renderHourlyBot(trialCached, asset, 'hourly_trial');
+        for (const trialKind of hourlyTrialKindsForAsset(asset)) {
+          const trialCached = getTrialBotCache(trialKind, asset);
+          if (trialCached) renderHourlyBot(trialCached, asset, trialKind);
+        }
       }
     }
 

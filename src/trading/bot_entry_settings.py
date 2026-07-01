@@ -60,7 +60,11 @@ def slot15_entry_settings_snapshot(settings: Slot15SettingsLike) -> dict[str, An
 def infer_store_meta(db_path: Any) -> tuple[str, str]:
   """Return (asset, bot_type) from a bot store db filename."""
   name = str(db_path).lower()
-  if "hourly_trial" in name:
+  if "hourly_trial_rally" in name:
+    bot_type = "hourly_trial_rally"
+  elif "hourly_trial_soft" in name:
+    bot_type = "hourly_trial_soft"
+  elif "hourly_trial" in name:
     bot_type = "hourly_trial"
   elif "slot15" in name:
     bot_type = "slot15"

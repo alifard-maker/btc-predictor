@@ -16,7 +16,9 @@ from src.trading.bot_performance_report import (
 def _bot_cfg_for_kind(cfg: dict[str, Any] | None, kind: str) -> dict[str, Any]:
   if not cfg:
     return {}
-  if kind in ("hourly", "hourly_trial"):
+  from src.backtest.mechanics_profiles import entry_kind_for_bot
+
+  if entry_kind_for_bot(kind) == "hourly":
     return (cfg.get("hourly") or {}).get("bot") or {}
   return (cfg.get("intra_slot") or {}).get("bot") or {}
 
