@@ -108,6 +108,7 @@ def test_rolling_hours_report_windows():
   assert is_trial_bot_kind("hourly_trial")
   assert is_trial_bot_kind("hourly_trial_rally")
   assert is_trial_bot_kind("hourly_trial_soft")
+  assert is_trial_bot_kind("hourly_trial_mech")
   assert not is_trial_bot_kind("hourly")
 
   now = datetime.now(timezone.utc)

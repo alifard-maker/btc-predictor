@@ -135,6 +135,8 @@
     .guide-note { font-size: 0.75rem; color: var(--muted); margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--border); line-height: 1.45; }
     .guide-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.65rem; margin: 0.75rem 0; }
     @media (max-width: 768px) { .guide-tabs { grid-template-columns: 1fr; } }
+    .trials-btc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+    @media (max-width: 900px) { .trials-btc-grid { grid-template-columns: 1fr; } }
     .guide-tab-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; font-size: 0.8rem; }
     .guide-tab-box h4 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 0.4rem; }
     .guide-tab-box p { margin: 0.25rem 0; color: #c8c8d8; }
@@ -233,6 +235,7 @@
       <button type="button" class="tab" id="tab-eth-15m" data-panel="panel-eth-15m" onclick="switchTab('eth-15m')">ETH 15m</button>
       <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">BTC Hourly</button>
       <button type="button" class="tab" id="tab-eth-hourly" data-panel="panel-eth-hourly" onclick="switchTab('eth-hourly')">ETH Hourly</button>
+      <button type="button" class="tab" id="tab-trials" data-panel="panel-trials" onclick="switchTab('trials')">Trials</button>
     </nav>
 
     <div id="bot-risk-banner" class="card" style="display:none;margin-bottom:.75rem;border-color:var(--warn);background:rgba(255,180,0,.08)"></div>
@@ -248,7 +251,8 @@
       <div class="guide-body">
         <p>This dashboard shows <strong>model forecasts</strong> and <strong>Kalshi mispricing</strong> for BTC (and ETH on the hourly tab). It does <strong>not</strong> place trades. All times are <strong>Eastern (ET)</strong> unless noted.</p>
 
-        <h3>The four tabs</h3>
+        <h3>The tabs</h3>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.5rem">Main tabs show live hourly bots and predictions. The <strong>Trials</strong> tab holds parallel paper benchmark bots (different entry mechanics, same leg exits).</p>
         <div class="guide-tabs">
           <div class="guide-tab-box">
             <h4>BTC 15m</h4>
@@ -498,21 +502,6 @@
         <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON — enters and exits paper/live positions from live signals (no browser required). <strong>Paper/Live and Auto-bet are independent per bot</strong> (BTC does not control ETH). <strong>Max at-risk $/hour</strong> caps open exposure at once; exits free budget for re-entry (many round-trips per hour are OK). <strong>Cumulative $ entered</strong> below can exceed your cap — that is normal churn, not overspend. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any BUY YES/NO pick).</p>
         <div id="btc-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
-      <div class="card" id="btc-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
-        <h2>BTC Hourly Trial</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>production ENTRY mechanics</strong> (<code>current</code> adaptive — same entry gates as live BTC Hourly above). Exits use <strong>15m-style leg TP/stop</strong> (+3¢ / −4¢, leg trail) for A/B vs live hourly exits.</p>
-        <div id="btc-hourly-trial-bot"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card" id="btc-hourly-trial-rally-bot-card" style="border-color:rgba(234,88,12,.35)">
-        <h2>BTC Hourly Trial — Rally</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>rally-only</strong> entry profile — adaptive entries only in rally mode; defense sits out entirely. Same leg TP/stop exits as other trials. $15/hr max at-risk (set below).</p>
-        <div id="btc-hourly-trial-rally-bot"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card" id="btc-hourly-trial-soft-bot-card" style="border-color:rgba(14,165,233,.35)">
-        <h2>BTC Hourly Trial — Soft</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>soft rally</strong> entry profile — full rally entries; defense limited to 1 YES threshold leg (40–80¢ mid) with edge ≥15¢. Same leg TP/stop exits.</p>
-        <div id="btc-hourly-trial-soft-bot"><p class="muted">Loading…</p></div>
-      </div>
       <div class="card" id="hourly-guide-card">
         <h2>How to read this tab</h2>
         <div id="hourly-guide"><p class="muted">Loading…</p></div>
@@ -556,11 +545,6 @@
         <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON (browser not required) — continuous enter/exit within your <strong>max at-risk $/hour</strong> (open exposure only; exits free budget). <strong>Paper/Live and Auto-bet are independent</strong> from BTC Hourly. <strong>Cumulative $ entered</strong> can exceed your cap when the bot rotates through many round-trips. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
         <div id="eth-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
-      <div class="card" id="eth-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
-        <h2>ETH Hourly Trial</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same entries and market data as <strong>ETH hourly</strong> above, but exits use <strong>15m-style contract-first logic</strong> (+3¢ take-profit, −4¢ stop, leg trail). Separate paper bankroll for A/B comparison.</p>
-        <div id="eth-hourly-trial-bot"><p class="muted">Loading…</p></div>
-      </div>
       <div class="card" id="eth-hourly-guide-card">
         <h2>How to read this tab</h2>
         <div id="eth-hourly-guide"><p class="muted">Loading…</p></div>
@@ -595,6 +579,40 @@
       <div class="card">
         <h2>Chart structure</h2>
         <div id="eth-daily-structure"><p class="muted">Loading…</p></div>
+      </div>
+    </div>
+
+    <div id="panel-trials" style="display:none">
+      <div class="card">
+        <h2>Paper trial benchmarks</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:0">Parallel paper bots comparing hourly <strong>entry mechanics</strong> profiles. All trials share <strong>15m-style leg exits</strong> (+3¢ / −4¢, leg trail). Enable Auto-bet on each card below — independent bankrolls and settings.</p>
+      </div>
+      <div class="trials-btc-grid">
+        <div class="card" id="btc-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35);margin-bottom:0">
+          <h2>BTC Hourly Trial</h2>
+          <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>production ENTRY mechanics</strong> (<code>current</code> adaptive — same entry gates as live BTC Hourly). Exits use <strong>15m-style leg TP/stop</strong> for A/B vs live hourly exits.</p>
+          <div id="btc-hourly-trial-bot"><p class="muted">Loading…</p></div>
+        </div>
+        <div class="card" id="btc-hourly-trial-rally-bot-card" style="border-color:rgba(234,88,12,.35);margin-bottom:0">
+          <h2>BTC Hourly Trial — Rally</h2>
+          <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>rally-only</strong> entry profile — adaptive entries only in rally mode; defense sits out entirely. Same leg TP/stop exits as other trials.</p>
+          <div id="btc-hourly-trial-rally-bot"><p class="muted">Loading…</p></div>
+        </div>
+        <div class="card" id="btc-hourly-trial-soft-bot-card" style="border-color:rgba(14,165,233,.35);margin-bottom:0">
+          <h2>BTC Hourly Trial — Soft</h2>
+          <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>soft rally</strong> entry profile — full rally entries; defense limited to 1 YES threshold leg (40–80¢ mid) with edge ≥15¢. Same leg TP/stop exits.</p>
+          <div id="btc-hourly-trial-soft-bot"><p class="muted">Loading…</p></div>
+        </div>
+        <div class="card" id="btc-hourly-trial-mech-bot-card" style="border-color:rgba(34,197,94,.35);margin-bottom:0">
+          <h2>BTC Hourly Trial — Mech</h2>
+          <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>mechanical fixes</strong> entry profile — 084d7d1 guards ON, <strong>adaptive OFF</strong> (inventory caps, no rally/defense modes). Same leg TP/stop exits.</p>
+          <div id="btc-hourly-trial-mech-bot"><p class="muted">Loading…</p></div>
+        </div>
+      </div>
+      <div class="card" id="eth-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
+        <h2>ETH Hourly Trial</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same entries and market data as <strong>ETH hourly</strong> live bot, but exits use <strong>15m-style contract-first logic</strong> (+3¢ take-profit, −4¢ stop, leg trail). Separate paper bankroll for A/B comparison.</p>
+        <div id="eth-hourly-trial-bot"><p class="muted">Loading…</p></div>
       </div>
     </div>
   </div>
@@ -674,15 +692,16 @@
     let hourlyRenderTab = 'daily';
     let slot15RenderTab = '15m';
     let dailyFetchGen = 0;
+    let trialsFetchGen = 0;
     let slot15FetchGen = 0;
     let hourlyGuideCheatOpen = false;
     const lastBotStatus = { btc: null, eth: null };
     const lastHourlyTrialBotStatusByKey = {};
-    const HOURLY_TRIAL_KINDS = new Set(['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft']);
+    const HOURLY_TRIAL_KINDS = new Set(['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft', 'hourly_trial_mech']);
     function isHourlyTrialKind(kind) { return HOURLY_TRIAL_KINDS.has(kind); }
     function hourlyTrialKindsForAsset(asset) {
       return asset === 'btc'
-        ? ['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft']
+        ? ['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft', 'hourly_trial_mech']
         : ['hourly_trial'];
     }
     function getTrialBotCache(kind, asset) {
@@ -1646,10 +1665,26 @@
       $('panel-eth-15m').style.display = name === 'eth-15m' ? '' : 'none';
       $('panel-daily').style.display = name === 'daily' ? '' : 'none';
       $('panel-eth-hourly').style.display = name === 'eth-hourly' ? '' : 'none';
+      $('panel-trials').style.display = name === 'trials' ? '' : 'none';
       $('tab-15m').classList.toggle('active', name === '15m');
       $('tab-eth-15m').classList.toggle('active', name === 'eth-15m');
       $('tab-daily').classList.toggle('active', name === 'daily');
       $('tab-eth-hourly').classList.toggle('active', name === 'eth-hourly');
+      $('tab-trials').classList.toggle('active', name === 'trials');
+      if (name === 'trials') {
+        for (const asset of ['btc', 'eth']) {
+          for (const trialKind of hourlyTrialKindsForAsset(asset)) {
+            const trialCached = getTrialBotCache(trialKind, asset);
+            const trialKey = botUiKey(trialKind, asset);
+            if (trialCached?.settings && !pendingBotPatch[trialKey]) {
+              lastKnownBotSettings[trialKey] = normalizeBotSettings(trialCached.settings, 'max_spend_per_hour_usd');
+            }
+            if (trialCached) renderHourlyBot(trialCached, asset, trialKind);
+          }
+        }
+        loadTrials();
+        return;
+      }
       if (name === 'daily' || name === 'eth-hourly') {
         const asset = name === 'eth-hourly' ? 'eth' : 'btc';
         const cached = lastBotStatus[asset];
@@ -1658,14 +1693,6 @@
           lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_hour_usd');
         }
         if (cached) renderHourlyBot(cached, asset);
-        for (const trialKind of hourlyTrialKindsForAsset(asset)) {
-          const trialCached = getTrialBotCache(trialKind, asset);
-          const trialKey = botUiKey(trialKind, asset);
-          if (trialCached?.settings && !pendingBotPatch[trialKey]) {
-            lastKnownBotSettings[trialKey] = normalizeBotSettings(trialCached.settings, 'max_spend_per_hour_usd');
-          }
-          if (trialCached) renderHourlyBot(trialCached, asset, trialKind);
-        }
         loadDaily();
         return;
       }
@@ -2095,6 +2122,7 @@
       hourly_trial: '/api/hourly-trial/bot',
       hourly_trial_rally: '/api/hourly-trial-rally/bot',
       hourly_trial_soft: '/api/hourly-trial-soft/bot',
+      hourly_trial_mech: '/api/hourly-trial-mech/bot',
     };
     const ETH_HOURLY_TRIAL_API = {
       hourly_trial: '/api/eth/hourly-trial/bot',
@@ -2103,6 +2131,7 @@
       hourly_trial: '/api/hourly-trial/bot/settings',
       hourly_trial_rally: '/api/hourly-trial-rally/bot/settings',
       hourly_trial_soft: '/api/hourly-trial-soft/bot/settings',
+      hourly_trial_mech: '/api/hourly-trial-mech/bot/settings',
     };
     const ETH_HOURLY_TRIAL_SETTINGS_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/settings',
@@ -2111,6 +2140,7 @@
       hourly_trial: '/api/hourly-trial/bot/reset-bankroll',
       hourly_trial_rally: '/api/hourly-trial-rally/bot/reset-bankroll',
       hourly_trial_soft: '/api/hourly-trial-soft/bot/reset-bankroll',
+      hourly_trial_mech: '/api/hourly-trial-mech/bot/reset-bankroll',
     };
     const ETH_HOURLY_TRIAL_RESET_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/reset-bankroll',
@@ -2119,6 +2149,7 @@
       hourly_trial: '/api/hourly-trial/bot/fresh-start',
       hourly_trial_rally: '/api/hourly-trial-rally/bot/fresh-start',
       hourly_trial_soft: '/api/hourly-trial-soft/bot/fresh-start',
+      hourly_trial_mech: '/api/hourly-trial-mech/bot/fresh-start',
     };
     const ETH_HOURLY_TRIAL_FRESH_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/fresh-start',
@@ -2127,6 +2158,7 @@
       hourly_trial: '/api/hourly-trial/bot/clear-history',
       hourly_trial_rally: '/api/hourly-trial-rally/bot/clear-history',
       hourly_trial_soft: '/api/hourly-trial-soft/bot/clear-history',
+      hourly_trial_mech: '/api/hourly-trial-mech/bot/clear-history',
     };
     const ETH_HOURLY_TRIAL_CLEAR_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/clear-history',
@@ -2222,6 +2254,7 @@
     function hourlyTrialKindLabel(kind) {
       if (kind === 'hourly_trial_rally') return 'hourly trial rally';
       if (kind === 'hourly_trial_soft') return 'hourly trial soft';
+      if (kind === 'hourly_trial_mech') return 'hourly trial mech';
       if (kind === 'hourly_trial') return 'hourly trial';
       return kind;
     }
@@ -2267,6 +2300,7 @@
       if (kind === 'slot15') return `slot15-${asset}`;
       if (kind === 'hourly_trial_rally') return `trial-rally-${asset}`;
       if (kind === 'hourly_trial_soft') return `trial-soft-${asset}`;
+      if (kind === 'hourly_trial_mech') return `trial-mech-${asset}`;
       if (isHourlyTrialKind(kind)) return `trial-${asset}`;
       return asset;
     }
@@ -2274,6 +2308,7 @@
     function hourlyBotSettingsWrapId(kind, asset) {
       if (kind === 'hourly_trial_rally') return `${asset}-hourly-trial-rally-bot-settings`;
       if (kind === 'hourly_trial_soft') return `${asset}-hourly-trial-soft-bot-settings`;
+      if (kind === 'hourly_trial_mech') return `${asset}-hourly-trial-mech-bot-settings`;
       if (isHourlyTrialKind(kind)) return `${asset}-hourly-trial-bot-settings`;
       return `${asset}-hourly-bot-settings`;
     }
@@ -2281,6 +2316,7 @@
     function hourlyBotPanelId(kind, asset) {
       if (kind === 'hourly_trial_rally') return `${asset}-hourly-trial-rally-bot`;
       if (kind === 'hourly_trial_soft') return `${asset}-hourly-trial-soft-bot`;
+      if (kind === 'hourly_trial_mech') return `${asset}-hourly-trial-mech-bot`;
       if (isHourlyTrialKind(kind)) return `${asset}-hourly-trial-bot`;
       return `${asset}-hourly-bot`;
     }
@@ -2739,6 +2775,7 @@
         'hourly_trial:btc': '/api/hourly-trial/bot/override-daily-cap',
         'hourly_trial_rally:btc': '/api/hourly-trial-rally/bot/override-daily-cap',
         'hourly_trial_soft:btc': '/api/hourly-trial-soft/bot/override-daily-cap',
+        'hourly_trial_mech:btc': '/api/hourly-trial-mech/bot/override-daily-cap',
         'hourly_trial:eth': '/api/eth/hourly-trial/bot/override-daily-cap',
         'slot15:btc': '/api/slot15/bot/override-daily-cap',
         'slot15:eth': '/api/eth/15m/bot/override-daily-cap',
@@ -3941,14 +3978,11 @@
       const api = hourlyApiFor(tabAtStart);
       const asset = tabAtStart === 'eth-hourly' ? 'eth' : 'btc';
       try {
-        const trialKinds = hourlyTrialKindsForAsset(asset);
-        const trialFetches = trialKinds.map((k) => get(hourlyBotStatusUrl(asset, k)).catch(() => null));
-        const [d, cal, hist, botDirect, ...trialDirects] = await Promise.all([
+        const [d, cal, hist, botDirect] = await Promise.all([
           get(api.prediction),
           get(api.calibration).catch(() => ({ summary: {} })),
           get(api.history).catch(() => []),
           get(hourlyBotStatusUrl(asset)).catch(() => null),
-          ...trialFetches,
         ]);
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         hourlyRenderTab = tabAtStart;
@@ -3976,12 +4010,8 @@
         renderDaily(d);
         renderHourlyCalibration(cal);
         renderHourlyHistory(hist);
-        if (activeTab === tabAtStart) {
-          trialKinds.forEach((trialKind, i) => {
-            let trialBot = trialDirects[i];
-            if (trialBot) trialBot = mergeHourlyTrialBotStatus(asset, trialBot, trialKind);
-            renderHourlyBot(trialBot, asset, trialKind);
-          });
+        if (activeTab === tabAtStart && bot) {
+          renderHourlyBot(bot, asset);
         }
       } catch (e) {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
@@ -3990,9 +4020,41 @@
         renderDaily({ ok: false, error: e.message, bot: cached || undefined });
         renderHourlyCalibration({});
         renderHourlyHistory([]);
-        for (const trialKind of hourlyTrialKindsForAsset(asset)) {
-          const trialCached = getTrialBotCache(trialKind, asset);
-          if (trialCached) renderHourlyBot(trialCached, asset, trialKind);
+        if (cached) renderHourlyBot(cached, asset);
+      }
+    }
+
+    async function loadTrials() {
+      const tabAtStart = activeTab;
+      if (tabAtStart !== 'trials') return;
+      const gen = ++trialsFetchGen;
+      const btcKinds = hourlyTrialKindsForAsset('btc');
+      const ethKinds = hourlyTrialKindsForAsset('eth');
+      try {
+        const fetches = [
+          ...btcKinds.map((k) => get(hourlyBotStatusUrl('btc', k)).catch(() => null)),
+          ...ethKinds.map((k) => get(hourlyBotStatusUrl('eth', k)).catch(() => null)),
+        ];
+        const results = await Promise.all(fetches);
+        if (gen !== trialsFetchGen || activeTab !== tabAtStart) return;
+        btcKinds.forEach((trialKind, i) => {
+          let trialBot = results[i];
+          if (trialBot) trialBot = mergeHourlyTrialBotStatus('btc', trialBot, trialKind);
+          renderHourlyBot(trialBot, 'btc', trialKind);
+        });
+        const ethOffset = btcKinds.length;
+        ethKinds.forEach((trialKind, i) => {
+          let trialBot = results[ethOffset + i];
+          if (trialBot) trialBot = mergeHourlyTrialBotStatus('eth', trialBot, trialKind);
+          renderHourlyBot(trialBot, 'eth', trialKind);
+        });
+      } catch (_) {
+        if (gen !== trialsFetchGen || activeTab !== tabAtStart) return;
+        for (const asset of ['btc', 'eth']) {
+          for (const trialKind of hourlyTrialKindsForAsset(asset)) {
+            const trialCached = getTrialBotCache(trialKind, asset);
+            if (trialCached) renderHourlyBot(trialCached, asset, trialKind);
+          }
         }
       }
     }
@@ -4043,6 +4105,8 @@
         }
       } else if (activeTab === 'daily' || activeTab === 'eth-hourly') {
         tasks.push(loadDaily());
+      } else if (activeTab === 'trials') {
+        tasks.push(loadTrials());
       }
       await Promise.all(tasks);
     }

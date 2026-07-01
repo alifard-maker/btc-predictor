@@ -1296,6 +1296,85 @@ def hourly_trial_soft_bot_trades(
   return out
 
 
+@app.get("/api/hourly-trial-mech/bot")
+def hourly_trial_mech_bot_status(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop.daily_prediction()
+  return _loop.hourly_trial_mech_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/hourly-trial-mech/bot/settings")
+async def hourly_trial_mech_bot_settings(request: Request, _: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  body = await request.json()
+  store = _loop.hourly_trial_mech_bot_store("btc")
+  _apply_hourly_bot_settings(store, body, cfg=_cfg)
+  tab = _loop.daily_prediction()
+  return _loop.hourly_trial_mech_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/hourly-trial-mech/bot/reset-bankroll")
+def hourly_trial_mech_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_trial_mech_bot_store("btc")
+  settings = store.get_settings()
+  if settings.mode != "paper":
+    raise HTTPException(400, "Reset bankroll is only available in paper mode")
+  store.reset_paper_bankroll(settings.max_spend_per_hour_usd)
+  tab = _loop.daily_prediction()
+  return _loop.hourly_trial_mech_bot_status("btc", tab if tab.get("ok") else None)
+
+
+@app.post("/api/hourly-trial-mech/bot/fresh-start")
+def hourly_trial_mech_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_fresh_start(
+    _loop.hourly_trial_mech_bot_store("btc"),
+    _loop.daily_prediction,
+    "btc",
+    kind="hourly_trial_mech",
+  )
+
+
+@app.post("/api/hourly-trial-mech/bot/clear-history")
+def hourly_trial_mech_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_bot_clear_history(
+    _loop.hourly_trial_mech_bot_store("btc"),
+    _loop.daily_prediction,
+    "btc",
+    kind="hourly_trial_mech",
+  )
+
+
+@app.post("/api/hourly-trial-mech/bot/override-daily-cap")
+def hourly_trial_mech_bot_override_daily_cap(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _override_daily_cap_hourly("btc", kind="hourly_trial_mech")
+
+
+@app.get("/api/hourly-trial-mech/bot/trades")
+def hourly_trial_mech_bot_trades(
+  limit: int = Query(default=100, le=200),
+  event_ticker: str | None = Query(default=None),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_trial_mech_bot_store("btc")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["hour_summary"] = store.hour_interval_summary(event_ticker)
+  return out
+
+
 @app.get("/api/eth/hourly-trial/bot")
 def eth_hourly_trial_bot_status(_: None = Depends(_session_user)):
   if _loop is None:
@@ -1709,6 +1788,7 @@ def admin_fresh_start_all_paper_bots(_: None = Depends(_session_user)):
       for trial_kind, store_fn in (
         ("hourly_trial_rally", _loop.hourly_trial_rally_bot_store),
         ("hourly_trial_soft", _loop.hourly_trial_soft_bot_store),
+        ("hourly_trial_mech", _loop.hourly_trial_mech_bot_store),
       ):
         t_store = store_fn(asset)
         t_settings = t_store.get_settings()

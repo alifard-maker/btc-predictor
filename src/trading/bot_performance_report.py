@@ -37,6 +37,7 @@ def _bot_report_label(kind: str, asset: str) -> str:
     "hourly_trial": f"{asset.upper()} Hourly Trial",
     "hourly_trial_rally": f"{asset.upper()} Hourly Trial — Rally",
     "hourly_trial_soft": f"{asset.upper()} Hourly Trial — Soft",
+    "hourly_trial_mech": f"{asset.upper()} Hourly Trial — Mech",
     "hourly": f"{asset.upper()} Hourly",
   }
   return labels.get(kind, f"{asset.upper()} {kind}")
@@ -602,6 +603,7 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
     ("hourly_trial", "btc", loop.hourly_trial_bot_store("btc"), loop.cfg),
     ("hourly_trial_rally", "btc", loop.hourly_trial_rally_bot_store("btc"), loop.cfg),
     ("hourly_trial_soft", "btc", loop.hourly_trial_soft_bot_store("btc"), loop.cfg),
+    ("hourly_trial_mech", "btc", loop.hourly_trial_mech_bot_store("btc"), loop.cfg),
     ("hourly", "eth", loop.hourly_bot_store("eth"), loop._eth_cfg or loop.cfg),
     ("hourly_trial", "eth", loop.hourly_trial_bot_store("eth"), loop._eth_cfg or loop.cfg),
     ("slot15", "btc", loop.slot15_bot_store("btc"), loop._acfg_15m("btc")),

@@ -100,6 +100,7 @@ def bot_db_specs(cfg: dict[str, Any]) -> list[tuple[str, str, Path]]:
     if asset == "btc":
       specs.append((asset, "hourly_trial_rally", logs / f"hourly_trial_rally_bot_{asset}.db"))
       specs.append((asset, "hourly_trial_soft", logs / f"hourly_trial_soft_bot_{asset}.db"))
+      specs.append((asset, "hourly_trial_mech", logs / f"hourly_trial_mech_bot_{asset}.db"))
     specs.append((asset, "slot15", logs / f"slot15_bot_{asset}.db"))
   return specs
 

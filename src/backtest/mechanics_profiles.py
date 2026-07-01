@@ -14,12 +14,14 @@ HOURLY_TRIAL_KINDS = frozenset({
   "hourly_trial",
   "hourly_trial_rally",
   "hourly_trial_soft",
+  "hourly_trial_mech",
 })
 
 _KIND_MECHANICS_PROFILE: dict[str, MechanicsProfile] = {
   "hourly_trial": "current",
   "hourly_trial_rally": "rally_only",
   "hourly_trial_soft": "soft_rally",
+  "hourly_trial_mech": "mechanical_fixes",
 }
 
 PROFILE_LABELS: dict[str, str] = {

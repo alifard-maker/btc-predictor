@@ -64,6 +64,8 @@ def infer_store_meta(db_path: Any) -> tuple[str, str]:
     bot_type = "hourly_trial_rally"
   elif "hourly_trial_soft" in name:
     bot_type = "hourly_trial_soft"
+  elif "hourly_trial_mech" in name:
+    bot_type = "hourly_trial_mech"
   elif "hourly_trial" in name:
     bot_type = "hourly_trial"
   elif "slot15" in name:

@@ -24,6 +24,7 @@ from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
     ("hourly_trial", "current"),
     ("hourly_trial_rally", "rally_only"),
     ("hourly_trial_soft", "soft_rally"),
+    ("hourly_trial_mech", "mechanical_fixes"),
     ("hourly", None),
     ("slot15", None),
   ],
@@ -34,7 +35,7 @@ def test_mechanics_profile_for_kind(kind, expected):
 
 @pytest.mark.parametrize(
   "kind",
-  ["hourly_trial", "hourly_trial_rally", "hourly_trial_soft"],
+  ["hourly_trial", "hourly_trial_rally", "hourly_trial_soft", "hourly_trial_mech"],
 )
 def test_is_hourly_trial_kind_true(kind):
   assert is_hourly_trial_kind(kind)
@@ -65,6 +66,14 @@ def test_cfg_with_profile_for_kind_soft_rally_defense_threshold():
   assert adaptive["defense_min_ask_edge_cents"] == 15.0
   assert adaptive["defense_yes_mid_min_cents"] == 40
   assert adaptive["defense_yes_mid_max_cents"] == 80
+
+
+def test_cfg_with_profile_for_kind_mech_adaptive_off():
+  base = {"hourly": {"bot": {"live_adaptive": {"enabled": True}, "live_inventory": {"enabled": False}}}}
+  out = cfg_with_profile_for_kind(base, "hourly_trial_mech")
+  bot = out["hourly"]["bot"]
+  assert bot["live_adaptive"]["enabled"] is False
+  assert bot["live_inventory"]["enabled"] is True
 
 
 def test_hourly_bot_applies_mechanics_profile_in_continuous_cycle():

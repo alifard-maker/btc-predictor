@@ -395,6 +395,9 @@ hourly:
     trial_soft:
       continuous_enabled: true
       poll_seconds: 10
+    trial_mech:
+      continuous_enabled: true
+      poll_seconds: 10
 
 # Flip-to-opposite
 flip:
