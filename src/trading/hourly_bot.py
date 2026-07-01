@@ -58,6 +58,7 @@ from src.trading.bot_live_exit import (
   apply_live_exit_entry_guards,
   live_cut_loss_min_usd,
   overlay_live_profit_settings,
+  resting_enter_cap_reached,
 )
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
@@ -1167,6 +1168,9 @@ class HourlyBot:
           pass
 
       if settings.mode == "live":
+        if resting_enter_cap_reached(self.store, event_ticker, cfg, kind="hourly"):
+          last_reason = "max_resting_enters"
+          continue
         result = self._place_live_enter(
           event_ticker,
           pick,

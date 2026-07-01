@@ -522,10 +522,15 @@ def adopt_filled_resting_enters(
   store: Any,
   kalshi: Any,
   event_ticker: str,
+  *,
+  cfg: dict[str, Any] | None = None,
+  kind: str = "hourly",
 ) -> dict[str, Any]:
   """Open bot legs when a resting live enter filled on Kalshi but was never recorded."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
+
+  from src.trading.bot_live_exit import cap_adopted_contracts
 
   changes: list[dict[str, Any]] = []
   with store._connect() as conn:
@@ -560,14 +565,14 @@ def adopt_filled_resting_enters(
       "entry_price_cents": int(trade.get("entry_price_cents") or trade.get("price_cents") or 0),
     }
     contracts_fp = float(snap["contracts"])
-    contracts = max(1, int(round(contracts_fp)))
+    contracts, contracts_fp = cap_adopted_contracts(contracts_fp, cfg, kind=kind)
     entry_c = int(snap.get("entry_price_cents") or trade.get("entry_price_cents") or trade.get("price_cents") or 0)
     if entry_c <= 0:
       continue
     import uuid
 
     pid = str(uuid.uuid4())
-    cost_usd = float(snap.get("cost_usd") or round(contracts_fp * entry_c / 100.0, 2))
+    cost_usd = round(contracts_fp * entry_c / 100.0, 2)
     store.open_position({
       "id": pid,
       "event_ticker": event_ticker,
@@ -580,6 +585,7 @@ def adopt_filled_resting_enters(
       "signal": trade.get("signal"),
       "label": trade.get("label"),
       "mode": "live",
+      "entry_source": "adopted_resting",
     })
     store.log_trade({
       "event_ticker": event_ticker,
@@ -664,10 +670,14 @@ def adopt_kalshi_orphan_inventory(
   event_ticker: str,
   *,
   ticker_belongs: Any | None = None,
+  cfg: dict[str, Any] | None = None,
+  kind: str = "hourly",
 ) -> dict[str, Any]:
   """Open bot legs for Kalshi inventory with no matching bot position (kalshi-only reconcile)."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
+
+  from src.trading.bot_live_exit import cap_adopted_contracts
 
   def _belongs(ticker: str, event: str) -> bool:
     if ticker_belongs is not None:
@@ -702,9 +712,9 @@ def adopt_kalshi_orphan_inventory(
       continue
     import uuid
 
-    contracts = max(1, int(round(contracts_fp)))
+    contracts, contracts_fp = cap_adopted_contracts(contracts_fp, cfg, kind=kind)
     pid = str(uuid.uuid4())
-    cost_usd = float(snap.get("cost_usd") or round(contracts_fp * entry_c / 100.0, 2))
+    cost_usd = round(contracts_fp * entry_c / 100.0, 2)
     store.open_position({
       "id": pid,
       "event_ticker": event_ticker,
@@ -717,6 +727,7 @@ def adopt_kalshi_orphan_inventory(
       "signal": meta.get("signal"),
       "label": meta.get("label"),
       "mode": "live",
+      "entry_source": "adopted_orphan",
     })
     store.log_trade({
       "event_ticker": event_ticker,
@@ -767,8 +778,12 @@ def run_live_position_hygiene(
   kind: str = "hourly",
 ) -> dict[str, Any]:
   """Sync inventory, cancel orphans, and optionally cancel resting enters when auto-bet is off."""
-  adopted_resting = adopt_filled_resting_enters(store, kalshi, event_ticker)
-  adopted_orphans = adopt_kalshi_orphan_inventory(store, kalshi, event_ticker)
+  adopted_resting = adopt_filled_resting_enters(
+    store, kalshi, event_ticker, cfg=cfg, kind=kind,
+  )
+  adopted_orphans = adopt_kalshi_orphan_inventory(
+    store, kalshi, event_ticker, cfg=cfg, kind=kind,
+  )
   sync = sync_live_positions_from_kalshi(
     store, kalshi, event_ticker, cfg=cfg, kind=kind,
   )
@@ -832,12 +847,16 @@ def run_live_slot_hygiene(
   def _slot15_belongs(ticker: str, _slot: str) -> bool:
     return bool(market_ticker) and str(ticker) == str(market_ticker)
 
-  adopted_resting = adopt_filled_resting_enters(store, kalshi, period_key)
+  adopted_resting = adopt_filled_resting_enters(
+    store, kalshi, period_key, cfg=cfg, kind="slot15",
+  )
   adopted_orphans = adopt_kalshi_orphan_inventory(
     store,
     kalshi,
     period_key,
     ticker_belongs=_slot15_belongs if market_ticker else None,
+    cfg=cfg,
+    kind="slot15",
   )
   sync = sync_live_positions_from_kalshi(
     store, kalshi, period_key, cfg=cfg, kind="slot15",

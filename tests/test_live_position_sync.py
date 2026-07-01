@@ -136,6 +136,32 @@ def test_adopt_filled_resting_enter_opens_bot_leg():
     assert any(c.get("action") == "adopted_resting_enter" for c in out["changes"])
 
 
+def test_adopt_filled_resting_enter_caps_contracts():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "status": "resting",
+      "mode": "live",
+      "market_ticker": "KXBTCD-EV1-T59400",
+      "side": "no",
+      "contracts": 6,
+      "price_cents": 50,
+      "entry_price_cents": 50,
+      "kalshi_order_id": "ord-big",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = -6
+    cfg = {"hourly": {"bot": {"live_exit": {"max_adopted_contracts": 2}}}}
+    adopt_filled_resting_enters(store, kalshi, "EV1", cfg=cfg, kind="hourly")
+    open_pos = store.open_positions("EV1")
+    assert len(open_pos) == 1
+    assert open_pos[0]["contracts"] == 2
+    assert open_pos[0]["entry_source"] == "adopted_resting"
+
+
 def test_adopt_kalshi_orphan_inventory_opens_untracked_leg():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")

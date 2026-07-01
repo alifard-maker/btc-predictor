@@ -7,6 +7,7 @@ from src.trading.live_entry_price import (
   LiveEntryPricingConfig,
   effective_cross_spread_min_edge_cents,
   format_live_entry_execution_detail,
+  live_entry_pricing_from_cfg,
   resolve_live_entry_price,
 )
 
@@ -77,3 +78,13 @@ def test_format_live_entry_execution_detail_includes_mode():
   })
   assert "cross_spread" in detail
   assert "ask_edge=14" in detail
+
+
+def test_passive_preset_disables_cross_spread_in_cfg():
+  cfg = {"hourly": {"bot": {"live_entry": {"cross_spread_enabled": True}}}}
+  pricing = live_entry_pricing_from_cfg(cfg, kind="hourly", aggressive=False)
+  assert pricing.cross_spread_enabled is False
+  pick = _pick(model_prob=0.60, yes_bid=40, yes_ask=42)
+  estrat = EntryStrategyConfig(min_ask_edge_cents=5.0)
+  resolved = resolve_live_entry_price(pick, "yes", pricing=pricing, estrat=estrat)
+  assert resolved["execution_mode"] == "passive_limit"

@@ -51,6 +51,9 @@ def live_entry_pricing_from_cfg(
     pricing = LiveEntryPricingConfig.from_bot_cfg(cfg.get("bot"))
   if aggressive:
     pricing = replace(pricing, cross_spread_min_edge_cents=10.0)
+  else:
+    # Passive preset: never cross the spread in live (backtest + live both worse).
+    pricing = replace(pricing, cross_spread_enabled=False)
   return pricing
 
 

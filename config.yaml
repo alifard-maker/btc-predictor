@@ -159,6 +159,10 @@ intra_slot:
       profit_exit_cooldown_seconds: 20
       mid_price_take_profit_usd: 0.06
       mid_price_max_entry_cents: 50
+      adopted_leg_cut_loss_min_hold_seconds: 300
+      adopted_leg_cut_loss_min_usd: 0.50
+      max_adopted_contracts: 2
+      max_resting_enters_per_hour: 6
     probe_no_trade:
       enabled: false
       min_prob: 0.58
@@ -321,6 +325,10 @@ hourly:
       profit_exit_cooldown_seconds: 30
       mid_price_take_profit_usd: 0.08
       mid_price_max_entry_cents: 60
+      adopted_leg_cut_loss_min_hold_seconds: 300
+      adopted_leg_cut_loss_min_usd: 0.50
+      max_adopted_contracts: 2
+      max_resting_enters_per_hour: 6
     trial:
       continuous_enabled: true
       poll_seconds: 10

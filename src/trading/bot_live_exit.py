@@ -27,6 +27,10 @@ class LiveExitConfig:
   profit_exit_cooldown_seconds: int | None = 30
   mid_price_take_profit_usd: float = 0.08
   mid_price_max_entry_cents: int = 60
+  adopted_leg_cut_loss_min_hold_seconds: int = 300
+  adopted_leg_cut_loss_min_usd: float = 0.50
+  max_adopted_contracts: int = 2
+  max_resting_enters_per_hour: int = 6
 
 
 _DEFAULTS = LiveExitConfig()
@@ -78,6 +82,39 @@ def live_cut_loss_min_usd(cfg: dict[str, Any] | None, *, kind: str = "hourly") -
   return live_exit_config(cfg, kind=kind).cut_loss_min_usd
 
 
+def is_adopted_live_leg(pos: dict[str, Any]) -> bool:
+  """Leg opened via resting-fill or kalshi-only reconcile adoption."""
+  src = str(pos.get("entry_source") or "")
+  return src.startswith("adopted_")
+
+
+def cap_adopted_contracts(contracts_fp: float, cfg: dict[str, Any] | None, *, kind: str) -> tuple[int, float]:
+  """Clamp adopted inventory to live_exit max (0 = no cap)."""
+  cap = int(live_exit_config(cfg, kind=kind).max_adopted_contracts)
+  rounded = max(1, int(round(contracts_fp)))
+  if cap <= 0:
+    return rounded, float(contracts_fp)
+  capped = min(rounded, cap)
+  return capped, min(float(contracts_fp), float(cap))
+
+
+def resting_enter_cap_reached(
+  store: Any,
+  event_ticker: str,
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str = "hourly",
+) -> bool:
+  """True when too many unfilled resting live enters exist for this hour/slot."""
+  cap = int(live_exit_config(cfg, kind=kind).max_resting_enters_per_hour)
+  if cap <= 0:
+    return False
+  count_fn = getattr(store, "count_resting_live_enters", None)
+  if not callable(count_fn):
+    return False
+  return int(count_fn(event_ticker)) >= cap
+
+
 def live_cut_loss_min_hold_seconds(
   cfg: dict[str, Any] | None,
   *,
@@ -111,8 +148,6 @@ def allow_live_cut_loss(
     if exit_reason == "CHEAP LEG CUT LOSS"
     else live_exit.cut_loss_min_usd
   )
-  if unrealized_usd >= -min_loss:
-    return False
   min_hold = (
     live_exit.cheap_leg_cut_min_hold_seconds
     if exit_reason == "CHEAP LEG CUT LOSS"
@@ -120,6 +155,11 @@ def allow_live_cut_loss(
       cfg, kind=kind, settings_min_hold=settings_min_hold,
     )
   )
+  if is_adopted_live_leg(pos):
+    min_loss = max(min_loss, float(live_exit.adopted_leg_cut_loss_min_usd))
+    min_hold = max(min_hold, int(live_exit.adopted_leg_cut_loss_min_hold_seconds))
+  if unrealized_usd >= -min_loss:
+    return False
   hold = position_hold_seconds(pos)
   if min_hold > 0 and (hold is None or hold < float(min_hold)):
     return False

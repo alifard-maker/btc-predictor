@@ -226,6 +226,8 @@ class Slot15BotStore:
       backfill_position_modes(conn)
     if pos_cols and "contracts_fp" not in pos_cols:
       conn.execute("ALTER TABLE bot_positions ADD COLUMN contracts_fp REAL")
+    if pos_cols and "entry_source" not in pos_cols:
+      conn.execute("ALTER TABLE bot_positions ADD COLUMN entry_source TEXT")
 
   def _init_db(self) -> None:
     with self._connect() as conn:
@@ -627,6 +629,7 @@ class Slot15BotStore:
       "stop_order_id": pos.get("stop_order_id"),
       "take_profit_order_id": pos.get("take_profit_order_id"),
       "mode": pos.get("mode") or "paper",
+      "entry_source": pos.get("entry_source"),
       "opened_at": now,
       "status": "open",
     }
@@ -636,11 +639,11 @@ class Slot15BotStore:
         INSERT INTO bot_positions (
           id, event_ticker, market_ticker, side, contracts, contracts_fp, entry_price_cents,
           cost_usd, signal, label, entry_edge, reference_price, stop_order_id,
-          take_profit_order_id, mode, opened_at, status
+          take_profit_order_id, mode, entry_source, opened_at, status
         ) VALUES (
           :id, :event_ticker, :market_ticker, :side, :contracts, :contracts_fp, :entry_price_cents,
           :cost_usd, :signal, :label, :entry_edge, :reference_price, :stop_order_id,
-          :take_profit_order_id, :mode, :opened_at, :status
+          :take_profit_order_id, :mode, :entry_source, :opened_at, :status
         )
         """,
         row,
@@ -925,6 +928,18 @@ class Slot15BotStore:
         (event_ticker, market_ticker, mode),
       ).fetchone()
     return self._enrich_trade(dict(row)) if row else None
+
+  def count_resting_live_enters(self, event_ticker: str, *, mode: str = "live") -> int:
+    with self._connect() as conn:
+      row = conn.execute(
+        """
+        SELECT COUNT(*) FROM bot_trades
+        WHERE event_ticker = ? AND action = 'enter'
+          AND status = 'resting' AND mode = ?
+        """,
+        (event_ticker, mode),
+      ).fetchone()
+    return int(row[0] or 0) if row else 0
 
   def list_trades(self, *, limit: int = 30, event_ticker: str | None = None) -> list[dict[str, Any]]:
     with self._connect() as conn:

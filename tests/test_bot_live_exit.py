@@ -89,6 +89,42 @@ def test_allow_live_cut_loss_blocks_profitable_cut():
   )
 
 
+def test_allow_live_cut_loss_stricter_for_adopted_legs():
+  cfg = {
+    "hourly": {
+      "bot": {
+        "live_exit": {
+          "cut_loss_min_usd": 0.20,
+          "cut_loss_min_hold_seconds": 120,
+          "adopted_leg_cut_loss_min_usd": 0.50,
+          "adopted_leg_cut_loss_min_hold_seconds": 300,
+        }
+      }
+    }
+  }
+  pos = {
+    "opened_at": (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat(),
+    "entry_source": "adopted_resting",
+  }
+  assert not allow_live_cut_loss(
+    exit_reason="CUT LOSSES",
+    unrealized_usd=-0.40,
+    pos=pos,
+    settings_min_hold=60,
+    cfg=cfg,
+    kind="hourly",
+  )
+  old = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+  assert allow_live_cut_loss(
+    exit_reason="CUT LOSSES",
+    unrealized_usd=-0.55,
+    pos={**pos, "opened_at": old},
+    settings_min_hold=60,
+    cfg=cfg,
+    kind="hourly",
+  )
+
+
 def test_overlay_live_profit_settings_lowers_mid_price_tp():
   settings = HourlyBotSettings(take_profit_usd=0.0, profit_exit_cooldown_seconds=60)
   pos = {"entry_price_cents": 42}
