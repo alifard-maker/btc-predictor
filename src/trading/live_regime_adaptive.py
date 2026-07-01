@@ -31,6 +31,7 @@ class AdaptivePassiveConfig:
   defense_max_entries_per_cycle: int = 1
   defense_min_ask_edge_cents: float = 12.0
   defense_block_range_bands: bool = True
+  defense_skip_all_entries: bool = False
 
 
 @dataclass(frozen=True)
@@ -200,6 +201,11 @@ def adaptive_live_entry_pricing(
     cross_spread_enabled=True,
     cross_spread_min_edge_cents=acfg.rally_cross_spread_min_edge_cents,
   )
+
+
+def defense_entries_blocked(decision: AdaptiveDecision, cfg: dict[str, Any] | None) -> bool:
+  acfg = adaptive_passive_config(cfg)
+  return acfg.enabled and acfg.defense_skip_all_entries and decision.mode == "defense"
 
 
 def cross_spread_allowed_for_adaptive(

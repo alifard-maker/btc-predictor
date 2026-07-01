@@ -347,6 +347,13 @@ hourly:
       defense_max_entries_per_cycle: 1
       defense_min_ask_edge_cents: 12.0
       defense_block_range_bands: true
+      defense_skip_all_entries: false
+    rally_only:
+      enabled: true
+      defense_skip_all_entries: true
+      profit_lock_usd: 1.25
+      rally_block_range_bands: true
+      defense_block_range_bands: true
     trial:
       continuous_enabled: true
       poll_seconds: 10

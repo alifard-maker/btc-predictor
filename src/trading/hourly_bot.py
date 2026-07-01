@@ -60,6 +60,7 @@ from src.trading.live_regime_adaptive import (
   apply_adaptive_passive_guards,
   assess_adaptive_passive_mode,
   cross_spread_allowed_for_adaptive,
+  defense_entries_blocked,
 )
 from src.trading.bot_live_exit import (
   allow_live_cut_loss,
@@ -985,6 +986,9 @@ class HourlyBot:
       self.store.set_last_skip_reason(
         f"hour_profit_locked:{adaptive.realized_pnl_usd:.2f}"
       )
+      return results
+    if defense_entries_blocked(adaptive, cfg):
+      self.store.set_last_skip_reason("adaptive_defense_skip")
       return results
 
     estrat = effective_bot_entry_strategy(

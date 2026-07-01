@@ -8,12 +8,13 @@ from typing import Any, Literal
 
 from src.trading.live_entry_price import LiveEntryPricingConfig
 
-MechanicsProfile = Literal["legacy", "mechanical_fixes", "current"]
+MechanicsProfile = Literal["legacy", "mechanical_fixes", "current", "rally_only"]
 
 PROFILE_LABELS: dict[str, str] = {
   "legacy": "Legacy (pre-084d7d1: cross-spread, no inventory/adaptive caps)",
   "mechanical_fixes": "Mechanical fixes only (084d7d1, no adaptive)",
   "current": "Current deploy (084d7d1 + adaptive passive v1)",
+  "rally_only": "Rally-only (adaptive: entries only in rally mode; defense sits out)",
 }
 
 
@@ -44,6 +45,14 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     live_entry["cross_spread_enabled"] = True
     live_exit.setdefault("max_resting_enters_per_hour", 6)
     live_exit.setdefault("max_adopted_contracts", 2)
+    return c
+
+  if profile == "rally_only":
+    live_inventory["enabled"] = True
+    live_adaptive["enabled"] = True
+    live_adaptive["defense_skip_all_entries"] = True
+    live_adaptive["rally_block_range_bands"] = True
+    live_entry["cross_spread_enabled"] = True
     return c
 
   live_inventory["enabled"] = True
