@@ -55,6 +55,7 @@ from src.trading.bot_entry_presets import (
 from src.trading.live_inventory_guards import apply_live_inventory_guards
 from src.trading.live_regime_adaptive import (
   AdaptiveDecision,
+  adaptive_defense_entry_block_reason,
   adaptive_live_entry_pricing,
   adaptive_range_band_block_reason,
   apply_adaptive_passive_guards,
@@ -1049,6 +1050,11 @@ class HourlyBot:
       range_block = adaptive_range_band_block_reason(pick, adaptive, cfg)
       if range_block:
         last_reason = range_block
+        continue
+
+      defense_block = adaptive_defense_entry_block_reason(pick, side, adaptive, cfg)
+      if defense_block:
+        last_reason = defense_block
         continue
 
       existing_on_ticker = [p for p in open_pos if p["market_ticker"] == market_ticker]

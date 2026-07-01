@@ -36,11 +36,13 @@ from src.trading.bot_live_exit import (
 )
 from src.trading.live_inventory_guards import apply_live_inventory_guards
 from src.trading.live_regime_adaptive import (
+  adaptive_defense_entry_block_reason,
   adaptive_live_entry_pricing,
   adaptive_range_band_block_reason,
   apply_adaptive_passive_guards,
   assess_adaptive_passive_mode,
   cross_spread_allowed_for_adaptive,
+  defense_entries_blocked,
 )
 from src.trading.entry_strategy import (
   ask_cents_for_side,
@@ -343,6 +345,8 @@ def replay_event(
     )
     if adaptive.mode == "locked":
       continue
+    if defense_entries_blocked(adaptive, cfg):
+      continue
 
     estrat_poll = apply_adaptive_passive_guards(estrat, adaptive, cfg)
     pricing = adaptive_live_entry_pricing(base_pricing, adaptive, cfg)
@@ -359,6 +363,9 @@ def replay_event(
       range_block = adaptive_range_band_block_reason(pick, adaptive, cfg)
       if range_block:
         continue
+      defense_block = adaptive_defense_entry_block_reason(pick, side, adaptive, cfg)
+      if defense_block:
+        continue
       block = correlation_block_reason(
         [{"side": l.side, "market_ticker": l.ticker} for l in state.legs],
         pick, side, resolve_pick=lambda t: picks_cache.get(t),
@@ -373,7 +380,7 @@ def replay_event(
       if (
         resolved.get("execution_mode") == "cross_spread"
         and not cross_spread_allowed_for_adaptive(adaptive, cfg)
-        and mechanics_profile == "current"
+        and mechanics_profile in ("current", "rally_only", "soft_rally")
       ):
         from dataclasses import replace as dc_replace
 

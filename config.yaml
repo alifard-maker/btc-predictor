@@ -348,9 +348,20 @@ hourly:
       defense_min_ask_edge_cents: 12.0
       defense_block_range_bands: true
       defense_skip_all_entries: false
+      defense_threshold_only: false
     rally_only:
       enabled: true
       defense_skip_all_entries: true
+      profit_lock_usd: 1.25
+      rally_block_range_bands: true
+      defense_block_range_bands: true
+    soft_rally:
+      enabled: true
+      defense_skip_all_entries: false
+      defense_threshold_only: true
+      defense_min_ask_edge_cents: 15.0
+      defense_yes_mid_min_cents: 40
+      defense_yes_mid_max_cents: 80
       profit_lock_usd: 1.25
       rally_block_range_bands: true
       defense_block_range_bands: true

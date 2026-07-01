@@ -35,6 +35,7 @@ from src.trading.entry_strategy import (
 from src.trading.live_entry_price import resolve_live_entry_price
 from src.trading.live_inventory_guards import apply_live_inventory_guards
 from src.trading.live_regime_adaptive import (
+  adaptive_defense_entry_block_reason,
   adaptive_live_entry_pricing,
   adaptive_range_band_block_reason,
   apply_adaptive_passive_guards,
@@ -291,6 +292,8 @@ def simulate_hour(
       side = "yes" if pick["signal"] == "BUY YES" else "no"
       if adaptive_range_band_block_reason(pick, adaptive, cfg):
         continue
+      if adaptive_defense_entry_block_reason(pick, side, adaptive, cfg):
+        continue
       block = correlation_block_reason(
         [{"side": l.side, "market_ticker": l.ticker} for l in state.legs],
         pick, side, resolve_pick=lambda t: picks_cache.get(t),
@@ -305,7 +308,7 @@ def simulate_hour(
       if (
         resolved.get("execution_mode") == "cross_spread"
         and not cross_spread_allowed_for_adaptive(adaptive, cfg)
-        and profile in ("current", "rally_only")
+        and profile in ("current", "rally_only", "soft_rally")
       ):
         from dataclasses import replace as dc_replace
 

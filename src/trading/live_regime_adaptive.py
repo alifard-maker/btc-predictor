@@ -32,6 +32,9 @@ class AdaptivePassiveConfig:
   defense_min_ask_edge_cents: float = 12.0
   defense_block_range_bands: bool = True
   defense_skip_all_entries: bool = False
+  defense_threshold_only: bool = False
+  defense_yes_mid_min_cents: int = 0
+  defense_yes_mid_max_cents: int = 0
 
 
 @dataclass(frozen=True)
@@ -171,6 +174,31 @@ def apply_adaptive_passive_guards(
     min_ask_edge_cents=max(estrat.min_ask_edge_cents, acfg.defense_min_ask_edge_cents),
     allow_scale_in=False,
   )
+
+
+def adaptive_defense_entry_block_reason(
+  pick: dict[str, Any],
+  side: str,
+  decision: AdaptiveDecision,
+  cfg: dict[str, Any] | None,
+) -> str | None:
+  """Soft-rally defense: one high-edge YES threshold in mid-price band only."""
+  acfg = adaptive_passive_config(cfg)
+  if not acfg.enabled or decision.mode != "defense" or not acfg.defense_threshold_only:
+    return None
+  if str(pick.get("strike_type") or "") != "greater":
+    return "soft_rally_defense_threshold_only"
+  if str(pick.get("signal") or "") != "BUY YES" or side != "yes":
+    return "soft_rally_defense_yes_only"
+  if acfg.defense_yes_mid_min_cents > 0 or acfg.defense_yes_mid_max_cents > 0:
+    mid = pick.get("kalshi_mid")
+    if mid is not None:
+      yes_cents = int(round(float(mid) * 100))
+      lo = acfg.defense_yes_mid_min_cents or 1
+      hi = acfg.defense_yes_mid_max_cents or 99
+      if yes_cents < lo or yes_cents > hi:
+        return "soft_rally_defense_mid_band"
+  return None
 
 
 def adaptive_range_band_block_reason(
