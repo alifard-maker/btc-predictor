@@ -329,6 +329,24 @@ hourly:
       adopted_leg_cut_loss_min_usd: 0.50
       max_adopted_contracts: 2
       max_resting_enters_per_hour: 6
+    live_adaptive:
+      enabled: true
+      profit_lock_usd: 1.25
+      min_rally_expected_move_pct: 0.15
+      min_rally_grind_pct: 0.10
+      rally_cross_spread_enabled: true
+      rally_cross_spread_min_edge_cents: 15.0
+      rally_cross_spread_requires_intrahour: true
+      rally_max_same_side_threshold_legs: 2
+      rally_max_same_side_range_legs: 0
+      rally_max_entries_per_cycle: 2
+      rally_min_ask_edge_cents: 8.0
+      rally_block_range_bands: true
+      defense_max_same_side_threshold_legs: 1
+      defense_max_same_side_range_legs: 0
+      defense_max_entries_per_cycle: 1
+      defense_min_ask_edge_cents: 12.0
+      defense_block_range_bands: true
     trial:
       continuous_enabled: true
       poll_seconds: 10

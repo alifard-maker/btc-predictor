@@ -42,8 +42,15 @@ def _core_snapshot(
   }
 
 
-def hourly_entry_settings_snapshot(settings: HourlySettingsLike) -> dict[str, Any]:
-  return _core_snapshot(settings, max_spend=settings.max_spend_per_hour_usd)
+def hourly_entry_settings_snapshot(
+  settings: HourlySettingsLike,
+  *,
+  adaptive: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+  snap = _core_snapshot(settings, max_spend=settings.max_spend_per_hour_usd)
+  if adaptive:
+    snap["adaptive"] = adaptive
+  return snap
 
 
 def slot15_entry_settings_snapshot(settings: Slot15SettingsLike) -> dict[str, Any]:

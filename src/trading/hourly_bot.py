@@ -53,6 +53,14 @@ from src.trading.bot_entry_presets import (
   effective_bot_entry_strategy,
 )
 from src.trading.live_inventory_guards import apply_live_inventory_guards
+from src.trading.live_regime_adaptive import (
+  AdaptiveDecision,
+  adaptive_live_entry_pricing,
+  adaptive_range_band_block_reason,
+  apply_adaptive_passive_guards,
+  assess_adaptive_passive_mode,
+  cross_spread_allowed_for_adaptive,
+)
 from src.trading.bot_live_exit import (
   allow_live_cut_loss,
   apply_live_exit_entry_guards,
@@ -149,6 +157,17 @@ def _side_from_signal(signal: str | None) -> str | None:
   if is_buy_no(signal):
     return "no"
   return None
+
+
+def _adaptive_settings_payload(decision: AdaptiveDecision | None) -> dict[str, Any] | None:
+  if decision is None:
+    return None
+  return {
+    "entry_mode": decision.mode,
+    "reasons": list(decision.reasons),
+    "intrahour_highlight": decision.intrahour_highlight,
+    "realized_pnl_usd": round(decision.realized_pnl_usd, 2),
+  }
 
 
 def _find_contract_in_live(live: dict[str, Any], market_ticker: str) -> dict[str, Any] | None:
@@ -955,6 +974,19 @@ class HourlyBot:
       self.store.set_last_skip_reason("no_buy_yes_no_candidates")
       return results
 
+    adaptive = assess_adaptive_passive_mode(
+      tab=tab,
+      cfg=cfg,
+      realized_pnl_usd=self.store.realized_pnl_usd(event_ticker),
+      aggressive=settings.aggressive_entries,
+      mode=settings.mode,
+    )
+    if adaptive.mode == "locked":
+      self.store.set_last_skip_reason(
+        f"hour_profit_locked:{adaptive.realized_pnl_usd:.2f}"
+      )
+      return results
+
     estrat = effective_bot_entry_strategy(
       cfg,
       kind=self.kind,
@@ -964,6 +996,7 @@ class HourlyBot:
     estrat = apply_live_inventory_guards(
       estrat, cfg, mode=settings.mode, kind=self.kind if self.kind != "hourly_trial" else "hourly",
     )
+    estrat = apply_adaptive_passive_guards(estrat, adaptive, cfg)
     estrat = apply_live_exit_entry_guards(
       estrat, cfg, mode=settings.mode, kind=self.kind if self.kind != "hourly_trial" else "hourly",
     )
@@ -1007,6 +1040,11 @@ class HourlyBot:
       side = _side_from_signal(pick.get("signal"))
       if not side:
         last_reason = "unrecognized_signal"
+        continue
+
+      range_block = adaptive_range_band_block_reason(pick, adaptive, cfg)
+      if range_block:
+        last_reason = range_block
         continue
 
       existing_on_ticker = [p for p in open_pos if p["market_ticker"] == market_ticker]
@@ -1128,9 +1166,20 @@ class HourlyBot:
         pricing = live_entry_pricing_from_cfg(
           cfg, kind=self.kind, aggressive=settings.aggressive_entries
         )
+        pricing = adaptive_live_entry_pricing(pricing, adaptive, cfg)
         live_resolved = resolve_live_entry_price(
           pick, side, pricing=pricing, estrat=estrat_entry
         )
+        if (
+          live_resolved.get("execution_mode") == "cross_spread"
+          and not cross_spread_allowed_for_adaptive(adaptive, cfg)
+        ):
+          from dataclasses import replace as dc_replace
+
+          pricing = dc_replace(pricing, cross_spread_enabled=False)
+          live_resolved = resolve_live_entry_price(
+            pick, side, pricing=pricing, estrat=estrat_entry
+          )
         price_raw = live_resolved.get("price_cents")
         if price_raw is None:
           last_reason = f"missing_price:{market_ticker}"
@@ -1183,6 +1232,7 @@ class HourlyBot:
           pid,
           cfg=cfg,
           entry_execution_detail=live_entry_detail,
+          adaptive=adaptive,
         )
       else:
         self.store.open_position({
@@ -1226,7 +1276,9 @@ class HourlyBot:
           "status": "filled",
           "detail": detail,
           "position_id": pid,
-          "entry_settings": hourly_entry_settings_snapshot(settings),
+          "entry_settings": hourly_entry_settings_snapshot(
+            settings, adaptive=_adaptive_settings_payload(adaptive),
+          ),
           **entry_quote_log_fields(entry_fill),
         })
         log.info("%s hourly bot [paper enter]: %s", self.asset.upper(), detail)
@@ -1255,8 +1307,12 @@ class HourlyBot:
     *,
     cfg: dict[str, Any] | None = None,
     entry_execution_detail: str | None = None,
+    adaptive: AdaptiveDecision | None = None,
   ) -> dict[str, Any]:
     exec_note = f" · {entry_execution_detail}" if entry_execution_detail else ""
+    entry_settings = hourly_entry_settings_snapshot(
+      settings, adaptive=_adaptive_settings_payload(adaptive),
+    )
     if not self.kalshi or not getattr(self.kalshi, "authenticated", False):
       return self.store.log_trade({
         "event_ticker": event_ticker,
@@ -1266,7 +1322,7 @@ class HourlyBot:
         "market_ticker": pick.get("ticker"),
         "status": "failed",
         "detail": "Live mode requires Kalshi API credentials",
-        "entry_settings": hourly_entry_settings_snapshot(settings),
+        "entry_settings": entry_settings,
       })
     try:
       ticker = str(pick["ticker"])
@@ -1307,7 +1363,7 @@ class HourlyBot:
             f"Live ENTER order {oid} (0 filled — resting on Kalshi; "
             f"{int(parsed['remaining_count'])} remaining){exec_note}"
           ),
-          "entry_settings": hourly_entry_settings_snapshot(settings),
+          "entry_settings": entry_settings,
         })
       fill_count = min(filled, count)
       fill_cost = round(cost_usd * fill_count / count, 2) if count else 0.0
@@ -1363,7 +1419,7 @@ class HourlyBot:
         "kalshi_order_id": oid,
         "position_id": pid,
         "detail": f"Live ENTER order {oid} ({fill_count} filled){bracket_note}{exec_note}",
-        "entry_settings": hourly_entry_settings_snapshot(settings),
+        "entry_settings": entry_settings,
       })
     except Exception as e:
       log.exception("%s hourly bot live enter failed: %s", self.asset.upper(), e)
@@ -1374,7 +1430,7 @@ class HourlyBot:
         "mode": "live",
         "status": "failed",
         "detail": str(e),
-        "entry_settings": hourly_entry_settings_snapshot(settings),
+        "entry_settings": entry_settings,
       })
 
   # Legacy trigger-based path (delegates to continuous when enabled)
