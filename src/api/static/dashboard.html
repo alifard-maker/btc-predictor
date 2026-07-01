@@ -2321,6 +2321,12 @@
       return `${asset}-hourly-bot`;
     }
 
+    function shouldRenderHourlyBot(asset, kind = 'hourly') {
+      if (isHourlyTrialKind(kind)) return activeTab === 'trials';
+      const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
+      return activeTab === tab;
+    }
+
     function readBotSettingsFromDom(asset, kind = 'hourly') {
       const p = botDomPrefix(kind, asset);
       const enabledEl = $(`bot-enabled-${p}`);
@@ -3577,8 +3583,7 @@
       const isTrial = isHourlyTrialKind(kind);
       const el = $(hourlyBotPanelId(kind, asset));
       if (!el) return;
-      const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
-      if (activeTab !== tab) return;
+      if (!shouldRenderHourlyBot(asset, kind)) return;
       if (bot && bot.asset && bot.asset !== asset) return;
       if (bot && bot.ok) {
         bot = (isTrial ? mergeHourlyTrialBotStatus(asset, bot, kind) : mergeBotStatus(asset, bot)) || bot;
@@ -3768,8 +3773,7 @@
           return false;
         }
         pendingBotPatch[key] = null;
-        const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
-        if (activeTab === tab) {
+        if (shouldRenderHourlyBot(asset, kind)) {
           const bot = await res.json();
           recordSettingsPatchConfirm(kind, asset, bot.settings || body, maxKey);
           renderHourlyBot(bot, asset, kind);
