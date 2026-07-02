@@ -233,8 +233,21 @@ class PredictionLoop:
     agg = agg.reset_index()
     return agg
 
-  def daily_prediction(self) -> dict[str, Any]:
-    return self._hourly_tab_prediction("btc")
+  def daily_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
+    return self._hourly_tab_prediction("btc", include_bot=include_bot)
+
+  def eth_hourly_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
+    return self._hourly_tab_prediction("eth", include_bot=include_bot)
+
+  def _cached_hourly_tab(self, asset: str) -> dict[str, Any] | None:
+    cached = self.latest_hourly_prediction if asset == "btc" else self.latest_eth_hourly_prediction
+    if cached and cached.get("ok"):
+      return cached
+    return None
+
+  def _hourly_tab_for_bot_status(self, asset: str) -> dict[str, Any] | None:
+    """Reuse latest prediction tab when possible — avoids rebuilding on every /bot poll."""
+    return self._cached_hourly_tab(asset) or self._hourly_tab_prediction(asset, include_bot=False)
 
   def all_bot_stores(self) -> list[Any]:
     from src.trading.bot_risk_state import register_bot_stores
@@ -427,6 +440,7 @@ class PredictionLoop:
     tab: dict[str, Any] | None = None,
     *,
     kind: str = "hourly",
+    lightweight: bool = False,
   ) -> dict[str, Any]:
     asset = asset.lower()
     if asset == "eth" and not asset_enabled(self.cfg, "eth"):
@@ -520,7 +534,12 @@ class PredictionLoop:
     self._attach_settlement_index_status(status, tab, asset=asset)
     self._attach_bot_daily_loss(status, kind=kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
-    if status.get("settings", {}).get("mode") == "live" and kalshi and kalshi.authenticated:
+    if (
+      not lightweight
+      and status.get("settings", {}).get("mode") == "live"
+      and kalshi
+      and kalshi.authenticated
+    ):
       from src.trading.live_position_sync import hourly_event_market_tickers_from_tab
       from src.trading.live_reconcile import build_live_reconcile_report
 
@@ -536,14 +555,15 @@ class PredictionLoop:
         event_ticker=event_ticker,
         market_tickers=market_tickers or None,
       )
-    from src.trading.bot_performance_report import build_experiment_summary
+    if not lightweight:
+      from src.trading.bot_performance_report import build_experiment_summary
 
-    status["experiment_performance"] = build_experiment_summary(
-      store.list_trades(limit=5000),
-      cfg=acfg,
-      kind=kind,
-      asset=asset,
-    )
+      status["experiment_performance"] = build_experiment_summary(
+        store.list_trades(limit=5000),
+        cfg=acfg,
+        kind=kind,
+        asset=asset,
+      )
     return status
 
   def hourly_live_reconcile(self, asset: str, *, kind: str = "hourly") -> dict[str, Any]:
@@ -1008,10 +1028,7 @@ class PredictionLoop:
       return
     self._run_slot15_bot_continuous("eth")
 
-  def eth_hourly_prediction(self) -> dict[str, Any]:
-    return self._hourly_tab_prediction("eth")
-
-  def _hourly_tab_prediction(self, asset: str) -> dict[str, Any]:
+  def _hourly_tab_prediction(self, asset: str, *, include_bot: bool = True) -> dict[str, Any]:
     acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
     if not acfg.get("daily", {}).get("enabled", True):
       return {"ok": False, "error": f"{asset.upper()} hourly predictions disabled"}
@@ -1140,10 +1157,12 @@ class PredictionLoop:
 
     if asset == "btc":
       self.latest_hourly_prediction = out
-      out["bot"] = self.hourly_bot_status("btc", out)
+      if include_bot:
+        out["bot"] = self.hourly_bot_status("btc", out)
     else:
       self.latest_eth_hourly_prediction = out
-      out["bot"] = self.hourly_bot_status("eth", out)
+      if include_bot:
+        out["bot"] = self.hourly_bot_status("eth", out)
     return out
 
   def run_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:

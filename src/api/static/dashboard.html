@@ -779,14 +779,14 @@
     function hourlyApiFor(tab) {
       if (tab === 'eth-hourly') {
         return {
-          prediction: '/api/eth/hourly/prediction',
+          prediction: '/api/eth/hourly/prediction?include_bot=false',
           calibration: '/api/eth/hourly/calibration',
           history: '/api/eth/hourly/predictions?limit=20',
           indexLabel: 'ERTI',
         };
       }
       return {
-        prediction: '/api/daily/prediction',
+        prediction: '/api/daily/prediction?include_bot=false',
         calibration: '/api/hourly/calibration',
         history: '/api/hourly/predictions?limit=20',
         indexLabel: 'BRTI',
@@ -933,6 +933,25 @@
       }
       if (!r.ok) throw new Error(r.status + ' ' + path);
       return r.json();
+    }
+
+    async function getWithTimeout(path, ms = 25000) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), ms);
+      try {
+        const r = await fetch(path, { credentials: 'same-origin', signal: ctrl.signal });
+        if (r.status === 401) {
+          window.location.href = '/login';
+          throw new Error('Unauthorized');
+        }
+        if (!r.ok) throw new Error(r.status + ' ' + path);
+        return r.json();
+      } catch (e) {
+        if (e && e.name === 'AbortError') throw new Error(`Timeout after ${ms}ms: ${path}`);
+        throw e;
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
     function showError(msg) {
@@ -1711,6 +1730,7 @@
           lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_hour_usd');
         }
         if (cached) renderHourlyBot(cached, asset);
+        else renderHourlyBot({ ok: false, error: 'Loading bot status…' }, asset);
         loadAll();
         return;
       }
@@ -2132,9 +2152,10 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/clear-history' : '/api/hourly/bot/clear-history';
     }
 
-    function hourlyBotStatusUrl(asset, kind = 'hourly') {
+    function hourlyBotStatusUrl(asset, kind = 'hourly', lightweight = true) {
       if (isHourlyTrialKind(kind)) return hourlyTrialBotStatusUrl(asset, kind);
-      return asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
+      const base = asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
+      return lightweight ? `${base}?lightweight=true` : `${base}?lightweight=false`;
     }
 
     const HOURLY_TRIAL_API = {
@@ -4046,7 +4067,7 @@
 
     async function refreshHourlyBotDirect(asset, tabAtStart, gen, predictionBot) {
       try {
-        const botDirect = await get(hourlyBotStatusUrl(asset));
+        const botDirect = await getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', true), 20000);
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         let bot = botDirect || predictionBot;
         if (botDirect && predictionBot) {
@@ -4069,8 +4090,15 @@
         }
         bot = mergeBotStatus(asset, bot);
         if (bot && activeTab === tabAtStart) renderHourlyBot(bot, asset);
+        // Full stats (experiment P&L, live reconcile) in background — non-blocking.
+        getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', false), 45000).then((fullBot) => {
+          if (gen !== dailyFetchGen || activeTab !== tabAtStart || !fullBot?.ok) return;
+          renderHourlyBot(mergeBotStatus(asset, fullBot), asset);
+        }).catch(() => {});
       } catch (_) {
-        /* prediction / cache already rendered */
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        const cached = lastBotStatus[asset];
+        if (cached) renderHourlyBot(cached, asset);
       }
     }
 
@@ -4080,28 +4108,25 @@
       const gen = ++dailyFetchGen;
       const api = hourlyApiFor(tabAtStart);
       const asset = tabAtStart === 'eth-hourly' ? 'eth' : 'btc';
-      try {
-        const [d, cal, hist] = await Promise.all([
-          get(api.prediction),
-          get(api.calibration).catch(() => ({ summary: {} })),
-          get(api.history).catch(() => []),
-        ]);
+      hourlyRenderTab = tabAtStart;
+      const cached = lastBotStatus[asset];
+      if (cached) renderHourlyBot(cached, asset);
+      else renderHourlyBot({ ok: false, error: 'Loading bot status…' }, asset);
+      get(api.calibration).catch(() => ({ summary: {} })).then((cal) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
-        hourlyRenderTab = tabAtStart;
-        let bot = d?.bot || null;
-        if (bot) bot = mergeBotStatus(asset, bot);
-        if (bot) d.bot = bot;
-        renderDaily(d);
         renderHourlyCalibration(cal);
+      });
+      get(api.history).catch(() => []).then((hist) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderHourlyHistory(hist);
-        if (activeTab === tabAtStart && bot) {
-          renderHourlyBot(bot, asset);
-        }
-        refreshHourlyBotDirect(asset, tabAtStart, gen, d?.bot);
+      });
+      try {
+        const d = await getWithTimeout(api.prediction, 30000);
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        renderDaily(d);
+        refreshHourlyBotDirect(asset, tabAtStart, gen, null);
       } catch (e) {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
-        hourlyRenderTab = tabAtStart;
-        const cached = lastBotStatus[asset];
         renderDaily({ ok: false, error: e.message, bot: cached || undefined });
         renderHourlyCalibration({});
         renderHourlyHistory([]);

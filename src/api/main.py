@@ -519,17 +519,17 @@ def eth_15m_predict_now(_: None = Depends(_verify_admin)):
 
 
 @app.get("/api/daily/prediction")
-def daily_prediction():
+def daily_prediction(include_bot: bool = Query(default=True)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  return _loop.daily_prediction()
+  return _loop.daily_prediction(include_bot=include_bot)
 
 
 @app.get("/api/eth/hourly/prediction")
-def eth_hourly_prediction():
+def eth_hourly_prediction(include_bot: bool = Query(default=True)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  return _loop.eth_hourly_prediction()
+  return _loop.eth_hourly_prediction(include_bot=include_bot)
 
 
 @app.get("/api/hourly/calibration")
@@ -826,17 +826,24 @@ def hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   result = _loop.sync_hourly_kalshi_fills("btc", force=True)
-  tab = _loop.daily_prediction()
-  status = _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
+  tab = _loop._hourly_tab_for_bot_status("btc")
+  status = _loop.hourly_bot_status("btc", tab if tab and tab.get("ok") else None)
   return {"sync": result, "bot": status}
 
 
 @app.get("/api/hourly/bot")
-def hourly_bot_status(_: None = Depends(_session_user)):
+def hourly_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  tab = _loop.daily_prediction()
-  return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
+  tab = _loop._hourly_tab_for_bot_status("btc")
+  return _loop.hourly_bot_status(
+    "btc",
+    tab if tab and tab.get("ok") else None,
+    lightweight=lightweight,
+  )
 
 
 @app.get("/api/hourly/bot/live-reconcile")
@@ -998,11 +1005,18 @@ def admin_bots_auto_tune(_: None = Depends(_verify_admin)):
 
 
 @app.get("/api/eth/hourly/bot")
-def eth_hourly_bot_status(_: None = Depends(_session_user)):
+def eth_hourly_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  tab = _loop.eth_hourly_prediction()
-  return _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
+  tab = _loop._hourly_tab_for_bot_status("eth")
+  return _loop.hourly_bot_status(
+    "eth",
+    tab if tab and tab.get("ok") else None,
+    lightweight=lightweight,
+  )
 
 
 @app.post("/api/eth/hourly/bot/sync-kalshi-fills")
@@ -1010,8 +1024,8 @@ def eth_hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   result = _loop.sync_hourly_kalshi_fills("eth", force=True)
-  tab = _loop.eth_hourly_prediction()
-  status = _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
+  tab = _loop._hourly_tab_for_bot_status("eth")
+  status = _loop.hourly_bot_status("eth", tab if tab and tab.get("ok") else None)
   return {"sync": result, "bot": status}
 
 
