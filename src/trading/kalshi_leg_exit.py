@@ -60,6 +60,39 @@ def leg_price_cents_from_fill(fill: dict[str, Any], *, held_side: str) -> int | 
   return None
 
 
+def sum_verified_kalshi_buy_contracts(
+  kalshi: Any,
+  *,
+  market_ticker: str,
+  side: str,
+  kalshi_order_id: str | None = None,
+) -> float:
+  """Buy fill contracts on Kalshi for ticker+side (optional single order_id)."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return 0.0
+  from src.trading.kalshi_fill_sync import (
+    _build_order_direction_cache,
+    _fill_action_side,
+    _fill_count,
+  )
+
+  ticker = str(market_ticker)
+  side_l = str(side or "").lower()
+  cache = _build_order_direction_cache(kalshi)
+  total = 0.0
+  for fill in kalshi.list_fills(ticker=ticker, limit=500):
+    leg = _fill_action_side(fill, cache)
+    if not leg:
+      continue
+    ft, action, fs = leg
+    if ft != ticker or action != "buy" or fs != side_l:
+      continue
+    if kalshi_order_id and str(fill.get("order_id") or "") != str(kalshi_order_id):
+      continue
+    total += _fill_count(fill)
+  return round(total, 2)
+
+
 def avg_sell_fill_cents(
   kalshi: Any,
   *,

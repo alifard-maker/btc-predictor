@@ -273,6 +273,23 @@ def should_reconcile_close_live_leg(
   return True
 
 
+def _filled_enter_kalshi_order_id(store: Any, position_id: str) -> str | None:
+  """Kalshi order id from the bot's filled enter for this position."""
+  with store._connect() as conn:
+    row = conn.execute(
+      """
+      SELECT kalshi_order_id FROM bot_trades
+      WHERE position_id = ? AND action = 'enter' AND status = 'filled'
+        AND kalshi_order_id IS NOT NULL AND kalshi_order_id != ''
+      ORDER BY created_at DESC LIMIT 1
+      """,
+      (position_id,),
+    ).fetchone()
+  if not row or not row[0]:
+    return None
+  return str(row[0])
+
+
 def _inferred_exit_price_cents(store: Any, position_id: str) -> int | None:
   """Best-effort exit price from a recent resting/filled exit row for this leg."""
   with store._connect() as conn:
@@ -313,7 +330,11 @@ def reconcile_close_stale_live_leg(
     live_exit_config,
     recent_exit_trade,
   )
-  from src.trading.kalshi_leg_exit import resolve_kalshi_leg_exit_cents
+  from src.trading.kalshi_leg_exit import (
+    avg_sell_fill_cents,
+    market_binary_exit_cents,
+    sum_verified_kalshi_buy_contracts,
+  )
   from src.trading.paper_execution import leg_pnl_usd
 
   ticker = str(pos["market_ticker"])
@@ -334,17 +355,63 @@ def reconcile_close_stale_live_leg(
       max_age_seconds=live_exit.reconcile_grace_after_exit_seconds,
     )
     inferred = inferred_exit_from_recent_trade(recent)
-  exit_c, source_note = resolve_kalshi_leg_exit_cents(
-    kalshi,
-    market_ticker=ticker,
-    side=side,
-    contracts=contracts,
-    pos=pos,
-    period_key=period_key,
-    inferred_cents=inferred,
+
+  sell_fill_c = (
+    avg_sell_fill_cents(
+      kalshi,
+      market_ticker=ticker,
+      side=side,
+      max_contracts=contracts,
+    )
+    if kalshi
+    else None
   )
+  allow_pnl = False
+  exit_c: int | None = None
+  source_note = ""
+  if sell_fill_c is not None:
+    exit_c = sell_fill_c
+    source_note = f"Kalshi sell fills avg @ {sell_fill_c}¢"
+    allow_pnl = True
+  else:
+    enter_oid = _filled_enter_kalshi_order_id(store, str(pos["id"]))
+    min_contracts = max(0.5, float(contracts) * 0.85)
+    verified_ct = 0.0
+    if kalshi:
+      if enter_oid:
+        verified_ct = sum_verified_kalshi_buy_contracts(
+          kalshi,
+          market_ticker=ticker,
+          side=side,
+          kalshi_order_id=enter_oid,
+        )
+      if verified_ct < min_contracts:
+        verified_ct = sum_verified_kalshi_buy_contracts(
+          kalshi,
+          market_ticker=ticker,
+          side=side,
+        )
+    verified_entry = verified_ct >= min_contracts
+    settle_c, settle_note = (
+      market_binary_exit_cents(kalshi, market_ticker=ticker, side=side, pos=pos)
+      if kalshi
+      else (None, "")
+    )
+    if settle_c is not None and verified_entry:
+      exit_c = settle_c
+      source_note = settle_note
+      allow_pnl = True
+    elif inferred is not None:
+      exit_c = int(inferred)
+      source_note = f"inferred exit @ {exit_c}¢"
+      allow_pnl = True
+    elif settle_c is not None:
+      exit_c = settle_c
+      source_note = f"{settle_note} (unverified Kalshi entry — P&L not booked)"
+      allow_pnl = False
+
   pnl_rounded = 0.0
-  if exit_c is not None and entry_c and contracts:
+  if allow_pnl and exit_c is not None and entry_c and contracts:
     pnl_rounded = round(
       float(
         leg_pnl_usd(
@@ -360,10 +427,13 @@ def reconcile_close_stale_live_leg(
   detail = "Live EXIT reconciled"
   if exit_c is not None:
     detail += f" @ {exit_c}¢"
-    if pnl_rounded < -0.005:
-      detail += f" (loss ${abs(pnl_rounded):.2f})"
-    elif pnl_rounded > 0.005:
-      detail += f" (profit ${pnl_rounded:.2f})"
+    if allow_pnl:
+      if pnl_rounded < -0.005:
+        detail += f" (loss ${abs(pnl_rounded):.2f})"
+      elif pnl_rounded > 0.005:
+        detail += f" (profit ${pnl_rounded:.2f})"
+    else:
+      detail += " (P&L not booked — no verified Kalshi entry on this side)"
   elif source_note:
     detail += " (exit price unknown)"
   detail += (
