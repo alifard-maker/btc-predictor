@@ -11,6 +11,7 @@ from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.kalshi_fill_sync import (
   backfill_kalshi_hourly_fills,
   replay_closed_legs_from_kalshi_fills,
+  summarize_kalshi_experiment_fills,
   sync_kalshi_fills_to_store,
 )
 
@@ -123,3 +124,34 @@ def test_sync_idempotent_second_run():
     second = sync_kalshi_fills_to_store(store, kalshi, force=True)
     assert len(first["changes"]) >= 1
     assert second["changes"] == []
+
+
+def test_summarize_kalshi_experiment_fills_pairs_round_trips():
+  ticker = "KXBTCD-26JUL0212-T60700"
+  fills = [
+    {
+      "order_id": "buy-a",
+      "ticker": ticker,
+      "action": "buy",
+      "side": "yes",
+      "yes_price": 40,
+      "count": 3,
+      "created_time": "2026-07-02T10:00:00+00:00",
+    },
+    {
+      "order_id": "sell-a",
+      "ticker": ticker,
+      "action": "sell",
+      "side": "yes",
+      "yes_price": 46,
+      "count": 3,
+      "created_time": "2026-07-02T10:30:00+00:00",
+    },
+  ]
+  kalshi = _kalshi_with_fills(fills)
+  since = datetime(2026, 7, 2, 7, 20, tzinfo=timezone.utc)
+  sm = summarize_kalshi_experiment_fills(kalshi, since=since)
+  assert sm["ok"] is True
+  assert sm["closed_trades"] == 1
+  assert sm["total_pnl_usd"] == 0.18
+  assert sm["wins"] == 1

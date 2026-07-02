@@ -489,3 +489,91 @@ def sync_kalshi_fills_to_store(
     "orders_scanned": first.get("orders_scanned", 0),
     "skipped": first.get("skipped"),
   }
+
+
+def summarize_kalshi_experiment_fills(
+  kalshi: Any,
+  *,
+  since: datetime,
+  critical: bool = True,
+  max_fills: int = 1000,
+) -> dict[str, Any]:
+  """
+  Realized P&L from Kalshi hourly fill history since an instant (exchange source of truth).
+  Pairs buy+sell on the same ticker/side; open legs are excluded from closed P&L.
+  """
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return {"ok": False, "error": "Kalshi not authenticated"}
+
+  raw_fills = kalshi.list_fills(limit=min(max_fills, 1000), critical=critical)
+  hourly_fills = [
+    f for f in raw_fills
+    if market_ticker_event_ticker(str(f.get("ticker") or ""))
+    and is_kalshi_hourly_event(market_ticker_event_ticker(str(f.get("ticker") or "")) or "")
+    and (_fill_created_at(f) is None or _fill_created_at(f) >= since)
+  ]
+  orders = _aggregate_fills_to_orders(hourly_fills)
+  legs: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+  for order in orders:
+    legs[(str(order["ticker"]), str(order["side"]))].append(order)
+
+  closed_pnls: list[float] = []
+  wins = 0
+  losses = 0
+  for leg_orders in legs.values():
+    buys = sorted(
+      [o for o in leg_orders if o["action"] == "buy"],
+      key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    sells = sorted(
+      [o for o in leg_orders if o["action"] == "sell"],
+      key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    sell_i = 0
+    for buy in buys:
+      buy_time = buy.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
+      while sell_i < len(sells):
+        sell = sells[sell_i]
+        sell_time = sell.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
+        if sell_time < buy_time:
+          sell_i += 1
+          continue
+        contracts = max(1, int(round(min(float(buy["contracts"]), float(sell["contracts"])))))
+        entry_c = int(buy["price_cents"])
+        exit_c = int(sell["price_cents"])
+        pnl = round(
+          float(
+            leg_pnl_usd(
+              entry_price_cents=entry_c,
+              mark_or_exit_cents=exit_c,
+              contracts=contracts,
+            )
+            or 0.0,
+          ),
+          2,
+        )
+        closed_pnls.append(pnl)
+        if pnl > 0:
+          wins += 1
+        elif pnl < 0:
+          losses += 1
+        sell_i += 1
+        break
+      else:
+        break
+
+  total = round(sum(closed_pnls), 2)
+  n = len(closed_pnls)
+  out: dict[str, Any] = {
+    "ok": True,
+    "source": "kalshi_fills",
+    "closed_trades": n,
+    "total_pnl_usd": total,
+    "wins": wins,
+    "losses": losses,
+    "fills_scanned": len(hourly_fills),
+  }
+  if n:
+    out["win_rate"] = round(wins / n, 3)
+    out["avg_pnl_usd"] = round(total / n, 2)
+  return out

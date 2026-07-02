@@ -84,12 +84,18 @@ def build_experiment_summary(
   cfg: dict[str, Any] | None,
   kind: str,
   asset: str,
+  trade_mode: str | None = None,
 ) -> dict[str, Any] | None:
   """Closed-trade summary since experiment_start_at in config."""
   start = experiment_start_at(cfg)
   if start is None:
     return None
   filtered = _filter_trades_since_dt(trades, start)
+  if trade_mode:
+    filtered = [
+      t for t in filtered
+      if str(t.get("mode") or "").lower() == str(trade_mode).lower()
+    ]
   enters = [t for t in filtered if t.get("action") == "enter" and t.get("status") == "filled"]
   closed = _closed_round_trips(filtered)
   sm = _summary(closed, enters)

@@ -246,3 +246,72 @@ def test_build_experiment_summary_filters_by_start():
     assert exp is not None
     assert exp["summary"]["closed_trades"] == 1
     assert exp["summary"]["total_pnl_usd"] == 0.5
+
+
+def test_build_experiment_summary_filters_live_mode_only():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "hourly_bot_btc.db")
+    store.log_trade({
+      "event_ticker": "EVT",
+      "action": "enter",
+      "mode": "paper",
+      "market_ticker": "MKT",
+      "side": "yes",
+      "contracts": 5,
+      "price_cents": 50,
+      "entry_price_cents": 50,
+      "cost_usd": 2.5,
+      "status": "filled",
+      "position_id": "p1",
+      "created_at": "2026-07-02T08:00:00+00:00",
+    })
+    store.log_trade({
+      "event_ticker": "EVT",
+      "action": "exit",
+      "mode": "paper",
+      "market_ticker": "MKT",
+      "side": "yes",
+      "contracts": 5,
+      "price_cents": 60,
+      "exit_price_cents": 60,
+      "pnl_usd": 0.5,
+      "status": "filled",
+      "position_id": "p1",
+      "created_at": "2026-07-02T08:05:00+00:00",
+    })
+    store.log_trade({
+      "event_ticker": "EVT",
+      "action": "enter",
+      "mode": "live",
+      "market_ticker": "MKT2",
+      "side": "yes",
+      "contracts": 2,
+      "price_cents": 44,
+      "entry_price_cents": 44,
+      "cost_usd": 0.88,
+      "status": "filled",
+      "position_id": "l1",
+      "created_at": "2026-07-02T09:00:00+00:00",
+    })
+    store.log_trade({
+      "event_ticker": "EVT",
+      "action": "exit",
+      "mode": "live",
+      "market_ticker": "MKT2",
+      "side": "yes",
+      "contracts": 2,
+      "price_cents": 50,
+      "exit_price_cents": 50,
+      "pnl_usd": 0.12,
+      "status": "filled",
+      "position_id": "l1",
+      "created_at": "2026-07-02T09:10:00+00:00",
+    })
+    cfg = {"hourly": {"bot": {"experiment_start_at": "2026-07-02T07:20:00+00:00"}}}
+    trades = store.list_trades(limit=100)
+    exp = build_experiment_summary(
+      trades, cfg=cfg, kind="hourly", asset="btc", trade_mode="live",
+    )
+    assert exp is not None
+    assert exp["summary"]["closed_trades"] == 1
+    assert exp["summary"]["total_pnl_usd"] == 0.12

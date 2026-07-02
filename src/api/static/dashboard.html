@@ -2498,17 +2498,30 @@
       const exp = bot.experiment_performance;
       if (!exp || !exp.summary) return '';
       const sm = exp.summary;
+      const ks = exp.kalshi_summary;
       const pnl = Number(sm.total_pnl_usd ?? 0);
       const pnlCls = pnl > 0 ? 'up' : pnl < 0 ? 'down' : 'muted';
       const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
       const start = exp.start_at ? new Date(exp.start_at).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'experiment start';
+      const modeNote = (bot.settings?.mode || 'paper') === 'live'
+        ? 'Counts <strong>live-mode</strong> closed trades in the bot log since anchor.'
+        : 'Counts <strong>paper</strong> closed trades in the bot log since anchor.';
+      let kalshiRow = '';
+      if (ks && ks.ok) {
+        const kpnl = Number(ks.total_pnl_usd ?? 0);
+        const kCls = kpnl > 0 ? 'up' : kpnl < 0 ? 'down' : 'muted';
+        const kwr = ks.win_rate != null ? `${(ks.win_rate * 100).toFixed(0)}%` : '—';
+        kalshiRow = `<div class="bot-stat"><span class="muted" title="Paired buy+sell fills from Kalshi API since experiment start">Kalshi fills P&amp;L</span><strong class="${kCls}">${kpnl >= 0 ? '+' : ''}$${kpnl.toFixed(2)}</strong><span class="muted" style="font-size:.6rem;display:block">${ks.closed_trades ?? 0} closed · ${kwr} WR</span></div>`;
+      }
       return `
         <div class="bot-row" style="margin:.35rem 0;padding:.45rem .55rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.28);border-radius:8px">
           <p class="muted" style="font-size:.64rem;margin:0 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Experiment since ${start} EDT</p>
-          <div class="bot-stat"><span class="muted">Closed P&amp;L</span><strong class="${pnlCls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</strong></div>
-          <div class="bot-stat"><span class="muted">Closed trades</span><strong>${sm.closed_trades ?? 0}</strong></div>
-          <div class="bot-stat"><span class="muted">Win rate</span><strong>${wr}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Bot DB closed round-trips since experiment anchor">Bot log P&amp;L</span><strong class="${pnlCls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</strong></div>
+          ${kalshiRow}
+          <div class="bot-stat"><span class="muted">Bot log closed</span><strong>${sm.closed_trades ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted">Bot log win rate</span><strong>${wr}</strong></div>
           <div class="bot-stat"><span class="muted">W / L</span><strong>${sm.wins ?? 0} / ${sm.losses ?? 0}</strong></div>
+          <p class="muted" style="font-size:.6rem;margin:.35rem 0 0;line-height:1.4">${modeNote} Kalshi row is exchange fill history — use it when the bot log lags.</p>
         </div>`;
     }
 
@@ -4065,9 +4078,8 @@
       }
     }
 
-    async function refreshHourlyBotDirect(asset, tabAtStart, gen, predictionBot) {
-      try {
-        const botDirect = await getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', true), 20000);
+    function refreshHourlyBotDirect(asset, tabAtStart, gen, predictionBot) {
+      getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', true), 8000).then((botDirect) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         let bot = botDirect || predictionBot;
         if (botDirect && predictionBot) {
@@ -4090,16 +4102,15 @@
         }
         bot = mergeBotStatus(asset, bot);
         if (bot && activeTab === tabAtStart) renderHourlyBot(bot, asset);
-        // Full stats (experiment P&L, live reconcile) in background — non-blocking.
-        getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', false), 45000).then((fullBot) => {
-          if (gen !== dailyFetchGen || activeTab !== tabAtStart || !fullBot?.ok) return;
-          renderHourlyBot(mergeBotStatus(asset, fullBot), asset);
-        }).catch(() => {});
-      } catch (_) {
+      }).catch(() => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         const cached = lastBotStatus[asset];
         if (cached) renderHourlyBot(cached, asset);
-      }
+      });
+      getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', false), 30000).then((fullBot) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart || !fullBot?.ok) return;
+        renderHourlyBot(mergeBotStatus(asset, fullBot), asset);
+      }).catch(() => {});
     }
 
     async function loadDaily() {
@@ -4121,7 +4132,7 @@
         renderHourlyHistory(hist);
       });
       try {
-        const d = await getWithTimeout(api.prediction, 30000);
+        const d = await getWithTimeout(api.prediction, 12000);
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderDaily(d);
         refreshHourlyBotDirect(asset, tabAtStart, gen, null);
@@ -4182,8 +4193,8 @@
 
       const tasks = [
         get('/health').then(renderStatus).catch(e => showError('Health: ' + e.message)),
-        loadBotPerformanceReport(),
       ];
+      loadBotPerformanceReport();
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();
         tasks.push(
@@ -4215,7 +4226,7 @@
           tasks.push(get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])));
         }
       } else if (activeTab === 'daily' || activeTab === 'eth-hourly') {
-        tasks.push(loadDaily());
+        loadDaily();
       } else if (activeTab === 'trials') {
         tasks.push(loadTrials());
       }

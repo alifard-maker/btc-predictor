@@ -102,6 +102,7 @@ class PredictionLoop:
     self._slot15_bot_stores: dict[str, Any] = {}
     self._slot15_bots: dict[str, Any] = {}
     self._hourly_tab_cache: dict[str, tuple[dict[str, Any], float]] = {}
+    self._hourly_prediction_mono: dict[str, float] = {}
     self._slot15_tab_cache: dict[str, tuple[dict[str, Any], float]] = {}
     if asset_enabled(self.cfg, "eth"):
       self._eth_cfg = asset_cfg(self.cfg, "eth")
@@ -234,10 +235,42 @@ class PredictionLoop:
     return agg
 
   def daily_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
-    return self._hourly_tab_prediction("btc", include_bot=include_bot)
+    return self._hourly_tab_prediction_cached("btc", include_bot=include_bot)
 
   def eth_hourly_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
-    return self._hourly_tab_prediction("eth", include_bot=include_bot)
+    return self._hourly_tab_prediction_cached("eth", include_bot=include_bot)
+
+  def _hourly_prediction_age_sec(self, asset: str) -> float | None:
+    ts = self._hourly_prediction_mono.get(asset.lower())
+    if ts is None:
+      return None
+    return max(0.0, time.monotonic() - ts)
+
+  def _hourly_tab_prediction_cached(
+    self,
+    asset: str,
+    *,
+    include_bot: bool = True,
+    max_age_sec: float = 60.0,
+  ) -> dict[str, Any]:
+    """Serve scheduler-warmed prediction when fresh — avoids full ML rebuild on every poll."""
+    asset = asset.lower()
+    cached = self._cached_hourly_tab(asset)
+    age = self._hourly_prediction_age_sec(asset)
+    if cached and cached.get("ok") and age is not None and age < max_age_sec:
+      out = dict(cached)
+      if include_bot:
+        out["bot"] = self.hourly_bot_status(
+          asset,
+          out,
+          lightweight=True,
+        )
+      else:
+        out.pop("bot", None)
+      out["_served_from_cache"] = True
+      out["_cache_age_sec"] = round(age, 1)
+      return out
+    return self._hourly_tab_prediction(asset, include_bot=include_bot)
 
   def _cached_hourly_tab(self, asset: str) -> dict[str, Any] | None:
     cached = self.latest_hourly_prediction if asset == "btc" else self.latest_eth_hourly_prediction
@@ -461,9 +494,12 @@ class PredictionLoop:
     if profile:
       status["mechanics_profile"] = profile
       status["mechanics_profile_label"] = PROFILE_LABELS.get(profile, profile)
-    status["recent_trades"] = store.list_trades(limit=100)
+    trade_limit = 35 if lightweight else 100
+    status["recent_trades"] = store.list_trades(limit=trade_limit)
     status["hour_trades"] = (
-      store.list_trades(limit=50, event_ticker=event_ticker) if event_ticker else []
+      store.list_trades(limit=35 if lightweight else 50, event_ticker=event_ticker)
+      if event_ticker
+      else []
     )
     open_pos = list(status.get("open_positions") or [])
     if tab and tab.get("ok"):
@@ -558,12 +594,31 @@ class PredictionLoop:
     if not lightweight:
       from src.trading.bot_performance_report import build_experiment_summary
 
-      status["experiment_performance"] = build_experiment_summary(
+      trade_mode = str(settings.mode or "paper").lower()
+      exp = build_experiment_summary(
         store.list_trades(limit=5000),
         cfg=acfg,
         kind=kind,
         asset=asset,
+        trade_mode=trade_mode if trade_mode == "live" else None,
       )
+      if (
+        exp
+        and trade_mode == "live"
+        and kalshi
+        and kalshi.authenticated
+      ):
+        from src.trading.bot_performance_report import experiment_start_at
+        from src.trading.kalshi_fill_sync import summarize_kalshi_experiment_fills
+
+        start = experiment_start_at(acfg)
+        if start:
+          exp["kalshi_summary"] = summarize_kalshi_experiment_fills(
+            kalshi,
+            since=start,
+            critical=True,
+          )
+      status["experiment_performance"] = exp
     return status
 
   def hourly_live_reconcile(self, asset: str, *, kind: str = "hourly") -> dict[str, Any]:
@@ -1157,10 +1212,12 @@ class PredictionLoop:
 
     if asset == "btc":
       self.latest_hourly_prediction = out
+      self._hourly_prediction_mono["btc"] = time.monotonic()
       if include_bot:
         out["bot"] = self.hourly_bot_status("btc", out)
     else:
       self.latest_eth_hourly_prediction = out
+      self._hourly_prediction_mono["eth"] = time.monotonic()
       if include_bot:
         out["bot"] = self.hourly_bot_status("eth", out)
     return out
