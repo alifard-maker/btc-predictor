@@ -830,6 +830,11 @@ def run_live_position_hygiene(
   adopted_orphans = adopt_kalshi_orphan_inventory(
     store, kalshi, event_ticker, cfg=cfg, kind=kind, critical=critical,
   )
+  from src.trading.kalshi_fill_sync import sync_kalshi_fills_to_store
+
+  fill_sync = sync_kalshi_fills_to_store(
+    store, kalshi, critical=critical, cfg=cfg, kind=kind,
+  )
   sync = sync_live_positions_from_kalshi(
     store, kalshi, event_ticker, cfg=cfg, kind=kind,
   )
@@ -841,11 +846,16 @@ def run_live_position_hygiene(
     resting_cancelled = cancel_resting_enter_orders_for_hourly_event(
       kalshi, event_ticker, tab,
     )
-  adopted_changes = (adopted_resting.get("changes") or []) + (adopted_orphans.get("changes") or [])
+  adopted_changes = (
+    (adopted_resting.get("changes") or [])
+    + (adopted_orphans.get("changes") or [])
+    + (fill_sync.get("changes") or [])
+  )
   return {
     **sync,
     "ok": sync.get("ok", True),
     "changes": (sync.get("changes") or []) + adopted_changes,
+    "kalshi_fill_sync": fill_sync,
     "orphan_sells_cancelled": orphans,
     "resting_enters_cancelled": resting_cancelled,
   }

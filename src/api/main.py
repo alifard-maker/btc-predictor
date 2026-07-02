@@ -821,6 +821,16 @@ def _apply_slot15_bot_settings(
   return out
 
 
+@app.post("/api/hourly/bot/sync-kalshi-fills")
+def hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  result = _loop.sync_hourly_kalshi_fills("btc", force=True)
+  tab = _loop.daily_prediction()
+  status = _loop.hourly_bot_status("btc", tab if tab.get("ok") else None)
+  return {"sync": result, "bot": status}
+
+
 @app.get("/api/hourly/bot")
 def hourly_bot_status(_: None = Depends(_session_user)):
   if _loop is None:
@@ -993,6 +1003,16 @@ def eth_hourly_bot_status(_: None = Depends(_session_user)):
     raise HTTPException(503, "Service starting")
   tab = _loop.eth_hourly_prediction()
   return _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/hourly/bot/sync-kalshi-fills")
+def eth_hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  result = _loop.sync_hourly_kalshi_fills("eth", force=True)
+  tab = _loop.eth_hourly_prediction()
+  status = _loop.hourly_bot_status("eth", tab if tab.get("ok") else None)
+  return {"sync": result, "bot": status}
 
 
 @app.post("/api/eth/hourly/bot/settings")

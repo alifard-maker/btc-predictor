@@ -573,6 +573,29 @@ class PredictionLoop:
       market_tickers=market_tickers or None,
     )
 
+  def sync_hourly_kalshi_fills(
+    self,
+    asset: str,
+    *,
+    kind: str = "hourly",
+    force: bool = True,
+  ) -> dict[str, Any]:
+    """Force-import recent Kalshi fills into the live bot trade log."""
+    from src.backtest.mechanics_profiles import entry_kind_for_bot
+    from src.trading.kalshi_fill_sync import sync_kalshi_fills_to_store
+
+    store = self.hourly_bot_store(asset, kind=kind)
+    kalshi = self._kalshi_for(asset)
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    return sync_kalshi_fills_to_store(
+      store,
+      kalshi,
+      force=force,
+      cfg=acfg,
+      kind=entry_kind_for_bot(kind),
+      critical=True,
+    )
+
   def hourly_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     return self.hourly_bot_status(asset, tab, kind="hourly_trial")
 
