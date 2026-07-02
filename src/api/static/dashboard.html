@@ -949,6 +949,12 @@
       if (paper) paper.checked = true;
       if (live) live.checked = false;
     }
+    function revertBotModeToLive(prefix) {
+      const paper = $(`bot-paper-${prefix}`);
+      const live = $(`bot-live-${prefix}`);
+      if (paper) paper.checked = false;
+      if (live) live.checked = true;
+    }
 
     async function parseSettingsError(res) {
       const errText = await res.text();
@@ -3707,6 +3713,17 @@
       const saveFn = isHourlyTrialKind(kind) ? saveHourlyTrialBotSettings : saveHourlyBotSettings;
       if (targetId === `bot-paper-${p}` && paper.checked) {
         live.checked = false;
+        const botCache = hourlyBotCache(kind, asset);
+        const currentMode = botCache?.settings?.mode === 'live' ? 'live' : 'paper';
+        if (currentMode === 'live') {
+          const pwd = promptLivePassword();
+          if (!pwd) {
+            revertBotModeToLive(p);
+            return;
+          }
+          saveFn(asset, pwd, kind);
+          return;
+        }
         saveFn(asset, undefined, kind);
         return;
       }
@@ -3756,7 +3773,7 @@
         paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
         aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
-      if (body.mode === 'live' && livePassword) body.live_password = livePassword;
+      if (livePassword) body.live_password = livePassword;
       const botCache = hourlyBotCache(kind, asset);
       attachLiveSwitchBody(body, botCache);
       const previousKnown = lastKnownBotSettings[key];

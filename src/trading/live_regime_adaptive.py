@@ -48,7 +48,7 @@ class AdaptiveDecision:
 def adaptive_passive_config(cfg: dict[str, Any] | None) -> AdaptivePassiveConfig:
   raw = dict(((cfg or {}).get("hourly") or {}).get("bot") or {}).get("live_adaptive") or {}
   if not raw:
-    return AdaptivePassiveConfig()
+    return AdaptivePassiveConfig(enabled=False)
   kw: dict[str, Any] = {}
   for field in AdaptivePassiveConfig.__dataclass_fields__:
     if field in raw:

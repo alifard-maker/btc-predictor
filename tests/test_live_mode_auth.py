@@ -39,9 +39,11 @@ def test_staying_live_skips_password():
 
 
 def test_switch_to_paper_skips_password():
-  require_live_password(
-    current_mode="live",
-    new_mode="paper",
-    body={},
-    password="Ducati1098R!",
-  )
+  # Live→paper now requires password to prevent accidental UI cross-talk.
+  with pytest.raises(HTTPException):
+    require_live_password(
+      current_mode="live",
+      new_mode="paper",
+      body={},
+      password="Ducati1098R!",
+    )

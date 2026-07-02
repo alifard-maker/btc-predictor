@@ -98,8 +98,16 @@ def effective_bot_entry_strategy(
 
   entry_kind = entry_kind_for_bot(kind)
   base = entry_strategy_from_cfg(cfg, kind=entry_kind)
+  # If the config explicitly sets fields under entry_strategy, preserve them.
+  raw_entry = (((cfg or {}).get("hourly") or {}).get("bot") or {}).get("entry_strategy") if entry_kind == "hourly" else (
+    (((cfg or {}).get("intra_slot") or {}).get("bot") or {}).get("entry_strategy")
+  )
+  raw_entry = raw_entry or {}
   preset_kind = "slot15" if kind == "slot15" else "hourly"
   estrat = replace(base, **_entry_preset_map(preset_kind, aggressive))
+  for field in EntryStrategyConfig.__dataclass_fields__:
+    if field in raw_entry:
+      estrat = replace(estrat, **{field: getattr(base, field)})
   if aggressive:
     return estrat
   if tuning and tuning.get("active"):

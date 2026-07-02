@@ -22,7 +22,7 @@ def _realized_adjustment(
   profit_use_pct: float,
 ) -> float:
   if not use_accumulated_profit:
-    return min(0.0, realized)
+    return realized
   if realized <= 0:
     return realized
   pct = _clamp_profit_use_pct(profit_use_pct) / 100.0
@@ -41,13 +41,13 @@ def deploy_bankroll_usd(
   """Capital the bot may use for new entries this interval."""
   pct = _clamp_profit_use_pct(profit_use_pct) / 100.0
   if mode == "paper":
-    if use_accumulated_profit:
-      paper = max(0.0, float(paper_bankroll_usd))
-      cap = float(max_cap)
-      if paper <= cap:
-        return paper
-      return cap + (paper - cap) * pct
-    return max(0.0, min(float(paper_bankroll_usd), float(max_cap)))
+    # Paper bankroll should always accumulate P&L across hours/slots; the
+    # "use_accumulated_profit" toggle is intended for live interval budgeting.
+    paper = max(0.0, float(paper_bankroll_usd))
+    cap = float(max_cap)
+    if paper <= cap:
+      return paper
+    return cap + (paper - cap) * pct
   realized = float(interval_realized_pnl_usd)
   adjustment = _realized_adjustment(
     realized,
@@ -76,6 +76,8 @@ def remaining_budget_usd(
     interval_realized_pnl_usd=interval_realized_pnl_usd,
   )
   concurrent_room = max(0.0, min(deploy, float(max_cap)) - open_exposure_usd)
+  if settings.mode == "paper":
+    return concurrent_room
   if settings.use_accumulated_profit:
     return concurrent_room
   interval_room = max(0.0, float(max_cap) - float(interval_total_entered_usd))

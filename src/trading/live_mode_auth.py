@@ -18,8 +18,13 @@ def require_live_password(
   body: dict[str, Any],
   password: str,
 ) -> None:
-  """Reject paper→live unless body.live_password matches."""
-  if new_mode != "live" or current_mode == "live":
+  """Reject mode switches involving live unless body.live_password matches.
+
+  This prevents accidental UI cross-talk from flipping a live bot back to paper.
+  """
+  if current_mode == new_mode:
+    return
+  if current_mode != "live" and new_mode != "live":
     return
   supplied = str(body.get("live_password") or "")
   if supplied != password:

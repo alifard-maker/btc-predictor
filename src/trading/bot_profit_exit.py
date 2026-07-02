@@ -428,7 +428,7 @@ class Slot15LegExitConfig:
   """Aggressive contract-mark exits for 15m bot (bird-in-the-hand)."""
 
   leg_take_profit_cents: int = 3
-  leg_stop_loss_cents: int = 8
+  leg_stop_loss_cents: int = 4
   leg_stop_gate_min_remaining_seconds: int = 180
   leg_take_profit_usd: float = 0.10
   leg_trail_arm_usd: float = 0.10
@@ -489,7 +489,7 @@ def leg_exit_config(cfg: dict[str, Any] | None, *, bot_kind: str = "slot15") -> 
   bot_cfg = _leg_exit_bot_cfg(cfg, bot_kind=bot_kind)
   return Slot15LegExitConfig(
     leg_take_profit_cents=int(bot_cfg.get("leg_take_profit_cents", 3)),
-    leg_stop_loss_cents=int(bot_cfg.get("leg_stop_loss_cents", 8)),
+    leg_stop_loss_cents=int(bot_cfg.get("leg_stop_loss_cents", 4)),
     leg_stop_gate_min_remaining_seconds=int(
       bot_cfg.get("leg_stop_gate_min_remaining_seconds", 180)
     ),
@@ -817,7 +817,7 @@ def evaluate_slot15_contract_exits(
     pick=pick,
     live_price=live_price,
     gate_on_hourly_thesis=gate_hourly,
-    gate_early_slot15=bot_kind == "slot15",
+    gate_early_slot15=False,
     monitor=monitor,
     seconds_remaining=exit_ctx.seconds_remaining,
     hours_to_settle=hours_to_settle,

@@ -960,6 +960,24 @@ class HourlyBot:
       live.get("hours_to_settle"), cfg,
     )
     if settle_gate:
+      # Prefer a more actionable cooldown reason when available (especially for
+      # trial bots near the end of the hour).
+      pp = live.get("primary_pick") or {}
+      mt = pp.get("ticker")
+      if mt:
+        cheap_cut_cd = max(
+          cheap_leg_cut_cooldown_seconds(cfg, kind="hourly"),
+          cut_loss_label_cooldown_seconds(cfg, kind="hourly"),
+        )
+        if self.store.is_in_cheap_leg_cut_cooldown(
+          event_ticker,
+          label=pp.get("label"),
+          market_ticker=str(mt),
+          cooldown_seconds=cheap_cut_cd,
+        ):
+          identity = pp.get("label") or str(mt)
+          self.store.set_last_skip_reason(f"cheap_leg_cut_cooldown:{identity}")
+          return results
       self.store.set_last_skip_reason(settle_gate)
       return results
 
