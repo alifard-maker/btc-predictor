@@ -283,7 +283,14 @@ class PredictionLoop:
 
   def _hourly_tab_for_bot_status(self, asset: str) -> dict[str, Any] | None:
     """Reuse latest prediction tab when possible — avoids rebuilding on every /bot poll."""
-    return self._cached_hourly_tab(asset) or self._hourly_tab_prediction(asset, include_bot=False)
+    cached = self._cached_hourly_tab(asset)
+    if cached:
+      return cached
+    try:
+      return self._hourly_tab_prediction_cached(asset, include_bot=False, max_age_sec=120.0)
+    except Exception:
+      log.exception("hourly tab for bot status failed (%s)", asset)
+      return None
 
   def all_bot_stores(self) -> list[Any]:
     from src.trading.bot_risk_state import register_bot_stores
@@ -806,7 +813,11 @@ class PredictionLoop:
   ) -> dict[str, Any]:
     """Full Kalshi inventory + fill backfill for the live hourly bot."""
     from src.backtest.mechanics_profiles import entry_kind_for_bot
-    from src.trading.live_position_sync import run_live_position_hygiene
+    from src.trading.live_position_sync import (
+      adopt_filled_resting_enters,
+      adopt_kalshi_orphan_inventory,
+      run_live_position_hygiene,
+    )
 
     store = self.hourly_bot_store(asset, kind=kind)
     settings = store.get_settings()
@@ -817,22 +828,50 @@ class PredictionLoop:
     if not kalshi or not getattr(kalshi, "authenticated", False):
       return {"ok": False, "skipped": "kalshi_not_authenticated"}
     tab = self._hourly_tab_for_bot_status(asset)
-    if not tab or not tab.get("ok"):
-      return {"ok": False, "skipped": "no_tab"}
-    event_ticker = (tab.get("event") or {}).get("event_ticker")
-    if not event_ticker:
-      return {"ok": False, "skipped": "no_event"}
-    report = run_live_position_hygiene(
-      store=store,
-      kalshi=kalshi,
-      event_ticker=str(event_ticker),
-      tab=tab,
-      settings_enabled=bool(settings.enabled),
-      cfg=acfg,
-      kind=entry_kind_for_bot(kind),
-      critical=True,
-      force_fill_sync=force_fill_sync,
-    )
+    event_ticker = ""
+    if tab and tab.get("ok"):
+      event_ticker = str((tab.get("event") or {}).get("event_ticker") or "")
+    entry_kind = entry_kind_for_bot(kind)
+    if tab and tab.get("ok") and event_ticker:
+      report = run_live_position_hygiene(
+        store=store,
+        kalshi=kalshi,
+        event_ticker=event_ticker,
+        tab=tab,
+        settings_enabled=bool(settings.enabled),
+        cfg=acfg,
+        kind=entry_kind,
+        critical=True,
+        force_fill_sync=force_fill_sync,
+      )
+    else:
+      from src.trading.kalshi_fill_sync import sync_kalshi_fills_to_store
+
+      fill_sync = sync_kalshi_fills_to_store(
+        store,
+        kalshi,
+        force=force_fill_sync,
+        cfg=acfg,
+        kind=entry_kind,
+        critical=True,
+      )
+      resting = adopt_filled_resting_enters(
+        store, kalshi, event_ticker or "SYNC", cfg=acfg, kind=entry_kind, critical=True,
+      )
+      orphans = adopt_kalshi_orphan_inventory(
+        store, kalshi, event_ticker or "SYNC", cfg=acfg, kind=entry_kind, critical=True,
+      )
+      adopted_changes = (
+        (resting.get("changes") or [])
+        + (orphans.get("changes") or [])
+        + (fill_sync.get("changes") or [])
+      )
+      report = {
+        "ok": True,
+        "changes": adopted_changes,
+        "kalshi_fill_sync": fill_sync,
+        "skipped_tab": True,
+      }
     fill = report.get("kalshi_fill_sync") or {}
     return {
       "ok": bool(report.get("ok", True)),
