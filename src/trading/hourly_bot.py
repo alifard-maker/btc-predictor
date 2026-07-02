@@ -75,7 +75,6 @@ from src.trading.entry_strategy import (
   cap_live_entry_contracts,
   correlation_block_reason,
   entry_budget_usd,
-  passes_ask_edge_gate,
   passes_tail_entry_gate,
   rank_hourly_candidates,
 )
@@ -1139,23 +1138,17 @@ class HourlyBot:
         else estrat
       )
 
-      if self.asset == "btc":
-        est_price = None
-        if settings.mode == "paper":
-          est_price = ask_cents_for_side(pick, side)
-        else:
-          est_price = _price_cents_for_pick(pick, side)
-        ok_tail, tail_reason, _ = passes_tail_entry_gate(
-          pick, side, est_price, estrat_entry
-        )
-        if not ok_tail:
-          last_reason = tail_reason or "tail_entry_blocked"
-          continue
+      est_price = None
+      if settings.mode == "paper":
+        est_price = ask_cents_for_side(pick, side)
       else:
-        ok_edge, ask_edge = passes_ask_edge_gate(pick, side, estrat_entry.min_ask_edge_cents)
-        if not ok_edge:
-          last_reason = f"ask_edge_too_low:{ask_edge:.0f}c"
-          continue
+        est_price = _price_cents_for_pick(pick, side)
+      ok_tail, tail_reason, _ = passes_tail_entry_gate(
+        pick, side, est_price, estrat_entry
+      )
+      if not ok_tail:
+        last_reason = tail_reason or "tail_entry_blocked"
+        continue
 
       block = correlation_block_reason(
         open_pos,
@@ -1193,13 +1186,12 @@ class HourlyBot:
           continue
         price_cents = int(entry_fill["price_cents"])
         count = int(entry_fill["contracts"])
-        if self.asset == "btc":
-          ok_fill, fill_reason, _ = passes_tail_entry_gate(
-            pick, side, price_cents, estrat_entry
-          )
-          if not ok_fill:
-            last_reason = fill_reason or "tail_entry_blocked"
-            continue
+        ok_fill, fill_reason, _ = passes_tail_entry_gate(
+          pick, side, price_cents, estrat_entry
+        )
+        if not ok_fill:
+          last_reason = fill_reason or "tail_entry_blocked"
+          continue
       else:
         pricing = live_entry_pricing_from_cfg(
           cfg, kind=self.kind, aggressive=settings.aggressive_entries
@@ -1223,13 +1215,12 @@ class HourlyBot:
           last_reason = f"missing_price:{market_ticker}"
           continue
         price_cents = int(price_raw)
-        if self.asset == "btc":
-          ok_fill, fill_reason, _ = passes_tail_entry_gate(
-            pick, side, price_cents, estrat_entry
-          )
-          if not ok_fill:
-            last_reason = fill_reason or "tail_entry_blocked"
-            continue
+        ok_fill, fill_reason, _ = passes_tail_entry_gate(
+          pick, side, price_cents, estrat_entry
+        )
+        if not ok_fill:
+          last_reason = fill_reason or "tail_entry_blocked"
+          continue
         count = _contracts_for_budget(stake, price_cents)
         if settings.mode == "live":
           count = cap_live_entry_contracts(

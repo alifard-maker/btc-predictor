@@ -552,9 +552,10 @@ eth:
       min_edge_for_highlight: 0.08
       min_edge_override_regime: 0.10
     bot:
+      mirror_btc_settings: true  # on deploy: copy BTC hourly dashboard settings (mode, cap, auto-bet)
       enabled: false
       mode: paper
-      max_spend_per_hour_usd: 10
+      max_spend_per_hour_usd: 15
       allow_strong: false
       allow_actionable: false
       use_accumulated_profit: false
@@ -572,11 +573,18 @@ eth:
       min_take_profit_pct: 0.10
       max_take_profit_pct: 0.40
       min_hold_seconds: 120
+      min_hours_to_settle_for_entry: 0.25
+      max_hours_to_settle_for_entry: 1.25
+      experiment_start_at: "2026-07-02T07:20:00+00:00"
       profit_exit_cooldown_seconds: 60
       cheap_leg_max_entry_cents: 20
       cheap_leg_cut_loss_cents: 10
       cheap_leg_cut_cooldown_seconds: 300
       cut_loss_label_cooldown_seconds: 600
+      live_entry:
+        cross_spread_enabled: true
+        cross_spread_min_edge_cents: 12
+        passive_limit_at: mid
       cut_loss_late_hour_min_hours: 0.167
       near_strike_cut_min_hours: 0.083
       near_strike_tolerance_usd: 3.0
@@ -587,21 +595,84 @@ eth:
         safety_weight: 0.40
         kelly_enabled: true
         kelly_fraction: 0.15
-        min_ask_edge_cents: 10
-        tail_entry_max_cents: 40
-        tail_entry_block: true
-        tail_entry_min_ask_edge_cents: 18
-        max_entries_per_cycle: 2
+        min_ask_edge_cents: 9
+        tail_entry_max_cents: 20
+        tail_entry_block: false
+        tail_entry_min_ask_edge_cents: 15
+        max_entries_per_cycle: 4
         max_concurrent_positions: 12
-        max_budget_fraction_per_entry: 0.30
-        max_stake_per_entry_usd: 1.50
-        max_contracts_per_entry: 4
+        max_budget_fraction_per_entry: 0.25
+        max_stake_per_entry_usd: 3.50
+        max_contracts_per_entry: 6
         correlation_guard: true
         allow_barbell: true
         barbell_min_strike_gap_pct: 0.20
         allow_scale_in: true
-        scale_in_max_legs_per_ticker: 2
+        scale_in_max_legs_per_ticker: 4
         scale_in_min_unrealized_pnl_usd: 0.05
+      live_inventory:
+        enabled: true
+        force_correlation_guard: true
+        correlation_min_strike_gap_pct: 0.18
+        max_same_side_threshold_legs: 1
+        max_same_side_range_legs: 1
+        max_concurrent_positions: 4
+        max_entries_per_cycle: 2
+        allow_scale_in: false
+      live_exit:
+        cut_loss_min_usd: 0.20
+        cut_loss_min_hold_seconds: 120
+        block_cut_when_profitable: true
+        cheap_leg_cut_min_hold_seconds: 90
+        cheap_leg_cut_min_loss_usd: 0.15
+        block_tail_entries: true
+        tail_block_max_cents: 20
+        reconcile_min_position_age_seconds: 45
+        reconcile_grace_after_exit_seconds: 90
+        take_profit_usd: 0.08
+        profit_exit_cooldown_seconds: 30
+        mid_price_take_profit_usd: 0.08
+        mid_price_max_entry_cents: 60
+        adopted_leg_cut_loss_min_hold_seconds: 300
+        adopted_leg_cut_loss_min_usd: 0.50
+        max_adopted_contracts: 2
+        max_resting_enters_per_hour: 6
+      live_adaptive:
+        enabled: true
+        profit_lock_usd: 1.25
+        min_rally_expected_move_pct: 0.15
+        min_rally_grind_pct: 0.10
+        rally_cross_spread_enabled: true
+        rally_cross_spread_min_edge_cents: 15.0
+        rally_cross_spread_requires_intrahour: true
+        rally_max_same_side_threshold_legs: 2
+        rally_max_same_side_range_legs: 0
+        rally_max_entries_per_cycle: 2
+        rally_min_ask_edge_cents: 8.0
+        rally_block_range_bands: true
+        defense_max_same_side_threshold_legs: 1
+        defense_max_same_side_range_legs: 0
+        defense_max_entries_per_cycle: 1
+        defense_min_ask_edge_cents: 12.0
+        defense_block_range_bands: true
+        defense_skip_all_entries: false
+        defense_threshold_only: false
+      rally_only:
+        enabled: true
+        defense_skip_all_entries: true
+        profit_lock_usd: 1.25
+        rally_block_range_bands: true
+        defense_block_range_bands: true
+      soft_rally:
+        enabled: true
+        defense_skip_all_entries: false
+        defense_threshold_only: true
+        defense_min_ask_edge_cents: 15.0
+        defense_yes_mid_min_cents: 40
+        defense_yes_mid_max_cents: 80
+        profit_lock_usd: 1.25
+        rally_block_range_bands: true
+        defense_block_range_bands: true
       trial:
         continuous_enabled: true
         poll_seconds: 10
@@ -626,6 +697,15 @@ eth:
         reassess_neutral_take_profit: true
         reassess_neutral_band: 0.07
         reassess_neutral_min_unrealized_usd: 0.05
+      trial_rally:
+        continuous_enabled: true
+        poll_seconds: 10
+      trial_soft:
+        continuous_enabled: true
+        poll_seconds: 10
+      trial_mech:
+        continuous_enabled: true
+        poll_seconds: 10
     sigma_calibration: true
 
 # Walk-forward backtest — realistic fills, fees, and ML validation

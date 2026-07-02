@@ -2933,6 +2933,14 @@ class PredictionLoop:
         log.info("Paper bots auto-enabled from PAPER_BOT_AUTO_ENABLE: %s", ", ".join(activated))
     except Exception as e:
       log.warning("Paper bot bootstrap skipped: %s", e)
+    try:
+      from src.trading.bot_hourly_settings_align import align_eth_hourly_settings_from_btc
+
+      mirror_stats = align_eth_hourly_settings_from_btc(self)
+      if mirror_stats.get("mirrored"):
+        log.info("ETH hourly settings mirrored from BTC: %s", mirror_stats)
+    except Exception as e:
+      log.warning("ETH hourly settings mirror skipped: %s", e)
     log.info("Scheduler started: 15m slots at :00/:15/:30/:45 ET (%s)", self.tz)
     return scheduler
 
