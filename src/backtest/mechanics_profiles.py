@@ -17,6 +17,8 @@ HOURLY_TRIAL_KINDS = frozenset({
   "hourly_trial_mech",
 })
 
+HOURLY_V2_KIND = "hourly_v2"
+
 _KIND_MECHANICS_PROFILE: dict[str, MechanicsProfile] = {
   "hourly_trial": "current",
   "hourly_trial_rally": "rally_only",
@@ -42,11 +44,21 @@ def mechanics_profile_for_kind(kind: str) -> MechanicsProfile | None:
 
 
 def entry_kind_for_bot(kind: str) -> str:
-  """Entry strategy / live guards use hourly mechanics for all trial bot kinds."""
-  return "hourly" if is_hourly_trial_kind(kind) else kind
+  """Entry strategy / live guards use hourly mechanics for trial and v2 bot kinds."""
+  if is_hourly_trial_kind(kind) or is_hourly_v2_kind(kind):
+    return "hourly"
+  return kind
+
+
+def is_hourly_v2_kind(kind: str) -> bool:
+  return kind == HOURLY_V2_KIND
 
 
 def cfg_with_profile_for_kind(cfg: dict[str, Any], kind: str) -> dict[str, Any]:
+  if is_hourly_v2_kind(kind):
+    from src.assets import asset_v2_runtime_cfg
+
+    return asset_v2_runtime_cfg(cfg)
   profile = mechanics_profile_for_kind(kind)
   if profile:
     return apply_mechanics_profile(cfg, profile)

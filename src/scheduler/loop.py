@@ -17,7 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from src.calibration.sources import KALSHI_EXIT_SOURCE, KALSHI_REF_SOURCE
 from src.calibration.hourly_tracker import HourlyCalibrationTracker
 from src.calibration.tracker import CalibrationTracker
-from src.assets import asset_cfg, asset_enabled, index_id_for_cfg
+from src.assets import asset_cfg, asset_enabled, asset_v2_enabled, index_id_for_cfg
 from src.config import ensure_dirs, load_config
 from src.data.fetcher import DataFetcher
 from src.data.kalshi import KalshiClient, KalshiPriceQuote
@@ -113,6 +113,10 @@ class PredictionLoop:
       self.eth_hourly_calibration = HourlyCalibrationTracker(self._eth_cfg, asset="eth")
       if self._eth_cfg.get("kalshi", {}).get("enabled", True):
         self.eth_calibration = CalibrationTracker(self._eth_cfg)
+
+    from src.scheduler.hourly_v2_support import init_hourly_v2
+
+    init_hourly_v2(self)
 
   def _asset_hourly_calibration(self, asset: str) -> HourlyCalibrationTracker:
     if asset == "eth":
@@ -308,6 +312,10 @@ class PredictionLoop:
       stores.append(self.hourly_trial_bot_store("eth"))
       if self._slot15m_enabled("eth"):
         stores.append(self.slot15_bot_store("eth"))
+    if asset_v2_enabled(self.cfg, "btc"):
+      stores.append(self.hourly_bot_store("btc", kind="hourly_v2"))
+    if asset_v2_enabled(self.cfg, "eth"):
+      stores.append(self.hourly_bot_store("eth", kind="hourly_v2"))
     register_bot_stores(stores)
     return stores
 
@@ -366,6 +374,8 @@ class PredictionLoop:
       return f"hourly_trial_soft_bot_{asset}.db"
     if kind == "hourly_trial_mech":
       return f"hourly_trial_mech_bot_{asset}.db"
+    if kind == "hourly_v2":
+      return f"hourly_v2_bot_{asset}.db"
     return f"hourly_bot_{asset}.db"
 
   def _hourly_bot_label(self, kind: str, label_asset: str) -> str:
@@ -374,6 +384,7 @@ class PredictionLoop:
       "hourly_trial_rally": f"{label_asset} Hourly Trial — Rally",
       "hourly_trial_soft": f"{label_asset} Hourly Trial — Soft",
       "hourly_trial_mech": f"{label_asset} Hourly Trial — Mech",
+      "hourly_v2": f"{label_asset} Hourly V2 (path)",
     }
     if kind in labels:
       return labels[kind]
@@ -1388,6 +1399,74 @@ class PredictionLoop:
       return None
     return self._run_hourly_prediction_for_asset("eth", force=force)
 
+  def hourly_v2_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
+    from src.scheduler.hourly_v2_support import hourly_v2_tab_prediction
+
+    if not asset_v2_enabled(self.cfg, "btc"):
+      return {"ok": False, "error": "BTC hourly v2 disabled"}
+    return hourly_v2_tab_prediction(self, "btc", include_bot=include_bot)
+
+  def eth_hourly_v2_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
+    from src.scheduler.hourly_v2_support import hourly_v2_tab_prediction
+
+    if not asset_v2_enabled(self.cfg, "eth"):
+      return {"ok": False, "error": "ETH hourly v2 disabled"}
+    return hourly_v2_tab_prediction(self, "eth", include_bot=include_bot)
+
+  def run_hourly_v2_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
+    from src.scheduler.hourly_v2_support import run_hourly_v2_prediction_for_asset
+
+    if not asset_v2_enabled(self.cfg, "btc"):
+      return None
+    return run_hourly_v2_prediction_for_asset(self, "btc", force=force)
+
+  def run_eth_hourly_v2_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
+    from src.scheduler.hourly_v2_support import run_hourly_v2_prediction_for_asset
+
+    if not asset_v2_enabled(self.cfg, "eth"):
+      return None
+    return run_hourly_v2_prediction_for_asset(self, "eth", force=force)
+
+  def run_hourly_v2_open_snapshot(self) -> dict[str, Any] | None:
+    from src.scheduler.hourly_v2_support import run_hourly_v2_open_for_asset
+
+    if not asset_v2_enabled(self.cfg, "btc"):
+      return None
+    return run_hourly_v2_open_for_asset(self, "btc")
+
+  def run_eth_hourly_v2_open_snapshot(self) -> dict[str, Any] | None:
+    from src.scheduler.hourly_v2_support import run_hourly_v2_open_for_asset
+
+    if not asset_v2_enabled(self.cfg, "eth"):
+      return None
+    return run_hourly_v2_open_for_asset(self, "eth")
+
+  def run_hourly_v2_late_call(self, *, force: bool = False) -> dict[str, Any] | None:
+    from src.scheduler.hourly_v2_support import run_hourly_v2_late_call_for_asset
+
+    if not asset_v2_enabled(self.cfg, "btc"):
+      return None
+    return run_hourly_v2_late_call_for_asset(self, "btc", force=force)
+
+  def run_eth_hourly_v2_late_call(self, *, force: bool = False) -> dict[str, Any] | None:
+    from src.scheduler.hourly_v2_support import run_hourly_v2_late_call_for_asset
+
+    if not asset_v2_enabled(self.cfg, "eth"):
+      return None
+    return run_hourly_v2_late_call_for_asset(self, "eth", force=force)
+
+  def run_hourly_v2_bot_continuous(self) -> None:
+    from src.scheduler.hourly_v2_support import run_hourly_v2_bot_continuous
+
+    if asset_v2_enabled(self.cfg, "btc"):
+      run_hourly_v2_bot_continuous(self, "btc")
+
+  def run_eth_hourly_v2_bot_continuous(self) -> None:
+    from src.scheduler.hourly_v2_support import run_hourly_v2_bot_continuous
+
+    if asset_v2_enabled(self.cfg, "eth"):
+      run_hourly_v2_bot_continuous(self, "eth")
+
   def run_hourly_late_call(self, *, force: bool = False) -> dict[str, Any] | None:
     return self._run_hourly_late_call_for_asset("btc", force=force)
 
@@ -1689,6 +1768,14 @@ class PredictionLoop:
     self.resolve_hourly_outcomes(asset="btc")
     if asset_enabled(self.cfg, "eth"):
       self.resolve_eth_hourly_outcomes()
+    if asset_v2_enabled(self.cfg, "btc"):
+      from src.scheduler.hourly_v2_support import resolve_hourly_v2_outcomes
+
+      resolve_hourly_v2_outcomes(self, asset="btc")
+    if asset_v2_enabled(self.cfg, "eth"):
+      from src.scheduler.hourly_v2_support import resolve_hourly_v2_outcomes
+
+      resolve_hourly_v2_outcomes(self, asset="eth")
     self._resolve_slot_outcomes("btc")
     if self._slot15m_enabled("eth"):
       self._resolve_slot_outcomes("eth")
@@ -2062,12 +2149,20 @@ class PredictionLoop:
     specs = (
       ("hourly", "btc", self.hourly_bot_store("btc"), self.cfg),
       ("hourly", "eth", self.hourly_bot_store("eth"), self._eth_cfg or self.cfg),
+      ("hourly_v2", "btc", self.hourly_bot_store("btc", kind="hourly_v2"), self._btc_v2_cfg or self.cfg),
+      ("hourly_v2", "eth", self.hourly_bot_store("eth", kind="hourly_v2"), self._eth_v2_cfg or self.cfg),
       ("slot15", "btc", self.slot15_bot_store("btc"), self._acfg_15m("btc")),
       ("slot15", "eth", self.slot15_bot_store("eth"), self._acfg_15m("eth")),
     )
     for kind, asset, store, acfg in specs:
       if asset == "eth" and kind == "slot15" and not self._slot15m_enabled("eth"):
         continue
+      if kind == "hourly_v2" and not asset_v2_enabled(self.cfg, asset):
+        continue
+      if kind == "hourly_v2":
+        from src.assets import asset_v2_runtime_cfg
+
+        acfg = asset_v2_runtime_cfg(acfg)
       try:
         out = run_auto_tune_for_store(store, cfg=acfg, kind=kind)
         out["kind"] = kind
@@ -2103,12 +2198,22 @@ class PredictionLoop:
     specs = (
       ("hourly", "btc", self.hourly_bot_store("btc"), self.cfg),
       ("hourly", "eth", self.hourly_bot_store("eth"), self._eth_cfg or self.cfg),
+      ("hourly_v2", "btc", self.hourly_bot_store("btc", kind="hourly_v2"), self._btc_v2_cfg or self.cfg),
+      ("hourly_v2", "eth", self.hourly_bot_store("eth", kind="hourly_v2"), self._eth_v2_cfg or self.cfg),
       ("slot15", "btc", self.slot15_bot_store("btc"), self._acfg_15m("btc")),
       ("slot15", "eth", self.slot15_bot_store("eth"), self._acfg_15m("eth")),
     )
     for kind, asset, store, bot_cfg in specs:
+      if bot_cfg is None:
+        continue
       if asset == "eth" and kind == "slot15" and not self._slot15m_enabled("eth"):
         continue
+      if kind == "hourly_v2" and not asset_v2_enabled(self.cfg, asset):
+        continue
+      if kind == "hourly_v2":
+        from src.assets import asset_v2_runtime_cfg
+
+        bot_cfg = asset_v2_runtime_cfg(bot_cfg)
       try:
         out = run_adaptive_calibration_for_store(store, cfg=bot_cfg, kind=kind)
         out["kind"] = kind
@@ -2257,6 +2362,72 @@ class PredictionLoop:
             id="hourly_trial_bot_continuous_eth",
             max_instances=1,
           )
+
+  def _schedule_hourly_v2(self, scheduler) -> None:
+    from src.assets import asset_v2_cfg
+
+    if asset_v2_enabled(self.cfg, "btc"):
+      v2cfg = self._btc_v2_cfg or asset_v2_cfg(self.cfg, "btc")
+      h2 = v2cfg.get("hourly_v2", {})
+      if h2.get("hour_open_snapshot", True):
+        scheduler.add_job(
+          self.run_hourly_v2_open_snapshot,
+          CronTrigger(minute=str(int(h2.get("open_log_minute", 0))), timezone=self.tz),
+          id="hourly_v2_open_btc",
+          max_instances=1,
+        )
+      scheduler.add_job(
+        self.run_hourly_v2_prediction,
+        CronTrigger(minute=str(int(h2.get("log_minute", 5))), timezone=self.tz),
+        id="hourly_v2_predict_btc",
+        max_instances=1,
+      )
+      scheduler.add_job(
+        self.run_hourly_v2_late_call,
+        CronTrigger(minute=str(int(h2.get("late_call_minute", 45))), timezone=self.tz),
+        id="hourly_v2_late_call_btc",
+        max_instances=1,
+      )
+      bot_cfg = h2.get("bot") or {}
+      if bot_cfg.get("continuous_enabled", True):
+        scheduler.add_job(
+          self.run_hourly_v2_bot_continuous,
+          "interval",
+          seconds=int(bot_cfg.get("poll_seconds", 10)),
+          id="hourly_v2_bot_continuous_btc",
+          max_instances=1,
+        )
+    if asset_v2_enabled(self.cfg, "eth"):
+      v2cfg = self._eth_v2_cfg or asset_v2_cfg(self.cfg, "eth")
+      h2 = v2cfg.get("hourly_v2", {})
+      if h2.get("hour_open_snapshot", True):
+        scheduler.add_job(
+          self.run_eth_hourly_v2_open_snapshot,
+          CronTrigger(minute=str(int(h2.get("open_log_minute", 0))), timezone=self.tz),
+          id="hourly_v2_open_eth",
+          max_instances=1,
+        )
+      scheduler.add_job(
+        self.run_eth_hourly_v2_prediction,
+        CronTrigger(minute=str(int(h2.get("log_minute", 5))), timezone=self.tz),
+        id="hourly_v2_predict_eth",
+        max_instances=1,
+      )
+      scheduler.add_job(
+        self.run_eth_hourly_v2_late_call,
+        CronTrigger(minute=str(int(h2.get("late_call_minute", 45))), timezone=self.tz),
+        id="hourly_v2_late_call_eth",
+        max_instances=1,
+      )
+      bot_cfg = h2.get("bot") or {}
+      if bot_cfg.get("continuous_enabled", True):
+        scheduler.add_job(
+          self.run_eth_hourly_v2_bot_continuous,
+          "interval",
+          seconds=int(bot_cfg.get("poll_seconds", 10)),
+          id="hourly_v2_bot_continuous_eth",
+          max_instances=1,
+        )
 
   def _auto_train_first_run(self) -> datetime:
     """Next calendar day at configured hour (default 2:00 AM ET)."""
@@ -2840,6 +3011,7 @@ class PredictionLoop:
     self._schedule_predictions(scheduler)
     self._schedule_second_chance(scheduler)
     self._schedule_hourly(scheduler)
+    self._schedule_hourly_v2(scheduler)
     self._schedule_slot15_bot(scheduler)
     scheduler.add_job(self.fetch_and_store, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=2), id="fetch_now")
     scheduler.add_job(self.run_prediction, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=8), id="predict_now")

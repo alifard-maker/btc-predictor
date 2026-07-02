@@ -768,7 +768,12 @@ class PostgresHourlyStore(HourlyPredictionStore):
     return True
 
 
-def create_hourly_store(cfg: dict[str, Any], *, asset: str = "btc") -> HourlyPredictionStore:
+def create_hourly_store(
+  cfg: dict[str, Any],
+  *,
+  asset: str = "btc",
+  db_basename: str | None = None,
+) -> HourlyPredictionStore:
   db_url = os.getenv("DATABASE_URL") or cfg.get("database_url")
   if db_url:
     try:
@@ -778,7 +783,8 @@ def create_hourly_store(cfg: dict[str, Any], *, asset: str = "btc") -> HourlyPre
       return store
     except Exception as e:
       log.warning("PostgreSQL hourly store unavailable (%s), using SQLite", e)
-  db_path = str(Path(cfg["paths"]["logs"]) / "hourly_predictions.db")
+  name = db_basename or "hourly_predictions.db"
+  db_path = str(Path(cfg["paths"]["logs"]) / name)
   store = SqliteHourlyStore(db_path, asset=asset)
   store.init()
   log.info("Using SQLite for hourly predictions at %s (%s)", db_path, asset)

@@ -246,6 +246,7 @@
       <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">BTC Hourly</button>
       <button type="button" class="tab" id="tab-eth-hourly" data-panel="panel-eth-hourly" onclick="switchTab('eth-hourly')">ETH Hourly</button>
       <button type="button" class="tab" id="tab-trials" data-panel="panel-trials" onclick="switchTab('trials')">Trials</button>
+      <button type="button" class="tab" id="tab-hourly-v2" data-panel="panel-hourly-v2" onclick="switchTab('hourly-v2')">Hourly V2</button>
     </nav>
 
     <div id="bot-risk-banner" class="card" style="display:none;margin-bottom:.75rem;border-color:var(--warn);background:rgba(255,180,0,.08)"></div>
@@ -625,6 +626,33 @@
         <div id="eth-hourly-trial-bot"><p class="muted">Loading…</p></div>
       </div>
     </div>
+
+    <div id="panel-hourly-v2" style="display:none">
+      <div class="card">
+        <h2>Hourly V2 · Path memory (parallel experiment)</h2>
+        <p class="muted" style="font-size:.78rem;margin:0">Fully isolated from <strong>BTC/ETH Hourly v1</strong>: separate predictions DB, paper bot, and logs. Uses <strong>structure + intrahour path</strong> (momentum, drawdown, recovery) — no v1 LightGBM blend. Compare forecast accuracy and paper P&amp;L here vs the main hourly tabs.</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:.75rem">
+        <div class="card" style="border-color:rgba(56,189,248,.35)">
+          <h2>BTC Hourly V2</h2>
+          <div id="btc-hourly-v2-bot"><p class="muted">Loading…</p></div>
+          <div id="v2-btc-summary" style="margin-top:.75rem"></div>
+          <h3 style="font-size:.9rem;margin:1rem 0 .35rem">Calibration</h3>
+          <div id="v2-btc-calibration"><p class="muted">Loading…</p></div>
+          <h3 style="font-size:.9rem;margin:1rem 0 .35rem">Prediction history</h3>
+          <div style="overflow-x:auto" id="v2-btc-history"><p class="muted">Loading…</p></div>
+        </div>
+        <div class="card" style="border-color:rgba(167,139,250,.35)">
+          <h2>ETH Hourly V2</h2>
+          <div id="eth-hourly-v2-bot"><p class="muted">Loading…</p></div>
+          <div id="v2-eth-summary" style="margin-top:.75rem"></div>
+          <h3 style="font-size:.9rem;margin:1rem 0 .35rem">Calibration</h3>
+          <div id="v2-eth-calibration"><p class="muted">Loading…</p></div>
+          <h3 style="font-size:.9rem;margin:1rem 0 .35rem">Prediction history</h3>
+          <div style="overflow-x:auto" id="v2-eth-history"><p class="muted">Loading…</p></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -705,12 +733,16 @@
     let slot15RenderTab = '15m';
     let dailyFetchGen = 0;
     let trialsFetchGen = 0;
+    let hourlyV2FetchGen = 0;
     let slot15FetchGen = 0;
     let hourlyGuideCheatOpen = false;
     const lastBotStatus = { btc: null, eth: null };
+    const lastV2BotStatus = { btc: null, eth: null };
     const lastHourlyTrialBotStatusByKey = {};
     const HOURLY_TRIAL_KINDS = new Set(['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft', 'hourly_trial_mech']);
+    const HOURLY_V2_KIND = 'hourly_v2';
     function isHourlyTrialKind(kind) { return HOURLY_TRIAL_KINDS.has(kind); }
+    function isHourlyV2Kind(kind) { return kind === HOURLY_V2_KIND; }
     function hourlyTrialKindsForAsset(asset) {
       return asset === 'btc'
         ? ['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft', 'hourly_trial_mech']
@@ -1703,11 +1735,26 @@
       $('panel-daily').style.display = name === 'daily' ? '' : 'none';
       $('panel-eth-hourly').style.display = name === 'eth-hourly' ? '' : 'none';
       $('panel-trials').style.display = name === 'trials' ? '' : 'none';
+      $('panel-hourly-v2').style.display = name === 'hourly-v2' ? '' : 'none';
       $('tab-15m').classList.toggle('active', name === '15m');
       $('tab-eth-15m').classList.toggle('active', name === 'eth-15m');
       $('tab-daily').classList.toggle('active', name === 'daily');
       $('tab-eth-hourly').classList.toggle('active', name === 'eth-hourly');
       $('tab-trials').classList.toggle('active', name === 'trials');
+      $('tab-hourly-v2').classList.toggle('active', name === 'hourly-v2');
+      if (name === 'hourly-v2') {
+        for (const asset of ['btc', 'eth']) {
+          const cached = lastV2BotStatus[asset];
+          const key = botUiKey(HOURLY_V2_KIND, asset);
+          if (cached?.settings && !pendingBotPatch[key]) {
+            lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_hour_usd');
+          }
+          if (cached) renderHourlyBot(cached, asset, HOURLY_V2_KIND);
+          else renderHourlyBot({ ok: false, error: 'Loading bot status…' }, asset, HOURLY_V2_KIND);
+        }
+        loadHourlyV2();
+        return;
+      }
       if (name === 'trials') {
         for (const asset of ['btc', 'eth']) {
           for (const trialKind of hourlyTrialKindsForAsset(asset)) {
@@ -2010,13 +2057,50 @@
       </div>`;
     }
 
+    function renderForecastVsSettle(fvs, targetId, indexLabel) {
+      const el = $(targetId);
+      if (!el) return;
+      if (!fvs || !fvs.n_resolved) {
+        el.innerHTML = '<p class="muted" style="font-size:.75rem">No resolved hours yet — compares locked μ vs settle (independent of bot).</p>';
+        return;
+      }
+      const roll = fvs.rolling_direction_accuracy || {};
+      const rollHtml = Object.entries(roll).map(([w, r]) => {
+        if (!r.total) return `<div><span>${w}</span><strong class="muted">—</strong></div>`;
+        return `<div><span>μ direction ${w}</span><strong>${pct(r.accuracy)} (${r.correct}/${r.total})</strong></div>`;
+      }).join('');
+      const recent = (fvs.recent || []).slice(0, 6).map((r) => {
+        const ok = r.direction_correct === true;
+        const miss = r.direction_correct === false;
+        const tag = ok ? '<span class="up">✓</span>' : miss ? '<span class="down">✗</span>' : '—';
+        const err = r.mu_error_usd != null ? ` · ${signedPrice(r.mu_error_usd)} vs μ` : '';
+        return `<tr><td style="font-size:.72rem">${time(r.logged_at)}</td><td>${tag}${err}</td><td class="muted" style="font-size:.72rem">${indexLabel} ${price(r.settle_brti)}</td></tr>`;
+      }).join('');
+      el.innerHTML = `
+        <div class="stats-block epoch">
+          <h3 style="font-size:.85rem;margin:0 0 .5rem">Forecast vs settle (@ :05 lock)</h3>
+          <p class="muted" style="font-size:.72rem;margin-bottom:.5rem">Did settlement end <strong>above/below</strong> reference in the same direction as blended μ? Separate from contract signal accuracy.</p>
+          <div class="cal-stats">
+            <div><span>Resolved</span><strong>${fvs.n_resolved}</strong></div>
+            ${fvs.direction_accuracy != null ? `<div><span>μ direction accuracy</span><strong>${pct(fvs.direction_accuracy)}</strong></div>` : ''}
+            ${fvs.mean_abs_error_usd != null ? `<div><span>Mean |μ error|</span><strong>${price(fvs.mean_abs_error_usd)}</strong></div>` : ''}
+            ${fvs.median_abs_error_usd != null ? `<div><span>Median |μ error|</span><strong>${price(fvs.median_abs_error_usd)}</strong></div>` : ''}
+            ${fvs.mean_error_sigma != null ? `<div><span>Mean |error|/σ</span><strong>${fvs.mean_error_sigma.toFixed(2)}</strong></div>` : ''}
+            ${fvs.in_zone_rate != null ? `<div><span>Settle in zone</span><strong>${pct(fvs.in_zone_rate)}</strong></div>` : ''}
+          </div>
+          <div class="cal-stats" style="margin-top:.5rem">${rollHtml}</div>
+          ${recent ? `<table style="margin-top:.65rem;width:100%"><thead><tr><th>Hour</th><th>Direction</th><th>Settle</th></tr></thead><tbody>${recent}</tbody></table>` : ''}
+        </div>`;
+    }
+
     function renderHourlyCalibration(data) {
       const s = data?.summary || {};
       const sr = s.strategy_range || {};
       const at = s.all_time?.open || {};
       const hasRange = (sr.most_likely_band?.n || 0) > 0 || (sr.all_lean_bands?.n || 0) > 0 || (sr.settlement_zone?.n || 0) > 0;
       if (!s.n_resolved && !at.n_resolved && !hasRange) {
-        h$('hourly-calibration').innerHTML = '<p class="muted">No resolved hourly events yet — logged each hour at :05 ET when a Kalshi book is open.</p>';
+        h$('hourly-calibration').innerHTML = '<p class="muted">No resolved hourly events yet — logged each hour at :05 ET when a Kalshi book is open.</p><div id="' + hourlyPrefix() + 'forecast-vs-settle"></div>';
+        renderForecastVsSettle(s.forecast_vs_settle, hourlyPrefix() + 'forecast-vs-settle', hourlyApi().indexLabel);
         return;
       }
       const idx = hourlyApi().indexLabel;
@@ -2042,7 +2126,129 @@
           ${renderHourlyBandStats('Most likely band @ lock', sr.most_likely_band)}
           ${renderHourlyBandStats('Best edge band @ lock', sr.best_edge_band)}
           ${sr.settlement_zone?.n ? `<div style="margin-top:.35rem"><h4 style="font-size:.8rem;margin:0 0 .35rem;color:var(--muted)">Settlement zone @ lock</h4><div class="cal-stats"><div><span>Scored</span><strong>${sr.settlement_zone.n}</strong></div><div><span>${idx} in zone</span><strong>${pct(sr.settlement_zone.in_zone_rate)}</strong></div></div></div>` : ''}
+        </div>
+        <div id="${hourlyPrefix()}forecast-vs-settle" style="margin-top:.75rem"></div>`;
+      renderForecastVsSettle(s.forecast_vs_settle, hourlyPrefix() + 'forecast-vs-settle', idx);
+    }
+
+    function renderHourlyV2Calibration(data, asset) {
+      const s = data?.summary || {};
+      const target = asset === 'eth' ? 'v2-eth-calibration' : 'v2-btc-calibration';
+      const idx = asset === 'eth' ? 'ERTI' : 'BRTI';
+      const el = $(target);
+      if (!el) return;
+      el.innerHTML = `<div class="cal-stats">
+          <div><span>Resolved</span><strong>${s.n_resolved || 0}</strong></div>
+          ${s.accuracy != null ? `<div><span>Signal accuracy</span><strong>${pct(s.accuracy)}</strong></div>` : ''}
+          ${s.brier_score != null ? `<div><span>Brier</span><strong>${s.brier_score.toFixed(4)}</strong></div>` : ''}
+        </div>
+        <div id="${target}-fvs" style="margin-top:.75rem"></div>`;
+      renderForecastVsSettle(s.forecast_vs_settle, `${target}-fvs`, idx);
+    }
+
+    function renderHourlyV2History(rows, asset) {
+      const target = asset === 'eth' ? 'v2-eth-history' : 'v2-btc-history';
+      const el = $(target);
+      if (!el) return;
+      if (!rows || !rows.length) {
+        el.innerHTML = '<p class="muted">No v2 predictions logged yet.</p>';
+        return;
+      }
+      const idx = asset === 'eth' ? 'ERTI' : 'BRTI';
+      el.innerHTML = `<table>
+        <thead><tr><th>Logged</th><th>Pick</th><th>Signal</th><th>Outcome</th></tr></thead>
+        <tbody>${rows.map((r) => {
+          const wrong = hourlyPickWrong(r);
+          let out = r.outcome == null ? '<span class="muted">pending</span>'
+            : wrong === true ? '<span class="down">MISS ✗</span>'
+            : wrong === false ? '<span class="up">HIT ✓</span>'
+            : (r.outcome ? '<span class="up">YES</span>' : '<span class="down">NO</span>');
+          return `<tr>
+            <td style="font-size:.78rem">${time(r.logged_at)}</td>
+            <td style="font-size:.78rem">${r.primary_label || '—'}</td>
+            <td>${r.primary_signal || '—'}</td>
+            <td>${out}${r.settle_brti != null ? `<div class="muted" style="font-size:.68rem">${idx} ${price(r.settle_brti)}</div>` : ''}</td>
+          </tr>`;
+        }).join('')}</tbody></table>`;
+    }
+
+    function renderHourlyV2Summary(d, asset) {
+      const target = asset === 'eth' ? 'v2-eth-summary' : 'v2-btc-summary';
+      const el = $(target);
+      if (!el) return;
+      if (!d?.ok) {
+        el.innerHTML = `<p class="muted">${d?.error || 'Unavailable'}</p>`;
+        return;
+      }
+      const live = d.live || d;
+      const pick = live.primary_pick || {};
+      const path = live.path_memory || {};
+      const mu = live.blended_mu != null ? price(live.blended_mu) : '—';
+      const ref = live.current_price != null ? price(live.current_price) : '—';
+      el.innerHTML = `
+        <div class="cal-stats" style="font-size:.8rem">
+          <div><span>Now</span><strong>${ref}</strong></div>
+          <div><span>Blended μ</span><strong>${mu}</strong></div>
+          <div><span>Primary</span><strong>${pick.label || '—'}</strong></div>
+          <div><span>Signal</span><strong>${pick.signal || 'NEUTRAL'}</strong></div>
+          <div><span>Path Δ (hour)</span><strong>${path.return_from_hour_open_pct != null ? path.return_from_hour_open_pct.toFixed(2) + '%' : '—'}</strong></div>
+          <div><span>Method</span><strong>path_v2</strong></div>
         </div>`;
+    }
+
+    function hourlyV2Api(asset) {
+      if (asset === 'eth') {
+        return {
+          prediction: '/api/eth/hourly-v2/prediction?include_bot=false',
+          calibration: '/api/eth/hourly-v2/calibration',
+          history: '/api/eth/hourly-v2/predictions?limit=20',
+        };
+      }
+      return {
+        prediction: '/api/hourly-v2/prediction?include_bot=false',
+        calibration: '/api/hourly-v2/calibration',
+        history: '/api/hourly-v2/predictions?limit=20',
+      };
+    }
+
+    async function loadHourlyV2() {
+      const tabAtStart = activeTab;
+      if (tabAtStart !== 'hourly-v2') return;
+      const gen = ++hourlyV2FetchGen;
+      for (const asset of ['btc', 'eth']) {
+        const api = hourlyV2Api(asset);
+        get(api.calibration).catch(() => ({ summary: {} })).then((cal) => {
+          if (gen !== hourlyV2FetchGen || activeTab !== tabAtStart) return;
+          renderHourlyV2Calibration(cal, asset);
+        });
+        get(api.history).catch(() => []).then((hist) => {
+          if (gen !== hourlyV2FetchGen || activeTab !== tabAtStart) return;
+          renderHourlyV2History(hist, asset);
+        });
+        getWithTimeout(hourlyBotStatusUrl(asset, HOURLY_V2_KIND, true), 15000).then((bot) => {
+          if (gen !== hourlyV2FetchGen || activeTab !== tabAtStart) return;
+          if (bot?.ok) {
+            lastV2BotStatus[asset] = mergeV2BotStatus(asset, bot);
+            renderHourlyBot(lastV2BotStatus[asset], asset, HOURLY_V2_KIND);
+          }
+        }).catch(() => {});
+        try {
+          const d = await getWithTimeout(api.prediction, 12000);
+          if (gen !== hourlyV2FetchGen || activeTab !== tabAtStart) return;
+          renderHourlyV2Summary(d, asset);
+        } catch (_) {
+          if (gen !== hourlyV2FetchGen || activeTab !== tabAtStart) return;
+          renderHourlyV2Summary({ ok: false, error: 'Prediction unavailable' }, asset);
+        }
+      }
+    }
+
+    function mergeV2BotStatus(asset, incoming) {
+      if (!incoming?.ok) return lastV2BotStatus[asset];
+      const prev = lastV2BotStatus[asset];
+      const merged = prev ? { ...prev, ...incoming, settings: mergeBotSettings(incoming.settings, prev.settings) } : incoming;
+      lastV2BotStatus[asset] = merged;
+      return merged;
     }
 
     function hourlyPickWrong(r) {
@@ -2136,7 +2342,10 @@
       </div>`;
     }
 
-    function hourlyBotSettingsUrl(asset) {
+    function hourlyBotSettingsUrl(asset, kind = 'hourly') {
+      if (isHourlyV2Kind(kind)) {
+        return asset === 'eth' ? '/api/eth/hourly-v2/bot/settings' : '/api/hourly-v2/bot/settings';
+      }
       return asset === 'eth' ? '/api/eth/hourly/bot/settings' : '/api/hourly/bot/settings';
     }
 
@@ -2144,11 +2353,17 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/reset-bankroll' : '/api/hourly/bot/reset-bankroll';
     }
 
-    function hourlyBotFreshStartUrl(asset) {
+    function hourlyBotFreshStartUrl(asset, kind = 'hourly') {
+      if (isHourlyV2Kind(kind)) {
+        return asset === 'eth' ? '/api/eth/hourly-v2/bot/fresh-start' : '/api/hourly-v2/bot/fresh-start';
+      }
       return asset === 'eth' ? '/api/eth/hourly/bot/fresh-start' : '/api/hourly/bot/fresh-start';
     }
 
-    function hourlyBotClearHistoryUrl(asset) {
+    function hourlyBotClearHistoryUrl(asset, kind = 'hourly') {
+      if (isHourlyV2Kind(kind)) {
+        return asset === 'eth' ? '/api/eth/hourly-v2/bot/clear-history' : '/api/hourly-v2/bot/clear-history';
+      }
       return asset === 'eth' ? '/api/eth/hourly/bot/clear-history' : '/api/hourly/bot/clear-history';
     }
 
@@ -2158,6 +2373,10 @@
 
     function hourlyBotStatusUrl(asset, kind = 'hourly', lightweight = true) {
       if (isHourlyTrialKind(kind)) return hourlyTrialBotStatusUrl(asset, kind);
+      if (isHourlyV2Kind(kind)) {
+        const base = asset === 'eth' ? '/api/eth/hourly-v2/bot' : '/api/hourly-v2/bot';
+        return `${base}?lightweight=${lightweight}`;
+      }
       const base = asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
       return lightweight ? `${base}?lightweight=true` : `${base}?lightweight=false`;
     }
@@ -2294,7 +2513,8 @@
     }
 
     function botForceKey(kind, asset) {
-      return isHourlyTrialKind(kind) ? botUiKey(kind, asset) : asset;
+      if (isHourlyTrialKind(kind) || isHourlyV2Kind(kind)) return botUiKey(kind, asset);
+      return asset;
     }
 
     function hourlyTrialKindLabel(kind) {
@@ -2306,6 +2526,7 @@
     }
 
     function hourlyBotCache(kind, asset) {
+      if (isHourlyV2Kind(kind)) return lastV2BotStatus[asset];
       return isHourlyTrialKind(kind) ? getTrialBotCache(kind, asset) : lastBotStatus[asset];
     }
 
@@ -2347,6 +2568,7 @@
       if (kind === 'hourly_trial_rally') return `trial-rally-${asset}`;
       if (kind === 'hourly_trial_soft') return `trial-soft-${asset}`;
       if (kind === 'hourly_trial_mech') return `trial-mech-${asset}`;
+      if (isHourlyV2Kind(kind)) return `v2-${asset}`;
       if (isHourlyTrialKind(kind)) return `trial-${asset}`;
       return asset;
     }
@@ -2355,6 +2577,7 @@
       if (kind === 'hourly_trial_rally') return `${asset}-hourly-trial-rally-bot-settings`;
       if (kind === 'hourly_trial_soft') return `${asset}-hourly-trial-soft-bot-settings`;
       if (kind === 'hourly_trial_mech') return `${asset}-hourly-trial-mech-bot-settings`;
+      if (isHourlyV2Kind(kind)) return `${asset}-hourly-v2-bot-settings`;
       if (isHourlyTrialKind(kind)) return `${asset}-hourly-trial-bot-settings`;
       return `${asset}-hourly-bot-settings`;
     }
@@ -2363,11 +2586,13 @@
       if (kind === 'hourly_trial_rally') return `${asset}-hourly-trial-rally-bot`;
       if (kind === 'hourly_trial_soft') return `${asset}-hourly-trial-soft-bot`;
       if (kind === 'hourly_trial_mech') return `${asset}-hourly-trial-mech-bot`;
+      if (isHourlyV2Kind(kind)) return `${asset}-hourly-v2-bot`;
       if (isHourlyTrialKind(kind)) return `${asset}-hourly-trial-bot`;
       return `${asset}-hourly-bot`;
     }
 
     function shouldRenderHourlyBot(asset, kind = 'hourly') {
+      if (isHourlyV2Kind(kind)) return activeTab === 'hourly-v2';
       if (isHourlyTrialKind(kind)) return activeTab === 'trials';
       const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
       return activeTab === tab;
@@ -3746,7 +3971,9 @@
       if (bot && bot.asset && bot.asset !== asset) return;
       const cached = hourlyBotCache(kind, asset);
       if (bot && bot.ok) {
-        bot = (isTrial ? mergeHourlyTrialBotStatus(asset, bot, kind) : mergeBotStatus(asset, bot)) || bot;
+        bot = (isTrial ? mergeHourlyTrialBotStatus(asset, bot, kind)
+          : isHourlyV2Kind(kind) ? mergeV2BotStatus(asset, bot)
+          : mergeBotStatus(asset, bot)) || bot;
       } else if (cached?.ok) {
         bot = cached;
       }
@@ -3910,7 +4137,7 @@
       if (pctEl) pctEl.disabled = !useProfits;
       if (kind === 'slot15') saveSlot15BotSettings(asset);
       else if (isHourlyTrialKind(kind)) saveHourlyTrialBotSettings(asset, undefined, kind);
-      else saveHourlyBotSettings(asset);
+      else saveHourlyBotSettings(asset, undefined, kind);
     }
 
     async function saveHourlyBotSettings(asset, livePassword, kind = 'hourly') {
@@ -3936,7 +4163,9 @@
       const previousKnown = lastKnownBotSettings[key];
       pendingBotPatch[key] = normalizeBotSettings(body, maxKey);
       try {
-        const settingsUrl = isHourlyTrialKind(kind) ? hourlyTrialBotSettingsUrl(asset, kind) : hourlyBotSettingsUrl(asset);
+        const settingsUrl = isHourlyTrialKind(kind) ? hourlyTrialBotSettingsUrl(asset, kind)
+          : isHourlyV2Kind(kind) ? hourlyBotSettingsUrl(asset, kind)
+          : hourlyBotSettingsUrl(asset);
         const res = await fetch(settingsUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4332,6 +4561,8 @@
         loadDaily();
       } else if (activeTab === 'trials') {
         tasks.push(loadTrials());
+      } else if (activeTab === 'hourly-v2') {
+        tasks.push(loadHourlyV2());
       }
       await Promise.all(tasks);
     }

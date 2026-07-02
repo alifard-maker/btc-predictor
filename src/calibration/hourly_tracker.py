@@ -28,6 +28,7 @@ from src.models.hourly_range_log import (
   parse_lean_bands,
   signal_correct_for_outcome,
 )
+from src.calibration.forecast_vs_settle import forecast_vs_settle_summary
 from src.trading.contract_signals import is_buy_no, is_buy_yes, primary_pick_correct
 
 
@@ -80,10 +81,19 @@ def archive_hourly_epoch(
 
 
 class HourlyCalibrationTracker:
-  def __init__(self, cfg: dict[str, Any], *, asset: str = "btc"):
+  def __init__(
+    self,
+    cfg: dict[str, Any],
+    *,
+    asset: str = "btc",
+    db_basename: str | None = None,
+  ):
     self.cfg = cfg
     self.asset = asset
-    self.store: HourlyPredictionStore = create_hourly_store(cfg, asset=asset)
+    basename = db_basename
+    if basename is None and cfg.get("_hourly_v2"):
+      basename = cfg.get("hourly_v2", {}).get("prediction_db")
+    self.store: HourlyPredictionStore = create_hourly_store(cfg, asset=asset, db_basename=basename)
 
   def log_prediction(self, row: dict[str, Any], *, force: bool = False) -> int:
     return self.store.log_prediction(row, force=force)
@@ -307,6 +317,7 @@ class HourlyCalibrationTracker:
       return {
         "n_resolved": 0,
         "rolling_accuracy": self._rolling(df),
+        "forecast_vs_settle": forecast_vs_settle_summary(df),
         "strategy_range": self._strategy_range_summary(df),
         "stats_epoch": read_hourly_stats_epoch(self.cfg),
         "all_time": {
@@ -344,6 +355,7 @@ class HourlyCalibrationTracker:
       "brier_score": brier,
       "accuracy": float(correct.mean()),
       "rolling_accuracy": self._rolling(df),
+      "forecast_vs_settle": forecast_vs_settle_summary(df),
       "lean_yes_signals": int(len(yes_rows)),
       "lean_yes_accuracy": float(self._correct(yes_rows).mean()) if len(yes_rows) else None,
       "lean_no_signals": int(len(no_rows)),

@@ -400,6 +400,53 @@ hourly:
       continuous_enabled: true
       poll_seconds: 10
 
+# Hourly V2 — path-memory predictor + paper bot (fully isolated from v1 hourly above)
+hourly_v2:
+  enabled: true
+  prediction_db: hourly_v2_predictions.db
+  hour_open_snapshot: true
+  open_log_minute: 0
+  log_minute: 5
+  late_call_minute: 45
+  blend:
+    path_weight: 0.55
+    structure_weight: 0.45
+  path_memory:
+    momentum_weight: 0.35
+    recovery_weight: 0.25
+    shock_threshold_pct: 0.5
+  regime:
+    enabled: true
+    min_expected_move_pct: 0.10
+    min_edge: 0.07
+    min_hours_to_settle: 0.25
+    max_sigma_pct: 2.5
+    min_reasons_to_block: 2
+  intrahour:
+    enabled: true
+    min_shock_pct: 0.6
+    min_edge_for_highlight: 0.08
+    min_edge_override_regime: 0.10
+  bot:
+    enabled: true
+    mode: paper
+    max_spend_per_hour_usd: 15
+    continuous_enabled: true
+    poll_seconds: 10
+    experiment_start_at: "2026-07-02T22:00:00+00:00"
+    entry_strategy:
+      enabled: true
+      min_ask_edge_cents: 9
+      kelly_enabled: true
+      kelly_fraction: 0.12
+      max_entries_per_cycle: 3
+      max_concurrent_positions: 8
+    live_adaptive:
+      enabled: true
+      profit_lock_usd: 1.25
+      defense_block_range_bands: true
+      rally_block_range_bands: true
+
 # Flip-to-opposite
 flip:
   enabled: true
@@ -707,6 +754,15 @@ eth:
         continuous_enabled: true
         poll_seconds: 10
     sigma_calibration: true
+  hourly_v2:
+    enabled: true
+    experiment_start_at: "2026-07-02T22:00:00+00:00"
+    bot:
+      enabled: true
+      mode: paper
+      max_spend_per_hour_usd: 15
+      continuous_enabled: true
+      poll_seconds: 10
 
 # Walk-forward backtest — realistic fills, fees, and ML validation
 backtest:

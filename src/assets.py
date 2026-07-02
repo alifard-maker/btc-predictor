@@ -55,6 +55,42 @@ def asset_cfg(base_cfg: dict[str, Any], asset: str) -> dict[str, Any]:
   return cfg
 
 
+def asset_v2_enabled(base_cfg: dict[str, Any], asset: str) -> bool:
+  asset = asset.lower()
+  if not asset_enabled(base_cfg, asset):
+    return False
+  if asset == DEFAULT_ASSET:
+    return bool((base_cfg.get("hourly_v2") or {}).get("enabled", False))
+  block = base_cfg.get(asset) or {}
+  return bool((block.get("hourly_v2") or {}).get("enabled", False))
+
+
+def asset_v2_cfg(base_cfg: dict[str, Any], asset: str) -> dict[str, Any]:
+  """Scoped cfg for hourly v2 (path memory) — separate logs/models, shared Kalshi series."""
+  cfg = asset_cfg(base_cfg, asset)
+  v2 = base_cfg.get("hourly_v2") or {}
+  if asset != DEFAULT_ASSET:
+    v2 = {**v2, **((base_cfg.get(asset) or {}).get("hourly_v2") or {})}
+  cfg["hourly_v2"] = v2
+  cfg["_hourly_v2"] = True
+  return cfg
+
+
+def asset_v2_runtime_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+  """Overlay hourly_v2.bot onto hourly.bot so HourlyBot reads v2 settings without touching v1."""
+  import copy
+
+  c = copy.deepcopy(cfg)
+  v2 = c.get("hourly_v2") or {}
+  hourly = c.setdefault("hourly", {})
+  for key in ("regime", "intrahour", "blend"):
+    if key in v2 and isinstance(v2[key], dict):
+      hourly[key] = {**hourly.get(key, {}), **v2[key]}
+  if "bot" in v2:
+    hourly["bot"] = {**hourly.get("bot", {}), **v2["bot"]}
+  return c
+
+
 def index_id_for_cfg(cfg: dict[str, Any]) -> str:
   pf = cfg.get("price_feed") or {}
   return str(pf.get("index_id") or cfg.get("kalshi", {}).get("brti_index_id", "BRTI"))

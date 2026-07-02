@@ -578,6 +578,62 @@ def eth_hourly_predictions(limit: int = Query(default=30, le=200)):
   return _serialize_records(df)
 
 
+@app.get("/api/hourly-v2/prediction")
+def hourly_v2_prediction(include_bot: bool = Query(default=True)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.hourly_v2_prediction(include_bot=include_bot)
+
+
+@app.get("/api/eth/hourly-v2/prediction")
+def eth_hourly_v2_prediction(include_bot: bool = Query(default=True)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.eth_hourly_v2_prediction(include_bot=include_bot)
+
+
+@app.get("/api/hourly-v2/calibration")
+def hourly_v2_calibration():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.btc_hourly_v2_calibration is None:
+    raise HTTPException(503, "BTC hourly v2 disabled")
+  return _sanitize_json({"summary": _loop.btc_hourly_v2_calibration.summary()})
+
+
+@app.get("/api/eth/hourly-v2/calibration")
+def eth_hourly_v2_calibration():
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_hourly_v2_calibration is None:
+    raise HTTPException(503, "ETH hourly v2 disabled")
+  return _sanitize_json({"summary": _loop.eth_hourly_v2_calibration.summary()})
+
+
+@app.get("/api/hourly-v2/predictions")
+def hourly_v2_predictions(limit: int = Query(default=30, le=200)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.btc_hourly_v2_calibration is None:
+    return []
+  df = _loop.btc_hourly_v2_calibration.load_recent(limit)
+  if df.empty:
+    return []
+  return _serialize_records(df)
+
+
+@app.get("/api/eth/hourly-v2/predictions")
+def eth_hourly_v2_predictions(limit: int = Query(default=30, le=200)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_hourly_v2_calibration is None:
+    return []
+  df = _loop.eth_hourly_v2_calibration.load_recent(limit)
+  if df.empty:
+    return []
+  return _serialize_records(df)
+
+
 @app.post("/api/admin/hourly/predict-now")
 def hourly_predict_now(
   force: bool = Query(default=False),
@@ -1095,6 +1151,100 @@ def eth_hourly_bot_trades(
   if event_ticker:
     out["hour_summary"] = store.hour_interval_summary(event_ticker)
   return out
+
+
+@app.get("/api/hourly-v2/bot")
+def hourly_v2_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop.hourly_v2_prediction(include_bot=False)
+  return _loop.hourly_bot_status(
+    "btc",
+    tab if tab.get("ok") else None,
+    kind="hourly_v2",
+    lightweight=lightweight,
+  )
+
+
+@app.post("/api/hourly-v2/bot/settings")
+async def hourly_v2_bot_settings(request: Request, _: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  body = await request.json()
+  store = _loop.hourly_bot_store("btc", kind="hourly_v2")
+  from src.assets import asset_v2_runtime_cfg
+
+  acfg = _loop._btc_v2_cfg or _cfg
+  _apply_hourly_bot_settings(store, body, cfg=asset_v2_runtime_cfg(acfg))
+  tab = _loop.hourly_v2_prediction(include_bot=False)
+  return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None, kind="hourly_v2")
+
+
+@app.post("/api/hourly-v2/bot/reset-bankroll")
+def hourly_v2_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_bot_store("btc", kind="hourly_v2")
+  store.reset_paper_bankroll()
+  tab = _loop.hourly_v2_prediction(include_bot=False)
+  return _loop.hourly_bot_status("btc", tab if tab.get("ok") else None, kind="hourly_v2")
+
+
+@app.post("/api/hourly-v2/bot/fresh-start")
+def hourly_v2_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_bot_store("btc", kind="hourly_v2")
+  return _hourly_bot_fresh_start(store, _loop.hourly_v2_prediction, "btc", kind="hourly_v2")
+
+
+@app.post("/api/hourly-v2/bot/clear-history")
+def hourly_v2_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_bot_store("btc", kind="hourly_v2")
+  return _hourly_bot_clear_history(store, _loop.hourly_v2_prediction, "btc", kind="hourly_v2")
+
+
+@app.get("/api/eth/hourly-v2/bot")
+def eth_hourly_v2_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop.eth_hourly_v2_prediction(include_bot=False)
+  return _loop.hourly_bot_status(
+    "eth",
+    tab if tab.get("ok") else None,
+    kind="hourly_v2",
+    lightweight=lightweight,
+  )
+
+
+@app.post("/api/eth/hourly-v2/bot/settings")
+async def eth_hourly_v2_bot_settings(request: Request, _: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  body = await request.json()
+  store = _loop.hourly_bot_store("eth", kind="hourly_v2")
+  from src.assets import asset_v2_runtime_cfg
+
+  acfg = _loop._eth_v2_cfg or _cfg
+  _apply_hourly_bot_settings(store, body, cfg=asset_v2_runtime_cfg(acfg))
+  tab = _loop.eth_hourly_v2_prediction(include_bot=False)
+  return _loop.hourly_bot_status("eth", tab if tab.get("ok") else None, kind="hourly_v2")
+
+
+@app.post("/api/eth/hourly-v2/bot/fresh-start")
+def eth_hourly_v2_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_bot_store("eth", kind="hourly_v2")
+  return _hourly_bot_fresh_start(store, _loop.eth_hourly_v2_prediction, "eth", kind="hourly_v2")
 
 
 @app.get("/api/hourly-trial/bot")
