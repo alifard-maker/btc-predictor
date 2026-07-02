@@ -409,7 +409,7 @@ class HourlyBot:
         settings_enabled=bool(settings.enabled),
         cfg=cfg,
         kind=entry_kind,
-        force_fill_sync=True,
+        force_fill_sync=False,
         asset=self.asset,
       )
     if not settings.enabled:

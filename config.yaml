@@ -22,9 +22,9 @@ kalshi:
   cache_sec: 15
   circuit_breaker:
     enabled: true
-    warn_threshold: 5
-    failure_threshold: 8
-    pause_on_429_after: 10
+    warn_threshold: 8
+    failure_threshold: 12
+    pause_on_429_after: 12
     pause_seconds: 30
     pause_seconds_429: 15
   brti_cache_sec: 2
@@ -32,6 +32,7 @@ kalshi:
   brti_index_id: BRTI
   brti_max_stale_sec: 5
   balance_cache_sec: 30
+  positions_cache_sec: 8
   exchange_tick_cache_sec: 1
   live_fallback_exchange: true
 
@@ -411,6 +412,8 @@ hourly_v2:
   blend:
     path_weight: 0.55
     structure_weight: 0.45
+  calibration:
+    enabled: true              # load data/logs/hourly_v2_calibration.json when present
   path_memory:
     momentum_weight: 0.35
     recovery_weight: 0.25
@@ -609,7 +612,7 @@ eth:
       profit_use_pct: 100
       paper_auto_refill: true
       continuous_enabled: true
-      poll_seconds: 10
+      poll_seconds: 12
       take_profit_enabled: true
       take_profit_mode: hybrid
       take_profit_pct: 0.25

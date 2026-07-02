@@ -30,8 +30,6 @@ def risk_gate_skip_reason(*, bot_key: str) -> str | None:
   if circuit:
     if circuit.is_paused():
       return SKIP_KALSHI_PAUSED
-    if circuit.is_degraded():
-      return SKIP_KALSHI_DEGRADED
   return None
 
 

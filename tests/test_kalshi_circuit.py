@@ -8,7 +8,7 @@ from pathlib import Path
 from src.trading.kalshi_circuit import CircuitConfig, KalshiCircuitBreaker
 
 
-def test_degraded_blocks_entries_before_pause():
+def test_degraded_warns_but_does_not_block_entries():
   with tempfile.TemporaryDirectory() as td:
     cb = KalshiCircuitBreaker(
       CircuitConfig(warn_threshold=2, failure_threshold=5),
@@ -20,7 +20,7 @@ def test_degraded_blocks_entries_before_pause():
 
     cb.record_failure("timeout")
     assert cb.is_degraded()
-    assert cb.entries_blocked()
+    assert not cb.entries_blocked()
     assert not cb.is_paused()
 
 

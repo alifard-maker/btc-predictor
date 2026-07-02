@@ -25,6 +25,7 @@ def path_memory_from_1m(
   hour_open: pd.Timestamp | None = None,
   lock_price: float | None = None,
   current_price: float | None = None,
+  as_of: pd.Timestamp | datetime | None = None,
   tz_name: str = "America/New_York",
 ) -> dict[str, float | None]:
   """Compute path-memory features from 1m candles since the current hour open."""
@@ -47,7 +48,14 @@ def path_memory_from_1m(
     return empty
   frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
   frame = frame.sort_values("timestamp")
-  now = pd.Timestamp.now(tz=timezone.utc)
+  if as_of is not None:
+    now = pd.Timestamp(as_of)
+    if now.tzinfo is None:
+      now = now.tz_localize(timezone.utc)
+    else:
+      now = now.tz_convert(timezone.utc)
+  else:
+    now = pd.Timestamp.now(tz=timezone.utc)
   hour_start = hour_open if hour_open is not None else _floor_hour_et(now, tz_name)
   if hour_start.tzinfo is None:
     hour_start = hour_start.tz_localize("UTC")

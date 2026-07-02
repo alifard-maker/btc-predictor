@@ -21,7 +21,7 @@ from src.models.hourly_range_log import (
 )
 from src.trading.contract_signals import BUY_NO, BUY_YES, VALUE_YES, is_actionable_buy
 from src.trading.hourly_bet_assessment import assess_hourly_bet
-from src.trading.hourly_regime import HourlyRegimeFilter
+from src.calibration.v2_calibration import load_v2_calibration
 
 log = logging.getLogger(__name__)
 
@@ -35,9 +35,21 @@ class PathHourlyPredictor:
     self.hcfg = cfg.get("hourly_v2", {})
     self.structure = DailyPredictor(cfg, daily_cfg=cfg.get("daily"))
     self.regime = HourlyRegimeFilter(self._regime_cfg())
+    cal = load_v2_calibration(cfg, asset=asset)
+    cal_enabled = bool(self.hcfg.get("calibration", {}).get("enabled", True))
+    if cal is not None and cal_enabled:
+      self.hcfg = cal.apply_to_hcfg(self.hcfg)
+      self._sigma_scale = cal.sigma_scale
+      log.info(
+        "%s V2 using backtest calibration: path_weight=%.2f sigma_scale=%.3f",
+        asset.upper(),
+        cal.path_weight,
+        cal.sigma_scale,
+      )
+    else:
+      self._sigma_scale = 1.0
     self.path_weight = float(self.hcfg.get("blend", {}).get("path_weight", 0.55))
     self.structure_weight = float(self.hcfg.get("blend", {}).get("structure_weight", 0.45))
-    self._sigma_scale = 1.0
 
   def _regime_cfg(self) -> dict[str, Any]:
     import copy

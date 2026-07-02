@@ -98,13 +98,14 @@ class KalshiCircuitBreaker:
     return self._consecutive_failures >= self.cfg.warn_threshold
 
   def entries_blocked(self) -> bool:
-    return self.is_paused() or self.is_degraded()
+    """Only full pause blocks new entries; degraded is warn-only (still tries to trade)."""
+    return self.is_paused()
 
   def throttle_discovery(self) -> bool:
     """Skip heavy Kalshi market scans when API is stressed."""
     if not self.cfg.enabled:
       return False
-    return self._consecutive_failures >= 1 or self.is_paused() or self.is_degraded()
+    return self.is_paused() or self.is_degraded()
 
   def allows_request(self, *, critical: bool = False) -> bool:
     if not self.cfg.enabled:

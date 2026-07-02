@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-07-02T23:08:03.506835+00:00",
+  "asset": "btc",
+  "params": {
+    "path_weight": 0.55,
+    "structure_weight": 0.44999999999999996,
+    "momentum_weight": 0.45,
+    "recovery_weight": 0.35,
+    "shock_threshold_pct": 0.4,
+    "sigma_scale": 0.5751857227699209
+  },
+  "source": "backtest",
+  "report": "data/logs/v2_calibration_report.json"
+}

@@ -191,6 +191,9 @@ class KalshiClient:
     self._slot_targets: dict[str, float] = {}
     self._balance_cache: tuple[dict[str, Any] | None, float] | None = None
     self._balance_cache_sec = float(kcfg.get("balance_cache_sec", 30))
+    self._positions_cache: tuple[list[dict[str, Any]], float] | None = None
+    self._positions_cache_sec = float(kcfg.get("positions_cache_sec", 8))
+    self._position_by_ticker_cache: dict[str, tuple[float, float]] = {}
     pf = cfg.get("price_feed") or {}
     self._brtI_index = kcfg.get("brti_index_id") or pf.get("index_id") or BRTI_INDEX_ID
 
@@ -386,6 +389,15 @@ class KalshiClient:
     """Net YES position for one market (negative = NO). None on API error."""
     if not self.authenticated:
       return None
+    cached = self._position_by_ticker_cache.get(str(ticker))
+    now = time.monotonic()
+    if cached is not None and (now - cached[1]) < self._positions_cache_sec:
+      return cached[0]
+    for row in self._cached_market_positions(critical=critical):
+      if str(row.get("ticker") or "") == str(ticker):
+        net = position_net_from_row(row)
+        self._position_by_ticker_cache[str(ticker)] = (net, now)
+        return net
     try:
       data = self.get(
         "/portfolio/positions",
@@ -398,20 +410,37 @@ class KalshiClient:
       return None
     rows = data.get("market_positions") if isinstance(data, dict) else None
     if not rows:
+      self._position_by_ticker_cache[str(ticker)] = (0.0, now)
       return 0.0
     row = rows[0] if isinstance(rows[0], dict) else None
     if not row:
+      self._position_by_ticker_cache[str(ticker)] = (0.0, now)
       return 0.0
-    return position_net_from_row(row)
+    net = position_net_from_row(row)
+    self._position_by_ticker_cache[str(ticker)] = (net, now)
+    return net
 
-  def list_market_positions(self, *, limit: int = 200, critical: bool = False) -> list[dict[str, Any]]:
-    """All non-flat Kalshi market positions."""
+  def _cached_market_positions(self, *, critical: bool = False) -> list[dict[str, Any]]:
+    now = time.monotonic()
+    if self._positions_cache is not None:
+      rows, ts = self._positions_cache
+      if (now - ts) < self._positions_cache_sec:
+        return rows
+    rows = self._fetch_market_positions(critical=critical)
+    self._positions_cache = (rows, now)
+    for row in rows:
+      ticker = str(row.get("ticker") or "")
+      if ticker:
+        self._position_by_ticker_cache[ticker] = (position_net_from_row(row), now)
+    return rows
+
+  def _fetch_market_positions(self, *, critical: bool = False) -> list[dict[str, Any]]:
     if not self.authenticated:
       return []
     try:
       data = self.get(
         "/portfolio/positions",
-        params={"limit": int(limit)},
+        params={"limit": 200},
         auth=True,
         critical=critical,
       )
@@ -430,6 +459,13 @@ class KalshiClient:
         continue
       out.append(row)
     return out
+
+  def list_market_positions(self, *, limit: int = 200, critical: bool = False) -> list[dict[str, Any]]:
+    """All non-flat Kalshi market positions."""
+    rows = self._cached_market_positions(critical=critical)
+    if limit >= len(rows):
+      return list(rows)
+    return list(rows[: int(limit)])
 
   def list_fills(
     self,

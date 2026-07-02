@@ -96,7 +96,7 @@ def test_kalshi_stale_auto_stop_cleared():
     assert s.auto_stop_reason is None
 
 
-def test_kalshi_degraded_does_not_auto_stop():
+def test_kalshi_degraded_does_not_block_entries():
   with tempfile.TemporaryDirectory() as td:
     from src.trading import kalshi_circuit as kc
 
@@ -106,8 +106,7 @@ def test_kalshi_degraded_does_not_auto_stop():
     store = HourlyBotStore(data_dir / "bot.db")
     cb.record_failure("e1")
     cb.record_failure("e2")
-    from src.trading.bot_risk_gates import SKIP_KALSHI_DEGRADED
 
-    assert risk_gate_skip_reason(bot_key=bot_risk_key("hourly", "btc")) == SKIP_KALSHI_DEGRADED
+    assert risk_gate_skip_reason(bot_key=bot_risk_key("hourly", "btc")) is None
     sync_auto_stop_for_risk(store, bot_key=bot_risk_key("hourly", "btc"))
     assert not store.get_settings().auto_stopped

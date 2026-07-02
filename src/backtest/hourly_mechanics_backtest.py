@@ -5,10 +5,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+
+from src.features.path_memory import apply_path_memory_adjustment, path_memory_from_1m
 
 from src.backtest.fill_simulator import FillSimulator, OrderStyle
 from src.backtest.fee_model import FeeModel
@@ -168,6 +170,78 @@ def _brti_poll_prices(open_px: float, high: float, low: float, close: float) -> 
   return [open_px, low + 0.35 * (high - low), low + 0.65 * (high - low), close]
 
 
+MuMode = Literal["momentum", "v2_path"]
+
+
+def _synthetic_1m_to_poll(
+  hour_ts: datetime,
+  poll_prices: list[float],
+  poll_idx: int,
+) -> pd.DataFrame:
+  """Build minimal 1m path from hour open through the current poll."""
+  rows: list[dict[str, Any]] = []
+  base = pd.Timestamp(hour_ts)
+  if base.tzinfo is None:
+    base = base.tz_localize(timezone.utc)
+  else:
+    base = base.tz_convert(timezone.utc)
+  for j in range(poll_idx + 1):
+    offset_min = j * 15 if j else 0
+    rows.append({"timestamp": base + pd.Timedelta(minutes=offset_min), "close": poll_prices[j]})
+  return pd.DataFrame(rows)
+
+
+def _blended_mu_for_poll(
+  *,
+  mu_mode: MuMode,
+  open_px: float,
+  high: float,
+  low: float,
+  close: float,
+  hour_open: float,
+  momentum_4h_pct: float,
+  poll_idx: int,
+  poll_prices: list[float],
+  brti: float,
+  hour_ts: datetime,
+  sigma: float,
+  cfg: dict[str, Any],
+) -> float:
+  structure_mu = open_px * (1.0 + momentum_4h_pct / 100.0 * 0.25)
+  if mu_mode == "momentum":
+    return structure_mu
+
+  hcfg = cfg.get("hourly_v2", {})
+  v2cal = hcfg.get("_v2_calibration") or {}
+  sigma_scale = float(v2cal.get("sigma_scale", 1.0))
+  effective_sigma = sigma * sigma_scale
+  path_weight = float(hcfg.get("blend", {}).get("path_weight", 0.55))
+  structure_weight = float(hcfg.get("blend", {}).get("structure_weight", 0.45))
+  hours_left = max(0.08, 1.0 - poll_idx * 0.22)
+  hour_start = pd.Timestamp(hour_ts)
+  if hour_start.tzinfo is None:
+    hour_start = hour_start.tz_localize(timezone.utc)
+  else:
+    hour_start = hour_start.tz_convert(timezone.utc)
+  poll_ts = hour_start + pd.Timedelta(minutes=poll_idx * 15)
+  df_1m = _synthetic_1m_to_poll(hour_ts, poll_prices, poll_idx)
+  path = path_memory_from_1m(
+    df_1m,
+    hour_open=hour_start,
+    lock_price=hour_open,
+    current_price=brti,
+    as_of=poll_ts,
+  )
+  path_mu, _ = apply_path_memory_adjustment(
+    structure_mu,
+    effective_sigma,
+    path,
+    hours_left,
+    cfg=hcfg,
+  )
+  return path_weight * path_mu + structure_weight * structure_mu
+
+
 def simulate_hour(
   *,
   open_px: float,
@@ -181,11 +255,11 @@ def simulate_hour(
   max_spend: float,
   fills: FillSimulator,
   hour_ts: datetime,
+  mu_mode: MuMode = "momentum",
 ) -> HourSimState:
   cfg = apply_mechanics_profile(cfg, profile)
   state = HourSimState()
   sigma = max(30.0, (high - low) * 0.6 + open_px * 0.001)
-  terminal_mu = open_px * (1.0 + momentum_4h_pct / 100.0 * 0.25)
   markets = _synthetic_markets(open_px)
   settle = close
 
@@ -200,6 +274,21 @@ def simulate_hour(
 
   for i, brti in enumerate(polls):
     hours_left = max(0.08, 1.0 - i * 0.22)
+    terminal_mu = _blended_mu_for_poll(
+      mu_mode=mu_mode,
+      open_px=open_px,
+      high=high,
+      low=low,
+      close=close,
+      hour_open=hour_open,
+      momentum_4h_pct=momentum_4h_pct,
+      poll_idx=i,
+      poll_prices=polls,
+      brti=brti,
+      hour_ts=hour_ts,
+      sigma=sigma,
+      cfg=cfg,
+    )
     model_base = 0.5 + 0.5 * math.tanh((terminal_mu - hour_open) / sigma)
     candidates: list[tuple[float, dict, dict]] = []
     for m in markets:
@@ -390,6 +479,7 @@ def run_mechanics_backtest(
   profile: MechanicsProfile,
   max_spend: float = 15.0,
   warmup_bars: int = 24,
+  mu_mode: MuMode = "momentum",
 ) -> dict[str, Any]:
   df = df_1h.sort_values("timestamp").reset_index(drop=True)
   fills = FillSimulator(app_cfg=cfg, fee_model=FeeModel(cfg=cfg))
@@ -424,6 +514,7 @@ def run_mechanics_backtest(
       max_spend=max_spend,
       fills=fills,
       hour_ts=hour_ts,
+      mu_mode=mu_mode,
     )
     total_pnl += st.realized_pnl
     filled += st.filled_enters
@@ -451,6 +542,7 @@ def run_mechanics_backtest(
 
   return {
     "profile": profile,
+    "mu_mode": mu_mode,
     "label": PROFILE_LABELS.get(profile, profile),
     "hours_simulated": n_hours,
     "hours_with_fills": hours_traded,
