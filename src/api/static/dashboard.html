@@ -668,6 +668,8 @@
         if (!srv) return false;
         if (!dom) return true;
         const domNorm = normalizeBotSettings(dom, maxKey);
+        // Live/paper mismatch is safety-critical — always trust server over stale DOM.
+        if (domNorm && srv.mode && domNorm.mode !== srv.mode) return true;
         const known = lastKnown ? normalizeBotSettings(lastKnown, maxKey) : domNorm;
         if (patchConfirmed && patchConfirmed.at && patchConfirmed.settings) {
           const age = Date.now() - patchConfirmed.at;

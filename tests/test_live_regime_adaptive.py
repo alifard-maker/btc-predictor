@@ -105,6 +105,19 @@ def test_adaptive_disabled_for_aggressive():
   assert decision.reasons == ("adaptive_disabled",)
 
 
+def test_assess_rally_in_paper_mode():
+  """Paper trial bots must classify rally/defense (not adaptive_disabled)."""
+  decision = assess_adaptive_passive_mode(
+    tab=_tab(),
+    cfg=_cfg(),
+    realized_pnl_usd=0.5,
+    aggressive=False,
+    mode="paper",
+  )
+  assert decision.mode == "rally"
+  assert decision.reasons != ("adaptive_disabled",)
+
+
 def test_apply_rally_guards_allow_two_threshold_legs():
   estrat = effective_bot_entry_strategy(_cfg(), kind="hourly", aggressive=False, tuning=None)
   estrat = apply_live_inventory_guards(estrat, _cfg(), mode="live", kind="hourly")

@@ -81,9 +81,13 @@ def assess_adaptive_passive_mode(
   aggressive: bool,
   mode: str,
 ) -> AdaptiveDecision:
-  """Classify the hour into rally, defense, or profit-locked (no new entries)."""
+  """Classify the hour into rally, defense, or profit-locked (no new entries).
+
+  Classification runs in paper mode too so trial bots (e.g. rally_only) can
+  evaluate adaptive profiles without switching to live Kalshi execution.
+  """
   acfg = adaptive_passive_config(cfg)
-  if not acfg.enabled or aggressive or mode != "live":
+  if not acfg.enabled or aggressive:
     return AdaptiveDecision("defense", ("adaptive_disabled",), realized_pnl_usd=realized_pnl_usd)
 
   if realized_pnl_usd >= acfg.profit_lock_usd:
