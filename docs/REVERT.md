@@ -1,5 +1,14 @@
 # Reverting to a known-good release
 
+## Backup tag (ETH hourly live + asset-scoped Kalshi sync)
+
+| Item | Value |
+|------|-------|
+| Tag | `backup/2026-07-02-eth-hourly-live` |
+| Commit | `f2d3af6` |
+| Version | Beta 4.0.15 |
+| Notes | ETH hourly live; Kalshi fill sync scoped by asset (no BTC→ETH contamination); foreign-asset phantom purge; Railway volume resizing to 20GB |
+
 ## Backup tag (post disk-resize, pre ghost-position fix)
 
 | Item | Value |
