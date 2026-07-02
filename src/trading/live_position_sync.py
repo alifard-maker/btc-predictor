@@ -402,6 +402,49 @@ def reconcile_close_stale_live_leg(
   })
 
 
+def purge_foreign_asset_open_positions(
+  store: Any,
+  kalshi: Any,
+  *,
+  asset: str,
+  cfg: dict[str, Any] | None = None,
+  kind: str = "hourly",
+) -> dict[str, Any]:
+  """Close open live legs that belong to the other asset (e.g. BTC tickers in ETH store)."""
+  from src.trading.hourly_event_time import hourly_asset_for_ticker, market_ticker_event_ticker
+
+  if not hasattr(store, "all_open_live_positions"):
+    return {"ok": True, "changes": []}
+  target = str(asset).lower()
+  changes: list[dict[str, Any]] = []
+  for pos in store.all_open_live_positions():
+    if normalize_position_mode(pos.get("mode")) != "live":
+      continue
+    ticker = str(pos.get("market_ticker") or "")
+    leg_asset = hourly_asset_for_ticker(ticker)
+    if leg_asset is None or leg_asset == target:
+      continue
+    period_key = str(pos.get("event_ticker") or market_ticker_event_ticker(ticker))
+    reconcile_close_stale_live_leg(
+      store=store,
+      pos=pos,
+      period_key=period_key,
+      kalshi=kalshi,
+      cfg=cfg,
+      kind=kind,
+      extra_detail=f"purged foreign-{leg_asset} leg from {target} bot store",
+    )
+    changes.append({
+      "action": "purged_foreign_asset",
+      "ticker": ticker,
+      "foreign_asset": leg_asset,
+      "position_id": str(pos.get("id") or ""),
+    })
+  if changes:
+    log.info("Purged %s foreign-asset phantom leg(s) from %s hourly store", len(changes), target)
+  return {"ok": True, "changes": changes}
+
+
 def sync_live_positions_from_kalshi(
   store: Any,
   kalshi: Any,
@@ -721,18 +764,25 @@ def adopt_kalshi_orphan_inventory(
   cfg: dict[str, Any] | None = None,
   kind: str = "hourly",
   critical: bool = False,
+  asset: str | None = None,
 ) -> dict[str, Any]:
   """Open bot legs for Kalshi inventory with no matching bot position (kalshi-only reconcile)."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
 
   from src.trading.bot_live_exit import cap_adopted_contracts
-  from src.trading.hourly_event_time import is_kalshi_hourly_event, market_ticker_event_ticker
+  from src.trading.hourly_event_time import (
+    hourly_fill_belongs_to_asset,
+    is_kalshi_hourly_event,
+    market_ticker_event_ticker,
+  )
 
   changes: list[dict[str, Any]] = []
   for row in kalshi.list_market_positions(critical=critical):
     ticker = str(row.get("ticker") or "")
     if not ticker:
+      continue
+    if asset and not hourly_fill_belongs_to_asset(ticker, asset):
       continue
     leg_event = market_ticker_event_ticker(ticker)
     if not leg_event or not is_kalshi_hourly_event(leg_event):
@@ -827,18 +877,26 @@ def run_live_position_hygiene(
   kind: str = "hourly",
   critical: bool = True,
   force_fill_sync: bool = False,
+  asset: str | None = None,
 ) -> dict[str, Any]:
   """Sync inventory, cancel orphans, and optionally cancel resting enters when auto-bet is off."""
+  foreign_purge = (
+    purge_foreign_asset_open_positions(
+      store, kalshi, asset=asset, cfg=cfg, kind=kind,
+    )
+    if asset
+    else {"ok": True, "changes": []}
+  )
   adopted_resting = adopt_filled_resting_enters(
     store, kalshi, event_ticker, cfg=cfg, kind=kind, critical=critical,
   )
   adopted_orphans = adopt_kalshi_orphan_inventory(
-    store, kalshi, event_ticker, cfg=cfg, kind=kind, critical=critical,
+    store, kalshi, event_ticker, cfg=cfg, kind=kind, critical=critical, asset=asset,
   )
   from src.trading.kalshi_fill_sync import sync_kalshi_fills_to_store
 
   fill_sync = sync_kalshi_fills_to_store(
-    store, kalshi, critical=critical, cfg=cfg, kind=kind, force=force_fill_sync,
+    store, kalshi, critical=critical, cfg=cfg, kind=kind, force=force_fill_sync, asset=asset,
   )
   sync = sync_live_positions_from_kalshi(
     store, kalshi, event_ticker, cfg=cfg, kind=kind,
@@ -852,7 +910,8 @@ def run_live_position_hygiene(
       kalshi, event_ticker, tab,
     )
   adopted_changes = (
-    (adopted_resting.get("changes") or [])
+    (foreign_purge.get("changes") or [])
+    + (adopted_resting.get("changes") or [])
     + (adopted_orphans.get("changes") or [])
     + (fill_sync.get("changes") or [])
   )

@@ -31,6 +31,28 @@ def is_kalshi_hourly_event(event_ticker: str) -> bool:
   return e.startswith(("KXBTCD-", "KXBTC-", "KXETHD-", "KXETH-"))
 
 
+def hourly_asset_for_event(event_ticker: str) -> str | None:
+  """btc | eth for Kalshi hourly series, else None."""
+  e = str(event_ticker)
+  if e.startswith(("KXBTCD-", "KXBTC-")):
+    return "btc"
+  if e.startswith(("KXETHD-", "KXETH-")):
+    return "eth"
+  return None
+
+
+def hourly_asset_for_ticker(ticker: str) -> str | None:
+  return hourly_asset_for_event(market_ticker_event_ticker(ticker))
+
+
+def hourly_fill_belongs_to_asset(ticker: str, asset: str) -> bool:
+  """True when a market/event ticker belongs to the bot asset (BTC vs ETH)."""
+  leg_asset = hourly_asset_for_ticker(ticker)
+  if leg_asset is None:
+    return True
+  return leg_asset == str(asset).lower()
+
+
 def ticker_belongs_to_hourly_event(ticker: str, event_ticker: str) -> bool:
   """True when a market ticker belongs to an hourly event (KXBTCD + KXBTC siblings)."""
   t = str(ticker)

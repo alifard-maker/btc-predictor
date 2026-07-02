@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.data.kalshi import position_net_from_row
-from src.trading.hourly_event_time import is_kalshi_hourly_event, market_ticker_event_ticker
+from src.trading.hourly_event_time import is_kalshi_hourly_event, market_ticker_event_ticker, hourly_fill_belongs_to_asset
 from src.trading.kalshi_leg_exit import leg_price_cents_from_fill
 from src.trading.paper_execution import leg_pnl_usd
 
@@ -259,6 +259,7 @@ def backfill_kalshi_hourly_fills(
   force: bool = False,
   cfg: dict[str, Any] | None = None,
   kind: str = "hourly",
+  asset: str | None = None,
   order_cache: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
   """Replay recent Kalshi fills into the bot trade log for missing live enters/exits."""
@@ -278,6 +279,8 @@ def backfill_kalshi_hourly_fills(
     ticker = _fill_market_ticker(fill)
     leg_event = market_ticker_event_ticker(ticker)
     if not leg_event or not is_kalshi_hourly_event(leg_event):
+      continue
+    if asset and not hourly_fill_belongs_to_asset(ticker, asset):
       continue
     ts = _fill_created_at(fill)
     if ts and ts < cutoff:
@@ -477,6 +480,7 @@ def replay_closed_legs_from_kalshi_fills(
   hours: float = 36.0,
   critical: bool = True,
   order_cache: dict[str, tuple[str, str]] | None = None,
+  asset: str | None = None,
 ) -> dict[str, Any]:
   """
   Second pass: pair buy+sell orders on the same leg when no open position exists.
@@ -494,6 +498,7 @@ def replay_closed_legs_from_kalshi_fills(
     f for f in raw_fills
     if market_ticker_event_ticker(_fill_market_ticker(f))
     and is_kalshi_hourly_event(market_ticker_event_ticker(_fill_market_ticker(f)) or "")
+    and (not asset or hourly_fill_belongs_to_asset(_fill_market_ticker(f), asset))
     and (_fill_created_at(f) is None or _fill_created_at(f) >= cutoff)
   ]
   orders = _aggregate_fills_to_orders(hourly_fills, order_cache=order_cache)
@@ -608,15 +613,16 @@ def sync_kalshi_fills_to_store(
   force: bool = False,
   cfg: dict[str, Any] | None = None,
   kind: str = "hourly",
+  asset: str | None = None,
 ) -> dict[str, Any]:
   """Run fill backfill passes (open legs, then closed round-trips)."""
   order_cache = _build_order_direction_cache(kalshi)
   first = backfill_kalshi_hourly_fills(
     store, kalshi, hours=hours, critical=critical, force=force, cfg=cfg, kind=kind,
-    order_cache=order_cache,
+    asset=asset, order_cache=order_cache,
   )
   second = replay_closed_legs_from_kalshi_fills(
-    store, kalshi, hours=hours, critical=critical, order_cache=order_cache,
+    store, kalshi, hours=hours, critical=critical, order_cache=order_cache, asset=asset,
   )
   changes = (first.get("changes") or []) + (second.get("changes") or [])
   return {
@@ -634,6 +640,7 @@ def summarize_kalshi_experiment_fills(
   since: datetime,
   critical: bool = True,
   max_fills: int = 1000,
+  asset: str | None = None,
 ) -> dict[str, Any]:
   """
   Realized P&L from Kalshi hourly fill history since an instant (exchange source of truth).
@@ -648,6 +655,7 @@ def summarize_kalshi_experiment_fills(
     f for f in raw_fills
     if market_ticker_event_ticker(_fill_market_ticker(f))
     and is_kalshi_hourly_event(market_ticker_event_ticker(_fill_market_ticker(f)) or "")
+    and (not asset or hourly_fill_belongs_to_asset(_fill_market_ticker(f), asset))
     and (_fill_created_at(f) is None or _fill_created_at(f) >= since)
   ]
   orders = _aggregate_fills_to_orders(hourly_fills, order_cache=order_cache)

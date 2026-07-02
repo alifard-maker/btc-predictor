@@ -410,6 +410,7 @@ class HourlyBot:
         cfg=cfg,
         kind=entry_kind,
         force_fill_sync=True,
+        asset=self.asset,
       )
     if not settings.enabled:
       self.store.set_last_skip_reason("auto_bet_off")

@@ -635,6 +635,7 @@ class PredictionLoop:
             kalshi,
             since=start,
             critical=True,
+            asset=asset,
           )
       status["experiment_performance"] = exp
     return status
@@ -797,6 +798,7 @@ class PredictionLoop:
       kind=entry_kind_for_bot(kind),
       critical=True,
       force_fill_sync=True,
+      asset=asset,
     )
 
   _KALSHI_SYNC_INTERVAL_SEC = 25.0
@@ -843,10 +845,15 @@ class PredictionLoop:
         kind=entry_kind,
         critical=True,
         force_fill_sync=force_fill_sync,
+        asset=asset,
       )
     else:
       from src.trading.kalshi_fill_sync import sync_kalshi_fills_to_store
+      from src.trading.live_position_sync import purge_foreign_asset_open_positions
 
+      foreign_purge = purge_foreign_asset_open_positions(
+        store, kalshi, asset=asset, cfg=acfg, kind=entry_kind,
+      )
       fill_sync = sync_kalshi_fills_to_store(
         store,
         kalshi,
@@ -854,15 +861,18 @@ class PredictionLoop:
         cfg=acfg,
         kind=entry_kind,
         critical=True,
+        asset=asset,
       )
       resting = adopt_filled_resting_enters(
         store, kalshi, event_ticker or "SYNC", cfg=acfg, kind=entry_kind, critical=True,
       )
       orphans = adopt_kalshi_orphan_inventory(
         store, kalshi, event_ticker or "SYNC", cfg=acfg, kind=entry_kind, critical=True,
+        asset=asset,
       )
       adopted_changes = (
-        (resting.get("changes") or [])
+        (foreign_purge.get("changes") or [])
+        + (resting.get("changes") or [])
         + (orphans.get("changes") or [])
         + (fill_sync.get("changes") or [])
       )
