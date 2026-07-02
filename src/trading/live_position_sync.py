@@ -414,8 +414,12 @@ def sync_live_positions_from_kalshi(
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
 
+  if hasattr(store, "all_open_live_positions"):
+    open_live = store.all_open_live_positions()
+  else:
+    open_live = store.open_positions(event_ticker)
   groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
-  for pos in store.open_positions(event_ticker):
+  for pos in open_live:
     if normalize_position_mode(pos.get("mode")) != "live":
       continue
     key = (str(pos["market_ticker"]), str(pos.get("side") or "").lower())
@@ -464,7 +468,7 @@ def sync_live_positions_from_kalshi(
         reconcile_close_stale_live_leg(
           store=store,
           pos=pos,
-          period_key=event_ticker,
+          period_key=str(pos.get("event_ticker") or event_ticker),
           kalshi=kalshi,
           cfg=cfg,
           kind=kind,

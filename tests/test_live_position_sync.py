@@ -280,6 +280,28 @@ def test_sync_live_positions_reconciles_when_kalshi_inventory_zero():
     assert any(c.get("action") == "reconciled_closed" for c in out["changes"])
 
 
+def test_sync_reconciles_phantom_legs_from_other_hours():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "old-leg",
+      "event_ticker": "KXBTCD-26JUL0209",
+      "market_ticker": "KXBTCD-26JUL0209-T60000",
+      "side": "yes",
+      "contracts": 2,
+      "entry_price_cents": 44,
+      "cost_usd": 0.88,
+      "mode": "live",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = 0
+    kalshi.list_resting_orders.return_value = []
+    out = sync_live_positions_from_kalshi(store, kalshi, "KXBTCD-26JUL0216")
+    assert store.all_open_live_positions() == []
+    assert any(c.get("action") == "reconciled_closed" for c in out["changes"])
+
+
 def test_sync_does_not_reconcile_when_resting_exit_sell_open():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
