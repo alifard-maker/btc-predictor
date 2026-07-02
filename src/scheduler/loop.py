@@ -105,6 +105,7 @@ class PredictionLoop:
     self._hourly_prediction_mono: dict[str, float] = {}
     self._kalshi_sync_mono: dict[str, float] = {}
     self._last_kalshi_sync: dict[str, dict[str, Any]] = {}
+    self._kalshi_sync_inflight: dict[str, bool] = {}
     self._slot15_tab_cache: dict[str, tuple[dict[str, Any], float]] = {}
     if asset_enabled(self.cfg, "eth"):
       self._eth_cfg = asset_cfg(self.cfg, "eth")
@@ -498,11 +499,11 @@ class PredictionLoop:
       status["mechanics_profile_label"] = PROFILE_LABELS.get(profile, profile)
     trade_limit = 35 if lightweight else 100
     settings = store.get_settings()
-    sync_report: dict[str, Any] | None = None
     if settings.mode == "live" and kind == "hourly":
-      sync_report = self._maybe_sync_live_kalshi(asset, kind=kind, force=False)
-      if sync_report:
-        status["kalshi_sync"] = sync_report
+      self._enqueue_kalshi_sync(asset, kind=kind)
+      last_sync = self._last_kalshi_sync.get(self._kalshi_sync_key(asset, kind))
+      if last_sync:
+        status["kalshi_sync"] = last_sync
     status["recent_trades"] = store.list_trades(limit=trade_limit)
     status["hour_trades"] = (
       store.list_trades(limit=35 if lightweight else 50, event_ticker=event_ticker)
@@ -666,8 +667,14 @@ class PredictionLoop:
     force: bool = True,
   ) -> dict[str, Any]:
     """Force full Kalshi hygiene + fill import into the live bot trade log."""
-    self._kalshi_sync_mono.pop(self._kalshi_sync_key(asset, kind), None)
-    return self.run_hourly_kalshi_sync(asset, kind=kind, force_fill_sync=force)
+    key = self._kalshi_sync_key(asset, kind)
+    self._kalshi_sync_mono.pop(key, None)
+    while self._kalshi_sync_inflight.get(key):
+      time.sleep(0.05)
+    report = self.run_hourly_kalshi_sync(asset, kind=kind, force_fill_sync=force)
+    self._last_kalshi_sync[key] = report
+    self._kalshi_sync_mono[key] = time.monotonic()
+    return report
 
   def hourly_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     return self.hourly_bot_status(asset, tab, kind="hourly_trial")
@@ -828,24 +835,35 @@ class PredictionLoop:
       "at": datetime.now(timezone.utc).isoformat(),
     }
 
-  def _maybe_sync_live_kalshi(
+  def _enqueue_kalshi_sync(
     self,
     asset: str,
     *,
     kind: str = "hourly",
     force: bool = False,
-  ) -> dict[str, Any] | None:
-    """Throttled Kalshi sync when the dashboard polls live bot status."""
+  ) -> None:
+    """Background Kalshi hygiene — must not block /api/hourly/bot reads."""
     key = self._kalshi_sync_key(asset, kind)
+    if self._kalshi_sync_inflight.get(key):
+      return
     now = time.monotonic()
     if not force:
       last = self._kalshi_sync_mono.get(key, 0.0)
       if now - last < self._KALSHI_SYNC_INTERVAL_SEC:
-        return self._last_kalshi_sync.get(key)
-    report = self.run_hourly_kalshi_sync(asset, kind=kind, force_fill_sync=True)
-    self._kalshi_sync_mono[key] = now
-    self._last_kalshi_sync[key] = report
-    return report
+        return
+
+    def _run() -> None:
+      try:
+        report = self.run_hourly_kalshi_sync(asset, kind=kind, force_fill_sync=True)
+        self._last_kalshi_sync[key] = report
+        self._kalshi_sync_mono[key] = time.monotonic()
+      except Exception:
+        log.exception("Background Kalshi sync failed for %s %s", asset, kind)
+      finally:
+        self._kalshi_sync_inflight.pop(key, None)
+
+    self._kalshi_sync_inflight[key] = True
+    threading.Thread(target=_run, daemon=True, name=f"kalshi-sync-{key}").start()
 
   def run_hourly_bot_continuous(self) -> None:
     self._run_hourly_bot_continuous("btc")

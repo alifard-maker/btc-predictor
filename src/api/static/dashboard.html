@@ -2847,13 +2847,28 @@
         btn.textContent = 'Syncing…';
       }
       try {
-        const res = await fetch(hourlyBotSyncKalshiUrl(asset), { method: 'POST', credentials: 'same-origin' });
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 60000);
+        const res = await fetch(hourlyBotSyncKalshiUrl(asset), {
+          method: 'POST',
+          credentials: 'same-origin',
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
         if (!res.ok) throw new Error(await parseSettingsError(res));
         const data = await res.json();
         const bot = mergeBotStatus(asset, data.bot || data);
         if (shouldRenderHourlyBot(asset, kind)) renderHourlyBot(bot, asset, kind);
+        if (data.sync?.skipped === 'kalshi_not_authenticated') {
+          showError('Kalshi sync failed: API not authenticated on server.');
+        }
       } catch (e) {
-        showError('Kalshi sync failed: ' + (e.message || e));
+        const msg = (e && e.name === 'AbortError')
+          ? 'Kalshi sync timed out after 60s — try again.'
+          : ('Kalshi sync failed: ' + (e.message || e));
+        showError(msg);
+        const cached = lastBotStatus[asset];
+        if (cached?.ok && shouldRenderHourlyBot(asset, kind)) renderHourlyBot(cached, asset, kind);
       } finally {
         if (btn) {
           btn.disabled = false;
@@ -3726,8 +3741,11 @@
       if (!el) return;
       if (!shouldRenderHourlyBot(asset, kind)) return;
       if (bot && bot.asset && bot.asset !== asset) return;
+      const cached = hourlyBotCache(kind, asset);
       if (bot && bot.ok) {
         bot = (isTrial ? mergeHourlyTrialBotStatus(asset, bot, kind) : mergeBotStatus(asset, bot)) || bot;
+      } else if (cached?.ok) {
+        bot = cached;
       }
       if (!bot || !bot.ok) {
         const statusWrap = $(`${hourlyBotPanelId(kind, asset)}-status`);
@@ -4106,8 +4124,6 @@
         locked: (rangeRg.recommendations || []).find(r => r.tier === 'locked')?.label,
       });
       renderDailyStructure(live.structure);
-      const botAsset = hourlyRenderTab === 'eth-hourly' ? 'eth' : 'btc';
-      if (activeTab === hourlyRenderTab) renderHourlyBot(data.bot, botAsset);
     }
 
     async function loadSlot15Bot(predictionBot) {
@@ -4139,9 +4155,14 @@
     }
 
     function refreshHourlyBotDirect(asset, tabAtStart, gen, predictionBot) {
-      getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', true), 8000).then((botDirect) => {
+      getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', true), 15000).then((botDirect) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
-        let bot = botDirect || predictionBot;
+        if (!botDirect?.ok) {
+          const cached = lastBotStatus[asset];
+          if (cached?.ok) renderHourlyBot(cached, asset);
+          return;
+        }
+        let bot = botDirect;
         if (botDirect && predictionBot) {
           const evt = botDirect.event_ticker || predictionBot.event_ticker;
           const hs = mergeHourSummary(
@@ -4161,7 +4182,7 @@
           bot = botDirect;
         }
         bot = mergeBotStatus(asset, bot);
-        if (bot && activeTab === tabAtStart) renderHourlyBot(bot, asset);
+        if (bot?.ok && activeTab === tabAtStart) renderHourlyBot(bot, asset);
       }).catch(() => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         const cached = lastBotStatus[asset];

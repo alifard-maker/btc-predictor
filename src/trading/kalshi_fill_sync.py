@@ -89,6 +89,15 @@ def _aggregate_fills_to_orders(fills: list[dict[str, Any]]) -> list[dict[str, An
   return out
 
 
+def _kalshi_fill_action_to_bot(action: str) -> str:
+  a = str(action or "").lower()
+  if a == "buy":
+    return "enter"
+  if a == "sell":
+    return "exit"
+  return a
+
+
 def _known_live_order_actions(store: Any) -> set[tuple[str, str]]:
   with store._connect() as conn:
     rows = conn.execute(
@@ -182,7 +191,8 @@ def backfill_kalshi_hourly_fills(
   for order in orders:
     oid = str(order["order_id"])
     action = str(order["action"])
-    if (oid, action) in known:
+    bot_action = _kalshi_fill_action_to_bot(action)
+    if (oid, bot_action) in known:
       continue
 
     ticker = str(order["ticker"])
