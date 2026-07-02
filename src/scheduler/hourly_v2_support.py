@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, Any
 
 from src.assets import asset_v2_cfg, asset_v2_enabled, asset_v2_runtime_cfg, index_id_for_cfg
 from src.calibration.hourly_tracker import HourlyCalibrationTracker
