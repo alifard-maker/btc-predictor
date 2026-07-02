@@ -536,6 +536,14 @@ class PredictionLoop:
         event_ticker=event_ticker,
         market_tickers=market_tickers or None,
       )
+    from src.trading.bot_performance_report import build_experiment_summary
+
+    status["experiment_performance"] = build_experiment_summary(
+      store.list_trades(limit=5000),
+      cfg=acfg,
+      kind=kind,
+      asset=asset,
+    )
     return status
 
   def hourly_live_reconcile(self, asset: str, *, kind: str = "hourly") -> dict[str, Any]:
@@ -607,12 +615,19 @@ class PredictionLoop:
     store = self.hourly_bot_store(asset, kind=kind)
     settings = store.get_settings()
     active = settings.enabled and settings.continuous
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    tab: dict[str, Any] | None = None
     try:
       if not active:
         if not settings.enabled:
           store.set_last_skip_reason("auto_bet_off")
+        if settings.mode == "live":
+          tab = self._cached_tab_if_throttled(self._hourly_tab_cache, asset)
+          if tab is None:
+            tab = self._hourly_tab_prediction(asset)
+            self._store_tab_cache(self._hourly_tab_cache, asset, tab)
+          self._run_live_hourly_hygiene_only(asset, kind=kind, tab=tab, cfg=acfg)
         return
-      acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
       tab = self._cached_tab_if_throttled(self._hourly_tab_cache, asset)
       if tab is None:
         tab = self._hourly_tab_prediction(asset)
@@ -626,6 +641,44 @@ class PredictionLoop:
       log.exception("%s %s bot continuous cycle failed: %s", asset.upper(), label, e)
     finally:
       store.record_cycle(active=active)
+
+  def _run_live_hourly_hygiene_only(
+    self,
+    asset: str,
+    *,
+    kind: str = "hourly",
+    tab: dict[str, Any] | None = None,
+    cfg: dict[str, Any] | None = None,
+  ) -> None:
+    """Adopt Kalshi fills even when auto-bet is off (live inventory sync)."""
+    from src.backtest.mechanics_profiles import entry_kind_for_bot
+
+    store = self.hourly_bot_store(asset, kind=kind)
+    settings = store.get_settings()
+    if settings.mode != "live":
+      return
+    kalshi = self._kalshi_for(asset)
+    if not kalshi or not getattr(kalshi, "authenticated", False):
+      return
+    if tab is None or not tab.get("ok"):
+      tab = self._hourly_tab_prediction(asset)
+    if not tab.get("ok"):
+      return
+    event_ticker = (tab.get("event") or {}).get("event_ticker")
+    if not event_ticker:
+      return
+    from src.trading.live_position_sync import run_live_position_hygiene
+
+    run_live_position_hygiene(
+      store=store,
+      kalshi=kalshi,
+      event_ticker=str(event_ticker),
+      tab=tab,
+      settings_enabled=bool(settings.enabled),
+      cfg=cfg,
+      kind=entry_kind_for_bot(kind),
+      critical=True,
+    )
 
   def run_hourly_bot_continuous(self) -> None:
     self._run_hourly_bot_continuous("btc")

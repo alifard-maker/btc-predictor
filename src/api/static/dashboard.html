@@ -2472,6 +2472,24 @@
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Live stats count <strong>only LIVE-mode</strong> trades. Paper history is excluded while you are in live mode.</p>`;
     }
 
+    function botExperimentPerformanceHtml(bot) {
+      const exp = bot.experiment_performance;
+      if (!exp || !exp.summary) return '';
+      const sm = exp.summary;
+      const pnl = Number(sm.total_pnl_usd ?? 0);
+      const pnlCls = pnl > 0 ? 'up' : pnl < 0 ? 'down' : 'muted';
+      const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
+      const start = exp.start_at ? new Date(exp.start_at).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'experiment start';
+      return `
+        <div class="bot-row" style="margin:.35rem 0;padding:.45rem .55rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.28);border-radius:8px">
+          <p class="muted" style="font-size:.64rem;margin:0 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Experiment since ${start} EDT</p>
+          <div class="bot-stat"><span class="muted">Closed P&amp;L</span><strong class="${pnlCls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Closed trades</span><strong>${sm.closed_trades ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted">Win rate</span><strong>${wr}</strong></div>
+          <div class="bot-stat"><span class="muted">W / L</span><strong>${sm.wins ?? 0} / ${sm.losses ?? 0}</strong></div>
+        </div>`;
+    }
+
     function botPaperBankrollHtml(bot, s, periodLabel) {
       if ((s.mode || 'paper') !== 'paper') return '';
       const pb = bot.paper_bankroll || {};
@@ -3121,7 +3139,21 @@
         return `<div class="perf-stat muted">${label}<strong>${sm.closed_trades ?? 0} exits</strong><span style="display:block;font-size:.62rem;margin-top:.15rem">WR ${wr} · net ${botPnlUsd(sm.total_pnl_usd)} · ${losses} losses ${lossUsd}</span></div>`;
       };
       const rollingGrid = (blocks) => rollingKeys.map(([key, label]) => rollLine(label, blocks[key])).join('');
-      let html = `<div class="perf-grid">
+      const experimentBots = report.experiment_bots || [];
+      let experimentHtml = '';
+      if (experimentBots.length) {
+        const rows = experimentBots.map((b) => {
+          const sm = b.summary || {};
+          const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
+          return `<tr><td>${b.label || b.kind}</td><td>${sm.closed_trades ?? 0}</td><td>${wr}</td><td>${botPnlUsd(sm.total_pnl_usd)}</td></tr>`;
+        }).join('');
+        const startLabel = report.experiment_start_at
+          ? new Date(report.experiment_start_at).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+          : 'start';
+        experimentHtml = `<p class="muted" style="font-size:.68rem;margin:0 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Live vs trials — since ${startLabel} EDT</p>
+          <table style="width:100%;font-size:.72rem;margin-bottom:.65rem"><thead><tr><th>Bot</th><th>Closed</th><th>Win%</th><th>P&amp;L</th></tr></thead><tbody>${rows}</tbody></table>`;
+      }
+      let html = `${experimentHtml}<div class="perf-grid">
         <div class="perf-stat muted">Main bots closed trades<strong>${combined.closed_trades ?? 0}</strong></div>
         <div class="perf-stat muted">Main win rate<strong>${combWr}</strong></div>
         <div class="perf-stat muted">Main realized P&amp;L<strong>${combPnl}</strong></div>
@@ -3687,6 +3719,7 @@
           <div class="bot-stat"><span class="muted" title="Sum of all filled enter costs this hour — can exceed max at-risk when positions rotate (churn)">Cumulative entered (churn)</span><strong>$${Number(hs.total_entered_usd ?? 0).toFixed(2)}</strong></div>
         </div>
         ${botIntervalPerformanceHtml(bot, s, 'hour')}
+        ${botExperimentPerformanceHtml(bot)}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across hours. Max at-risk caps concurrent open exposure.' : 'Hour bankroll = max cap + realized P&amp;L this hour (live only).' } <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
         ${botLiveKalshiCashHtml(s, bot)}
         ${botLivePerformanceHtml(bot, s, 'hour')}

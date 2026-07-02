@@ -382,7 +382,7 @@ class KalshiClient:
         log.warning("Cancel resting order %s on %s failed: %s", oid, ticker, e)
     return cancelled
 
-  def get_market_position(self, ticker: str) -> float | None:
+  def get_market_position(self, ticker: str, *, critical: bool = False) -> float | None:
     """Net YES position for one market (negative = NO). None on API error."""
     if not self.authenticated:
       return None
@@ -391,6 +391,7 @@ class KalshiClient:
         "/portfolio/positions",
         params={"ticker": str(ticker), "limit": 1},
         auth=True,
+        critical=critical,
       )
     except Exception as e:
       log.warning("Kalshi get position for %s failed: %s", ticker, e)
@@ -403,7 +404,7 @@ class KalshiClient:
       return 0.0
     return position_net_from_row(row)
 
-  def list_market_positions(self, *, limit: int = 200) -> list[dict[str, Any]]:
+  def list_market_positions(self, *, limit: int = 200, critical: bool = False) -> list[dict[str, Any]]:
     """All non-flat Kalshi market positions."""
     if not self.authenticated:
       return []
@@ -412,6 +413,7 @@ class KalshiClient:
         "/portfolio/positions",
         params={"limit": int(limit)},
         auth=True,
+        critical=critical,
       )
     except Exception as e:
       log.warning("Kalshi list positions failed: %s", e)
@@ -435,6 +437,7 @@ class KalshiClient:
     ticker: str | None = None,
     order_id: str | None = None,
     limit: int = 200,
+    critical: bool = False,
   ) -> list[dict[str, Any]]:
     """Executed fills for the authenticated member (newest pages first)."""
     if not self.authenticated:
@@ -451,7 +454,7 @@ class KalshiClient:
       if cursor:
         params["cursor"] = cursor
       try:
-        data = self.get("/portfolio/fills", params=params, auth=True)
+        data = self.get("/portfolio/fills", params=params, auth=True, critical=critical)
       except Exception as e:
         log.warning("Kalshi list fills failed: %s", e)
         break

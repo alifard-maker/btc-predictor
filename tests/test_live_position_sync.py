@@ -129,7 +129,7 @@ def test_adopt_filled_resting_enter_opens_bot_leg():
     kalshi.authenticated = True
     kalshi.get_market_position.return_value = 2
     out = adopt_filled_resting_enters(store, kalshi, "EV1")
-    open_pos = store.open_positions("EV1")
+    open_pos = store.open_positions("KXBTCD-EV1")
     assert len(open_pos) == 1
     assert open_pos[0]["contracts"] == 2
     assert open_pos[0]["entry_price_cents"] == 40
@@ -156,10 +156,36 @@ def test_adopt_filled_resting_enter_caps_contracts():
     kalshi.get_market_position.return_value = -6
     cfg = {"hourly": {"bot": {"live_exit": {"max_adopted_contracts": 2}}}}
     adopt_filled_resting_enters(store, kalshi, "EV1", cfg=cfg, kind="hourly")
-    open_pos = store.open_positions("EV1")
+    open_pos = store.open_positions("KXBTCD-EV1")
     assert len(open_pos) == 1
     assert open_pos[0]["contracts"] == 2
     assert open_pos[0]["entry_source"] == "adopted_resting"
+
+
+def test_adopt_filled_resting_enter_cross_hour_event():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "KXBTCD-26JUL0206",
+      "action": "enter",
+      "status": "resting",
+      "mode": "live",
+      "market_ticker": "KXBTCD-26JUL0206-T61600",
+      "side": "yes",
+      "contracts": 2,
+      "price_cents": 40,
+      "entry_price_cents": 40,
+      "kalshi_order_id": "ord-rest",
+      "label": "$61,600 or above",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = 2
+    out = adopt_filled_resting_enters(store, kalshi, "KXBTCD-26JUL0210")
+    open_pos = store.open_positions("KXBTCD-26JUL0206")
+    assert len(open_pos) == 1
+    assert any(c.get("action") == "adopted_resting_enter" for c in out["changes"])
+    assert store.latest_resting_enter("KXBTCD-26JUL0206", "KXBTCD-26JUL0206-T61600") is None
 
 
 def test_adopt_kalshi_orphan_inventory_opens_untracked_leg():

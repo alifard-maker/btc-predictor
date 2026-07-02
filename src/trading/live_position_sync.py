@@ -31,13 +31,15 @@ def kalshi_position_leg(
   kalshi: Any,
   market_ticker: str,
   side: str,
+  *,
+  critical: bool = False,
 ) -> dict[str, Any] | None:
   """Contracts, cost, and avg entry from Kalshi market_positions row."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return None
   side_l = str(side or "").lower()
   ticker = str(market_ticker)
-  for row in kalshi.list_market_positions():
+  for row in kalshi.list_market_positions(critical=critical):
     if str(row.get("ticker") or "") != ticker:
       continue
     net = position_net_from_row(row)
@@ -59,26 +61,32 @@ def kalshi_position_leg(
       "cost_usd": round(cost_usd, 2) if cost_usd > 0 else None,
       "entry_price_cents": entry_cents,
     }
-  sellable = kalshi_sellable_contracts(kalshi, ticker, side_l)
+  sellable = kalshi_sellable_contracts(kalshi, ticker, side_l, critical=critical)
   if sellable is None or sellable < 0.05:
     return None
   return {"contracts": round(float(sellable), 2), "cost_usd": None, "entry_price_cents": None}
 
 
-def kalshi_sellable_contracts(kalshi: Any, market_ticker: str, side: str) -> float | None:
+def kalshi_sellable_contracts(
+  kalshi: Any,
+  market_ticker: str,
+  side: str,
+  *,
+  critical: bool = False,
+) -> float | None:
   """Contracts held on Kalshi for this leg; None when the API is unavailable."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return None
   side_l = str(side or "").lower()
   ticker = str(market_ticker)
-  for row in kalshi.list_market_positions():
+  for row in kalshi.list_market_positions(critical=critical):
     if str(row.get("ticker") or "") != ticker:
       continue
     net = position_net_from_row(row)
     if side_l == "yes":
       return max(0.0, float(net))
     return max(0.0, -float(net))
-  net = kalshi.get_market_position(ticker)
+  net = kalshi.get_market_position(ticker, critical=critical)
   if net is None:
     return None
   if side_l == "yes":
@@ -518,6 +526,21 @@ def _has_open_live_leg(store: Any, event_ticker: str, market_ticker: str, side: 
   return False
 
 
+def _has_open_live_leg_for_ticker(store: Any, market_ticker: str, side: str) -> bool:
+  """True when any open live leg exists for this market ticker (any hour)."""
+  side_l = str(side or "").lower()
+  with store._connect() as conn:
+    row = conn.execute(
+      """
+      SELECT 1 FROM bot_positions
+      WHERE market_ticker = ? AND lower(side) = ? AND status = 'open' AND mode = 'live'
+      LIMIT 1
+      """,
+      (str(market_ticker), side_l),
+    ).fetchone()
+  return row is not None
+
+
 def adopt_filled_resting_enters(
   store: Any,
   kalshi: Any,
@@ -525,22 +548,28 @@ def adopt_filled_resting_enters(
   *,
   cfg: dict[str, Any] | None = None,
   kind: str = "hourly",
+  critical: bool = False,
 ) -> dict[str, Any]:
-  """Open bot legs when a resting live enter filled on Kalshi but was never recorded."""
+  """Open bot legs when a resting live enter filled on Kalshi but was never recorded.
+
+  Scans all resting live enters (not only the current hour) so fills that land
+  after hour rollover are still adopted.
+  """
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
 
   from src.trading.bot_live_exit import cap_adopted_contracts
+  from src.trading.hourly_event_time import market_ticker_event_ticker
 
   changes: list[dict[str, Any]] = []
   with store._connect() as conn:
     rows = conn.execute(
       """
       SELECT * FROM bot_trades
-      WHERE event_ticker = ? AND action = 'enter' AND status = 'resting' AND mode = 'live'
+      WHERE action = 'enter' AND status = 'resting' AND mode = 'live'
       ORDER BY created_at DESC
+      LIMIT 100
       """,
-      (event_ticker,),
     ).fetchall()
 
   seen: set[tuple[str, str]] = set()
@@ -554,12 +583,13 @@ def adopt_filled_resting_enters(
     if key in seen:
       continue
     seen.add(key)
-    if _has_open_live_leg(store, event_ticker, ticker, side):
+    leg_event = market_ticker_event_ticker(ticker) or str(trade.get("event_ticker") or event_ticker)
+    if _has_open_live_leg_for_ticker(store, ticker, side):
       continue
-    sellable = kalshi_sellable_contracts(kalshi, ticker, side)
+    sellable = kalshi_sellable_contracts(kalshi, ticker, side, critical=critical)
     if sellable is None or sellable < 0.05:
       continue
-    snap = kalshi_position_leg(kalshi, ticker, side) or {
+    snap = kalshi_position_leg(kalshi, ticker, side, critical=critical) or {
       "contracts": round(float(sellable), 2),
       "cost_usd": None,
       "entry_price_cents": int(trade.get("entry_price_cents") or trade.get("price_cents") or 0),
@@ -573,9 +603,13 @@ def adopt_filled_resting_enters(
 
     pid = str(uuid.uuid4())
     cost_usd = round(contracts_fp * entry_c / 100.0, 2)
+    detail = (
+      f"Live ENTER adopted from resting fill on Kalshi "
+      f"(order {trade.get('kalshi_order_id') or '?'}) — {contracts} contracts"
+    )
     store.open_position({
       "id": pid,
-      "event_ticker": event_ticker,
+      "event_ticker": leg_event,
       "market_ticker": ticker,
       "side": side,
       "contracts": contracts,
@@ -587,40 +621,50 @@ def adopt_filled_resting_enters(
       "mode": "live",
       "entry_source": "adopted_resting",
     })
-    store.log_trade({
-      "event_ticker": event_ticker,
-      "trigger": "continuous",
-      "action": "enter",
-      "mode": "live",
-      "market_ticker": ticker,
-      "side": side,
-      "contracts": contracts,
-      "price_cents": entry_c,
-      "entry_price_cents": entry_c,
-      "cost_usd": cost_usd,
-      "signal": trade.get("signal"),
-      "label": trade.get("label"),
-      "status": "filled",
-      "detail": (
-        f"Live ENTER adopted from resting fill on Kalshi "
-        f"(order {trade.get('kalshi_order_id') or '?'}) — {contracts} contracts"
-      ),
-      "position_id": pid,
-      "kalshi_order_id": trade.get("kalshi_order_id"),
-    })
+    trade_id = trade.get("id")
+    if trade_id is not None and hasattr(store, "promote_resting_enter_to_filled"):
+      store.promote_resting_enter_to_filled(
+        trade_id,
+        event_ticker=leg_event,
+        contracts=contracts,
+        cost_usd=cost_usd,
+        entry_price_cents=entry_c,
+        position_id=pid,
+        detail=detail,
+      )
+    else:
+      store.log_trade({
+        "event_ticker": leg_event,
+        "trigger": "continuous",
+        "action": "enter",
+        "mode": "live",
+        "market_ticker": ticker,
+        "side": side,
+        "contracts": contracts,
+        "price_cents": entry_c,
+        "entry_price_cents": entry_c,
+        "cost_usd": cost_usd,
+        "signal": trade.get("signal"),
+        "label": trade.get("label"),
+        "status": "filled",
+        "detail": detail,
+        "position_id": pid,
+        "kalshi_order_id": trade.get("kalshi_order_id"),
+      })
     changes.append({
       "action": "adopted_resting_enter",
       "ticker": ticker,
       "side": side,
       "contracts": contracts,
       "position_id": pid,
+      "event_ticker": leg_event,
     })
     log.info(
       "Adopted resting enter fill %s %s x%s on %s",
       side.upper(),
       ticker,
       contracts,
-      event_ticker,
+      leg_event,
     )
 
   return {"ok": True, "changes": changes}
@@ -648,11 +692,11 @@ def _recent_enter_trade_meta(
     row = conn.execute(
       """
       SELECT label, signal, entry_price_cents, price_cents FROM bot_trades
-      WHERE event_ticker = ? AND market_ticker = ? AND side = ?
+      WHERE market_ticker = ? AND side = ?
         AND action = 'enter' AND mode = 'live'
       ORDER BY created_at DESC LIMIT 1
       """,
-      (event_ticker, market_ticker, side),
+      (market_ticker, side),
     ).fetchone()
   if not row:
     return {}
@@ -672,36 +716,36 @@ def adopt_kalshi_orphan_inventory(
   ticker_belongs: Any | None = None,
   cfg: dict[str, Any] | None = None,
   kind: str = "hourly",
+  critical: bool = False,
 ) -> dict[str, Any]:
   """Open bot legs for Kalshi inventory with no matching bot position (kalshi-only reconcile)."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
 
   from src.trading.bot_live_exit import cap_adopted_contracts
-
-  def _belongs(ticker: str, event: str) -> bool:
-    if ticker_belongs is not None:
-      return bool(ticker_belongs(ticker, event))
-    return _ticker_belongs_to_hourly_event(ticker, event)
+  from src.trading.hourly_event_time import is_kalshi_hourly_event, market_ticker_event_ticker
 
   changes: list[dict[str, Any]] = []
-  for row in kalshi.list_market_positions():
+  for row in kalshi.list_market_positions(critical=critical):
     ticker = str(row.get("ticker") or "")
-    if not ticker or not _belongs(ticker, event_ticker):
+    if not ticker:
+      continue
+    leg_event = market_ticker_event_ticker(ticker)
+    if not leg_event or not is_kalshi_hourly_event(leg_event):
       continue
     net = position_net_from_row(row)
     if abs(net) < 0.05:
       continue
     side = "yes" if net > 0 else "no"
-    if _has_open_live_leg(store, event_ticker, ticker, side):
+    if _has_open_live_leg_for_ticker(store, ticker, side):
       continue
-    snap = kalshi_position_leg(kalshi, ticker, side)
+    snap = kalshi_position_leg(kalshi, ticker, side, critical=critical)
     if snap is None:
       continue
     contracts_fp = float(snap["contracts"])
     if contracts_fp < 0.05:
       continue
-    meta = _recent_enter_trade_meta(store, event_ticker, ticker, side)
+    meta = _recent_enter_trade_meta(store, leg_event, ticker, side)
     entry_c = int(
       snap.get("entry_price_cents")
       or meta.get("entry_price_cents")
@@ -717,7 +761,7 @@ def adopt_kalshi_orphan_inventory(
     cost_usd = round(contracts_fp * entry_c / 100.0, 2)
     store.open_position({
       "id": pid,
-      "event_ticker": event_ticker,
+      "event_ticker": leg_event,
       "market_ticker": ticker,
       "side": side,
       "contracts": contracts,
@@ -730,7 +774,7 @@ def adopt_kalshi_orphan_inventory(
       "entry_source": "adopted_orphan",
     })
     store.log_trade({
-      "event_ticker": event_ticker,
+      "event_ticker": leg_event,
       "trigger": "continuous",
       "action": "enter",
       "mode": "live",
@@ -755,13 +799,14 @@ def adopt_kalshi_orphan_inventory(
       "side": side,
       "contracts": contracts_fp,
       "position_id": pid,
+      "event_ticker": leg_event,
     })
     log.info(
       "Adopted kalshi-only inventory %s %s x%s on %s",
       side.upper(),
       ticker,
       contracts_fp,
-      event_ticker,
+      leg_event,
     )
 
   return {"ok": True, "changes": changes}
@@ -776,13 +821,14 @@ def run_live_position_hygiene(
   settings_enabled: bool,
   cfg: dict[str, Any] | None = None,
   kind: str = "hourly",
+  critical: bool = True,
 ) -> dict[str, Any]:
   """Sync inventory, cancel orphans, and optionally cancel resting enters when auto-bet is off."""
   adopted_resting = adopt_filled_resting_enters(
-    store, kalshi, event_ticker, cfg=cfg, kind=kind,
+    store, kalshi, event_ticker, cfg=cfg, kind=kind, critical=critical,
   )
   adopted_orphans = adopt_kalshi_orphan_inventory(
-    store, kalshi, event_ticker, cfg=cfg, kind=kind,
+    store, kalshi, event_ticker, cfg=cfg, kind=kind, critical=critical,
   )
   sync = sync_live_positions_from_kalshi(
     store, kalshi, event_ticker, cfg=cfg, kind=kind,

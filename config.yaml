@@ -268,6 +268,7 @@ hourly:
     min_hold_seconds: 120
     min_hours_to_settle_for_entry: 0.25  # block new legs in last 15m of hour (FREE mode too)
     max_hours_to_settle_for_entry: 1.25  # block entries on far-future hourly events (hour-edge guard)
+    experiment_start_at: "2026-07-02T07:20:00+00:00"  # Jul 2 2026 3:20 AM EDT — paper trials vs live
     profit_exit_cooldown_seconds: 60
     cheap_leg_max_entry_cents: 20
     cheap_leg_cut_loss_cents: 10

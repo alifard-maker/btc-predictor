@@ -5,7 +5,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from src.trading.bot_performance_report import build_bot_performance_report
+from src.trading.bot_performance_report import (
+  build_bot_performance_report,
+  build_experiment_summary,
+)
 from src.trading.hourly_bot_store import HourlyBotStore
 
 
@@ -201,3 +204,45 @@ def test_combined_rolling_excludes_trial_bots():
   days_trial = _combined_window_days(trial, 60)
   assert days_main["total_pnl_usd"] == 3.0
   assert days_trial["total_pnl_usd"] == -10.0
+
+
+def test_build_experiment_summary_filters_by_start():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "hourly_bot_btc.db")
+    _seed_round_trip(store, entry=50, spread=2, pnl=1.0, pid="old")
+    store.log_trade({
+      "event_ticker": "EVT",
+      "trigger": "continuous",
+      "action": "enter",
+      "mode": "paper",
+      "market_ticker": "MKT",
+      "side": "yes",
+      "contracts": 5,
+      "price_cents": 50,
+      "entry_price_cents": 50,
+      "cost_usd": 2.5,
+      "status": "filled",
+      "position_id": "new",
+      "created_at": "2026-07-02T08:00:00+00:00",
+    })
+    store.log_trade({
+      "event_ticker": "EVT",
+      "trigger": "continuous",
+      "action": "exit",
+      "mode": "paper",
+      "market_ticker": "MKT",
+      "side": "yes",
+      "contracts": 5,
+      "price_cents": 60,
+      "exit_price_cents": 60,
+      "pnl_usd": 0.5,
+      "status": "filled",
+      "position_id": "new",
+      "created_at": "2026-07-02T08:05:00+00:00",
+    })
+    cfg = {"hourly": {"bot": {"experiment_start_at": "2026-07-02T07:20:00+00:00"}}}
+    trades = store.list_trades(limit=100)
+    exp = build_experiment_summary(trades, cfg=cfg, kind="hourly", asset="btc")
+    assert exp is not None
+    assert exp["summary"]["closed_trades"] == 1
+    assert exp["summary"]["total_pnl_usd"] == 0.5

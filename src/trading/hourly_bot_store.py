@@ -963,6 +963,50 @@ class HourlyBotStore:
       ).fetchone()
     return self._enrich_trade(dict(row)) if row else None
 
+  def promote_resting_enter_to_filled(
+    self,
+    trade_id: str | int,
+    *,
+    event_ticker: str,
+    contracts: int,
+    cost_usd: float,
+    entry_price_cents: int,
+    position_id: str,
+    detail: str,
+  ) -> dict[str, Any] | None:
+    """Promote a resting live enter row to filled (avoids duplicate trade rows)."""
+    tid = str(trade_id)
+    with self._connect() as conn:
+      row = conn.execute("SELECT * FROM bot_trades WHERE id = ?", (tid,)).fetchone()
+      if not row:
+        return None
+      conn.execute(
+        """
+        UPDATE bot_trades
+        SET status = 'filled',
+            event_ticker = ?,
+            contracts = ?,
+            cost_usd = ?,
+            price_cents = ?,
+            entry_price_cents = ?,
+            position_id = ?,
+            detail = ?
+        WHERE id = ? AND action = 'enter' AND status = 'resting' AND mode = 'live'
+        """,
+        (
+          event_ticker,
+          int(contracts),
+          float(cost_usd),
+          int(entry_price_cents),
+          int(entry_price_cents),
+          str(position_id),
+          detail,
+          tid,
+        ),
+      )
+      updated = conn.execute("SELECT * FROM bot_trades WHERE id = ?", (tid,)).fetchone()
+    return self._enrich_trade(dict(updated)) if updated else None
+
   def count_resting_live_enters(self, event_ticker: str, *, mode: str = "live") -> int:
     """Unfilled resting live enter rows for this hour (spam guard)."""
     with self._connect() as conn:
