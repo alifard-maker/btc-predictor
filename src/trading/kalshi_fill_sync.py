@@ -71,10 +71,19 @@ def _order_action_side(order: dict[str, Any]) -> tuple[str, str] | None:
   return None
 
 
+_ORDER_DIRECTION_CACHE: dict[int, tuple[float, dict[str, tuple[str, str]]]] = {}
+_ORDER_CACHE_TTL_SEC = 120.0
+
+
 def _build_order_direction_cache(kalshi: Any) -> dict[str, tuple[str, str]]:
   """Map order_id → (buy|sell, yes|no) for fills missing legacy action/side."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {}
+  cache_key = id(kalshi)
+  now = time.monotonic()
+  cached = _ORDER_DIRECTION_CACHE.get(cache_key)
+  if cached is not None and (now - cached[0]) < _ORDER_CACHE_TTL_SEC:
+    return cached[1]
   cache: dict[str, tuple[str, str]] = {}
   for status in ("executed", "canceled", "resting"):
     cursor: str | None = None
@@ -100,6 +109,7 @@ def _build_order_direction_cache(kalshi: Any) -> dict[str, tuple[str, str]]:
       cursor = data.get("cursor") if isinstance(data, dict) else None
       if not cursor:
         break
+  _ORDER_DIRECTION_CACHE[cache_key] = (now, cache)
   return cache
 
 

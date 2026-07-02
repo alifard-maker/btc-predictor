@@ -331,7 +331,33 @@ class PredictionLoop:
       "daily_loss": daily,
       "kalshi_circuit": kalshi,
       "bots_paused": bool(daily.get("any_cap_active")) or bool(kalshi.get("entries_blocked")),
+      "live_hourly": self._live_hourly_pulse(),
     }
+
+  def _live_hourly_pulse(self) -> dict[str, Any]:
+    """Compact live-bot heartbeat for post-deploy /health checks (no auth)."""
+    out: dict[str, Any] = {}
+    for asset in ("btc", "eth"):
+      if asset == "eth" and not asset_enabled(self.cfg, "eth"):
+        continue
+      try:
+        store = self.hourly_bot_store(asset, kind="hourly")
+        settings = store.get_settings()
+        runtime = store.get_runtime()
+        out[asset] = {
+          "enabled": bool(settings.enabled),
+          "continuous": bool(settings.continuous),
+          "mode": settings.mode,
+          "auto_stopped": bool(settings.auto_stopped),
+          "auto_stop_reason": settings.auto_stop_reason,
+          "last_skip_reason": store.last_skip_reason(),
+          "last_cycle_at": runtime.get("last_cycle_at"),
+          "last_cycle_active": runtime.get("last_cycle_active"),
+          "cycles_total": runtime.get("cycles_total"),
+        }
+      except Exception as exc:
+        out[asset] = {"error": str(exc)[:200]}
+    return out
 
   def _cached_tab_if_throttled(
     self,
@@ -808,7 +834,7 @@ class PredictionLoop:
       cfg=cfg,
       kind=entry_kind_for_bot(kind),
       critical=True,
-      force_fill_sync=True,
+      force_fill_sync=False,
       asset=asset,
     )
 
