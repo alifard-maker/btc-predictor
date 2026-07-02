@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 
 from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.kalshi_fill_sync import (
+  _aggregate_fills_to_orders,
+  _build_order_direction_cache,
   backfill_kalshi_hourly_fills,
   replay_closed_legs_from_kalshi_fills,
   summarize_kalshi_experiment_fills,
@@ -59,6 +61,25 @@ def test_backfill_closed_round_trip_from_kalshi_fills():
     assert enters[0]["kalshi_order_id"] == "buy-1"
     assert exits[0]["kalshi_order_id"] == "sell-1"
     assert float(exits[0]["pnl_usd"]) == 0.18
+
+
+def test_aggregate_v2_fills_with_order_cache():
+  fills = [
+    {
+      "order_id": "buy-v2",
+      "market_ticker": "KXBTCD-26JUL0212-T60700",
+      "outcome_side": "yes",
+      "book_side": "bid",
+      "yes_price_dollars": "0.4400",
+      "count_fp": "2.00",
+      "created_time": "2026-07-02T16:44:00+00:00",
+    },
+  ]
+  cache = {"buy-v2": ("buy", "yes")}
+  orders = _aggregate_fills_to_orders(fills, order_cache=cache)
+  assert len(orders) == 1
+  assert orders[0]["action"] == "buy"
+  assert orders[0]["price_cents"] == 44
 
 
 def test_backfill_v2_dollar_price_fills():

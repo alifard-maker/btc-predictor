@@ -825,10 +825,14 @@ def _apply_slot15_bot_settings(
 def hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  result = _loop.sync_hourly_kalshi_fills("btc", force=True)
-  tab = _loop._hourly_tab_for_bot_status("btc")
-  status = _loop.hourly_bot_status("btc", tab if tab and tab.get("ok") else None)
-  return {"sync": result, "bot": status}
+  try:
+    result = _loop.sync_hourly_kalshi_fills("btc", force=True)
+    tab = _loop._hourly_tab_for_bot_status("btc")
+    status = _loop.hourly_bot_status("btc", tab if tab and tab.get("ok") else None)
+    return {"sync": result, "bot": status}
+  except Exception as e:
+    log.exception("hourly bot sync-kalshi-fills failed: %s", e)
+    raise HTTPException(500, f"Kalshi sync failed: {e}") from e
 
 
 @app.get("/api/hourly/bot")

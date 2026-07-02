@@ -46,27 +46,115 @@ def _fill_count(fill: dict[str, Any]) -> float:
   return 0.0
 
 
-def _aggregate_fills_to_orders(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _fill_market_ticker(fill: dict[str, Any]) -> str:
+  return str(fill.get("ticker") or fill.get("market_ticker") or "").strip()
+
+
+def _order_action_side(order: dict[str, Any]) -> tuple[str, str] | None:
+  """Normalize Kalshi V1/V2 order rows to (action, held_side)."""
+  action = str(order.get("action") or "").lower()
+  side = str(order.get("side") or order.get("outcome_side") or "").lower()
+  book = str(order.get("book_side") or "").lower()
+  if side in ("bid", "ask"):
+    book, side = side, ""
+  if side not in ("yes", "no"):
+    if book == "bid":
+      side = "yes"
+    elif book == "ask":
+      side = "no"
+  if action in ("buy", "sell") and side in ("yes", "no"):
+    return action, side
+  if book == "bid":
+    return "buy", "yes"
+  if book == "ask":
+    return "buy", "no"
+  return None
+
+
+def _build_order_direction_cache(kalshi: Any) -> dict[str, tuple[str, str]]:
+  """Map order_id → (buy|sell, yes|no) for fills missing legacy action/side."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return {}
+  cache: dict[str, tuple[str, str]] = {}
+  for status in ("executed", "canceled", "resting"):
+    cursor: str | None = None
+    for _ in range(6):
+      params: dict[str, Any] = {"status": status, "limit": 200}
+      if cursor:
+        params["cursor"] = cursor
+      try:
+        data = kalshi.get("/portfolio/orders", params=params, auth=True, critical=True)
+      except Exception as e:
+        log.warning("Kalshi order list (%s) failed: %s", status, e)
+        break
+      orders = data.get("orders") if isinstance(data, dict) else None
+      if not isinstance(orders, list):
+        break
+      for order in orders:
+        if not isinstance(order, dict):
+          continue
+        pair = _order_action_side(order)
+        oid = order.get("order_id")
+        if oid and pair:
+          cache[str(oid)] = pair
+      cursor = data.get("cursor") if isinstance(data, dict) else None
+      if not cursor:
+        break
+  return cache
+
+
+def _fill_action_side(
+  fill: dict[str, Any],
+  order_cache: dict[str, tuple[str, str]],
+) -> tuple[str, str, str] | None:
+  """Return (ticker, action, side) for one Kalshi fill row."""
+  ticker = _fill_market_ticker(fill)
+  if not ticker:
+    return None
+  action = str(fill.get("action") or "").lower()
+  side = str(fill.get("side") or fill.get("outcome_side") or "").lower()
+  book = str(fill.get("book_side") or "").lower()
+  if side in ("bid", "ask"):
+    book, side = side, ""
+  if side not in ("yes", "no"):
+    if book == "bid":
+      side = "yes"
+    elif book == "ask":
+      side = "no"
+  if action in ("buy", "sell") and side in ("yes", "no"):
+    return ticker, action, side
+  oid = str(fill.get("order_id") or "")
+  if oid and oid in order_cache:
+    act, sd = order_cache[oid]
+    return ticker, act, sd
+  return None
+
+
+def _aggregate_fills_to_orders(
+  fills: list[dict[str, Any]],
+  *,
+  order_cache: dict[str, tuple[str, str]] | None = None,
+) -> list[dict[str, Any]]:
   """Merge partial fills per Kalshi order_id."""
+  order_cache = order_cache or {}
   buckets: dict[str, dict[str, Any]] = {}
+  skipped = 0
   for fill in fills:
+    leg = _fill_action_side(fill, order_cache)
+    if not leg:
+      skipped += 1
+      continue
+    ticker, action, side = leg
     oid = str(fill.get("order_id") or fill.get("trade_id") or fill.get("fill_id") or "")
     if not oid:
       ts = _fill_created_at(fill)
-      ticker = str(fill.get("ticker") or "")
-      action = str(fill.get("action") or "").lower()
-      side = str(fill.get("side") or "").lower()
       oid = f"anon:{ticker}:{action}:{side}:{ts.isoformat() if ts else 'unknown'}"
-    ticker = str(fill.get("ticker") or "")
-    action = str(fill.get("action") or "").lower()
-    side = str(fill.get("side") or "").lower()
-    if not ticker or action not in ("buy", "sell") or side not in ("yes", "no"):
-      continue
     ct = _fill_count(fill)
     if ct <= 0:
       continue
     px = leg_price_cents_from_fill(fill, held_side=side)
     if px is None:
+      skipped += 1
       continue
     row = buckets.setdefault(
       oid,
@@ -93,6 +181,8 @@ def _aggregate_fills_to_orders(fills: list[dict[str, Any]]) -> list[dict[str, An
     row["price_cents"] = max(1, min(99, int(round(row["price_value"] / row["contracts"]))))
     out.append(row)
   out.sort(key=lambda r: r.get("created_at") or datetime.min.replace(tzinfo=timezone.utc))
+  if skipped and not out:
+    log.warning("Kalshi fill aggregate: skipped %s fill row(s) — missing direction or price", skipped)
   return out
 
 
@@ -169,6 +259,7 @@ def backfill_kalshi_hourly_fills(
   force: bool = False,
   cfg: dict[str, Any] | None = None,
   kind: str = "hourly",
+  order_cache: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
   """Replay recent Kalshi fills into the bot trade log for missing live enters/exits."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
@@ -180,9 +271,11 @@ def backfill_kalshi_hourly_fills(
 
   cutoff = datetime.now(timezone.utc) - timedelta(hours=float(hours))
   raw_fills = kalshi.list_fills(limit=500, critical=critical)
+  if order_cache is None:
+    order_cache = _build_order_direction_cache(kalshi)
   hourly_fills: list[dict[str, Any]] = []
   for fill in raw_fills:
-    ticker = str(fill.get("ticker") or "")
+    ticker = _fill_market_ticker(fill)
     leg_event = market_ticker_event_ticker(ticker)
     if not leg_event or not is_kalshi_hourly_event(leg_event):
       continue
@@ -191,7 +284,7 @@ def backfill_kalshi_hourly_fills(
       continue
     hourly_fills.append(fill)
 
-  orders = _aggregate_fills_to_orders(hourly_fills)
+  orders = _aggregate_fills_to_orders(hourly_fills, order_cache=order_cache)
   known = _known_live_order_actions(store)
   changes: list[dict[str, Any]] = []
 
@@ -383,6 +476,7 @@ def replay_closed_legs_from_kalshi_fills(
   *,
   hours: float = 36.0,
   critical: bool = True,
+  order_cache: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
   """
   Second pass: pair buy+sell orders on the same leg when no open position exists.
@@ -394,12 +488,15 @@ def replay_closed_legs_from_kalshi_fills(
 
   cutoff = datetime.now(timezone.utc) - timedelta(hours=float(hours))
   raw_fills = kalshi.list_fills(limit=500, critical=critical)
-  orders = _aggregate_fills_to_orders([
+  if order_cache is None:
+    order_cache = _build_order_direction_cache(kalshi)
+  hourly_fills = [
     f for f in raw_fills
-    if market_ticker_event_ticker(str(f.get("ticker") or ""))
-    and is_kalshi_hourly_event(market_ticker_event_ticker(str(f.get("ticker") or "")) or "")
+    if market_ticker_event_ticker(_fill_market_ticker(f))
+    and is_kalshi_hourly_event(market_ticker_event_ticker(_fill_market_ticker(f)) or "")
     and (_fill_created_at(f) is None or _fill_created_at(f) >= cutoff)
-  ])
+  ]
+  orders = _aggregate_fills_to_orders(hourly_fills, order_cache=order_cache)
   known = _known_live_order_actions(store)
   changes: list[dict[str, Any]] = []
 
@@ -513,11 +610,13 @@ def sync_kalshi_fills_to_store(
   kind: str = "hourly",
 ) -> dict[str, Any]:
   """Run fill backfill passes (open legs, then closed round-trips)."""
+  order_cache = _build_order_direction_cache(kalshi)
   first = backfill_kalshi_hourly_fills(
     store, kalshi, hours=hours, critical=critical, force=force, cfg=cfg, kind=kind,
+    order_cache=order_cache,
   )
   second = replay_closed_legs_from_kalshi_fills(
-    store, kalshi, hours=hours, critical=critical,
+    store, kalshi, hours=hours, critical=critical, order_cache=order_cache,
   )
   changes = (first.get("changes") or []) + (second.get("changes") or [])
   return {
@@ -544,13 +643,14 @@ def summarize_kalshi_experiment_fills(
     return {"ok": False, "error": "Kalshi not authenticated"}
 
   raw_fills = kalshi.list_fills(limit=min(max_fills, 1000), critical=critical)
+  order_cache = _build_order_direction_cache(kalshi)
   hourly_fills = [
     f for f in raw_fills
-    if market_ticker_event_ticker(str(f.get("ticker") or ""))
-    and is_kalshi_hourly_event(market_ticker_event_ticker(str(f.get("ticker") or "")) or "")
+    if market_ticker_event_ticker(_fill_market_ticker(f))
+    and is_kalshi_hourly_event(market_ticker_event_ticker(_fill_market_ticker(f)) or "")
     and (_fill_created_at(f) is None or _fill_created_at(f) >= since)
   ]
-  orders = _aggregate_fills_to_orders(hourly_fills)
+  orders = _aggregate_fills_to_orders(hourly_fills, order_cache=order_cache)
   legs: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
   for order in orders:
     legs[(str(order["ticker"]), str(order["side"]))].append(order)

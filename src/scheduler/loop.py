@@ -669,9 +669,17 @@ class PredictionLoop:
     """Force full Kalshi hygiene + fill import into the live bot trade log."""
     key = self._kalshi_sync_key(asset, kind)
     self._kalshi_sync_mono.pop(key, None)
+    deadline = time.monotonic() + 45.0
     while self._kalshi_sync_inflight.get(key):
+      if time.monotonic() >= deadline:
+        log.warning("Kalshi sync wait timed out for %s — proceeding", key)
+        break
       time.sleep(0.05)
-    report = self.run_hourly_kalshi_sync(asset, kind=kind, force_fill_sync=force)
+    try:
+      report = self.run_hourly_kalshi_sync(asset, kind=kind, force_fill_sync=force)
+    except Exception as e:
+      log.exception("Kalshi sync failed for %s: %s", asset, e)
+      return {"ok": False, "error": str(e), "changes": 0}
     self._last_kalshi_sync[key] = report
     self._kalshi_sync_mono[key] = time.monotonic()
     return report
