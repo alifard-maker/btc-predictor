@@ -103,6 +103,8 @@ class PredictionLoop:
     self._slot15_bots: dict[str, Any] = {}
     self._hourly_tab_cache: dict[str, tuple[dict[str, Any], float]] = {}
     self._hourly_prediction_mono: dict[str, float] = {}
+    self._kalshi_sync_mono: dict[str, float] = {}
+    self._last_kalshi_sync: dict[str, dict[str, Any]] = {}
     self._slot15_tab_cache: dict[str, tuple[dict[str, Any], float]] = {}
     if asset_enabled(self.cfg, "eth"):
       self._eth_cfg = asset_cfg(self.cfg, "eth")
@@ -495,6 +497,12 @@ class PredictionLoop:
       status["mechanics_profile"] = profile
       status["mechanics_profile_label"] = PROFILE_LABELS.get(profile, profile)
     trade_limit = 35 if lightweight else 100
+    settings = store.get_settings()
+    sync_report: dict[str, Any] | None = None
+    if settings.mode == "live" and kind == "hourly":
+      sync_report = self._maybe_sync_live_kalshi(asset, kind=kind, force=False)
+      if sync_report:
+        status["kalshi_sync"] = sync_report
     status["recent_trades"] = store.list_trades(limit=trade_limit)
     status["hour_trades"] = (
       store.list_trades(limit=35 if lightweight else 50, event_ticker=event_ticker)
@@ -502,6 +510,8 @@ class PredictionLoop:
       else []
     )
     open_pos = list(status.get("open_positions") or [])
+    if settings.mode == "live" and kind == "hourly":
+      open_pos = store.all_open_live_positions()
     if tab and tab.get("ok"):
       from src.trading.hourly_bot import enrich_open_positions_live
 
@@ -510,10 +520,11 @@ class PredictionLoop:
         open_pos,
         tab,
         acfg,
-        settings=store.get_settings(),
+        settings=settings,
         bot_kind=kind,
       )
       status["open_positions"] = open_pos
+      status["open_position_count"] = len(open_pos)
     hs = status.get("hourly_summary") or status.get("hour_summary")
     if hs:
       hs = dict(hs)
@@ -546,7 +557,6 @@ class PredictionLoop:
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
     status["adaptive_calibration"] = store.get_adaptive_calibration()
-    settings = store.get_settings()
     from src.trading.stake_cap_utilization import compute_stake_cap_utilization
 
     stake_trades = status.get("hour_trades") or []
@@ -655,21 +665,9 @@ class PredictionLoop:
     kind: str = "hourly",
     force: bool = True,
   ) -> dict[str, Any]:
-    """Force-import recent Kalshi fills into the live bot trade log."""
-    from src.backtest.mechanics_profiles import entry_kind_for_bot
-    from src.trading.kalshi_fill_sync import sync_kalshi_fills_to_store
-
-    store = self.hourly_bot_store(asset, kind=kind)
-    kalshi = self._kalshi_for(asset)
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
-    return sync_kalshi_fills_to_store(
-      store,
-      kalshi,
-      force=force,
-      cfg=acfg,
-      kind=entry_kind_for_bot(kind),
-      critical=True,
-    )
+    """Force full Kalshi hygiene + fill import into the live bot trade log."""
+    self._kalshi_sync_mono.pop(self._kalshi_sync_key(asset, kind), None)
+    return self.run_hourly_kalshi_sync(asset, kind=kind, force_fill_sync=force)
 
   def hourly_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     return self.hourly_bot_status(asset, tab, kind="hourly_trial")
@@ -776,7 +774,78 @@ class PredictionLoop:
       cfg=cfg,
       kind=entry_kind_for_bot(kind),
       critical=True,
+      force_fill_sync=True,
     )
+
+  _KALSHI_SYNC_INTERVAL_SEC = 25.0
+
+  def _kalshi_sync_key(self, asset: str, kind: str) -> str:
+    return f"{asset.lower()}:{kind}"
+
+  def run_hourly_kalshi_sync(
+    self,
+    asset: str,
+    *,
+    kind: str = "hourly",
+    force_fill_sync: bool = True,
+  ) -> dict[str, Any]:
+    """Full Kalshi inventory + fill backfill for the live hourly bot."""
+    from src.backtest.mechanics_profiles import entry_kind_for_bot
+    from src.trading.live_position_sync import run_live_position_hygiene
+
+    store = self.hourly_bot_store(asset, kind=kind)
+    settings = store.get_settings()
+    kalshi = self._kalshi_for(asset)
+    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    if settings.mode != "live":
+      return {"ok": True, "skipped": "not_live"}
+    if not kalshi or not getattr(kalshi, "authenticated", False):
+      return {"ok": False, "skipped": "kalshi_not_authenticated"}
+    tab = self._hourly_tab_for_bot_status(asset)
+    if not tab or not tab.get("ok"):
+      return {"ok": False, "skipped": "no_tab"}
+    event_ticker = (tab.get("event") or {}).get("event_ticker")
+    if not event_ticker:
+      return {"ok": False, "skipped": "no_event"}
+    report = run_live_position_hygiene(
+      store=store,
+      kalshi=kalshi,
+      event_ticker=str(event_ticker),
+      tab=tab,
+      settings_enabled=bool(settings.enabled),
+      cfg=acfg,
+      kind=entry_kind_for_bot(kind),
+      critical=True,
+      force_fill_sync=force_fill_sync,
+    )
+    fill = report.get("kalshi_fill_sync") or {}
+    return {
+      "ok": bool(report.get("ok", True)),
+      "changes": len(report.get("changes") or []),
+      "fills_seen": fill.get("fills_seen"),
+      "orders_scanned": fill.get("orders_scanned"),
+      "skipped": fill.get("skipped"),
+      "at": datetime.now(timezone.utc).isoformat(),
+    }
+
+  def _maybe_sync_live_kalshi(
+    self,
+    asset: str,
+    *,
+    kind: str = "hourly",
+    force: bool = False,
+  ) -> dict[str, Any] | None:
+    """Throttled Kalshi sync when the dashboard polls live bot status."""
+    key = self._kalshi_sync_key(asset, kind)
+    now = time.monotonic()
+    if not force:
+      last = self._kalshi_sync_mono.get(key, 0.0)
+      if now - last < self._KALSHI_SYNC_INTERVAL_SEC:
+        return self._last_kalshi_sync.get(key)
+    report = self.run_hourly_kalshi_sync(asset, kind=kind, force_fill_sync=True)
+    self._kalshi_sync_mono[key] = now
+    self._last_kalshi_sync[key] = report
+    return report
 
   def run_hourly_bot_continuous(self) -> None:
     self._run_hourly_bot_continuous("btc")

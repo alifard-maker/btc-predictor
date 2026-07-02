@@ -319,6 +319,17 @@ class HourlyBotStore:
       ).fetchall()
     return [dict(r) for r in rows]
 
+  def all_open_live_positions(self) -> list[dict[str, Any]]:
+    with self._connect() as conn:
+      rows = conn.execute(
+        """
+        SELECT * FROM bot_positions
+        WHERE status = 'open' AND mode = 'live'
+        ORDER BY opened_at DESC
+        """,
+      ).fetchall()
+    return [dict(r) for r in rows]
+
   def open_exposure_usd(self, event_ticker: str, mode: str | None = None) -> float:
     positions = self.open_positions(event_ticker)
     if mode:

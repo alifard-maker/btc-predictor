@@ -2152,6 +2152,10 @@
       return asset === 'eth' ? '/api/eth/hourly/bot/clear-history' : '/api/hourly/bot/clear-history';
     }
 
+    function hourlyBotSyncKalshiUrl(asset) {
+      return asset === 'eth' ? '/api/eth/hourly/bot/sync-kalshi-fills' : '/api/hourly/bot/sync-kalshi-fills';
+    }
+
     function hourlyBotStatusUrl(asset, kind = 'hourly', lightweight = true) {
       if (isHourlyTrialKind(kind)) return hourlyTrialBotStatusUrl(asset, kind);
       const base = asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
@@ -2804,6 +2808,58 @@
         </div>
         ${!ok ? `<p class="muted" style="font-size:.68rem;margin:.35rem 0 0">${mismatchN} position mismatch${mismatchN === 1 ? '' : 'es'}${orphanN ? ` · ${orphanN} orphan sell${orphanN === 1 ? '' : 's'}` : ''}</p>${detailHtml}` : `<p class="muted" style="font-size:.68rem;margin:.35rem 0 0">Bot open legs match Kalshi for this hour.</p>`}
       </div>`;
+    }
+
+    function botKalshiSyncHtml(bot, asset, kind) {
+      if ((bot?.settings?.mode || bot?.mode || 'paper') !== 'live' || isHourlyTrialKind(kind)) return '';
+      const sync = bot?.kalshi_sync;
+      const auth = !!bot?.kalshi_authenticated;
+      const p = botDomPrefix(kind, asset);
+      const changes = Number(sync?.changes ?? 0);
+      const fills = sync?.fills_seen;
+      const skipped = sync?.skipped;
+      const at = sync?.at ? new Date(sync.at).toLocaleTimeString() : null;
+      let statusLine = 'Kalshi sync runs automatically every ~25s while this panel is open.';
+      if (!auth) {
+        statusLine = 'Kalshi API not authenticated — live fills cannot import. Check Railway env keys.';
+      } else if (skipped === 'kalshi_not_authenticated') {
+        statusLine = 'Kalshi auth failed during last sync attempt.';
+      } else if (sync && changes > 0) {
+        statusLine = `Last sync imported ${changes} change${changes === 1 ? '' : 's'}${fills != null ? ` from ${fills} fill(s)` : ''}${at ? ` at ${at}` : ''}.`;
+      } else if (sync && at) {
+        statusLine = `Last sync: no new fills${at ? ` (${at})` : ''}.`;
+      }
+      return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);border-radius:8px;font-size:.75rem;color:#bfdbfe">
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;justify-content:space-between">
+          <strong>Kalshi live sync</strong>
+          <button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem" id="bot-sync-kalshi-${p}" onclick="syncKalshiFills('${asset}', '${kind}')">Sync from Kalshi now</button>
+        </div>
+        <p class="muted" style="font-size:.68rem;margin:.35rem 0 0;color:#cbd5e1">${statusLine}</p>
+      </div>`;
+    }
+
+    async function syncKalshiFills(asset, kind = 'hourly') {
+      if (isHourlyTrialKind(kind)) return;
+      const p = botDomPrefix(kind, asset);
+      const btn = $(`bot-sync-kalshi-${p}`);
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Syncing…';
+      }
+      try {
+        const res = await fetch(hourlyBotSyncKalshiUrl(asset), { method: 'POST', credentials: 'same-origin' });
+        if (!res.ok) throw new Error(await parseSettingsError(res));
+        const data = await res.json();
+        const bot = mergeBotStatus(asset, data.bot || data);
+        if (shouldRenderHourlyBot(asset, kind)) renderHourlyBot(bot, asset, kind);
+      } catch (e) {
+        showError('Kalshi sync failed: ' + (e.message || e));
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Sync from Kalshi now';
+        }
+      }
     }
 
     function confirmPaperCloseBeforeLive(bot, periodLabel) {
@@ -3711,7 +3767,9 @@
       const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
       const hourId = hs.event_ticker || bot.event_ticker || '—';
       const assetLabel = asset === 'eth' ? 'ETH' : 'BTC';
-      const tradeSource = (bot.hour_trades && bot.hour_trades.length) ? bot.hour_trades : (bot.recent_trades || []);
+      const tradeSource = s.mode === 'live'
+        ? (bot.recent_trades || [])
+        : ((bot.hour_trades && bot.hour_trades.length) ? bot.hour_trades : (bot.recent_trades || []));
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
         indexLabel: bot.index_label || (asset === 'eth' ? 'ERTI' : 'BRTI'),
         indexNow: bot.index_now_price,
@@ -3725,6 +3783,7 @@
       const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode);
       const serverBanner = botServerBanner(bot, s);
       const reconcileHtml = botLiveReconcileHtml(bot);
+      const kalshiSyncHtml = botKalshiSyncHtml(bot, asset, kind);
       const emptyLog = s.enabled
         ? `No bot activity yet${freeMode ? ' — free mode waits for any live BUY YES/NO on the hourly tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
         : 'No filled trades this hour yet. Auto-bet is off — resting orders are hidden by default.';
@@ -3743,6 +3802,7 @@
         ${watchHtml}
         ${skipHtml}
         ${reconcileHtml}
+        ${kalshiSyncHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · <strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}</strong> P&amp;L for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
           <div class="bot-stat"><span class="muted">Hour total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>

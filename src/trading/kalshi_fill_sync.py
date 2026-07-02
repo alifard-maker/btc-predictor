@@ -43,9 +43,13 @@ def _aggregate_fills_to_orders(fills: list[dict[str, Any]]) -> list[dict[str, An
   """Merge partial fills per Kalshi order_id."""
   buckets: dict[str, dict[str, Any]] = {}
   for fill in fills:
-    oid = str(fill.get("order_id") or fill.get("trade_id") or "")
+    oid = str(fill.get("order_id") or fill.get("trade_id") or fill.get("fill_id") or "")
     if not oid:
-      continue
+      ts = _fill_created_at(fill)
+      ticker = str(fill.get("ticker") or "")
+      action = str(fill.get("action") or "").lower()
+      side = str(fill.get("side") or "").lower()
+      oid = f"anon:{ticker}:{action}:{side}:{ts.isoformat() if ts else 'unknown'}"
     ticker = str(fill.get("ticker") or "")
     action = str(fill.get("action") or "").lower()
     side = str(fill.get("side") or "").lower()
@@ -323,7 +327,12 @@ def backfill_kalshi_hourly_fills(
 
   if changes:
     log.info("Kalshi fill backfill: %s change(s)", len(changes))
-  return {"ok": True, "changes": changes, "orders_scanned": len(orders)}
+  return {
+    "ok": True,
+    "changes": changes,
+    "orders_scanned": len(orders),
+    "fills_seen": len(hourly_fills),
+  }
 
 
 def _has_filled_enter_for_order(store: Any, order_id: str) -> bool:
@@ -487,6 +496,7 @@ def sync_kalshi_fills_to_store(
     "ok": True,
     "changes": changes,
     "orders_scanned": first.get("orders_scanned", 0),
+    "fills_seen": first.get("fills_seen", 0),
     "skipped": first.get("skipped"),
   }
 

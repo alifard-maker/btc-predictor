@@ -822,6 +822,7 @@ def run_live_position_hygiene(
   cfg: dict[str, Any] | None = None,
   kind: str = "hourly",
   critical: bool = True,
+  force_fill_sync: bool = False,
 ) -> dict[str, Any]:
   """Sync inventory, cancel orphans, and optionally cancel resting enters when auto-bet is off."""
   adopted_resting = adopt_filled_resting_enters(
@@ -833,7 +834,7 @@ def run_live_position_hygiene(
   from src.trading.kalshi_fill_sync import sync_kalshi_fills_to_store
 
   fill_sync = sync_kalshi_fills_to_store(
-    store, kalshi, critical=critical, cfg=cfg, kind=kind,
+    store, kalshi, critical=critical, cfg=cfg, kind=kind, force=force_fill_sync,
   )
   sync = sync_live_positions_from_kalshi(
     store, kalshi, event_ticker, cfg=cfg, kind=kind,
