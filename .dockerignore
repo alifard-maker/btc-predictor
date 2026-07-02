@@ -5,6 +5,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 data/
+!data/calibration/
+!data/calibration/**
 *.db
 .env
 .env.*

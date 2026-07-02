@@ -21,6 +21,7 @@ from src.models.hourly_range_log import (
 )
 from src.trading.contract_signals import BUY_NO, BUY_YES, VALUE_YES, is_actionable_buy
 from src.trading.hourly_bet_assessment import assess_hourly_bet
+from src.trading.hourly_regime import HourlyRegimeFilter
 from src.calibration.v2_calibration import load_v2_calibration
 
 log = logging.getLogger(__name__)
