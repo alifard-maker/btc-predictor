@@ -26,14 +26,38 @@ def _yes_price_cents(raw: Any) -> int | None:
   return max(1, min(99, int(round(val))))
 
 
-def leg_price_cents_from_fill(fill: dict[str, Any], *, held_side: str) -> int | None:
-  """Held-leg price in cents from a Kalshi fill (yes_price is YES-denominated)."""
-  yes_c = _yes_price_cents(fill.get("yes_price") or fill.get("price"))
-  if yes_c is None:
+def _dollars_field_to_cents(raw: Any) -> int | None:
+  if raw is None or raw == "":
     return None
-  if str(held_side or "").lower() == "yes":
-    return yes_c
-  return max(1, min(99, 100 - yes_c))
+  try:
+    val = float(raw)
+  except (TypeError, ValueError):
+    return None
+  if 0 < val <= 1:
+    return max(1, min(99, int(round(val * 100))))
+  return max(1, min(99, int(round(val))))
+
+
+def leg_price_cents_from_fill(fill: dict[str, Any], *, held_side: str) -> int | None:
+  """Held-leg price in cents from a Kalshi fill (V2 dollars or legacy cents)."""
+  side_l = str(held_side or "").lower()
+  yes_d = fill.get("yes_price_dollars") or fill.get("yes_price_fixed")
+  no_d = fill.get("no_price_dollars") or fill.get("no_price_fixed")
+  yes_c = _dollars_field_to_cents(yes_d) if yes_d not in (None, "") else _yes_price_cents(
+    fill.get("yes_price") or fill.get("price"),
+  )
+  no_c = _dollars_field_to_cents(no_d) if no_d not in (None, "") else _yes_price_cents(fill.get("no_price"))
+  if side_l == "yes":
+    if yes_c is not None:
+      return yes_c
+    if no_c is not None:
+      return max(1, min(99, 100 - no_c))
+    return None
+  if no_c is not None:
+    return no_c
+  if yes_c is not None:
+    return max(1, min(99, 100 - yes_c))
+  return None
 
 
 def avg_sell_fill_cents(

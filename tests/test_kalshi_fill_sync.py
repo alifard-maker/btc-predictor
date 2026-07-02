@@ -61,6 +61,39 @@ def test_backfill_closed_round_trip_from_kalshi_fills():
     assert float(exits[0]["pnl_usd"]) == 0.18
 
 
+def test_backfill_v2_dollar_price_fills():
+  ticker = "KXBTCD-26JUL0212-T60700"
+  fills = [
+    {
+      "order_id": "buy-v2",
+      "ticker": ticker,
+      "action": "buy",
+      "side": "yes",
+      "yes_price_dollars": "0.4400",
+      "count_fp": "2.00",
+      "created_time": "2026-07-02T16:44:00+00:00",
+    },
+    {
+      "order_id": "sell-v2",
+      "ticker": ticker,
+      "action": "sell",
+      "side": "yes",
+      "yes_price_dollars": "0.5300",
+      "count_fp": "2.00",
+      "created_time": "2026-07-02T16:45:00+00:00",
+    },
+  ]
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    kalshi = _kalshi_with_fills(fills)
+    out = replay_closed_legs_from_kalshi_fills(store, kalshi)
+    assert out["ok"] is True
+    assert len(out["changes"]) == 1
+    trades = store.list_trades(limit=50)
+    assert len([t for t in trades if t.get("action") == "enter" and t.get("status") == "filled"]) == 1
+    assert len([t for t in trades if t.get("action") == "exit" and t.get("status") == "filled"]) == 1
+
+
 def test_backfill_skips_already_imported_enter():
   ticker = "KXBTCD-26JUL0212-T60700"
   with tempfile.TemporaryDirectory() as tmp:

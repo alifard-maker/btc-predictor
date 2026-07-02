@@ -33,10 +33,17 @@ def _fill_created_at(fill: dict[str, Any]) -> datetime | None:
 
 
 def _fill_count(fill: dict[str, Any]) -> float:
-  try:
-    return float(fill.get("count") or fill.get("fill_count") or 0)
-  except (TypeError, ValueError):
-    return 0.0
+  for key in ("count_fp", "count", "fill_count"):
+    raw = fill.get(key)
+    if raw is None or raw == "":
+      continue
+    try:
+      val = float(raw)
+    except (TypeError, ValueError):
+      continue
+    if val > 0:
+      return val
+  return 0.0
 
 
 def _aggregate_fills_to_orders(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -206,9 +213,6 @@ def backfill_kalshi_hourly_fills(
     if action == "buy":
       resting = _resting_enter_for_order(store, oid)
       if resting and hasattr(store, "promote_resting_enter_to_filled"):
-        if _open_live_position(store, ticker, side):
-          known.add((oid, "enter"))
-          continue
         contracts, contracts_fp = cap_adopted_contracts(contracts_fp, cfg, kind=kind)
         pid = str(uuid.uuid4())
         cost_usd = round(contracts_fp * price_cents / 100.0, 2)
@@ -216,6 +220,20 @@ def backfill_kalshi_hourly_fills(
           f"Live ENTER backfilled from Kalshi fills "
           f"(order {oid}) — {contracts} contracts"
         )
+        if _open_live_position(store, ticker, side):
+          existing = _open_live_position(store, ticker, side)
+          store.promote_resting_enter_to_filled(
+            resting["id"],
+            event_ticker=leg_event,
+            contracts=contracts,
+            cost_usd=cost_usd,
+            entry_price_cents=price_cents,
+            position_id=str(existing["id"]) if existing else pid,
+            detail=detail,
+          )
+          changes.append({"action": "promoted_resting_from_fills", "order_id": oid, "ticker": ticker})
+          known.add((oid, "enter"))
+          continue
         store.open_position({
           "id": pid,
           "event_ticker": leg_event,

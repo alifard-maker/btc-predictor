@@ -2285,7 +2285,9 @@
         hour_summary: mergedHs,
         hourly_summary: mergedHs,
         open_positions: incoming.open_positions ?? prev.open_positions,
-        recent_trades: incoming.recent_trades ?? prev.recent_trades,
+        recent_trades: (incoming.recent_trades && incoming.recent_trades.length)
+          ? incoming.recent_trades
+          : prev.recent_trades,
       };
       lastBotStatus[asset] = merged;
       return merged;
@@ -2819,15 +2821,16 @@
       const fills = sync?.fills_seen;
       const skipped = sync?.skipped;
       const at = sync?.at ? new Date(sync.at).toLocaleTimeString() : null;
+      const orders = sync?.orders_scanned;
       let statusLine = 'Kalshi sync runs automatically every ~25s while this panel is open.';
       if (!auth) {
         statusLine = 'Kalshi API not authenticated — live fills cannot import. Check Railway env keys.';
       } else if (skipped === 'kalshi_not_authenticated') {
         statusLine = 'Kalshi auth failed during last sync attempt.';
       } else if (sync && changes > 0) {
-        statusLine = `Last sync imported ${changes} change${changes === 1 ? '' : 's'}${fills != null ? ` from ${fills} fill(s)` : ''}${at ? ` at ${at}` : ''}.`;
+        statusLine = `Last sync imported ${changes} change${changes === 1 ? '' : 's'}${fills != null ? ` from ${fills} fill(s)` : ''}${orders != null ? ` · ${orders} order(s)` : ''}${at ? ` at ${at}` : ''}.`;
       } else if (sync && at) {
-        statusLine = `Last sync: no new fills${at ? ` (${at})` : ''}.`;
+        statusLine = `Last sync: no new fills${fills != null ? ` (${fills} Kalshi fills, ${orders ?? 0} orders parsed)` : ''}${at ? ` · ${at}` : ''}.`;
       }
       return `<div style="margin:.45rem 0 .55rem;padding:.55rem .65rem;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.3);border-radius:8px;font-size:.75rem;color:#bfdbfe">
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;justify-content:space-between">
@@ -3785,9 +3788,15 @@
       const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
       const hourId = hs.event_ticker || bot.event_ticker || '—';
       const assetLabel = asset === 'eth' ? 'ETH' : 'BTC';
-      const tradeSource = s.mode === 'live'
-        ? (bot.recent_trades || [])
-        : ((bot.hour_trades && bot.hour_trades.length) ? bot.hour_trades : (bot.recent_trades || []));
+      const tradeSource = (() => {
+        const all = bot.recent_trades || [];
+        if (s.mode !== 'live') {
+          return (bot.hour_trades && bot.hour_trades.length) ? bot.hour_trades : all;
+        }
+        const filled = all.filter((t) => ['filled', 'reconciled', 'skipped'].includes(String(t.status || '').toLowerCase()));
+        const resting = all.filter((t) => String(t.status || '').toLowerCase() === 'resting');
+        return filled.length ? [...filled, ...resting] : all;
+      })();
       const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
         indexLabel: bot.index_label || (asset === 'eth' ? 'ERTI' : 'BRTI'),
         indexNow: bot.index_now_price,
@@ -4154,6 +4163,17 @@
       }
     }
 
+    function refreshHourlyBotTradeLog(asset, tabAtStart, gen) {
+      const url = asset === 'eth' ? '/api/eth/hourly/bot/trades?limit=200' : '/api/hourly/bot/trades?limit=200';
+      getWithTimeout(url, 15000).then((data) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        const cached = lastBotStatus[asset];
+        if (!cached?.ok) return;
+        const merged = mergeBotStatus(asset, { ...cached, recent_trades: data.trades || [] });
+        if (merged?.ok && shouldRenderHourlyBot(asset, 'hourly')) renderHourlyBot(merged, asset);
+      }).catch(() => {});
+    }
+
     function refreshHourlyBotDirect(asset, tabAtStart, gen, predictionBot) {
       getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', true), 15000).then((botDirect) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
@@ -4183,6 +4203,7 @@
         }
         bot = mergeBotStatus(asset, bot);
         if (bot?.ok && activeTab === tabAtStart) renderHourlyBot(bot, asset);
+        refreshHourlyBotTradeLog(asset, tabAtStart, gen);
       }).catch(() => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         const cached = lastBotStatus[asset];
@@ -4191,6 +4212,7 @@
       getWithTimeout(hourlyBotStatusUrl(asset, 'hourly', false), 30000).then((fullBot) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart || !fullBot?.ok) return;
         renderHourlyBot(mergeBotStatus(asset, fullBot), asset);
+        refreshHourlyBotTradeLog(asset, tabAtStart, gen);
       }).catch(() => {});
     }
 
