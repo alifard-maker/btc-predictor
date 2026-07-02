@@ -517,7 +517,7 @@
         <div id="hourly-guide"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="daily-summary-card">
-        <h2>${(g.interval?.badge || 'Kalshi')} event <span id="daily-freq-badge"></span></h2>
+        <h2><span id="daily-event-title">BTC Kalshi event</span> <span id="daily-freq-badge"></span></h2>
         <p class="muted" id="daily-meta">Loading…</p>
         <div id="intrahour-opportunity"></div>
         <div id="daily-primary-signal"></div>
@@ -1711,7 +1711,7 @@
           lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_hour_usd');
         }
         if (cached) renderHourlyBot(cached, asset);
-        loadDaily();
+        loadAll();
         return;
       }
       if (name === '15m' || name === 'eth-15m') {
@@ -1855,6 +1855,7 @@
 
     function renderHourlyGuidance(g) {
       const el = h$('hourly-guide');
+      if (!el) return;
       if (!g) {
         el.innerHTML = '<p class="muted">Guidance unavailable.</p>';
         return;
@@ -3889,6 +3890,12 @@
           ? `Hour open ${time(hourOpen.logged_at)} · awaiting :05 lock`
           : 'Hour open @ :00 ET · official lock @ :05 ET';
       const g = data.guidance || {};
+      const titleEl = h$('daily-event-title');
+      if (titleEl) {
+        const iv = g.interval || {};
+        const fallback = hourlyRenderTab === 'eth-hourly' ? 'ETH Kalshi' : 'BTC Kalshi';
+        titleEl.textContent = `${iv.badge || fallback} event`;
+      }
       renderHourlyGuidance(g);
 
       h$('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · settles ${settle} · ${idx} now ${price(data.brti_live || live.current_price)} · ${live.hours_to_settle}h left · ${lockNote}`;
@@ -4037,6 +4044,36 @@
       }
     }
 
+    async function refreshHourlyBotDirect(asset, tabAtStart, gen, predictionBot) {
+      try {
+        const botDirect = await get(hourlyBotStatusUrl(asset));
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        let bot = botDirect || predictionBot;
+        if (botDirect && predictionBot) {
+          const evt = botDirect.event_ticker || predictionBot.event_ticker;
+          const hs = mergeHourSummary(
+            predictionBot.hour_summary || predictionBot.hourly_summary || {},
+            botDirect.hour_summary || botDirect.hourly_summary || {},
+            evt,
+          );
+          bot = {
+            ...predictionBot,
+            ...botDirect,
+            event_ticker: evt,
+            hour_summary: hs,
+            hourly_summary: hs,
+            settings: botDirect.settings || predictionBot.settings,
+          };
+        } else if (botDirect) {
+          bot = botDirect;
+        }
+        bot = mergeBotStatus(asset, bot);
+        if (bot && activeTab === tabAtStart) renderHourlyBot(bot, asset);
+      } catch (_) {
+        /* prediction / cache already rendered */
+      }
+    }
+
     async function loadDaily() {
       const tabAtStart = activeTab;
       if (tabAtStart !== 'daily' && tabAtStart !== 'eth-hourly') return;
@@ -4044,34 +4081,15 @@
       const api = hourlyApiFor(tabAtStart);
       const asset = tabAtStart === 'eth-hourly' ? 'eth' : 'btc';
       try {
-        const [d, cal, hist, botDirect] = await Promise.all([
+        const [d, cal, hist] = await Promise.all([
           get(api.prediction),
           get(api.calibration).catch(() => ({ summary: {} })),
           get(api.history).catch(() => []),
-          get(hourlyBotStatusUrl(asset)).catch(() => null),
         ]);
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         hourlyRenderTab = tabAtStart;
-        let bot = botDirect || d.bot;
-        if (botDirect && d.bot) {
-          const evt = botDirect.event_ticker || d.bot.event_ticker;
-          const hs = mergeHourSummary(
-            d.bot.hour_summary || d.bot.hourly_summary || {},
-            botDirect.hour_summary || botDirect.hourly_summary || {},
-            evt,
-          );
-          bot = {
-            ...d.bot,
-            ...botDirect,
-            event_ticker: evt,
-            hour_summary: hs,
-            hourly_summary: hs,
-            settings: botDirect.settings || d.bot.settings,
-          };
-        } else if (botDirect) {
-          bot = botDirect;
-        }
-        bot = mergeBotStatus(asset, bot);
+        let bot = d?.bot || null;
+        if (bot) bot = mergeBotStatus(asset, bot);
         if (bot) d.bot = bot;
         renderDaily(d);
         renderHourlyCalibration(cal);
@@ -4079,6 +4097,7 @@
         if (activeTab === tabAtStart && bot) {
           renderHourlyBot(bot, asset);
         }
+        refreshHourlyBotDirect(asset, tabAtStart, gen, d?.bot);
       } catch (e) {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         hourlyRenderTab = tabAtStart;
@@ -4087,6 +4106,7 @@
         renderHourlyCalibration({});
         renderHourlyHistory([]);
         if (cached) renderHourlyBot(cached, asset);
+        else renderHourlyBot({ ok: false, error: e.message }, asset);
       }
     }
 
