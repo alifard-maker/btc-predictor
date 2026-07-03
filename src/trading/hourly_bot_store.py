@@ -203,6 +203,9 @@ class HourlyBotStore:
     from src.trading.bot_cheap_leg_cooldown import migrate_cheap_leg_cut_cooldowns
 
     migrate_cheap_leg_cut_cooldowns(conn)
+    from src.trading.bot_whipsaw_guard import migrate_whipsaw_signal_gates
+
+    migrate_whipsaw_signal_gates(conn)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_trades)").fetchall()}
     if cols and "action" not in cols:
       conn.execute("ALTER TABLE bot_trades ADD COLUMN action TEXT NOT NULL DEFAULT 'enter'")
@@ -609,6 +612,43 @@ class HourlyBotStore:
         label=label,
         market_ticker=market_ticker,
         cooldown_seconds=cooldown_seconds,
+      )
+
+  def count_quick_exit_cuts(self, event_ticker: str) -> int:
+    from src.trading.bot_whipsaw_guard import count_quick_exit_cuts
+
+    with self._connect() as conn:
+      return count_quick_exit_cuts(conn, event_ticker)
+
+  def record_whipsaw_spot_against_cut(
+    self,
+    event_ticker: str,
+    *,
+    side: str,
+    signal: str | None,
+  ) -> None:
+    from src.trading.bot_whipsaw_guard import record_spot_against_cut
+
+    with self._connect() as conn:
+      record_spot_against_cut(
+        conn, event_ticker=event_ticker, side=side, signal=signal,
+      )
+
+  def whipsaw_signal_refresh_blocks(
+    self,
+    event_ticker: str,
+    *,
+    side: str,
+    current_signal: str | None,
+  ) -> bool:
+    from src.trading.bot_whipsaw_guard import signal_refresh_required
+
+    with self._connect() as conn:
+      return signal_refresh_required(
+        conn,
+        event_ticker=event_ticker,
+        side=side,
+        current_signal=current_signal,
       )
 
   def has_open_position(self, event_ticker: str, market_ticker: str) -> bool:

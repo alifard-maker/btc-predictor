@@ -31,6 +31,12 @@ from src.trading.bot_cheap_leg_cooldown import (
   resolve_exit_cooldown_seconds,
   resolve_label_reentry_cooldown_seconds,
 )
+from src.trading.bot_whipsaw_guard import (
+  WhipsawGuardConfig,
+  apply_whipsaw_momentum_contract_cap,
+  whipsaw_hour_entry_blocked,
+  whipsaw_pick_entry_blocked,
+)
 from src.trading.bot_adaptive_calibration import (
   adaptive_entry_allowed,
   record_adaptive_probe_entry,
@@ -978,6 +984,18 @@ class HourlyBot:
           market_ticker=pos["market_ticker"],
           cooldown_seconds=label_cd,
         )
+      wcfg = WhipsawGuardConfig.from_cfg(cfg, kind="hourly")
+      if (
+        wcfg.enabled
+        and exit_reason == "CUT LOSSES"
+        and exit_context.get("quick_exit_applied")
+        and exit_context.get("spot_favors_held_side") is False
+      ):
+        self.store.record_whipsaw_spot_against_cut(
+          event_ticker,
+          side=str(pos.get("side") or "yes"),
+          signal=str(exit_context.get("live_signal") or pick.get("signal") or ""),
+        )
       results.append(row)
 
     return results
@@ -1137,6 +1155,15 @@ class HourlyBot:
       self.store.set_last_skip_reason("adaptive_defense_skip")
       return results
 
+    wcfg = WhipsawGuardConfig.from_cfg(cfg, kind="hourly")
+    quick_exit_cuts = self.store.count_quick_exit_cuts(event_ticker) if wcfg.enabled else 0
+    whipsaw_block = whipsaw_hour_entry_blocked(
+      wcfg=wcfg, quick_exit_cuts=quick_exit_cuts, adaptive=adaptive,
+    )
+    if whipsaw_block:
+      self.store.set_last_skip_reason(whipsaw_block)
+      return results
+
     estrat = effective_bot_entry_strategy(
       cfg,
       kind=self.kind,
@@ -1152,6 +1179,7 @@ class HourlyBot:
     )
 
     estrat = apply_hour_momentum_policy(estrat, momentum_policy)
+    estrat = apply_whipsaw_momentum_contract_cap(estrat, momentum_policy, wcfg)
     late_entry_effective = resolve_late_entry_config(cfg, momentum_policy)
 
     ranked = rank_hourly_candidates(candidates, estrat=estrat)
@@ -1221,7 +1249,38 @@ class HourlyBot:
         if not ok_scale:
           last_reason = scale_reason or f"already_open:{market_ticker}"
           continue
+        scale_block = whipsaw_pick_entry_blocked(
+          wcfg=wcfg,
+          adaptive=adaptive,
+          side=side,
+          signal=pick.get("signal"),
+          is_scale_in=True,
+          signal_gate_active=False,
+        )
+        if scale_block:
+          last_reason = scale_block
+          continue
         allow_scale_in_ticker = market_ticker
+
+      signal_gate = (
+        wcfg.enabled
+        and self.store.whipsaw_signal_refresh_blocks(
+          event_ticker,
+          side=side,
+          current_signal=str(pick.get("signal") or ""),
+        )
+      )
+      pick_block = whipsaw_pick_entry_blocked(
+        wcfg=wcfg,
+        adaptive=adaptive,
+        side=side,
+        signal=pick.get("signal"),
+        is_scale_in=False,
+        signal_gate_active=signal_gate,
+      )
+      if pick_block:
+        last_reason = pick_block
+        continue
 
       if self.store.is_in_cooldown(
         event_ticker, market_ticker, settings.reentry_cooldown_seconds
