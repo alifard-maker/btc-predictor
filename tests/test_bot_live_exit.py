@@ -188,7 +188,7 @@ def test_overlay_live_profit_settings_quick_exit_in_defense():
           "enabled": True,
           "min_hold_seconds": 30,
           "take_profit_pct": 0.06,
-          "take_profit_usd": 0.04,
+          "take_profit_usd": 0.06,
         }
       }
     }
@@ -203,7 +203,7 @@ def test_overlay_live_profit_settings_quick_exit_in_defense():
   )
   assert out.min_hold_seconds == 30
   assert out.take_profit_pct == 0.0
-  assert out.take_profit_usd == 0.04
+  assert out.take_profit_usd == 0.06
   assert out.take_profit_either_threshold is True
 
 
@@ -305,7 +305,7 @@ def test_overlay_live_profit_settings_quick_exit_for_adopted_leg():
           "enabled": True,
           "min_hold_seconds": 30,
           "take_profit_pct": 0.06,
-          "take_profit_usd": 0.04,
+          "take_profit_usd": 0.06,
         },
       }
     }
@@ -321,7 +321,7 @@ def test_overlay_live_profit_settings_quick_exit_for_adopted_leg():
   )
   assert out.min_hold_seconds == 30
   assert out.take_profit_pct == 0.0
-  assert out.take_profit_usd == 0.04
+  assert out.take_profit_usd == 0.06
 
 
 def test_reconcile_close_blocked_for_young_position():

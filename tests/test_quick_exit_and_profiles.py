@@ -30,7 +30,7 @@ def _cfg_with_quick_exit() -> dict:
           "cut_loss_min_hold_seconds": 30,
           "cut_loss_min_usd": 0.12,
           "take_profit_pct": 0.06,
-          "take_profit_usd": 0.04,
+          "take_profit_usd": 0.06,
           "apply_when": {"adaptive_mode": "defense"},
         },
       }
@@ -63,7 +63,7 @@ def test_overlay_live_profit_settings_quick_exit_in_paper():
   )
   assert out.min_hold_seconds == 30
   assert out.take_profit_pct == 0.0
-  assert out.take_profit_usd == 0.04
+  assert out.take_profit_usd == 0.06
   assert out.take_profit_either_threshold is True
 
 

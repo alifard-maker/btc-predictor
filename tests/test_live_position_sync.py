@@ -20,6 +20,7 @@ from src.trading.live_position_sync import (
   kalshi_position_leg,
   kalshi_sellable_contracts,
   order_still_resting,
+  refresh_live_leg_contracts_from_kalshi,
   reconcile_close_stale_live_leg,
   resting_exit_order_id,
   resting_sell_contracts,
@@ -520,6 +521,34 @@ def test_sync_live_positions_from_kalshi_updates_contracts_and_merges_duplicates
     assert open_pos[0]["contracts"] == 5
     assert open_pos[0]["cost_usd"] == 4.0
     assert any(c.get("action") == "synced" for c in out["changes"])
+
+
+def test_refresh_live_leg_contracts_from_kalshi_before_exit_pnl():
+  """Adopted legs capped at 2 must refresh to full Kalshi size for profit checks."""
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    pos = {
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "yes",
+      "contracts": 2,
+      "entry_price_cents": 68,
+      "cost_usd": 1.36,
+      "mode": "live",
+      "entry_source": "adopted_resting",
+    }
+    store.open_position(pos)
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = 3
+    kalshi.list_market_positions.return_value = []
+    refreshed = refresh_live_leg_contracts_from_kalshi(pos, kalshi, store)
+    assert refreshed["contracts"] == 3
+    assert refreshed["cost_usd"] == 2.04
+    open_pos = store.open_positions("EV1")
+    assert open_pos[0]["contracts"] == 3
+    assert open_pos[0]["cost_usd"] == 2.04
 
 
 def test_verify_kalshi_exit_fill_requires_inventory_drop():

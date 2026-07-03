@@ -42,7 +42,7 @@ class QuickExitConfig:
   cut_loss_min_hold_seconds: int = 30
   cut_loss_min_usd: float = 0.12
   take_profit_pct: float = 0.06
-  take_profit_usd: float = 0.04
+  take_profit_usd: float = 0.06
   apply_when_adaptive_mode: str | None = "defense"
   apply_when_hour_momentum_state: str | None = "conservative"
 

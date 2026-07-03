@@ -207,7 +207,7 @@ def _check_new_trades(state: MonitorState, source: str, trades: list[dict]) -> N
         f"{ca} UTC | {source} | trade {tid[:8]} | filled exit (IOC verified) — {detail[:120]}"
       )
 
-    # quick scalp: defense + hold 30-119s + profit ~$0.04+ or cut ~$0.12 + filled non-backfill
+    # quick scalp: defense + hold 30-119s + profit ~$0.06+ or cut ~$0.12 + filled non-backfill
     if (
       is_filled
       and not is_backfill
@@ -216,7 +216,7 @@ def _check_new_trades(state: MonitorState, source: str, trades: list[dict]) -> N
       and hold is not None
       and 30 <= hold < 120
     ):
-      profit_ok = pnl_usd is not None and pnl_usd >= 0.04
+      profit_ok = pnl_usd is not None and pnl_usd >= 0.06
       cut_ok = pnl_usd is not None and abs(pnl_usd) >= 0.10 and "CUT" in detail.upper()
       if profit_ok or cut_ok:
         state.quick_scalp.status = "verified"

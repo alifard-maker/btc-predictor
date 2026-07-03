@@ -28,6 +28,54 @@ def _position_contracts(pos: dict[str, Any]) -> float:
   return float(int(pos.get("contracts") or 0))
 
 
+def refresh_live_leg_contracts_from_kalshi(
+  pos: dict[str, Any],
+  kalshi: Any,
+  store: Any,
+) -> dict[str, Any]:
+  """Align bot leg size with Kalshi inventory before exit P&L / profit checks."""
+  if normalize_position_mode(pos.get("mode")) != "live":
+    return pos
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return pos
+  ticker = str(pos.get("market_ticker") or "")
+  side = str(pos.get("side") or "").lower()
+  if not ticker or side not in ("yes", "no"):
+    return pos
+  sellable = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
+  if sellable is None:
+    return pos
+  bot_ct = _position_contracts(pos)
+  if sellable <= bot_ct + 0.04:
+    return pos
+  entry_c = int(pos.get("entry_price_cents") or 0)
+  if entry_c <= 0:
+    snap = kalshi_position_leg(kalshi, ticker, side, critical=True)
+    if snap and snap.get("entry_price_cents"):
+      entry_c = int(snap["entry_price_cents"])
+  contracts_fp = round(float(sellable), 2)
+  contracts = max(1, int(round(contracts_fp)))
+  cost_usd = (
+    round(contracts_fp * entry_c / 100.0, 2)
+    if entry_c > 0
+    else float(pos.get("cost_usd") or 0)
+  )
+  store.update_position_contracts(
+    str(pos["id"]),
+    contracts=contracts,
+    contracts_fp=contracts_fp,
+    cost_usd=cost_usd,
+    entry_price_cents=entry_c if entry_c > 0 else None,
+  )
+  updated = dict(pos)
+  updated["contracts"] = contracts
+  updated["contracts_fp"] = contracts_fp
+  updated["cost_usd"] = cost_usd
+  if entry_c > 0:
+    updated["entry_price_cents"] = entry_c
+  return updated
+
+
 def kalshi_position_leg(
   kalshi: Any,
   market_ticker: str,

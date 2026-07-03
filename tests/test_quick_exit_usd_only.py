@@ -7,7 +7,7 @@ from src.trading.bot_profit_exit import should_take_profit_target
 from src.trading.hourly_bot_store import HourlyBotSettings
 
 
-def test_quick_exit_usd_only_fires_at_four_cents_after_hold():
+def test_quick_exit_usd_only_fires_at_six_cents_after_hold():
   settings = HourlyBotSettings(min_hold_seconds=90, take_profit_pct=0.25)
   cfg = {
     "hourly": {
@@ -15,7 +15,7 @@ def test_quick_exit_usd_only_fires_at_four_cents_after_hold():
         "quick_exit": {
           "enabled": True,
           "min_hold_seconds": 30,
-          "take_profit_usd": 0.04,
+          "take_profit_usd": 0.06,
         }
       }
     }
@@ -28,10 +28,10 @@ def test_quick_exit_usd_only_fires_at_four_cents_after_hold():
     adaptive_mode="defense",
   )
   assert out.take_profit_pct == 0.0
-  assert out.take_profit_usd == 0.04
+  assert out.take_profit_usd == 0.06
   assert should_take_profit_target(
     enabled=True,
-    unrealized_usd=0.04,
+    unrealized_usd=0.06,
     cost_usd=1.50,
     take_profit_pct=out.take_profit_pct,
     take_profit_usd=out.take_profit_usd,
@@ -41,7 +41,7 @@ def test_quick_exit_usd_only_fires_at_four_cents_after_hold():
   )
   assert not should_take_profit_target(
     enabled=True,
-    unrealized_usd=0.04,
+    unrealized_usd=0.06,
     cost_usd=1.50,
     take_profit_pct=out.take_profit_pct,
     take_profit_usd=out.take_profit_usd,

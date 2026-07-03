@@ -310,11 +310,14 @@ def _should_paper_exit(alert: dict[str, Any], unrealized_pnl: float | None) -> b
 
 
 def _unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | None:
+  from src.trading.live_position_sync import _position_contracts
+
+  contracts = max(1, int(round(_position_contracts(pos))))
   return unrealized_leg_pnl_usd(
     side=str(pos.get("side") or "yes"),
     entry_price_cents=int(pos["entry_price_cents"]),
     mark_price_cents=mark_cents,
-    contracts=int(pos["contracts"]),
+    contracts=contracts,
   )
 
 
@@ -749,6 +752,14 @@ class HourlyBot:
     hour_momentum_state = str(mom_snap.get("state") or "") or None
 
     for pos in self.store.open_positions(event_ticker):
+      if (
+        settings.mode == "live"
+        and self.kalshi
+        and getattr(self.kalshi, "authenticated", False)
+      ):
+        from src.trading.live_position_sync import refresh_live_leg_contracts_from_kalshi
+
+        pos = refresh_live_leg_contracts_from_kalshi(pos, self.kalshi, self.store)
       pick = _find_contract_in_live(live, pos["market_ticker"])
       if not pick:
         continue
