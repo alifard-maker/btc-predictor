@@ -17,6 +17,7 @@ from src.trading.live_position_sync import (
   confirm_kalshi_exit_fill,
   effective_kalshi_inventory,
   hourly_event_market_tickers_from_tab,
+  kalshi_contracts_for_adoption,
   kalshi_position_leg,
   kalshi_sellable_contracts,
   order_still_resting,
@@ -168,12 +169,36 @@ def test_adopt_filled_resting_enter_caps_contracts():
     kalshi = MagicMock()
     kalshi.authenticated = True
     kalshi.get_market_position.return_value = -6
-    cfg = {"hourly": {"bot": {"live_exit": {"max_adopted_contracts": 2}}}}
+    cfg = {"hourly": {"bot": {"live_exit": {"max_adopted_contracts": 6}}}}
     adopt_filled_resting_enters(store, kalshi, "EV1", cfg=cfg, kind="hourly")
     open_pos = store.open_positions("KXBTCD-EV1")
     assert len(open_pos) == 1
-    assert open_pos[0]["contracts"] == 2
+    assert open_pos[0]["contracts"] == 6
     assert open_pos[0]["entry_source"] == "adopted_resting"
+
+
+def test_adopt_filled_resting_enter_caps_at_six_when_kalshi_has_eight():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "status": "resting",
+      "mode": "live",
+      "market_ticker": "KXBTCD-EV1-T59400",
+      "side": "no",
+      "contracts": 8,
+      "price_cents": 50,
+      "entry_price_cents": 50,
+      "kalshi_order_id": "ord-big",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = -8
+    cfg = {"hourly": {"bot": {"live_exit": {"max_adopted_contracts": 6}}}}
+    adopt_filled_resting_enters(store, kalshi, "EV1", cfg=cfg, kind="hourly")
+    open_pos = store.open_positions("KXBTCD-EV1")
+    assert open_pos[0]["contracts"] == 6
 
 
 def test_adopt_filled_resting_enter_cross_hour_event():
@@ -523,8 +548,17 @@ def test_sync_live_positions_from_kalshi_updates_contracts_and_merges_duplicates
     assert any(c.get("action") == "synced" for c in out["changes"])
 
 
+def test_kalshi_contracts_for_adoption_uses_sellable_over_snap():
+  snap = {"contracts": 2.0, "entry_price_cents": 70}
+  cfg = {"hourly": {"bot": {"live_exit": {"max_adopted_contracts": 6}}}}
+  contracts, contracts_fp, raw = kalshi_contracts_for_adoption(6.0, snap, cfg, kind="hourly")
+  assert raw == 6.0
+  assert contracts == 6
+  assert contracts_fp == 6.0
+
+
 def test_refresh_live_leg_contracts_from_kalshi_before_exit_pnl():
-  """Adopted legs capped at 2 must refresh to full Kalshi size for profit checks."""
+  """Adopted legs sync to full Kalshi size for profit checks at exit."""
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     pos = {

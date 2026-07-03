@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Poll production for quick_exit, exit verification, and soft_rally evidence."""
+"""Poll production for quick_exit, exit verification, inventory sync, and rule health."""
 
 from __future__ import annotations
 
@@ -21,7 +21,13 @@ BASE = os.environ.get(
 )
 POLL_SEC = float(os.environ.get("MONITOR_POLL_SEC", "150"))  # 2.5 min
 MAX_MINUTES = float(os.environ.get("MONITOR_MAX_MIN", "40"))
+TARGET_VERSION = os.environ.get("MONITOR_TARGET_VERSION", "4.0.39")
 LOG_PATH = Path(os.environ.get("MONITOR_LOG", "/tmp/btc_monitor_verification.jsonl"))
+ASSETS = tuple(
+  a.strip()
+  for a in os.environ.get("MONITOR_ASSETS", "btc,eth,spx,ndx").split(",")
+  if a.strip()
+)
 
 
 def _password() -> str:
@@ -70,38 +76,81 @@ class FeatureStatus:
 
 
 @dataclass
+class MismatchIncident:
+  ts: str
+  asset: str
+  ticker: str
+  side: str
+  bot_contracts: float
+  kalshi_contracts: float
+  delta: float
+  kind: str
+
+
+@dataclass
 class MonitorState:
   started_at: datetime
   seen_trade_ids: set[str] = field(default_factory=set)
   quick_scalp: FeatureStatus = field(default_factory=FeatureStatus)
   exit_verification: FeatureStatus = field(default_factory=FeatureStatus)
   soft_rally: FeatureStatus = field(default_factory=FeatureStatus)
+  inventory_sync: FeatureStatus = field(default_factory=FeatureStatus)
+  rule_conflicts: FeatureStatus = field(default_factory=FeatureStatus)
+  mismatches: list[MismatchIncident] = field(default_factory=list)
+  quick_exit_exits: list[str] = field(default_factory=list)
   poll_count: int = 0
   last_health: dict[str, Any] = field(default_factory=dict)
 
 
+def _asset_prefix(asset: str) -> str:
+  return "/api/hourly" if asset == "btc" else f"/api/{asset}/hourly"
+
+
+def _parse_trades_payload(data: Any) -> list[dict]:
+  if isinstance(data, list):
+    return [t for t in data if isinstance(t, dict)]
+  if isinstance(data, dict):
+    return [t for t in (data.get("trades") or []) if isinstance(t, dict)]
+  return []
+
+
+def _asset_bundle(session: requests.Session, asset: str) -> dict[str, Any]:
+  prefix = _asset_prefix(asset)
+  bot = session.get(f"{BASE}{prefix}/bot", timeout=30).json()
+  recon: dict[str, Any] = {}
+  rr = session.get(f"{BASE}{prefix}/bot/live-reconcile", timeout=30)
+  if rr.ok:
+    recon = rr.json()
+  if not recon:
+    recon = bot.get("live_reconcile") or {}
+  trades_raw = session.get(f"{BASE}{prefix}/bot/trades?limit=200", timeout=60).json()
+  trades = _parse_trades_payload(trades_raw)
+  return {
+    "bot": bot,
+    "reconcile": recon,
+    "trades": [t for t in trades if t.get("mode") == "live"],
+  }
+
+
 def _trade_sources(session: requests.Session) -> list[tuple[str, list[dict]]]:
   out: list[tuple[str, list[dict]]] = []
-  for label, path in (
-    ("btc_hourly", "/api/hourly/bot/trades?limit=200"),
-    ("eth_hourly", "/api/eth/hourly/bot/trades?limit=200"),
-  ):
-    resp = session.get(f"{BASE}{path}", timeout=60)
-    resp.raise_for_status()
-    trades = resp.json().get("trades") or []
-    out.append((label, [t for t in trades if t.get("mode") == "live"]))
+  for asset in ASSETS:
+    try:
+      bundle = _asset_bundle(session, asset)
+      out.append((f"{asset}_hourly", bundle["trades"]))
+    except Exception as e:
+      out.append((f"{asset}_hourly", []))
+      print(f"WARN: {asset} trades unavailable: {e}", flush=True)
   return out
 
 
 def _bot_status(session: requests.Session) -> dict[str, Any]:
   out: dict[str, Any] = {}
-  for key, path in (
-    ("btc", "/api/hourly/bot"),
-    ("eth", "/api/eth/hourly/bot"),
-  ):
-    resp = session.get(f"{BASE}{path}", timeout=30)
+  for asset in ASSETS:
+    prefix = _asset_prefix(asset)
+    resp = session.get(f"{BASE}{prefix}/bot", timeout=30)
     if resp.ok:
-      out[key] = resp.json()
+      out[asset] = resp.json()
   return out
 
 
@@ -121,6 +170,9 @@ def _enter_by_position(trades: list[dict]) -> dict[str, dict]:
 
 
 def _hold_seconds(enter: dict | None, exit_trade: dict) -> float | None:
+  ctx = exit_trade.get("exit_context") or {}
+  if ctx.get("hold_seconds") is not None:
+    return float(ctx["hold_seconds"])
   if not enter:
     return None
   t0 = _parse_ts(enter.get("created_at"))
@@ -152,13 +204,77 @@ def _soft_rally_entry_ok(trade: dict) -> bool:
     return False
   price = trade.get("entry_price_cents") or trade.get("price_cents")
   if price is None:
-    return None
+    return False
   if not (40 <= int(price) <= 80):
     return False
   detail = (trade.get("detail") or "").lower()
   if "defense_skip_all" in detail:
     return False
   return True
+
+
+def _check_mismatches(ts: str, asset: str, recon: dict[str, Any]) -> list[MismatchIncident]:
+  out: list[MismatchIncident] = []
+  for row in recon.get("mismatches") or []:
+    bot_ct = float(row.get("contracts") or 0)
+    kalshi_ct = float(row.get("kalshi_contracts") or 0)
+    if kalshi_ct > bot_ct + 0.24:
+      out.append(MismatchIncident(
+        ts=ts,
+        asset=asset,
+        ticker=str(row.get("ticker") or "?"),
+        side=str(row.get("side") or "?"),
+        bot_contracts=bot_ct,
+        kalshi_contracts=kalshi_ct,
+        delta=round(kalshi_ct - bot_ct, 2),
+        kind="count_mismatch",
+      ))
+  for row in recon.get("kalshi_only") or []:
+    out.append(MismatchIncident(
+      ts=ts,
+      asset=asset,
+      ticker=str(row.get("ticker") or "?"),
+      side=str(row.get("side") or "?"),
+      bot_contracts=0.0,
+      kalshi_contracts=float(row.get("contracts") or 0),
+      delta=float(row.get("contracts") or 0),
+      kind="kalshi_only",
+    ))
+  return out
+
+
+def _detect_rule_conflict(skip: str) -> str | None:
+  s = skip.lower()
+  if "defense_skip_all" in s and "soft_rally" in s:
+    return "soft_rally vs defense_skip_all"
+  if "hour_momentum:pressing" in s and "adaptive_defense" in s:
+    return "hour_momentum pressing vs adaptive defense"
+  if "max_concurrent" in s and "fully_deployed" in s:
+    return "max_concurrent vs fully_deployed"
+  if "adaptive_defense_skip" in s and "soft_rally" in s:
+    return "adaptive defense skip with soft_rally gate"
+  return None
+
+
+def _log_quick_exit_exit(state: MonitorState, source: str, t: dict, enter: dict | None) -> None:
+  ctx = t.get("exit_context") or {}
+  if not ctx.get("quick_exit_applied"):
+    return
+  hold = _hold_seconds(enter, t)
+  _, pnl = _pnl_from_detail(t.get("detail") or "")
+  if t.get("pnl_usd") is not None:
+    pnl = float(t["pnl_usd"])
+  verified = (
+    t.get("status") == "filled"
+    and "unverified" not in (t.get("detail") or "").lower()
+  )
+  hold_s = f"{hold:.0f}s" if hold is not None else "?"
+  line = (
+    f"{(t.get('created_at') or '')[:19]} | {source} | status={t.get('status')} | "
+    f"hold={hold_s} | pnl=${pnl if pnl is not None else '?'} | verified={verified} | "
+    f"qx=true | {(t.get('detail') or '')[:80]}"
+  )
+  state.quick_exit_exits.append(line)
 
 
 def _check_new_trades(state: MonitorState, source: str, trades: list[dict]) -> None:
@@ -173,7 +289,6 @@ def _check_new_trades(state: MonitorState, source: str, trades: list[dict]) -> N
     action = t.get("action")
     status = t.get("status")
 
-    # soft_rally: successful defense YES mid-band entry
     if action == "enter" and status == "filled" and _soft_rally_entry_ok(t):
       es = t.get("entry_settings") or {}
       state.soft_rally.status = "verified"
@@ -190,9 +305,10 @@ def _check_new_trades(state: MonitorState, source: str, trades: list[dict]) -> N
     _, pnl_usd = _pnl_from_detail(detail)
     is_unverified = "unverified" in detail.lower() and "inventory unchanged" in detail.lower()
     is_backfill = "backfilled" in detail.lower()
-    is_reconcile_only = status == "reconciled"
     is_filled = status == "filled"
     defense = _is_defense_or_conservative(enter) if enter else False
+
+    _log_quick_exit_exit(state, source, t, enter)
 
     if is_unverified:
       if state.exit_verification.status != "verified":
@@ -207,7 +323,6 @@ def _check_new_trades(state: MonitorState, source: str, trades: list[dict]) -> N
         f"{ca} UTC | {source} | trade {tid[:8]} | filled exit (IOC verified) — {detail[:120]}"
       )
 
-    # quick scalp: defense + hold 30-119s + profit ~$0.06+ or cut ~$0.12 + filled non-backfill
     if (
       is_filled
       and not is_backfill
@@ -218,23 +333,50 @@ def _check_new_trades(state: MonitorState, source: str, trades: list[dict]) -> N
     ):
       profit_ok = pnl_usd is not None and pnl_usd >= 0.06
       cut_ok = pnl_usd is not None and abs(pnl_usd) >= 0.10 and "CUT" in detail.upper()
-      if profit_ok or cut_ok:
+      ctx = t.get("exit_context") or {}
+      if (profit_ok or cut_ok) and ctx.get("quick_exit_applied"):
         state.quick_scalp.status = "verified"
         state.quick_scalp.evidence.append(
-          f"{ca} UTC | {source} | trade {tid[:8]} | hold={hold:.0f}s defense pnl=${pnl_usd:.2f} — {detail[:120]}"
+          f"{ca} UTC | {source} | trade {tid[:8]} | hold={hold:.0f}s defense pnl=${pnl_usd:.2f} qx=true — {detail[:120]}"
         )
 
 
 def _check_health_skips(state: MonitorState, health: dict) -> None:
   lh = (health.get("bot_risk") or {}).get("live_hourly") or {}
-  for asset in ("btc", "eth"):
+  for asset in ASSETS:
     bot = lh.get(asset) or {}
     skip = str(bot.get("last_skip_reason") or "")
+    if not skip:
+      continue
+    conflict = _detect_rule_conflict(skip)
+    if conflict:
+      state.rule_conflicts.status = "flagged"
+      state.rule_conflicts.evidence.append(f"health | {asset} skip={skip} | conflict={conflict}")
     if "soft_rally" in skip and "defense_skip_all" not in skip:
-      # gates active; note but don't verify until entry passes
       state.soft_rally.evidence.append(
         f"health | {asset} skip={skip} (gates active, awaiting passing entry)"
       )
+
+
+def _check_inventory(state: MonitorState, ts: str, session: requests.Session) -> None:
+  for asset in ASSETS:
+    try:
+      bundle = _asset_bundle(session, asset)
+    except Exception:
+      continue
+    recon = bundle["reconcile"]
+    if recon.get("ok") is True:
+      state.inventory_sync.status = "verified"
+      state.inventory_sync.evidence.append(f"{ts} | {asset} reconcile OK")
+    incidents = _check_mismatches(ts, asset, recon)
+    if incidents:
+      state.inventory_sync.status = "mismatch"
+      state.mismatches.extend(incidents)
+      for inc in incidents:
+        state.inventory_sync.evidence.append(
+          f"{ts} | {asset} {inc.kind} {inc.ticker} {inc.side} "
+          f"bot={inc.bot_contracts} kalshi={inc.kalshi_contracts} delta=+{inc.delta}"
+        )
 
 
 def _log(state: MonitorState, msg: str, extra: dict | None = None) -> None:
@@ -252,26 +394,39 @@ def _log(state: MonitorState, msg: str, extra: dict | None = None) -> None:
 def _all_verified(state: MonitorState) -> bool:
   return all(
     getattr(state, k).status == "verified"
-    for k in ("quick_scalp", "exit_verification", "soft_rally")
-  )
+    for k in ("quick_scalp", "exit_verification", "soft_rally", "inventory_sync")
+  ) and state.rule_conflicts.status != "flagged"
 
 
 def _print_report(state: MonitorState) -> None:
   print("\n" + "=" * 72)
   print("FINAL VERIFICATION REPORT")
   print(f"Started: {state.started_at.isoformat()[:19]} UTC | Polls: {state.poll_count}")
-  print(f"Version: {state.last_health.get('version', '?')}")
+  print(f"Target: Beta {TARGET_VERSION} | Version: {state.last_health.get('version', '?')}")
   print("=" * 72)
   rows = [
     ("quick scalp", state.quick_scalp),
     ("exit verification", state.exit_verification),
     ("soft_rally", state.soft_rally),
+    ("inventory sync", state.inventory_sync),
+    ("rule conflicts", state.rule_conflicts),
   ]
   print("| Feature | Status | Evidence |")
   print("|---|---|---|")
   for name, feat in rows:
     ev = "; ".join(feat.evidence[-3:]) if feat.evidence else "(none during window)"
     print(f"| {name} | {feat.status} | {ev} |")
+  if state.mismatches:
+    print(f"\nMismatch incidents: {len(state.mismatches)}")
+    for m in state.mismatches[-5:]:
+      print(
+        f"  {m.ts} {m.asset} {m.kind} {m.ticker} {m.side} "
+        f"bot={m.bot_contracts} kalshi={m.kalshi_contracts}",
+      )
+  if state.quick_exit_exits:
+    print(f"\nQuick-exit exits ({len(state.quick_exit_exits)}):")
+    for line in state.quick_exit_exits[-8:]:
+      print(f"  {line}")
   print()
 
 
@@ -281,7 +436,6 @@ def main() -> int:
   state = MonitorState(started_at=datetime.now(timezone.utc))
   LOG_PATH.write_text("", encoding="utf-8")
 
-  # Baseline existing trade IDs so we only watch NEW events
   for _, trades in _trade_sources(session):
     for t in trades:
       if t.get("id"):
@@ -290,9 +444,12 @@ def main() -> int:
   health = _health(session)
   state.last_health = health
   _check_health_skips(state, health)
+  ts0 = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+  _check_inventory(state, ts0, session)
   _log(
     state,
-    f"monitor start | version={health.get('version')} | baseline_trades={len(state.seen_trade_ids)}",
+    f"monitor start | version={health.get('version')} | assets={','.join(ASSETS)} | "
+    f"baseline_trades={len(state.seen_trade_ids)}",
   )
 
   deadline = time.time() + MAX_MINUTES * 60
@@ -304,11 +461,15 @@ def main() -> int:
       _check_health_skips(state, health)
       bots = _bot_status(session)
       open_n = sum(len((bots.get(k) or {}).get("open_positions") or []) for k in bots)
+      ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+      _check_inventory(state, ts, session)
       for source, trades in _trade_sources(session):
         _check_new_trades(state, source, trades)
       _log(
         state,
-        f"poll | open={open_n} | qs={state.quick_scalp.status} ev={state.exit_verification.status} sr={state.soft_rally.status}",
+        f"poll | open={open_n} | qs={state.quick_scalp.status} ev={state.exit_verification.status} "
+        f"sr={state.soft_rally.status} inv={state.inventory_sync.status} "
+        f"rules={state.rule_conflicts.status} mismatches={len(state.mismatches)}",
       )
       if _all_verified(state):
         _log(state, "all features verified — stopping early")
@@ -320,7 +481,7 @@ def main() -> int:
     time.sleep(POLL_SEC)
 
   _print_report(state)
-  return 0
+  return 0 if state.inventory_sync.status != "mismatch" and state.rule_conflicts.status != "flagged" else 1
 
 
 if __name__ == "__main__":

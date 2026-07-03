@@ -29,8 +29,21 @@ class LiveExitConfig:
   mid_price_max_entry_cents: int = 60
   adopted_leg_cut_loss_min_hold_seconds: int = 300
   adopted_leg_cut_loss_min_usd: float = 0.50
-  max_adopted_contracts: int = 2
+  # Align with max_contracts_per_entry / Kelly stake (~$4 @ 70¢ ≈ 5–6 contracts).
+  # Orthogonal to live_inventory.max_concurrent_positions (leg count, not size).
+  max_adopted_contracts: int = 6
   max_resting_enters_per_hour: int = 6
+
+
+# Live hourly rule precedence (no contradictions when read top-down):
+# 1. quick_exit — defense OR hour_momentum conservative; wins hold overlays and
+#    adopted_leg cut floors (see allow_live_cut_loss / overlay_live_profit_settings).
+# 2. adopted_leg_cut_loss — 300s / $0.50 floor only when quick_exit does NOT apply.
+# 3. hold_overlays — mode-aware min_hold when quick_exit off (rally 90s, defense 30s).
+# 4. live_adaptive + soft_rally — entry gates only; soft_rally narrows defense to
+#    threshold mid-band YES; complements (not conflicts with) quick_exit scalps.
+# 5. hour_momentum — stake/entry caps; conservative state also enables quick_exit.
+# 6. max_adopted_contracts — per-leg size at adoption; max_concurrent is leg count.
 
 
 @dataclass(frozen=True)

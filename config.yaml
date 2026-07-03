@@ -162,7 +162,7 @@ intra_slot:
       mid_price_max_entry_cents: 50
       adopted_leg_cut_loss_min_hold_seconds: 300
       adopted_leg_cut_loss_min_usd: 0.50
-      max_adopted_contracts: 2
+      max_adopted_contracts: 6
       max_resting_enters_per_hour: 6
     probe_no_trade:
       enabled: false
@@ -334,7 +334,7 @@ hourly:
       mid_price_max_entry_cents: 60
       adopted_leg_cut_loss_min_hold_seconds: 300
       adopted_leg_cut_loss_min_usd: 0.50
-      max_adopted_contracts: 4
+      max_adopted_contracts: 6
       max_resting_enters_per_hour: 6
     live_adaptive:
       enabled: true
@@ -735,7 +735,7 @@ eth:
         mid_price_max_entry_cents: 60
         adopted_leg_cut_loss_min_hold_seconds: 300
         adopted_leg_cut_loss_min_usd: 0.50
-        max_adopted_contracts: 4
+        max_adopted_contracts: 6
         max_resting_enters_per_hour: 6
       live_adaptive:
         enabled: true

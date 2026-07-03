@@ -28,6 +28,33 @@ def _position_contracts(pos: dict[str, Any]) -> float:
   return float(int(pos.get("contracts") or 0))
 
 
+def kalshi_contracts_for_adoption(
+  sellable: float | None,
+  snap: dict[str, Any] | None,
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str,
+) -> tuple[int, float, float]:
+  """Kalshi sellable inventory at adoption (same source as exit refresh), then cap."""
+  from src.trading.bot_live_exit import cap_adopted_contracts
+
+  snap_ct = float((snap or {}).get("contracts") or 0)
+  if sellable is not None and sellable >= 0.05:
+    raw_fp = round(float(sellable), 2)
+  elif snap_ct >= 0.05:
+    raw_fp = round(snap_ct, 2)
+  else:
+    return 0, 0.0, 0.0
+  if snap_ct >= 0.05 and abs(raw_fp - snap_ct) > 0.04:
+    log.info(
+      "Adoption contract sync: sellable=%s snap=%s — using sellable",
+      raw_fp,
+      snap_ct,
+    )
+  contracts, contracts_fp = cap_adopted_contracts(raw_fp, cfg, kind=kind)
+  return contracts, contracts_fp, raw_fp
+
+
 def refresh_live_leg_contracts_from_kalshi(
   pos: dict[str, Any],
   kalshi: Any,
@@ -751,7 +778,6 @@ def adopt_filled_resting_enters(
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
 
-  from src.trading.bot_live_exit import cap_adopted_contracts
   from src.trading.hourly_event_time import market_ticker_event_ticker
 
   changes: list[dict[str, Any]] = []
@@ -787,8 +813,11 @@ def adopt_filled_resting_enters(
       "cost_usd": None,
       "entry_price_cents": int(trade.get("entry_price_cents") or trade.get("price_cents") or 0),
     }
-    contracts_fp = float(snap["contracts"])
-    contracts, contracts_fp = cap_adopted_contracts(contracts_fp, cfg, kind=kind)
+    contracts, contracts_fp, _raw_fp = kalshi_contracts_for_adoption(
+      sellable, snap, cfg, kind=kind,
+    )
+    if contracts_fp < 0.05:
+      continue
     entry_c = int(snap.get("entry_price_cents") or trade.get("entry_price_cents") or trade.get("price_cents") or 0)
     if entry_c <= 0:
       continue
@@ -916,7 +945,6 @@ def adopt_kalshi_orphan_inventory(
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
 
-  from src.trading.bot_live_exit import cap_adopted_contracts
   from src.trading.hourly_event_time import (
     hourly_fill_belongs_to_asset,
     is_kalshi_hourly_event,
@@ -942,7 +970,10 @@ def adopt_kalshi_orphan_inventory(
     snap = kalshi_position_leg(kalshi, ticker, side, critical=critical)
     if snap is None:
       continue
-    contracts_fp = float(snap["contracts"])
+    sellable = kalshi_sellable_contracts(kalshi, ticker, side, critical=critical)
+    contracts, contracts_fp, _raw_fp = kalshi_contracts_for_adoption(
+      sellable, snap, cfg, kind=kind,
+    )
     if contracts_fp < 0.05:
       continue
     meta = _recent_enter_trade_meta(store, leg_event, ticker, side)
@@ -964,7 +995,6 @@ def adopt_kalshi_orphan_inventory(
       continue
     import uuid
 
-    contracts, contracts_fp = cap_adopted_contracts(contracts_fp, cfg, kind=kind)
     pid = str(uuid.uuid4())
     cost_usd = round(contracts_fp * entry_c / 100.0, 2)
     store.open_position({
@@ -1272,8 +1302,12 @@ def _ensure_live_leg_after_failed_exit(
   sellable = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
   if sellable is None or sellable < 0.05:
     return
-  contracts_fp = round(float(sellable), 2)
-  contracts = max(1, int(round(contracts_fp)))
+  snap = kalshi_position_leg(kalshi, ticker, side, critical=True)
+  contracts, contracts_fp, _raw_fp = kalshi_contracts_for_adoption(
+    sellable, snap, cfg, kind=kind,
+  )
+  if contracts_fp < 0.05:
+    return
   entry_c = int(pos.get("entry_price_cents") or 0)
   if entry_c <= 0:
     snap = kalshi_position_leg(kalshi, ticker, side, critical=True)
@@ -1287,9 +1321,6 @@ def _ensure_live_leg_after_failed_exit(
       cost_usd=round(contracts_fp * entry_c / 100.0, 2) if entry_c else float(pos.get("cost_usd") or 0),
     )
     return
-  from src.trading.bot_live_exit import cap_adopted_contracts
-
-  contracts, contracts_fp = cap_adopted_contracts(contracts_fp, cfg, kind=kind)
   if entry_c <= 0:
     bid_c = _kalshi_leg_bid_cents(kalshi, ticker, side)
     entry_c = bid_c or 50

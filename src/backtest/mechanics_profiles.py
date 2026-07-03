@@ -91,7 +91,7 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     live_adaptive["enabled"] = False
     live_entry["cross_spread_enabled"] = True
     live_exit.setdefault("max_resting_enters_per_hour", 6)
-    live_exit.setdefault("max_adopted_contracts", 2)
+    live_exit.setdefault("max_adopted_contracts", 6)
     return c
 
   if profile == "rally_only":
