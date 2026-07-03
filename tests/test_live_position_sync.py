@@ -14,6 +14,7 @@ from src.trading.live_position_sync import (
   adopt_kalshi_orphan_inventory,
   cancel_orphan_live_sell_orders,
   cancel_resting_enter_orders_for_hourly_event,
+  confirm_kalshi_exit_fill,
   effective_kalshi_inventory,
   hourly_event_market_tickers_from_tab,
   kalshi_position_leg,
@@ -26,6 +27,11 @@ from src.trading.live_position_sync import (
   try_live_position_exit,
   verify_kalshi_exit_fill,
 )
+
+
+def _mock_kalshi_exit_order(kalshi: MagicMock, *, executed: bool = True) -> None:
+  status = "executed" if executed else "resting"
+  kalshi.get_order.return_value = {"status": status, "fill_count": 2}
 
 
 @pytest.fixture(autouse=True)
@@ -522,6 +528,27 @@ def test_verify_kalshi_exit_fill_requires_inventory_drop():
   assert verify_kalshi_exit_fill(sellable_before=None, sellable_after=0.0, claimed_fill=1) == 0
 
 
+def test_confirm_kalshi_exit_fill_requires_executed_when_api_claims_fill():
+  assert confirm_kalshi_exit_fill(
+    sellable_before=2.0,
+    sellable_after=0.0,
+    claimed_fill=2,
+    order_status="executed",
+  ) == 2
+  assert confirm_kalshi_exit_fill(
+    sellable_before=2.0,
+    sellable_after=0.0,
+    claimed_fill=2,
+    order_status="resting",
+  ) == 0
+  assert confirm_kalshi_exit_fill(
+    sellable_before=2.0,
+    sellable_after=0.0,
+    claimed_fill=2,
+    order_status=None,
+  ) == 2
+
+
 def test_try_live_position_exit_rejects_unverified_api_fill_after_floor_retry():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
@@ -539,9 +566,12 @@ def test_try_live_position_exit_rejects_unverified_api_fill_after_floor_retry():
     kalshi.authenticated = True
     kalshi.get_market_position.return_value = -2
     kalshi.list_resting_orders.return_value = []
+    _mock_kalshi_exit_order(kalshi, executed=False)
+    kalshi.get_market_ticker.return_value = {"no_bid_dollars": "0.1600"}
     kalshi.create_order.side_effect = [
-      {"order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0}},
-      {"order": {"order_id": "sell-2", "fill_count": 2, "remaining_count": 0}},
+      {"order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
+      {"order": {"order_id": "sell-2", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
+      {"order": {"order_id": "sell-3", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
     ]
     row = try_live_position_exit(
       kalshi=kalshi,
@@ -560,7 +590,7 @@ def test_try_live_position_exit_rejects_unverified_api_fill_after_floor_retry():
     assert row is not None
     assert row["status"] == "skipped"
     assert store.open_positions("EV1") != []
-    assert kalshi.create_order.call_count == 2
+    assert kalshi.create_order.call_count == 3
     assert kalshi.cancel_order.called
 
 
@@ -581,9 +611,10 @@ def test_try_live_position_exit_retries_unverified_fill_with_floor_sell():
     kalshi.authenticated = True
     kalshi.get_market_position.side_effect = [-2] + [-2] * 8 + [0]
     kalshi.list_resting_orders.return_value = []
+    _mock_kalshi_exit_order(kalshi, executed=True)
     kalshi.create_order.side_effect = [
-      {"order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0}},
-      {"order": {"order_id": "sell-2", "fill_count": 2, "remaining_count": 0}},
+      {"order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
+      {"order": {"order_id": "sell-2", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
     ]
     out = try_live_position_exit(
       kalshi=kalshi,
@@ -624,8 +655,9 @@ def test_try_live_position_exit_verifies_fill_after_stale_inventory_cache():
     kalshi.authenticated = True
     kalshi.get_market_position.side_effect = [-2, -2, 0]
     kalshi.list_resting_orders.return_value = []
+    _mock_kalshi_exit_order(kalshi, executed=True)
     kalshi.create_order.return_value = {
-      "order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0},
+      "order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0, "status": "executed"},
     }
     out = try_live_position_exit(
       kalshi=kalshi,
@@ -670,8 +702,9 @@ def test_try_live_position_exit_cancels_stale_resting_exit_when_inventory_held()
     kalshi.authenticated = True
     kalshi.get_market_position.side_effect = [4, 0]
     kalshi.list_resting_orders.return_value = [{"order_id": "ord-1"}]
+    _mock_kalshi_exit_order(kalshi, executed=True)
     kalshi.create_order.return_value = {
-      "order": {"order_id": "sell-2", "fill_count": 4, "remaining_count": 0},
+      "order": {"order_id": "sell-2", "fill_count": 4, "remaining_count": 0, "status": "executed"},
     }
     out = try_live_position_exit(
       kalshi=kalshi,
@@ -741,3 +774,106 @@ def test_try_live_position_exit_skips_when_pending_resting_exit():
     )
     assert out is None
     kalshi.create_order.assert_not_called()
+
+
+def test_try_live_position_exit_bid_retry_after_two_ghost_fills():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "yes",
+      "contracts": 2,
+      "entry_price_cents": 60,
+      "cost_usd": 1.2,
+      "mode": "live",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    def _inventory_after_bid_poll(*_a, **_k):
+      if kalshi.create_order.call_count >= 3:
+        return 0
+      return 2
+
+    kalshi.get_market_position.side_effect = _inventory_after_bid_poll
+    kalshi.list_resting_orders.return_value = []
+    kalshi.get_market_ticker.return_value = {"yes_bid_dollars": "0.8400"}
+
+    def _order_status(*_a, **_k):
+      if kalshi.create_order.call_count >= 3:
+        return {"status": "executed", "fill_count": 2}
+      return {"status": "resting", "fill_count": 2}
+
+    kalshi.get_order.side_effect = _order_status
+    kalshi.create_order.side_effect = [
+      {"order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
+      {"order": {"order_id": "sell-2", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
+      {"order": {"order_id": "sell-3", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
+    ]
+    out = try_live_position_exit(
+      kalshi=kalshi,
+      store=store,
+      pos=store.open_positions("EV1")[0],
+      period_key="EV1",
+      exit_price=84,
+      contracts=2,
+      entry_c=60,
+      pos_mode="live",
+      pick={"signal": "BUY YES"},
+      exit_reason="PROFIT TARGET",
+      detail_suffix="test",
+      extra_detail="",
+    )
+    assert out is not None
+    assert out["fill_count"] == 2
+    assert out["sell_cents"] == 84
+    assert kalshi.create_order.call_count == 3
+
+
+def test_try_live_position_exit_restores_closed_leg_after_unverified():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "yes",
+      "contracts": 2,
+      "entry_price_cents": 60,
+      "cost_usd": 1.2,
+      "mode": "live",
+    })
+    pos = store.open_positions("EV1")[0]
+    store.close_position("p1")
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = 2
+    kalshi.list_resting_orders.return_value = []
+    kalshi.get_market_ticker.return_value = {"yes_bid_dollars": "0.8400"}
+    kalshi.get_order.return_value = {"status": "resting", "fill_count": 2}
+    kalshi.create_order.side_effect = [
+      {"order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
+      {"order": {"order_id": "sell-2", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
+      {"order": {"order_id": "sell-3", "fill_count": 2, "remaining_count": 0, "status": "executed"}},
+    ]
+    row = try_live_position_exit(
+      kalshi=kalshi,
+      store=store,
+      pos=pos,
+      period_key="EV1",
+      exit_price=84,
+      contracts=2,
+      entry_c=60,
+      pos_mode="live",
+      pick={"signal": "BUY YES"},
+      exit_reason="PROFIT TARGET",
+      detail_suffix="test",
+      extra_detail="",
+    )
+    assert row is not None
+    assert row["status"] == "skipped"
+    open_pos = store.open_positions("EV1")
+    assert len(open_pos) == 1
+    assert open_pos[0]["side"] == "yes"
+    assert open_pos[0]["contracts"] == 2

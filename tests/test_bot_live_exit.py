@@ -282,6 +282,30 @@ def test_sync_skips_reconcile_for_young_live_leg():
     assert any(c.get("action") == "inventory_pending_exit" for c in out["changes"])
 
 
+def test_reconcile_close_blocked_after_unverified_exit():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    pos = {
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "yes",
+      "opened_at": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat(),
+    }
+    store.log_trade({
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "yes",
+      "action": "exit",
+      "mode": "live",
+      "status": "skipped",
+      "position_id": "p1",
+      "detail": "Live EXIT unverified (API claimed 2 fill(s) but Kalshi inventory unchanged)",
+    })
+    cfg = {"hourly": {"bot": {"live_exit": {"reconcile_grace_after_exit_seconds": 120}}}}
+    assert reconcile_close_blocked(store, pos, cfg, kind="hourly") == "reconcile_recent_unverified_exit"
+
+
 def test_should_reconcile_close_respects_grace_config():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")

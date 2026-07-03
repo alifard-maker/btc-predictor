@@ -57,11 +57,18 @@ def parse_v2_order_response(order: dict[str, Any]) -> dict[str, Any]:
     remaining_count = float(body.get("remaining_count") or 0)
   except (TypeError, ValueError):
     remaining_count = 0.0
+  status = str(body.get("status") or order.get("status") or "").lower()
   return {
     "order_id": body.get("order_id") or order.get("order_id"),
     "fill_count": fill_count,
     "remaining_count": remaining_count,
+    "status": status,
   }
+
+
+def kalshi_order_is_executed(status: str | None) -> bool:
+  """True when Kalshi reports the order fully executed (not merely fill_count > 0)."""
+  return str(status or "").lower() == "executed"
 
 
 def position_net_from_row(row: dict[str, Any]) -> float:
@@ -356,6 +363,23 @@ class KalshiClient:
     return self._request(
       "DELETE", f"/portfolio/events/orders/{order_id}", auth=True, critical=True
     )
+
+  def get_order(self, order_id: str, *, critical: bool = False) -> dict[str, Any] | None:
+    """Fetch one portfolio order by ID (V2 event orders, then legacy path)."""
+    if not self.authenticated or not order_id:
+      return None
+    for path in (
+      f"/portfolio/events/orders/{order_id}",
+      f"/portfolio/orders/{order_id}",
+    ):
+      try:
+        data = self.get(path, auth=True, critical=critical)
+      except Exception as e:
+        log.debug("Kalshi get order %s via %s failed: %s", order_id, path, e)
+        continue
+      body = data.get("order") if isinstance(data.get("order"), dict) else data
+      return body if isinstance(body, dict) else None
+    return None
 
   def list_resting_orders(self, *, ticker: str | None = None) -> list[dict[str, Any]]:
     """Open resting orders (V1 list endpoint; works for V2 event orders)."""

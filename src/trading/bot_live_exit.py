@@ -379,6 +379,52 @@ def _seconds_since(raw: str | None) -> float | None:
   return (datetime.now(timezone.utc) - dt).total_seconds()
 
 
+def recent_unverified_exit_attempt(
+  store: Any,
+  *,
+  event_ticker: str,
+  market_ticker: str,
+  side: str,
+  position_id: str | None = None,
+  max_age_seconds: int = 300,
+) -> dict[str, Any] | None:
+  """Most recent skipped live exit where Kalshi API fill_count did not match inventory."""
+  side_l = str(side or "").lower()
+  with store._connect() as conn:
+    if position_id:
+      row = conn.execute(
+        """
+        SELECT * FROM bot_trades
+        WHERE position_id = ? AND action = 'exit' AND status = 'skipped'
+          AND detail LIKE '%unverified%'
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (position_id,),
+      ).fetchone()
+      if row:
+        trade = dict(row)
+        age = _seconds_since(trade.get("created_at"))
+        if age is not None and age <= max_age_seconds:
+          return trade
+    row = conn.execute(
+      """
+      SELECT * FROM bot_trades
+      WHERE event_ticker = ? AND market_ticker = ? AND side = ?
+        AND action = 'exit' AND mode = 'live' AND status = 'skipped'
+        AND detail LIKE '%unverified%'
+      ORDER BY created_at DESC LIMIT 1
+      """,
+      (event_ticker, market_ticker, side_l),
+    ).fetchone()
+  if not row:
+    return None
+  trade = dict(row)
+  age = _seconds_since(trade.get("created_at"))
+  if age is None or age > max_age_seconds:
+    return None
+  return trade
+
+
 def recent_exit_trade(
   store: Any,
   *,
@@ -452,6 +498,16 @@ def reconcile_close_blocked(
   )
   if recent and str(recent.get("position_id") or "") != str(pos.get("id") or ""):
     return "reconcile_recent_exit_sibling"
+  unverified = recent_unverified_exit_attempt(
+    store,
+    event_ticker=event,
+    market_ticker=ticker,
+    side=side,
+    position_id=str(pos.get("id") or "") or None,
+    max_age_seconds=live_exit.reconcile_grace_after_exit_seconds,
+  )
+  if unverified:
+    return "reconcile_recent_unverified_exit"
   return None
 
 

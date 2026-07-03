@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from src.trading.bot_position_mode import normalize_position_mode
-from src.data.kalshi import position_net_from_row
+from src.data.kalshi import kalshi_order_is_executed, position_net_from_row
 from src.trading.live_bracket_orders import (
   aggressive_exit_limit_cents,
   cancel_resting_orders,
@@ -890,6 +890,14 @@ def adopt_kalshi_orphan_inventory(
       or 0,
     )
     if entry_c <= 0:
+      cost_usd = snap.get("cost_usd")
+      if cost_usd and contracts_fp > 0:
+        entry_c = max(1, min(99, int(round(100.0 * float(cost_usd) / contracts_fp))))
+    if entry_c <= 0:
+      bid_c = _kalshi_leg_bid_cents(kalshi, ticker, side)
+      if bid_c is not None and bid_c > 0:
+        entry_c = bid_c
+    if entry_c <= 0:
       continue
     import uuid
 
@@ -1096,6 +1104,183 @@ def verify_kalshi_exit_fill(
   return 0
 
 
+def confirm_kalshi_exit_fill(
+  *,
+  sellable_before: float | None,
+  sellable_after: float | None,
+  claimed_fill: int,
+  order_status: str | None,
+) -> int:
+  """Require inventory drop; when API claims fills, also require executed order status."""
+  inv_fill = verify_kalshi_exit_fill(
+    sellable_before=sellable_before,
+    sellable_after=sellable_after,
+    claimed_fill=claimed_fill,
+  )
+  if inv_fill <= 0:
+    return 0
+  if claimed_fill <= 0:
+    return inv_fill
+  if order_status is None:
+    return inv_fill
+  if kalshi_order_is_executed(order_status):
+    return inv_fill
+  return 0
+
+
+def _kalshi_order_status(kalshi: Any, order_id: str | None) -> str | None:
+  if not kalshi or not order_id:
+    return None
+  get_order = getattr(kalshi, "get_order", None)
+  if not callable(get_order):
+    return None
+  try:
+    row = get_order(str(order_id), critical=True)
+  except Exception as e:
+    log.debug("Kalshi get_order %s failed: %s", order_id, e)
+    return None
+  if not row:
+    return None
+  return str(row.get("status") or "").lower() or None
+
+
+def _kalshi_leg_bid_cents(kalshi: Any, market_ticker: str, side: str) -> int | None:
+  """Best-effort bid for a held leg (used for marketable exit retries)."""
+  if not kalshi:
+    return None
+  get_market = getattr(kalshi, "get_market_ticker", None)
+  if not callable(get_market):
+    return None
+  try:
+    row = get_market(str(market_ticker))
+  except Exception:
+    return None
+  if not row:
+    return None
+  side_l = str(side or "").lower()
+  if side_l == "yes":
+    raw = row.get("yes_bid_dollars")
+    if raw is None:
+      raw = row.get("yes_bid")
+  else:
+    raw = row.get("no_bid_dollars")
+    if raw is None:
+      raw = row.get("no_bid")
+    if raw is None:
+      yes_ask = row.get("yes_ask_dollars") or row.get("yes_ask")
+      if yes_ask is not None:
+        try:
+          return max(1, min(99, int(round(100.0 - float(yes_ask)))))
+        except (TypeError, ValueError):
+          pass
+  if raw is None:
+    return None
+  try:
+    val = float(raw)
+    if val <= 1.0:
+      return max(1, min(99, int(round(val * 100.0))))
+    return max(1, min(99, int(round(val))))
+  except (TypeError, ValueError):
+    return None
+
+
+def _position_still_open(store: Any, position_id: str) -> bool:
+  with store._connect() as conn:
+    row = conn.execute(
+      "SELECT 1 FROM bot_positions WHERE id = ? AND status = 'open' LIMIT 1",
+      (str(position_id),),
+    ).fetchone()
+  return row is not None
+
+
+def _ensure_live_leg_after_failed_exit(
+  store: Any,
+  kalshi: Any,
+  pos: dict[str, Any],
+  *,
+  period_key: str,
+  cfg: dict[str, Any] | None = None,
+  kind: str = "hourly",
+) -> None:
+  """Keep or restore an open bot leg when Kalshi still holds inventory after a failed exit."""
+  ticker = str(pos["market_ticker"])
+  side = str(pos["side"])
+  pid = str(pos["id"])
+  sellable = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
+  if sellable is None or sellable < 0.05:
+    return
+  contracts_fp = round(float(sellable), 2)
+  contracts = max(1, int(round(contracts_fp)))
+  entry_c = int(pos.get("entry_price_cents") or 0)
+  if entry_c <= 0:
+    snap = kalshi_position_leg(kalshi, ticker, side, critical=True)
+    if snap and snap.get("entry_price_cents"):
+      entry_c = int(snap["entry_price_cents"])
+  if _position_still_open(store, pid):
+    store.update_position_contracts(
+      pid,
+      contracts=contracts,
+      contracts_fp=contracts_fp,
+      cost_usd=round(contracts_fp * entry_c / 100.0, 2) if entry_c else float(pos.get("cost_usd") or 0),
+    )
+    return
+  from src.trading.bot_live_exit import cap_adopted_contracts
+
+  contracts, contracts_fp = cap_adopted_contracts(contracts_fp, cfg, kind=kind)
+  if entry_c <= 0:
+    bid_c = _kalshi_leg_bid_cents(kalshi, ticker, side)
+    entry_c = bid_c or 50
+  cost_usd = round(contracts_fp * entry_c / 100.0, 2)
+  with store._connect() as conn:
+    closed = conn.execute(
+      "SELECT id FROM bot_positions WHERE id = ? AND status = 'closed'",
+      (pid,),
+    ).fetchone()
+    if closed:
+      conn.execute(
+        """
+        UPDATE bot_positions
+        SET status = 'open', event_ticker = ?, market_ticker = ?, side = ?,
+            contracts = ?, contracts_fp = ?, entry_price_cents = ?, cost_usd = ?,
+            mode = 'live', entry_source = ?
+        WHERE id = ?
+        """,
+        (
+          period_key,
+          ticker,
+          side,
+          contracts,
+          contracts_fp,
+          entry_c,
+          cost_usd,
+          "restored_after_unverified_exit",
+          pid,
+        ),
+      )
+    else:
+      store.open_position({
+        "id": pid,
+        "event_ticker": period_key,
+        "market_ticker": ticker,
+        "side": side,
+        "contracts": contracts,
+        "contracts_fp": contracts_fp,
+        "entry_price_cents": entry_c,
+        "cost_usd": cost_usd,
+        "signal": pos.get("signal"),
+        "label": pos.get("label"),
+        "mode": "live",
+        "entry_source": "restored_after_unverified_exit",
+      })
+  log.warning(
+    "Restored live bot leg %s %s x%s on %s after unverified exit",
+    side.upper(),
+    ticker,
+    contracts_fp,
+    period_key,
+  )
+
+
 def _cancel_pending_resting_exit(kalshi: Any, store: Any, position_id: str) -> str | None:
   """Cancel a stale bot resting-exit order when inventory is still held."""
   pending_oid = resting_exit_order_id(store, position_id)
@@ -1123,23 +1308,28 @@ def _sellable_after_exit_attempt(
   side: str,
   sellable_before: float | None,
   claimed_fill: int,
-) -> float | None:
-  """Poll fresh Kalshi inventory after an exit order (cache may lag API fills)."""
+  order_id: str | None = None,
+) -> tuple[float | None, str | None]:
+  """Poll fresh Kalshi inventory and order status after an exit order."""
   sellable_after: float | None = None
-  polls = 4 if claimed_fill > 0 else 1
+  order_status: str | None = None
+  polls = 6 if claimed_fill > 0 else 1
   for attempt in range(polls):
     _invalidate_kalshi_position_cache(kalshi, ticker=ticker)
     sellable_after = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
-    if verify_kalshi_exit_fill(
+    if order_id and claimed_fill > 0:
+      order_status = _kalshi_order_status(kalshi, order_id)
+    if confirm_kalshi_exit_fill(
       sellable_before=sellable_before,
       sellable_after=sellable_after,
       claimed_fill=claimed_fill,
+      order_status=order_status,
     ) > 0:
-      return sellable_after
+      return sellable_after, order_status
     if claimed_fill <= 0 or attempt >= polls - 1:
-      return sellable_after
-    time.sleep(0.25)
-  return sellable_after
+      return sellable_after, order_status
+    time.sleep(0.35)
+  return sellable_after, order_status
 
 
 def _attempt_live_exit_sell(
@@ -1162,14 +1352,20 @@ def _attempt_live_exit_sell(
     time_in_force=time_in_force,
   )
   claimed_fill = int(exit_result.get("fill_count") or 0)
-  sellable_after = _sellable_after_exit_attempt(
+  order_id = exit_result.get("order_id")
+  sellable_after, order_status = _sellable_after_exit_attempt(
     kalshi,
     ticker=ticker,
     side=side,
     sellable_before=sellable_before,
     claimed_fill=claimed_fill,
+    order_id=str(order_id) if order_id else None,
   )
-  return {**exit_result, "sellable_after": sellable_after}
+  return {
+    **exit_result,
+    "sellable_after": sellable_after,
+    "order_status": order_status,
+  }
 
 
 def _log_unverified_live_exit(
@@ -1294,11 +1490,11 @@ def try_live_position_exit(
   )
   live_exit_oid = attempt.get("order_id")
   claimed_fill = int(attempt.get("fill_count") or 0)
-  sellable_after = attempt.get("sellable_after")
-  fill_count = verify_kalshi_exit_fill(
+  fill_count = confirm_kalshi_exit_fill(
     sellable_before=sellable_before,
-    sellable_after=sellable_after,
+    sellable_after=attempt.get("sellable_after"),
     claimed_fill=claimed_fill,
+    order_status=attempt.get("order_status"),
   )
   last_attempt = attempt
 
@@ -1328,13 +1524,54 @@ def try_live_position_exit(
       )
       live_exit_oid = retry.get("order_id") or live_exit_oid
       claimed_fill = int(retry.get("fill_count") or 0)
-      sellable_after = retry.get("sellable_after")
-      fill_count = verify_kalshi_exit_fill(
+      fill_count = confirm_kalshi_exit_fill(
         sellable_before=sellable_before,
-        sellable_after=sellable_after,
+        sellable_after=retry.get("sellable_after"),
         claimed_fill=claimed_fill,
+        order_status=retry.get("order_status"),
       )
       last_attempt = retry
+
+  if claimed_fill > 0 and fill_count <= 0:
+    bid_cents = _kalshi_leg_bid_cents(kalshi, ticker, side)
+    sellable_before = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
+    if (
+      bid_cents is not None
+      and bid_cents > 0
+      and sellable_before is not None
+      and sellable_before > 0.05
+    ):
+      log.warning(
+        "Live exit floor sell unverified on %s — retrying marketable sell at bid %s¢",
+        ticker,
+        bid_cents,
+      )
+      if live_exit_oid:
+        try:
+          kalshi.cancel_order(str(live_exit_oid))
+        except Exception as e:
+          log.warning("Cancel unverified exit %s failed: %s", live_exit_oid, e)
+      sell_int = max(1, int(round(min(float(sell_int), float(sellable_before)))))
+      bid_attempt = _attempt_live_exit_sell(
+        kalshi,
+        ticker=ticker,
+        side=side,
+        sell_int=sell_int,
+        sell_cents=bid_cents,
+        time_in_force="immediate_or_cancel",
+        sellable_before=sellable_before,
+      )
+      live_exit_oid = bid_attempt.get("order_id") or live_exit_oid
+      claimed_fill = int(bid_attempt.get("fill_count") or 0)
+      fill_count = confirm_kalshi_exit_fill(
+        sellable_before=sellable_before,
+        sellable_after=bid_attempt.get("sellable_after"),
+        claimed_fill=claimed_fill,
+        order_status=bid_attempt.get("order_status"),
+      )
+      if fill_count > 0:
+        sell_cents = bid_cents
+      last_attempt = bid_attempt
 
   if claimed_fill > 0 and fill_count <= 0:
     log.warning(
@@ -1342,6 +1579,14 @@ def try_live_position_exit(
       live_exit_oid,
       claimed_fill,
       ticker,
+    )
+    _ensure_live_leg_after_failed_exit(
+      store,
+      kalshi,
+      pos,
+      period_key=period_key,
+      cfg=cfg,
+      kind=kind,
     )
     return _log_unverified_live_exit(
       store,

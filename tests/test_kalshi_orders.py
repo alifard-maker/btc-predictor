@@ -90,6 +90,34 @@ def test_position_net_from_row_prefers_fp():
   assert position_net_from_row({"position": -2}) == -2.0
 
 
+def test_parse_v2_order_response_includes_status():
+  parsed = parse_v2_order_response({
+    "order": {
+      "order_id": "ord-1",
+      "fill_count": 2,
+      "remaining_count": 0,
+      "status": "executed",
+    },
+  })
+  assert parsed["status"] == "executed"
+  assert parsed["fill_count"] == 2.0
+
+
+def test_get_order_reads_events_endpoint():
+  client = KalshiClient({"kalshi": {"key_id": "k", "private_key": ""}})
+  client._private_key = MagicMock()
+  with patch.object(
+    client,
+    "get",
+    return_value={"order": {"order_id": "ord-1", "status": "executed"}},
+  ) as get:
+    row = client.get_order("ord-1")
+  assert row["status"] == "executed"
+  get.assert_called_once_with(
+    "/portfolio/events/orders/ord-1", auth=True, critical=False,
+  )
+
+
 def test_get_market_position_reads_portfolio_positions():
   client = KalshiClient({"kalshi": {"key_id": "k", "private_key": ""}})
   client._private_key = MagicMock()
