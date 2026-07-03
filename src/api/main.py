@@ -1065,6 +1065,26 @@ def bots_risk_status(_: None = Depends(_session_user)):
   return _loop.bot_risk_status()
 
 
+@app.get("/api/bots/hourly-live-trial-compare")
+def bots_hourly_live_trial_compare(
+  asset: str = Query(default="btc", pattern="^(btc|eth)$"),
+  limit_hours: int = Query(default=24, ge=1, le=72),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.hourly_live_trial_compare import build_hourly_live_trial_compare
+
+  live_store = _loop.hourly_bot_store(asset, kind="hourly")
+  trial_store = _loop.hourly_bot_store(asset, kind="hourly_trial")
+  return build_hourly_live_trial_compare(
+    live_store,
+    trial_store,
+    asset=asset,
+    limit_hours=limit_hours,
+  )
+
+
 @app.post("/api/admin/bots/auto-tune")
 def admin_bots_auto_tune(_: None = Depends(_verify_admin)):
   if _loop is None:

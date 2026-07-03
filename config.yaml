@@ -800,6 +800,15 @@ eth:
         profit_lock_usd: 1.25
         rally_block_range_bands: true
         defense_block_range_bands: true
+      whipsaw_guard:
+        enabled: true
+        max_quick_exit_cuts_per_hour: 3
+        pause_all_entries_after_cut_streak: true
+        block_entries_when_regime_blocked: true
+        block_scale_in_when_regime_blocked: true
+        require_signal_refresh_after_spot_against_cut: true
+        conservative_max_contracts_per_entry: 2
+        event_cut_cooldown_seconds: 600
       trial:
         continuous_enabled: true
         poll_seconds: 10
