@@ -294,6 +294,8 @@ class KalshiClient:
       resp.raise_for_status()
       if circuit:
         circuit.record_success()
+      if not resp.content or not resp.content.strip():
+        return {}
       return resp.json()
     except Exception as e:
       if circuit:

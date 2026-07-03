@@ -157,9 +157,9 @@ def main() -> int:
     print("\nAlready at Advanced tier or higher; skipping upgrade POST.")
     return 0
 
-  print(f"\nPOST {UPGRADE_PATH} (empty body)...")
+  print(f"\nPOST {UPGRADE_PATH} (json={{}})...")
   try:
-    client.post(UPGRADE_PATH, auth=True)
+    client.post(UPGRADE_PATH, auth=True, json_body={})
     print("Upgrade request accepted (HTTP 2xx).")
   except Exception as exc:
     print(f"ERROR: Upgrade failed: {exc}", file=sys.stderr)
