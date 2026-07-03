@@ -33,6 +33,8 @@ class HourlyLiveTrialAlignConfig:
   quick_exit_min_hold_seconds: int | None = 60
   quick_exit_cut_loss_min_hold_seconds: int | None = 60
   prefer_passive_below_edge_cents: float = 12.0
+  mirror_trial_entry_execution: bool = True
+  block_reentry_while_resting: bool = True
   block_scale_in_after_quick_exit_cut: bool = True
   compare_pair_window_seconds: int = 180
   whipsaw_max_quick_exit_cuts_per_hour: int | None = 2
@@ -58,6 +60,8 @@ class HourlyLiveTrialAlignConfig:
       "entry_align_with_trial": bool(raw.get("entry_align_with_trial", True)),
       "align_live_inventory": bool(raw.get("align_live_inventory", True)),
       "prefer_passive_below_edge_cents": float(exe.get("prefer_passive_below_edge_cents", 12.0)),
+      "mirror_trial_entry_execution": bool(exe.get("mirror_trial_entry_execution", True)),
+      "block_reentry_while_resting": bool(exe.get("block_reentry_while_resting", True)),
       "block_scale_in_after_quick_exit_cut": bool(exe.get("block_scale_in_after_quick_exit_cut", True)),
       "compare_pair_window_seconds": int(cmp_.get("pair_window_seconds", 180)),
     }
@@ -162,6 +166,8 @@ def apply_align_entry_pricing(
   if not live_trial_align_active(cfg, kind=kind, mode=mode):
     return pricing
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
+  if acfg.mirror_trial_entry_execution:
+    return replace(pricing, cross_spread_enabled=True)
   try:
     edge = float(pick.get("ask_edge_cents") if pick.get("ask_edge_cents") is not None else pick.get("edge"))
   except (TypeError, ValueError):
@@ -171,3 +177,81 @@ def apply_align_entry_pricing(
   if edge < acfg.prefer_passive_below_edge_cents:
     return replace(pricing, cross_spread_enabled=False)
   return pricing
+
+
+def should_mirror_trial_entry_execution(
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str,
+  mode: str,
+) -> bool:
+  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+    return False
+  return HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind).mirror_trial_entry_execution
+
+
+def pending_resting_enter_blocks_entry(
+  store: Any,
+  kalshi: Any,
+  event_ticker: str,
+  market_ticker: str,
+  *,
+  cfg: dict[str, Any] | None,
+  kind: str = "hourly",
+  mode: str = "live",
+) -> str | None:
+  """Return skip reason when an unfilled resting buy is still working this ticker."""
+  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+    return None
+  acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
+  if not acfg.block_reentry_while_resting:
+    return None
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return None
+  latest = getattr(store, "latest_resting_enter", None)
+  if not callable(latest):
+    return None
+  prior = latest(event_ticker, market_ticker, mode="live")
+  if not prior:
+    return None
+  from src.trading.live_position_sync import order_still_resting
+
+  oid = str(prior.get("kalshi_order_id") or "")
+  if oid and order_still_resting(kalshi, oid):
+    return f"pending_resting_limit:{market_ticker}"
+  return None
+
+
+def count_live_entry_slots_used(
+  store: Any,
+  kalshi: Any,
+  event_ticker: str,
+  open_positions: list[dict[str, Any]],
+  *,
+  cfg: dict[str, Any] | None,
+  kind: str = "hourly",
+  mode: str = "live",
+) -> int:
+  """Filled legs plus tickers with an active resting buy (pending position)."""
+  open_tickers = {str(p.get("market_ticker") or "") for p in open_positions}
+  open_tickers.discard("")
+  slots = len(open_positions)
+  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+    return slots
+  acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
+  if not acfg.block_reentry_while_resting:
+    return slots
+  list_fn = getattr(store, "list_resting_enters", None)
+  if not callable(list_fn) or not kalshi or not getattr(kalshi, "authenticated", False):
+    return slots
+  from src.trading.live_position_sync import order_still_resting
+
+  for row in list_fn(event_ticker, mode="live"):
+    ticker = str(row.get("market_ticker") or "")
+    if not ticker or ticker in open_tickers:
+      continue
+    oid = str(row.get("kalshi_order_id") or "")
+    if oid and order_still_resting(kalshi, oid):
+      slots += 1
+      open_tickers.add(ticker)
+  return slots

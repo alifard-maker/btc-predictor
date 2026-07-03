@@ -8,6 +8,8 @@ from src.trading.hourly_live_trial_align import (
   HourlyLiveTrialAlignConfig,
   apply_align_entry_pricing,
   merge_whipsaw_align_overrides,
+  pending_resting_enter_blocks_entry,
+  should_mirror_trial_entry_execution,
   should_use_trial_leg_exits,
   skip_soft_rally_entry_overlay,
 )
@@ -25,6 +27,10 @@ def _cfg() -> dict:
             "adaptive_modes": ["defense"],
             "hour_momentum_states": ["conservative"],
             "max_hold_seconds": 600,
+          },
+          "execution": {
+            "mirror_trial_entry_execution": True,
+            "block_reentry_while_resting": True,
           },
           "quick_exit": {"min_hold_seconds": 60, "cut_loss_min_hold_seconds": 60},
           "whipsaw": {"max_quick_exit_cuts_per_hour": 2},
@@ -75,14 +81,48 @@ def test_skip_soft_rally_when_align_enabled():
   assert not skip_soft_rally_entry_overlay(_cfg(), kind="hourly_trial")
 
 
-def test_prefer_passive_below_edge():
+def test_prefer_passive_below_edge_when_mirror_disabled():
+  cfg = _cfg()
+  cfg["hourly"]["bot"]["live_trial_align"]["execution"]["mirror_trial_entry_execution"] = False
   pricing = LiveEntryPricingConfig(cross_spread_enabled=True)
   pick = {"ask_edge_cents": 8}
-  out = apply_align_entry_pricing(pricing, pick, cfg=_cfg(), kind="hourly", mode="live")
+  out = apply_align_entry_pricing(pricing, pick, cfg=cfg, kind="hourly", mode="live")
   assert out.cross_spread_enabled is False
-  pick2 = {"ask_edge_cents": 20}
-  out2 = apply_align_entry_pricing(pricing, pick2, cfg=_cfg(), kind="hourly", mode="live")
-  assert out2.cross_spread_enabled is True
+
+
+def test_mirror_trial_execution_enables_cross_spread():
+  pricing = LiveEntryPricingConfig(cross_spread_enabled=False)
+  pick = {"ask_edge_cents": 8}
+  out = apply_align_entry_pricing(pricing, pick, cfg=_cfg(), kind="hourly", mode="live")
+  assert out.cross_spread_enabled is True
+  assert should_mirror_trial_entry_execution(_cfg(), kind="hourly", mode="live")
+
+
+def test_pending_resting_blocks_entry(tmp_path):
+  from unittest.mock import MagicMock
+
+  from src.trading.hourly_bot_store import HourlyBotStore
+
+  store = HourlyBotStore(tmp_path / "bot.db")
+  store.log_trade({
+    "event_ticker": "EV1",
+    "market_ticker": "KX-T1",
+    "action": "enter",
+    "mode": "live",
+    "status": "resting",
+    "kalshi_order_id": "ord-1",
+    "side": "no",
+  })
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  with __import__("unittest.mock", fromlist=["patch"]).patch(
+    "src.trading.live_position_sync.order_still_resting",
+    return_value=True,
+  ):
+    reason = pending_resting_enter_blocks_entry(
+      store, kalshi, "EV1", "KX-T1", cfg=_cfg(), kind="hourly", mode="live",
+    )
+  assert reason == "pending_resting_limit:KX-T1"
 
 
 def test_align_disabled_by_default():

@@ -1137,6 +1137,20 @@ class HourlyBotStore:
       )
     return int(cur.rowcount or 0)
 
+  def list_resting_enters(self, event_ticker: str, *, mode: str = "live") -> list[dict[str, Any]]:
+    """All unfilled resting enter rows for this hour (may include stale DB rows)."""
+    with self._connect() as conn:
+      rows = conn.execute(
+        """
+        SELECT * FROM bot_trades
+        WHERE event_ticker = ? AND action = 'enter'
+          AND status = 'resting' AND mode = ?
+        ORDER BY created_at DESC
+        """,
+        (event_ticker, mode),
+      ).fetchall()
+    return [self._enrich_trade(dict(r)) for r in rows]
+
   def count_resting_live_enters(self, event_ticker: str, *, mode: str = "live") -> int:
     """Concurrent unfilled resting buy markets this hour (distinct tickers only)."""
     with self._connect() as conn:

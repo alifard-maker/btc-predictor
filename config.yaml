@@ -420,6 +420,8 @@ hourly:
         min_hold_seconds: 60
         cut_loss_min_hold_seconds: 60
       execution:
+        mirror_trial_entry_execution: true
+        block_reentry_while_resting: true
         prefer_passive_below_edge_cents: 12
         block_scale_in_after_quick_exit_cut: true
       whipsaw:
@@ -841,6 +843,8 @@ eth:
           min_hold_seconds: 60
           cut_loss_min_hold_seconds: 60
         execution:
+          mirror_trial_entry_execution: true
+          block_reentry_while_resting: true
           prefer_passive_below_edge_cents: 12
           block_scale_in_after_quick_exit_cut: true
         whipsaw:

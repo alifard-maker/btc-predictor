@@ -40,8 +40,11 @@ from src.trading.bot_whipsaw_guard import (
 from src.trading.hourly_live_trial_align import (
   HourlyLiveTrialAlignConfig,
   apply_align_entry_pricing,
+  count_live_entry_slots_used,
   live_trial_align_active,
   merge_whipsaw_align_overrides,
+  pending_resting_enter_blocks_entry,
+  should_mirror_trial_entry_execution,
   should_use_trial_leg_exits,
 )
 from src.trading.bot_adaptive_calibration import (
@@ -1221,12 +1224,25 @@ class HourlyBot:
     entries_this_cycle = 0
     max_entries = estrat.max_entries_per_cycle if estrat.enabled else 1
 
+    max_slots = estrat.max_concurrent_positions if estrat.enabled else 99
+    slots_used = (
+      count_live_entry_slots_used(
+        self.store,
+        self.kalshi,
+        event_ticker,
+        open_pos,
+        cfg=cfg,
+        kind=self.kind,
+        mode=settings.mode,
+      )
+      if settings.mode == "live"
+      else len(open_pos)
+    )
+
     for _composite, _edge, _saf, pick, bet in ranked:
       if entries_this_cycle >= max_entries:
         break
-      if len(self.store.open_positions(event_ticker)) >= (
-        estrat.max_concurrent_positions if estrat.enabled else 99
-      ):
+      if slots_used >= max_slots:
         last_reason = "max_concurrent_positions"
         break
       if not bet_qualifies(pick, bet, settings):
@@ -1263,6 +1279,18 @@ class HourlyBot:
         continue
 
       existing_on_ticker = [p for p in open_pos if p["market_ticker"] == market_ticker]
+      pending_block = pending_resting_enter_blocks_entry(
+        self.store,
+        self.kalshi,
+        event_ticker,
+        market_ticker,
+        cfg=cfg,
+        kind=self.kind,
+        mode=settings.mode,
+      )
+      if pending_block:
+        last_reason = pending_block
+        continue
       allow_scale_in_ticker: str | None = None
       if existing_on_ticker:
         ok_scale, scale_reason = evaluate_scale_in(existing_on_ticker, pick, side, estrat)
@@ -1420,8 +1448,12 @@ class HourlyBot:
         live_resolved = resolve_live_entry_price(
           pick, side, pricing=pricing, estrat=estrat_entry
         )
+        mirror_exec = should_mirror_trial_entry_execution(
+          cfg, kind=self.kind, mode=settings.mode,
+        )
         if (
           live_resolved.get("execution_mode") == "cross_spread"
+          and not mirror_exec
           and not cross_spread_allowed_for_adaptive(adaptive, cfg)
         ):
           from dataclasses import replace as dc_replace
@@ -1540,6 +1572,19 @@ class HourlyBot:
       results.append(result)
       entries_this_cycle += 1
       open_pos = self.store.open_positions(event_ticker)
+      slots_used = (
+        count_live_entry_slots_used(
+          self.store,
+          self.kalshi,
+          event_ticker,
+          open_pos,
+          cfg=cfg,
+          kind=self.kind,
+          mode=settings.mode,
+        )
+        if settings.mode == "live"
+        else len(open_pos)
+      )
 
     if not results:
       if momentum_snap and momentum_snap.get("state"):
