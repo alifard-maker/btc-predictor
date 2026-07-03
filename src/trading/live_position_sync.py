@@ -451,7 +451,7 @@ def reconcile_close_stale_live_leg(
     contracts,
     period_key,
   )
-  return store.log_trade({
+  row = store.log_trade({
     "event_ticker": period_key,
     "trigger": "continuous",
     "action": "exit",
@@ -470,6 +470,18 @@ def reconcile_close_stale_live_leg(
     "detail": detail,
     "position_id": pos["id"],
   })
+  if allow_pnl and pos_mode == "live" and abs(pnl_rounded) >= 0.005:
+    from src.trading.bot_risk_gates import record_exit_and_maybe_cap
+
+    asset = str((cfg or {}).get("_asset") or "btc")
+    record_exit_and_maybe_cap(
+      pnl_rounded,
+      kind=kind,
+      asset=asset,
+      store=store,
+      cfg=cfg,
+    )
+  return row
 
 
 def purge_foreign_asset_open_positions(

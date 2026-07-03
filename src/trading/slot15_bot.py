@@ -406,8 +406,7 @@ class Slot15Bot:
 
       from src.trading.slot15_settlement import should_rollover_close_slot15_leg
 
-      actions.extend(
-        force_close_period_positions(
+      rollover_rows = force_close_period_positions(
           self.store,
           prev_period,
           exit_cents_for_position=_exit_cents,
@@ -418,7 +417,19 @@ class Slot15Bot:
             pos, prev_period, kalshi=self.kalshi,
           ),
         )
-      )
+      for row in rollover_rows:
+        if (
+          str(row.get("mode") or "") == "live"
+          and str(row.get("status") or "") in ("filled", "reconciled")
+        ):
+          record_exit_and_maybe_cap(
+            float(row.get("pnl_usd") or 0),
+            kind="slot15",
+            asset=self.asset,
+            store=self.store,
+            cfg=cfg,
+          )
+      actions.extend(rollover_rows)
       settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind="slot15")
 
     actions.extend(self._process_exits(tab, slot_key, settings, cfg=cfg))

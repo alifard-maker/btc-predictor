@@ -498,8 +498,7 @@ class HourlyBot:
           f"@ {exit_price}¢ (entry {entry_c}¢) — {note}{settle_line}"
         )
 
-      actions.extend(
-        force_close_period_positions(
+      rollover_rows = force_close_period_positions(
           self.store,
           prev_period,
           exit_cents_for_position=_exit_cents,
@@ -508,7 +507,19 @@ class HourlyBot:
           format_detail=_rollover_detail,
           should_close=lambda pos: should_rollover_close_hourly_leg(pos, prev_period),
         )
-      )
+      for row in rollover_rows:
+        if (
+          str(row.get("mode") or "") == "live"
+          and str(row.get("status") or "") in ("filled", "reconciled")
+        ):
+          record_exit_and_maybe_cap(
+            float(row.get("pnl_usd") or 0),
+            kind="hourly",
+            asset=self.asset,
+            store=self.store,
+            cfg=cfg,
+          )
+      actions.extend(rollover_rows)
       settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
 
     actions.extend(self._process_exits(tab, event_ticker, settings, cfg))

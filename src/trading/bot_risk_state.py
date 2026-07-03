@@ -165,6 +165,20 @@ class BotRiskCoordinator:
     self._save()
     log.info("Daily risk reset for %s (%s)", bot_key, self._date_key)
 
+  def sync_bot_realized_pnl(self, bot_key: str, realized_pnl_usd: float) -> dict[str, Any]:
+    """Set today's realized P&L from trade-log reconciliation (not incremental)."""
+    row = self._row(bot_key)
+    realized = round(float(realized_pnl_usd), 2)
+    row["realized_pnl_usd"] = realized
+    if row.get("cap_override"):
+      self._save()
+      return self.status_for_bot(bot_key)
+    cap = float(self.cfg.cap_usd)
+    capped = bool(self.cfg.enabled and cap > 0 and realized <= -abs(cap))
+    row["cap_active"] = capped
+    self._save()
+    return self.status_for_bot(bot_key)
+
   def status_for_bot(self, bot_key: str) -> dict[str, Any]:
     self._roll_day_if_needed()
     cap = float(self.cfg.cap_usd)

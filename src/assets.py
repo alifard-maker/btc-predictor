@@ -10,6 +10,17 @@ SUPPORTED_ASSETS = ("btc", "eth")
 DEFAULT_ASSET = "btc"
 
 
+def _deep_merge_dict(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+  """Merge overlay onto base; nested dicts are merged recursively."""
+  out = dict(base)
+  for key, value in overlay.items():
+    if key in out and isinstance(out[key], dict) and isinstance(value, dict):
+      out[key] = _deep_merge_dict(out[key], value)
+    else:
+      out[key] = value
+  return out
+
+
 def asset_enabled(base_cfg: dict[str, Any], asset: str) -> bool:
   asset = asset.lower()
   if asset == DEFAULT_ASSET:
@@ -49,7 +60,15 @@ def asset_cfg(base_cfg: dict[str, Any], asset: str) -> dict[str, Any]:
   cfg["price_feed"] = {**base_cfg.get("price_feed", {}), **block.get("price_feed", {})}
   cfg["kalshi"] = {**base_cfg.get("kalshi", {}), **block.get("kalshi", {})}
   cfg["daily"] = {**base_cfg.get("daily", {}), **block.get("daily", {})}
-  cfg["hourly"] = {**base_cfg.get("hourly", {}), **block.get("hourly", {})}
+  base_hourly = base_cfg.get("hourly") or {}
+  block_hourly = block.get("hourly") or {}
+  merged_hourly = {**base_hourly, **block_hourly}
+  if "bot" in base_hourly or "bot" in block_hourly:
+    merged_hourly["bot"] = _deep_merge_dict(
+      base_hourly.get("bot") or {},
+      block_hourly.get("bot") or {},
+    )
+  cfg["hourly"] = merged_hourly
   cfg["paths"]["db"] = str(Path(cfg["paths"]["logs"]) / "predictions.db")
   cfg["_asset"] = asset
   return cfg

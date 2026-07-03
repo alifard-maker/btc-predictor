@@ -128,6 +128,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
       log.warning("Phantom period-settlement cleanup skipped: %s", e)
     try:
+      from src.trading.bot_pnl_backfill import sync_daily_risk_from_trade_logs
+
+      risk_sync = sync_daily_risk_from_trade_logs(data_dir, cfg=_cfg)
+      if risk_sync.get("bots_adjusted"):
+        log.info("Daily risk reconciled from trade logs: %s", risk_sync)
+    except Exception as e:
+      log.warning("Daily risk trade-log sync skipped: %s", e)
+    try:
       snap = _loop.calibration.snapshot_stats(note="auto bootstrap")
       if snap.get("status") == "ok":
         log.info("Stats snapshot on startup: %s", snap)

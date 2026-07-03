@@ -156,6 +156,92 @@ def reconcile_daily_risk_deltas(
   return applied
 
 
+def today_live_exit_pnl_usd(
+  db_path: Path | str,
+  *,
+  timezone: str = "America/New_York",
+) -> float:
+  """Sum live exit P&L for the current calendar day in *timezone*."""
+  path = Path(db_path)
+  if not path.is_file():
+    return 0.0
+  try:
+    tz = ZoneInfo(timezone)
+  except Exception:
+    tz = ZoneInfo("America/New_York")
+  today = datetime.now(tz).date()
+  conn = sqlite3.connect(path)
+  try:
+    rows = conn.execute(
+      """
+      SELECT pnl_usd, created_at
+      FROM bot_trades
+      WHERE action = 'exit'
+        AND mode = 'live'
+        AND status IN ('filled', 'reconciled')
+        AND pnl_usd IS NOT NULL
+      """,
+    ).fetchall()
+  finally:
+    conn.close()
+  total = 0.0
+  for pnl_usd, created_at in rows:
+    if not _is_today_ny(str(created_at or ""), tz_name=timezone):
+      continue
+    total += float(pnl_usd or 0)
+  return round(total, 2)
+
+
+def sync_daily_risk_from_trade_logs(
+  data_dir: Path | str,
+  *,
+  cfg: dict[str, Any] | None = None,
+  dry_run: bool = False,
+) -> dict[str, Any]:
+  """
+  Reconcile bot_daily_risk.json with today's live exit P&L in each bot DB.
+
+  The daily risk file is incremental (updated on each exit). Historical bugs
+  (inverted NO P&L, phantom settlements) can leave it stale vs the trade log.
+  """
+  root = Path(data_dir)
+  dl_cfg = daily_loss_config_from_cfg(cfg)
+  coord = BotRiskCoordinator(root, dl_cfg)
+  per_bot: dict[str, Any] = {}
+  changed = 0
+  for db_path in bot_db_paths(root):
+    meta = _parse_db_meta(db_path)
+    if not meta:
+      continue
+    kind, asset = meta
+    bot_key = bot_risk_key(kind, asset)
+    computed = today_live_exit_pnl_usd(db_path, timezone=dl_cfg.timezone)
+    before = coord.status_for_bot(bot_key)
+    before_pnl = float(before.get("realized_pnl_usd") or 0)
+    delta = round(computed - before_pnl, 2)
+    per_bot[bot_key] = {
+      "db_path": str(db_path),
+      "computed_pnl_usd": computed,
+      "before_pnl_usd": before_pnl,
+      "delta_usd": delta,
+    }
+    if abs(delta) < _PNL_TOL:
+      continue
+    changed += 1
+    if not dry_run:
+      coord.sync_bot_realized_pnl(bot_key, computed)
+      per_bot[bot_key]["after_pnl_usd"] = computed
+  return {
+    "data_dir": str(root),
+    "date_key": coord._date_key,
+    "timezone": dl_cfg.timezone,
+    "bots_checked": len(per_bot),
+    "bots_adjusted": changed,
+    "per_bot": per_bot,
+    "dry_run": dry_run,
+  }
+
+
 def backfill_bot_db(
   db_path: Path | str,
   *,

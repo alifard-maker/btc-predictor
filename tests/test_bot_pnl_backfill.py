@@ -11,8 +11,11 @@ from src.trading.bot_pnl_backfill import (
   backfill_bot_db,
   correct_no_exit_pnl_usd,
   is_inverted_no_exit,
+  sync_daily_risk_from_trade_logs,
+  today_live_exit_pnl_usd,
   wrong_no_exit_pnl_usd,
 )
+from src.trading.bot_risk_state import BotRiskCoordinator, DailyLossConfig, bot_risk_key
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 from src.trading.paper_bankroll import apply_paper_exit_pnl, get_paper_state, reset_paper_bankroll
 
@@ -24,6 +27,7 @@ def _insert_no_exit(
   exit_cents: int,
   contracts: int,
   pnl_usd: float,
+  mode: str = "paper",
 ) -> None:
   now = datetime.now(timezone.utc).isoformat()
   with store._connect() as conn:
@@ -42,7 +46,7 @@ def _insert_no_exit(
         "KXTEST-1H",
         "continuous",
         "exit",
-        "paper",
+        mode,
         "MKT-1",
         "no",
         contracts,
@@ -140,3 +144,31 @@ def test_backfill_corrects_pnl_and_paper_bankroll_idempotent():
     second = backfill_bot_db(db_path, dry_run=False, data_dir=Path(tmp))
     assert second["fixed"] == 0
     assert second["paper_pnl_delta_usd"] == 0.0
+
+
+def test_sync_daily_risk_from_trade_logs_overwrites_stale_counter():
+  with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    db_path = root / "logs" / "hourly_bot_btc.db"
+    db_path.parent.mkdir(parents=True)
+    store = HourlyBotStore(db_path)
+    _insert_no_exit(
+      store,
+      entry_cents=80,
+      exit_cents=68,
+      contracts=4,
+      pnl_usd=-0.48,
+      mode="live",
+    )
+    assert today_live_exit_pnl_usd(db_path) == -0.48
+
+    coord = BotRiskCoordinator(root, DailyLossConfig())
+    key = bot_risk_key("hourly", "btc")
+    coord.record_exit_pnl(key, 4.32)
+    coord.record_exit_pnl(key, 4.32)
+    assert coord.status_for_bot(key)["realized_pnl_usd"] == 8.64
+
+    stats = sync_daily_risk_from_trade_logs(root)
+    assert stats["bots_adjusted"] == 1
+    reloaded = BotRiskCoordinator(root, DailyLossConfig())
+    assert reloaded.status_for_bot(key)["realized_pnl_usd"] == -0.48

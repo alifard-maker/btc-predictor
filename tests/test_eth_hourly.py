@@ -40,6 +40,14 @@ def test_asset_cfg_btc_unchanged(base_cfg):
   assert index_id_for_cfg(btc) == "BRTI"
 
 
+def test_asset_cfg_eth_inherits_hour_momentum_from_btc(base_cfg):
+  eth = asset_cfg(base_cfg, "eth")
+  hm = ((eth.get("hourly") or {}).get("bot") or {}).get("hour_momentum") or {}
+  assert hm.get("enabled") is True
+  assert eth["hourly"]["bot"].get("mirror_btc_settings") is True
+  assert eth["hourly"]["bot"].get("experiment_start_at")
+
+
 def test_kalshi_daily_hourly_frequency_for_eth_series():
   cfg = {
     "kalshi": {"enabled": False},
