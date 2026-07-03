@@ -3362,6 +3362,16 @@
       }
     }
 
+    function botHourMomentumBrief(state) {
+      const labels = {
+        conservative: 'conservative hour (losing/choppy — tighter entries)',
+        normal: 'normal hour momentum',
+        pressing: 'pressing hour (winning — more entries allowed)',
+        locked: 'hour profit locked (no new entries)',
+      };
+      return labels[state] || state.replace(/_/g, ' ');
+    }
+
     function botSkipReasonBrief(raw) {
       if (!raw) return '';
       if (raw.startsWith('hour_momentum:')) {
@@ -3370,15 +3380,15 @@
         if (colon > 0) {
           const state = rest.slice(0, colon);
           const innerBrief = botSkipReasonBrief(rest.slice(colon + 1));
-          const stateBrief = state.replace(/_/g, ' ');
+          const stateBrief = botHourMomentumBrief(state);
           return innerBrief ? `${stateBrief} · ${innerBrief}` : stateBrief;
         }
       }
-      if (raw.startsWith('already_open:')) return 'already open on this contract';
+      if (raw.startsWith('already_open:')) return 'already holding this contract (no add-to)';
       if (raw.startsWith('ask_edge_too_low:')) return `ask-edge thin (${raw.slice('ask_edge_too_low:'.length)})`;
       if (raw.startsWith('reentry_cooldown:')) return 're-entry cooldown';
       if (raw.startsWith('cheap_leg_cut_cooldown:')) return 'cheap leg cut cooldown';
-      if (raw.startsWith('scale_in_not_winner:')) return 'scale-in blocked (not winning)';
+      if (raw.startsWith('scale_in_not_winner:')) return 'already open — leg not winning enough to add';
       if (raw === 'scale_in_max_legs') return 'scale-in max legs reached';
       if (raw === 'scale_in_side_mismatch') return 'scale-in side mismatch';
       if (raw.startsWith('scale_in_edge_not_improved:')) return 'scale-in needs better ask edge';
@@ -3398,6 +3408,27 @@
       return labels[raw] || raw.split(':')[0].replace(/_/g, ' ');
     }
 
+    function botSignalFilterNote(periodLabel, freeMode, blocked) {
+      if (periodLabel === 'hour') {
+        if (freeMode) {
+          return blocked
+            ? 'Signal filter: FREE (STRONG/ACTIONABLE off). Budget, hour momentum, inventory, and open-leg rules still apply.'
+            : 'Signal filter: FREE — will enter on any BUY YES/NO passing book + ask-edge. Budget and other guards still apply.';
+        }
+        return blocked
+          ? 'Signal filter: STRONG/ACTIONABLE required. Regime, budget, and other guards also apply.'
+          : 'Signal filter: STRONG/ACTIONABLE — enters when signal, regime, and book pass.';
+      }
+      if (freeMode) {
+        return blocked
+          ? 'Signal filter: FREE (STRONG/ACTIONABLE off). Budget, slot rules, and inventory still apply.'
+          : 'Signal filter: FREE — will enter on LONG/SHORT + late/flip when checks pass.';
+      }
+      return blocked
+        ? 'Signal filter: STRONG/ACTIONABLE required. Other guards still apply.'
+        : 'Signal filter: STRONG/ACTIONABLE applies.';
+    }
+
     function botEntryWatchHtml(bot, periodLabel, freeMode) {
       const w = bot.entry_watch;
       if (!w) return '';
@@ -3407,22 +3438,27 @@
       const deployLine = bot.remaining_usd != null
         ? ` · <strong>$${Number(bot.remaining_usd).toFixed(2)}</strong> deployable`
         : '';
-      const skipBrief = bot.last_skip_reason
-        ? ` · skip: ${botSkipReasonBrief(bot.last_skip_reason)}`
-        : '';
+      const skipRaw = bot.last_skip_reason || '';
+      const skipBrief = skipRaw ? botSkipReasonBrief(skipRaw) : '';
+      const blocked = !!skipRaw;
+      const filterNote = botSignalFilterNote(periodLabel, freeMode, blocked);
+      const boxStyle = 'font-size:.68rem;margin:.2rem 0 .35rem;padding:.45rem .55rem;border-radius:6px';
+      const blockedStyle = `${boxStyle};background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.22)`;
+      const watchStyle = `${boxStyle};background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.12)`;
       if (periodLabel === 'hour') {
         const sig = w.signal || '—';
         const label = w.label ? ` · ${w.label}` : '';
         let regime = '';
         if (w.regime_allow_trade === false) {
           regime = freeMode
-            ? ' · live regime <span class="muted">(advisory only in FREE mode)</span>'
+            ? ' · regime <span class="muted">(advisory — ignored in FREE mode)</span>'
             : ' · <span class="down">regime blocked</span>';
         }
-        const modeNote = freeMode
-          ? 'FREE mode: enters on any BUY YES/NO passing book + ask-edge (regime ignored).'
-          : 'Enters on STRONG/ACTIONABLE when signal + regime + book pass.';
-        return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${label}${regime}${slotsLine}${deployLine}${skipBrief}<br><span style="opacity:.9">${modeNote}</span></p>`;
+        const tabLine = `${sig}${label}${regime}${slotsLine}${deployLine}`;
+        if (blocked) {
+          return `<p class="muted" style="${blockedStyle}"><strong>Not entering this cycle:</strong> ${skipBrief}<br><span style="opacity:.88">Tab signal: ${tabLine}</span><br><span style="opacity:.72;font-size:.62rem">${filterNote}</span></p>`;
+        }
+        return `<p class="muted" style="${watchStyle}"><strong>Watching for entry:</strong> ${tabLine}<br><span style="opacity:.72;font-size:.62rem">${filterNote}</span></p>`;
       }
       const sig = w.signal || '—';
       const model = w.model_signal && w.model_signal !== sig ? ` (model ${w.model_signal})` : '';
@@ -3433,14 +3469,24 @@
       const attemptLine = attempt && attempt.skip_reason
         ? ` · last try: ${attempt.skip_reason}${attempt.bid_cents != null ? ` (bid ${attempt.bid_cents}¢ ask ${attempt.ask_cents}¢ spread ${attempt.spread_cents}¢)` : ''}`
         : '';
-      const modeNote = freeMode
-        ? 'FREE mode: LONG/SHORT + late/flip (no STRONG/ACTIONABLE gate).'
-        : 'STRONG/ACTIONABLE filters apply.';
-      return `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;padding:.4rem .55rem;background:rgba(59,130,246,.08);border-radius:6px"><strong>Watching:</strong> ${sig}${model}${prob}${late}${flip}${attemptLine}${slotsLine}${deployLine}${skipBrief}<br><span style="opacity:.9">${modeNote}</span></p>`;
+      const tabLine = `${sig}${model}${prob}${late}${flip}${attemptLine}${slotsLine}${deployLine}`;
+      if (blocked) {
+        return `<p class="muted" style="${blockedStyle}"><strong>Not entering this cycle:</strong> ${skipBrief}<br><span style="opacity:.88">Tab signal: ${tabLine}</span><br><span style="opacity:.72;font-size:.62rem">${filterNote}</span></p>`;
+      }
+      return `<p class="muted" style="${watchStyle}"><strong>Watching for entry:</strong> ${tabLine}<br><span style="opacity:.72;font-size:.62rem">${filterNote}</span></p>`;
     }
 
     function botSkipReasonLabel(raw) {
       if (!raw) return '';
+      if (raw.startsWith('hour_momentum:')) {
+        const rest = raw.slice('hour_momentum:'.length);
+        const colon = rest.indexOf(':');
+        if (colon > 0) {
+          const state = rest.slice(0, colon);
+          const inner = botSkipReasonLabel(rest.slice(colon + 1));
+          return `${botHourMomentumBrief(state).replace(/^./, (c) => c.toUpperCase())}. ${inner}`;
+        }
+      }
       const labels = {
         daily_loss_cap: 'Daily loss cap hit for this bot — new entries paused until tomorrow (ET). Use Resume entries today to override.',
         settlement_index_unavailable: 'Live entries blocked — settlement index (BRTI/ERTI) unavailable. Check Kalshi API keys on Railway.',
@@ -3480,7 +3526,7 @@
       if (raw.startsWith('already_open:')) return `Already holding open position on ${raw.slice('already_open:'.length)} — one position per contract (no add-to). Exit first to re-enter at a new price.`;
       if (raw.startsWith('scale_in_not_winner:')) {
         const upnl = raw.slice('scale_in_not_winner:'.length);
-        return `Scale-in blocked — combined unrealized P&L $${upnl} below minimum (only add to winners).`;
+        return `Already holding this contract — combined unrealized P&L $${upnl} is below the minimum to add another leg (only add to winners).`;
       }
       if (raw.startsWith('scale_in_edge_not_improved:')) {
         const edge = raw.slice('scale_in_edge_not_improved:'.length);
@@ -4188,7 +4234,6 @@
       });
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'slot', 'slot15', asset);
-      const skipHtml = botSkipReasonHtml(bot);
       const settlementIndexHtml = settlementIndexWarningHtml(bot);
       const watchHtml = botEntryWatchHtml(bot, 'slot', freeMode);
       const serverBanner = botServerBanner(bot, s);
@@ -4209,7 +4254,6 @@
         ${settlementIndexHtml}
         ${autoStopHtml}
         ${watchHtml}
-        ${skipHtml}
         ${reconcileHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · <strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}</strong> P&amp;L for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
         <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
@@ -4396,7 +4440,6 @@
       });
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'hour', kind, asset);
-      const skipHtml = botSkipReasonHtml(bot);
       const settlementIndexHtml = settlementIndexWarningHtml(bot);
       const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode);
       const serverBanner = botServerBanner(bot, s);
@@ -4418,7 +4461,6 @@
         ${settlementIndexHtml}
         ${autoStopHtml}
         ${watchHtml}
-        ${skipHtml}
         ${reconcileHtml}
         ${kalshiSyncHtml}
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>${assetLabel}</strong> · <strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}</strong> P&amp;L for hour <strong>${hourId}</strong> only (resets each new Kalshi hour). Trade log keeps all hours.</p>
