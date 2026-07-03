@@ -24,6 +24,7 @@ class HourlyBotSettings:
   take_profit_mode: str = "hybrid"  # fixed | adaptive | trailing | hybrid
   take_profit_pct: float = 0.25
   take_profit_usd: float = 0.0
+  take_profit_either_threshold: bool = False
   trail_arm_profit_pct: float = 0.08
   trail_giveback_pct: float = 0.35
   trail_arm_profit_usd: float = 0.50

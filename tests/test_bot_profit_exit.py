@@ -58,6 +58,40 @@ def test_should_take_profit_target_requires_min_usd_when_set():
   )
 
 
+def test_should_take_profit_target_quick_exit_usd_or_pct():
+  """Micro-scalp: $0.08 on $1.50 leg hits $0.06 before 12% pct."""
+  assert should_take_profit_target(
+    enabled=True,
+    unrealized_usd=0.08,
+    cost_usd=1.50,
+    take_profit_pct=0.12,
+    take_profit_usd=0.06,
+    min_hold_seconds=0,
+    hold_seconds=60.0,
+    profit_threshold_either=True,
+  )
+  assert not should_take_profit_target(
+    enabled=True,
+    unrealized_usd=0.08,
+    cost_usd=1.50,
+    take_profit_pct=0.12,
+    take_profit_usd=0.06,
+    min_hold_seconds=0,
+    hold_seconds=60.0,
+    profit_threshold_either=False,
+  )
+  assert should_take_profit_target(
+    enabled=True,
+    unrealized_usd=0.20,
+    cost_usd=1.50,
+    take_profit_pct=0.12,
+    take_profit_usd=0.06,
+    min_hold_seconds=0,
+    hold_seconds=60.0,
+    profit_threshold_either=True,
+  )
+
+
 def test_profit_pct():
   assert profit_pct(2.5, 10.0) == 0.25
 

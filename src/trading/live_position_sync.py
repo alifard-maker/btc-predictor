@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from src.trading.bot_position_mode import normalize_position_mode
@@ -1109,6 +1110,38 @@ def _cancel_pending_resting_exit(kalshi: Any, store: Any, position_id: str) -> s
   return pending_oid
 
 
+def _invalidate_kalshi_position_cache(kalshi: Any, *, ticker: str) -> None:
+  invalidate = getattr(kalshi, "invalidate_position_cache", None)
+  if callable(invalidate):
+    invalidate(ticker=ticker)
+
+
+def _sellable_after_exit_attempt(
+  kalshi: Any,
+  *,
+  ticker: str,
+  side: str,
+  sellable_before: float | None,
+  claimed_fill: int,
+) -> float | None:
+  """Poll fresh Kalshi inventory after an exit order (cache may lag API fills)."""
+  sellable_after: float | None = None
+  polls = 4 if claimed_fill > 0 else 1
+  for attempt in range(polls):
+    _invalidate_kalshi_position_cache(kalshi, ticker=ticker)
+    sellable_after = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
+    if verify_kalshi_exit_fill(
+      sellable_before=sellable_before,
+      sellable_after=sellable_after,
+      claimed_fill=claimed_fill,
+    ) > 0:
+      return sellable_after
+    if claimed_fill <= 0 or attempt >= polls - 1:
+      return sellable_after
+    time.sleep(0.25)
+  return sellable_after
+
+
 def _attempt_live_exit_sell(
   kalshi: Any,
   *,
@@ -1117,6 +1150,7 @@ def _attempt_live_exit_sell(
   sell_int: int,
   sell_cents: int,
   time_in_force: str,
+  sellable_before: float | None = None,
 ) -> dict[str, Any]:
   """Place one live exit sell and refresh sellable inventory for verification."""
   exit_result = place_live_exit_sell(
@@ -1127,7 +1161,14 @@ def _attempt_live_exit_sell(
     limit_cents=sell_cents,
     time_in_force=time_in_force,
   )
-  sellable_after = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
+  claimed_fill = int(exit_result.get("fill_count") or 0)
+  sellable_after = _sellable_after_exit_attempt(
+    kalshi,
+    ticker=ticker,
+    side=side,
+    sellable_before=sellable_before,
+    claimed_fill=claimed_fill,
+  )
   return {**exit_result, "sellable_after": sellable_after}
 
 
@@ -1237,7 +1278,7 @@ def try_live_position_exit(
     return None
 
   cancel_resting_orders_for_ticker(kalshi, ticker)
-  sell_cents = aggressive_exit_limit_cents(int(exit_price))
+  sell_cents = aggressive_exit_limit_cents(int(exit_price), haircut=4)
   sell_int = max(1, int(sell_count)) if sell_count >= 0.99 else 0
   if sell_int <= 0:
     return None
@@ -1249,6 +1290,7 @@ def try_live_position_exit(
     sell_int=sell_int,
     sell_cents=sell_cents,
     time_in_force="immediate_or_cancel",
+    sellable_before=sellable_before,
   )
   live_exit_oid = attempt.get("order_id")
   claimed_fill = int(attempt.get("fill_count") or 0)
@@ -1282,6 +1324,7 @@ def try_live_position_exit(
         sell_int=sell_int,
         sell_cents=1,
         time_in_force="fill_or_kill",
+        sellable_before=sellable_before,
       )
       live_exit_oid = retry.get("order_id") or live_exit_oid
       claimed_fill = int(retry.get("fill_count") or 0)

@@ -386,6 +386,14 @@ class KalshiClient:
         log.warning("Cancel resting order %s on %s failed: %s", oid, ticker, e)
     return cancelled
 
+  def invalidate_position_cache(self, *, ticker: str | None = None) -> None:
+    """Drop cached portfolio positions so post-order reads see fresh inventory."""
+    self._positions_cache = None
+    if ticker:
+      self._position_by_ticker_cache.pop(str(ticker), None)
+    else:
+      self._position_by_ticker_cache.clear()
+
   def get_market_position(self, ticker: str, *, critical: bool = False) -> float | None:
     """Net YES position for one market (negative = NO). None on API error."""
     if not self.authenticated:

@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.live_position_sync import (
   adopt_filled_resting_enters,
@@ -24,6 +26,11 @@ from src.trading.live_position_sync import (
   try_live_position_exit,
   verify_kalshi_exit_fill,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_exit_inventory_poll_sleep(monkeypatch):
+  monkeypatch.setattr("src.trading.live_position_sync.time.sleep", lambda _s: None)
 
 
 def test_kalshi_sellable_contracts_yes_and_no():
@@ -572,7 +579,7 @@ def test_try_live_position_exit_retries_unverified_fill_with_floor_sell():
     })
     kalshi = MagicMock()
     kalshi.authenticated = True
-    kalshi.get_market_position.side_effect = [-2, -2, -2, 0]
+    kalshi.get_market_position.side_effect = [-2] + [-2] * 8 + [0]
     kalshi.list_resting_orders.return_value = []
     kalshi.create_order.side_effect = [
       {"order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0}},
@@ -598,6 +605,45 @@ def test_try_live_position_exit_retries_unverified_fill_with_floor_sell():
     retry_kwargs = kalshi.create_order.call_args_list[1].kwargs
     assert retry_kwargs["no_price"] == 1
     assert retry_kwargs["time_in_force"] == "fill_or_kill"
+
+
+def test_try_live_position_exit_verifies_fill_after_stale_inventory_cache():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.open_position({
+      "id": "p1",
+      "event_ticker": "EV1",
+      "market_ticker": "T1",
+      "side": "no",
+      "contracts": 2,
+      "entry_price_cents": 36,
+      "cost_usd": 0.72,
+      "mode": "live",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.side_effect = [-2, -2, 0]
+    kalshi.list_resting_orders.return_value = []
+    kalshi.create_order.return_value = {
+      "order": {"order_id": "sell-1", "fill_count": 2, "remaining_count": 0},
+    }
+    out = try_live_position_exit(
+      kalshi=kalshi,
+      store=store,
+      pos=store.open_positions("EV1")[0],
+      period_key="EV1",
+      exit_price=44,
+      contracts=2,
+      entry_c=36,
+      pos_mode="live",
+      pick={"signal": "BUY NO"},
+      exit_reason="PROFIT TARGET",
+      detail_suffix="test",
+      extra_detail="",
+    )
+    assert out is not None
+    assert out["fill_count"] == 2
+    assert kalshi.create_order.call_count == 1
 
 
 def test_try_live_position_exit_cancels_stale_resting_exit_when_inventory_held():

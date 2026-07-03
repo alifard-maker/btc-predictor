@@ -12,6 +12,7 @@ class ProfitExitSettings(Protocol):
   take_profit_mode: str
   take_profit_pct: float
   take_profit_usd: float
+  take_profit_either_threshold: bool
   min_hold_seconds: int
   trail_arm_profit_pct: float
   trail_giveback_pct: float
@@ -104,8 +105,13 @@ def should_take_profit_target(
   take_profit_usd: float,
   min_hold_seconds: int,
   hold_seconds: float | None,
+  profit_threshold_either: bool = False,
 ) -> bool:
-  """True when unrealized gain meets configured % and optional $ thresholds."""
+  """True when unrealized gain meets configured % and optional $ thresholds.
+
+  Default (AND): both pct and min-$ must be met when take_profit_usd > 0.
+  quick_exit (OR): fire when either pct or min-$ is met (micro-scalp).
+  """
   if not enabled or unrealized_usd is None:
     return False
   if unrealized_usd <= 0:
@@ -113,9 +119,17 @@ def should_take_profit_target(
   if not _hold_time_ok(min_hold_seconds, hold_seconds):
     return False
   pct = profit_pct(unrealized_usd, cost_usd)
-  if pct < take_profit_pct:
+  pct_ok = pct >= take_profit_pct
+  usd_ok = take_profit_usd <= 0 or unrealized_usd >= take_profit_usd
+  if profit_threshold_either:
+    if take_profit_pct <= 0:
+      return usd_ok
+    if take_profit_usd <= 0:
+      return pct_ok
+    return pct_ok or usd_ok
+  if not pct_ok:
     return False
-  if take_profit_usd > 0 and unrealized_usd < take_profit_usd:
+  if take_profit_usd > 0 and not usd_ok:
     return False
   return True
 
@@ -242,6 +256,9 @@ def evaluate_adaptive_profit_exit(
       take_profit_usd=float(settings.take_profit_usd),
       min_hold_seconds=settings.min_hold_seconds,
       hold_seconds=hold_seconds,
+      profit_threshold_either=bool(
+        getattr(settings, "take_profit_either_threshold", False)
+      ),
     ):
       if mode == "fixed":
         detail = profit_target_detail(unrealized_usd, cost_usd)

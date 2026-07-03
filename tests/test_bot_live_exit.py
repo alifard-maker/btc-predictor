@@ -204,6 +204,7 @@ def test_overlay_live_profit_settings_quick_exit_in_defense():
   assert out.min_hold_seconds == 30
   assert out.take_profit_pct == 0.12
   assert out.take_profit_usd == 0.06
+  assert out.take_profit_either_threshold is True
 
 
 def test_allow_live_cut_loss_quick_exit_lowers_thresholds():

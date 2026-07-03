@@ -499,6 +499,7 @@ def overlay_live_profit_settings(
     qcfg = quick_exit_config(cfg, kind=kind)
     kw["take_profit_pct"] = float(qcfg.take_profit_pct)
     kw["take_profit_usd"] = float(qcfg.take_profit_usd)
+    kw["take_profit_either_threshold"] = True
 
   if mode == "live":
     base_tp = float(kw.get("take_profit_usd", getattr(settings, "take_profit_usd", 0.0)))
