@@ -234,3 +234,23 @@ def init_bot_risk_coordinator(cfg: dict[str, Any], data_dir: Path) -> BotRiskCoo
 
 def get_bot_risk_coordinator() -> BotRiskCoordinator | None:
   return _COORDINATOR
+
+
+def coordinator_for_data_dir(
+  data_dir: Path | str,
+  cfg: dict[str, Any] | None = None,
+) -> BotRiskCoordinator:
+  """Use the process singleton when its data_dir matches; else a standalone instance."""
+  root = Path(data_dir).resolve()
+  coord = _COORDINATOR
+  if coord is not None and Path(coord.data_dir).resolve() == root:
+    return coord
+  return BotRiskCoordinator(root, daily_loss_config_from_cfg(cfg))
+
+
+def reload_bot_risk_coordinator() -> BotRiskCoordinator | None:
+  """Re-read bot_daily_risk.json into the in-memory singleton (e.g. after external sync)."""
+  if _COORDINATOR is None:
+    return None
+  _COORDINATOR._load()
+  return _COORDINATOR

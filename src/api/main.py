@@ -2020,11 +2020,22 @@ def backfill_late(_: None = Depends(_verify_admin)):
 @app.post("/api/admin/backfill-bot-pnl")
 def backfill_bot_pnl(_: None = Depends(_verify_admin)):
   """Recompute inverted historical NO exit P&L in bot trade databases."""
-  from src.trading.bot_pnl_backfill import backfill_all_bot_dbs
+  from src.trading.bot_pnl_backfill import backfill_all_bot_dbs, sync_daily_risk_from_trade_logs
 
   data_dir = Path(_cfg["paths"]["logs"]).parent
   stats = backfill_all_bot_dbs(data_dir, dry_run=False, cfg=_cfg)
-  return {"status": "ok", **stats}
+  risk_sync = sync_daily_risk_from_trade_logs(data_dir, cfg=_cfg)
+  return {"status": "ok", **stats, "daily_risk_sync": risk_sync}
+
+
+@app.post("/api/admin/sync-daily-risk")
+def admin_sync_daily_risk(_: None = Depends(_verify_admin)):
+  """Reconcile bot_daily_risk.json with today's live exit P&L from trade logs."""
+  from src.trading.bot_pnl_backfill import sync_daily_risk_from_trade_logs
+
+  data_dir = Path(_cfg["paths"]["logs"]).parent
+  risk_sync = sync_daily_risk_from_trade_logs(data_dir, cfg=_cfg)
+  return {"status": "ok", **risk_sync}
 
 
 @app.post("/api/admin/backfill-rollover-settlement")

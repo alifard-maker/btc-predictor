@@ -45,7 +45,7 @@ class PredictionLoop:
     from src.trading.bot_risk_state import init_bot_risk_coordinator
     from src.trading.kalshi_circuit import init_circuit_breaker
 
-    data_dir = Path(os.getenv("DATA_DIR", self.cfg.get("paths", {}).get("data", "data")))
+    data_dir = Path(os.getenv("DATA_DIR", str(Path(self.cfg["paths"]["logs"]).parent)))
     init_circuit_breaker(self.cfg, data_dir)
     init_bot_risk_coordinator(self.cfg, data_dir)
 

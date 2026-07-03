@@ -15,7 +15,13 @@ from src.trading.bot_pnl_backfill import (
   today_live_exit_pnl_usd,
   wrong_no_exit_pnl_usd,
 )
-from src.trading.bot_risk_state import BotRiskCoordinator, DailyLossConfig, bot_risk_key
+from src.trading.bot_risk_state import (
+  BotRiskCoordinator,
+  DailyLossConfig,
+  bot_risk_key,
+  coordinator_for_data_dir,
+  init_bot_risk_coordinator,
+)
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 from src.trading.paper_bankroll import apply_paper_exit_pnl, get_paper_state, reset_paper_bankroll
 
@@ -172,3 +178,47 @@ def test_sync_daily_risk_from_trade_logs_overwrites_stale_counter():
     assert stats["bots_adjusted"] == 1
     reloaded = BotRiskCoordinator(root, DailyLossConfig())
     assert reloaded.status_for_bot(key)["realized_pnl_usd"] == -0.48
+
+
+def test_sync_daily_risk_updates_singleton_coordinator():
+  import src.trading.bot_risk_state as brs
+
+  with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    db_path = root / "logs" / "hourly_bot_btc.db"
+    db_path.parent.mkdir(parents=True)
+    store = HourlyBotStore(db_path)
+    _insert_no_exit(
+      store,
+      entry_cents=80,
+      exit_cents=68,
+      contracts=4,
+      pnl_usd=-0.48,
+      mode="live",
+    )
+
+    key = bot_risk_key("hourly", "btc")
+    init_bot_risk_coordinator({}, root)
+    coord = brs.get_bot_risk_coordinator()
+    assert coord is not None
+    coord.record_exit_pnl(key, 4.32)
+    coord.record_exit_pnl(key, 4.32)
+    assert coord.status_for_bot(key)["realized_pnl_usd"] == 8.64
+
+    stats = sync_daily_risk_from_trade_logs(root)
+    assert stats["bots_adjusted"] == 1
+    assert brs.get_bot_risk_coordinator() is coord
+    assert coord.status_for_bot(key)["realized_pnl_usd"] == -0.48
+
+
+def test_coordinator_for_data_dir_prefers_singleton():
+  import src.trading.bot_risk_state as brs
+
+  with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    init_bot_risk_coordinator({}, root)
+    singleton = brs.get_bot_risk_coordinator()
+    picked = coordinator_for_data_dir(root)
+    assert picked is singleton
+    other = coordinator_for_data_dir(root / "other")
+    assert other is not singleton

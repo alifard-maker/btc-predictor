@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.trading.bot_risk_state import BotRiskCoordinator, bot_risk_key, daily_loss_config_from_cfg
+from src.trading.bot_risk_state import (
+  BotRiskCoordinator,
+  bot_risk_key,
+  coordinator_for_data_dir,
+  daily_loss_config_from_cfg,
+)
 from src.trading.paper_bankroll import apply_paper_exit_pnl, get_paper_state, migrate_paper_state
 from src.trading.paper_execution import leg_pnl_usd
 
@@ -146,7 +151,7 @@ def reconcile_daily_risk_deltas(
   if not deltas_by_bot:
     return {}
   applied: dict[str, float] = {}
-  coord = BotRiskCoordinator(Path(data_dir), daily_loss_config_from_cfg(cfg))
+  coord = coordinator_for_data_dir(Path(data_dir), cfg)
   for bot_key, delta in sorted(deltas_by_bot.items()):
     if abs(delta) < _PNL_TOL:
       continue
@@ -206,7 +211,7 @@ def sync_daily_risk_from_trade_logs(
   """
   root = Path(data_dir)
   dl_cfg = daily_loss_config_from_cfg(cfg)
-  coord = BotRiskCoordinator(root, dl_cfg)
+  coord = coordinator_for_data_dir(root, cfg)
   per_bot: dict[str, Any] = {}
   changed = 0
   for db_path in bot_db_paths(root):
