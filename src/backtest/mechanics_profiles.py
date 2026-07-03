@@ -81,7 +81,7 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     live_entry["cross_spread_enabled"] = True
     live_entry["cross_spread_min_edge_cents"] = 12.0
     live_exit["max_resting_enters_per_hour"] = 999
-    live_exit["max_adopted_contracts"] = 6
+    live_exit["max_orphan_adopted_contracts"] = 6
     live_exit["adopted_leg_cut_loss_min_hold_seconds"] = 90
     live_exit["adopted_leg_cut_loss_min_usd"] = 0.20
     return c
@@ -91,7 +91,7 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     live_adaptive["enabled"] = False
     live_entry["cross_spread_enabled"] = True
     live_exit.setdefault("max_resting_enters_per_hour", 6)
-    live_exit.setdefault("max_adopted_contracts", 6)
+    live_exit.setdefault("max_orphan_adopted_contracts", 6)
     return c
 
   if profile == "rally_only":

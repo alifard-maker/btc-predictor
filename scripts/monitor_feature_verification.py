@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Poll production for quick_exit, exit verification, inventory sync, and rule health."""
+"""Poll production for quick_exit, exit verification, inventory sync, and rule health.
+
+Cron example (30 min production verification after deploy):
+  MONITOR_MAX_MIN=30 MONITOR_TARGET_VERSION=4.0.40 python scripts/monitor_feature_verification.py
+"""
 
 from __future__ import annotations
 
@@ -20,8 +24,9 @@ BASE = os.environ.get(
   "https://btc-predictor-production-f460.up.railway.app",
 )
 POLL_SEC = float(os.environ.get("MONITOR_POLL_SEC", "150"))  # 2.5 min
-MAX_MINUTES = float(os.environ.get("MONITOR_MAX_MIN", "40"))
-TARGET_VERSION = os.environ.get("MONITOR_TARGET_VERSION", "4.0.39")
+DEFAULT_MAX_MINUTES = float(os.environ.get("MONITOR_MAX_MIN", "30"))
+MAX_MINUTES = DEFAULT_MAX_MINUTES
+TARGET_VERSION = os.environ.get("MONITOR_TARGET_VERSION", "4.0.40")
 LOG_PATH = Path(os.environ.get("MONITOR_LOG", "/tmp/btc_monitor_verification.jsonl"))
 ASSETS = tuple(
   a.strip()
@@ -85,6 +90,7 @@ class MismatchIncident:
   kalshi_contracts: float
   delta: float
   kind: str
+  entry_source: str | None = None
 
 
 @dataclass
@@ -95,6 +101,7 @@ class MonitorState:
   exit_verification: FeatureStatus = field(default_factory=FeatureStatus)
   soft_rally: FeatureStatus = field(default_factory=FeatureStatus)
   inventory_sync: FeatureStatus = field(default_factory=FeatureStatus)
+  resting_adopt_sync: FeatureStatus = field(default_factory=FeatureStatus)
   rule_conflicts: FeatureStatus = field(default_factory=FeatureStatus)
   mismatches: list[MismatchIncident] = field(default_factory=list)
   quick_exit_exits: list[str] = field(default_factory=list)
@@ -213,6 +220,54 @@ def _soft_rally_entry_ok(trade: dict) -> bool:
   return True
 
 
+def _check_resting_adopt_mismatches(
+  ts: str,
+  asset: str,
+  bot: dict[str, Any],
+  recon: dict[str, Any],
+) -> list[MismatchIncident]:
+  """Alert when resting-adopted legs track fewer contracts than Kalshi inventory."""
+  out: list[MismatchIncident] = []
+  kalshi_by_key: dict[tuple[str, str], float] = {}
+  for row in (recon.get("matched") or []) + (recon.get("mismatches") or []):
+    ticker = str(row.get("ticker") or "")
+    side = str(row.get("side") or "").lower()
+    kalshi_ct = row.get("kalshi_contracts")
+    if ticker and side and kalshi_ct is not None:
+      kalshi_by_key[(ticker, side)] = float(kalshi_ct)
+  for row in recon.get("kalshi_only") or []:
+    ticker = str(row.get("ticker") or "")
+    side = str(row.get("side") or "").lower()
+    if ticker and side:
+      kalshi_by_key[(ticker, side)] = float(row.get("contracts") or 0)
+
+  for pos in bot.get("open_positions") or []:
+    if pos.get("mode") != "live":
+      continue
+    src = str(pos.get("entry_source") or "")
+    if not src.startswith("adopted_resting"):
+      continue
+    ticker = str(pos.get("market_ticker") or "")
+    side = str(pos.get("side") or "").lower()
+    bot_ct = float(pos.get("contracts_fp") or pos.get("contracts") or 0)
+    kalshi_ct = kalshi_by_key.get((ticker, side))
+    if kalshi_ct is None:
+      continue
+    if kalshi_ct > bot_ct + 0.24:
+      out.append(MismatchIncident(
+        ts=ts,
+        asset=asset,
+        ticker=ticker,
+        side=side,
+        bot_contracts=bot_ct,
+        kalshi_contracts=kalshi_ct,
+        delta=round(kalshi_ct - bot_ct, 2),
+        kind="resting_adopt_undercount",
+        entry_source=src,
+      ))
+  return out
+
+
 def _check_mismatches(ts: str, asset: str, recon: dict[str, Any]) -> list[MismatchIncident]:
   out: list[MismatchIncident] = []
   for row in recon.get("mismatches") or []:
@@ -329,12 +384,11 @@ def _check_new_trades(state: MonitorState, source: str, trades: list[dict]) -> N
       and not is_unverified
       and defense
       and hold is not None
-      and 30 <= hold < 120
+      and 30 <= hold <= 90
     ):
       profit_ok = pnl_usd is not None and pnl_usd >= 0.06
-      cut_ok = pnl_usd is not None and abs(pnl_usd) >= 0.10 and "CUT" in detail.upper()
       ctx = t.get("exit_context") or {}
-      if (profit_ok or cut_ok) and ctx.get("quick_exit_applied"):
+      if profit_ok and ctx.get("quick_exit_applied"):
         state.quick_scalp.status = "verified"
         state.quick_scalp.evidence.append(
           f"{ca} UTC | {source} | trade {tid[:8]} | hold={hold:.0f}s defense pnl=${pnl_usd:.2f} qx=true — {detail[:120]}"
@@ -365,10 +419,27 @@ def _check_inventory(state: MonitorState, ts: str, session: requests.Session) ->
     except Exception:
       continue
     recon = bundle["reconcile"]
+    bot = bundle["bot"]
     if recon.get("ok") is True:
       state.inventory_sync.status = "verified"
       state.inventory_sync.evidence.append(f"{ts} | {asset} reconcile OK")
     incidents = _check_mismatches(ts, asset, recon)
+    resting_incidents = _check_resting_adopt_mismatches(ts, asset, bot, recon)
+    if resting_incidents:
+      state.resting_adopt_sync.status = "mismatch"
+      state.mismatches.extend(resting_incidents)
+      for inc in resting_incidents:
+        state.resting_adopt_sync.evidence.append(
+          f"{ts} | {asset} resting_adopt {inc.ticker} {inc.side} "
+          f"bot={inc.bot_contracts} kalshi={inc.kalshi_contracts} delta=+{inc.delta}"
+        )
+    elif any(
+      str(p.get("entry_source") or "").startswith("adopted_resting")
+      for p in (bot.get("open_positions") or [])
+      if p.get("mode") == "live"
+    ):
+      state.resting_adopt_sync.status = "verified"
+      state.resting_adopt_sync.evidence.append(f"{ts} | {asset} resting-adopt legs aligned")
     if incidents:
       state.inventory_sync.status = "mismatch"
       state.mismatches.extend(incidents)
@@ -394,7 +465,7 @@ def _log(state: MonitorState, msg: str, extra: dict | None = None) -> None:
 def _all_verified(state: MonitorState) -> bool:
   return all(
     getattr(state, k).status == "verified"
-    for k in ("quick_scalp", "exit_verification", "soft_rally", "inventory_sync")
+    for k in ("quick_scalp", "exit_verification", "soft_rally", "inventory_sync", "resting_adopt_sync")
   ) and state.rule_conflicts.status != "flagged"
 
 
@@ -409,6 +480,7 @@ def _print_report(state: MonitorState) -> None:
     ("exit verification", state.exit_verification),
     ("soft_rally", state.soft_rally),
     ("inventory sync", state.inventory_sync),
+    ("resting adopt sync", state.resting_adopt_sync),
     ("rule conflicts", state.rule_conflicts),
   ]
   print("| Feature | Status | Evidence |")
@@ -469,6 +541,7 @@ def main() -> int:
         state,
         f"poll | open={open_n} | qs={state.quick_scalp.status} ev={state.exit_verification.status} "
         f"sr={state.soft_rally.status} inv={state.inventory_sync.status} "
+        f"radopt={state.resting_adopt_sync.status} "
         f"rules={state.rule_conflicts.status} mismatches={len(state.mismatches)}",
       )
       if _all_verified(state):
@@ -481,7 +554,13 @@ def main() -> int:
     time.sleep(POLL_SEC)
 
   _print_report(state)
-  return 0 if state.inventory_sync.status != "mismatch" and state.rule_conflicts.status != "flagged" else 1
+  return (
+    0
+    if state.inventory_sync.status != "mismatch"
+    and state.resting_adopt_sync.status != "mismatch"
+    and state.rule_conflicts.status != "flagged"
+    else 1
+  )
 
 
 if __name__ == "__main__":

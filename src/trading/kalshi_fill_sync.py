@@ -319,7 +319,9 @@ def backfill_kalshi_hourly_fills(
     if action == "buy":
       resting = _resting_enter_for_order(store, oid)
       if resting and hasattr(store, "promote_resting_enter_to_filled"):
-        contracts, contracts_fp = cap_adopted_contracts(contracts_fp, cfg, kind=kind)
+        contracts, contracts_fp = cap_adopted_contracts(
+          contracts_fp, cfg, kind=kind, adoption_source="resting_fill",
+        )
         pid = str(uuid.uuid4())
         cost_usd = round(contracts_fp * price_cents / 100.0, 2)
         detail = (
@@ -371,7 +373,9 @@ def backfill_kalshi_hourly_fills(
         known.add((oid, "enter"))
         continue
 
-      contracts, contracts_fp = cap_adopted_contracts(contracts_fp, cfg, kind=kind)
+      contracts, contracts_fp = cap_adopted_contracts(
+        contracts_fp, cfg, kind=kind, adoption_source="orphan",
+      )
       pid = str(uuid.uuid4())
       cost_usd = round(contracts_fp * price_cents / 100.0, 2)
       detail = (

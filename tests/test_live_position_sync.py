@@ -169,7 +169,7 @@ def test_adopt_filled_resting_enter_caps_contracts():
     kalshi = MagicMock()
     kalshi.authenticated = True
     kalshi.get_market_position.return_value = -6
-    cfg = {"hourly": {"bot": {"live_exit": {"max_adopted_contracts": 6}}}}
+    cfg = {"hourly": {"bot": {"live_exit": {"max_orphan_adopted_contracts": 6}}}}
     adopt_filled_resting_enters(store, kalshi, "EV1", cfg=cfg, kind="hourly")
     open_pos = store.open_positions("KXBTCD-EV1")
     assert len(open_pos) == 1
@@ -177,7 +177,7 @@ def test_adopt_filled_resting_enter_caps_contracts():
     assert open_pos[0]["entry_source"] == "adopted_resting"
 
 
-def test_adopt_filled_resting_enter_caps_at_six_when_kalshi_has_eight():
+def test_adopt_filled_resting_enter_tracks_full_kalshi_size_when_eight():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     store.log_trade({
@@ -195,10 +195,42 @@ def test_adopt_filled_resting_enter_caps_at_six_when_kalshi_has_eight():
     kalshi = MagicMock()
     kalshi.authenticated = True
     kalshi.get_market_position.return_value = -8
-    cfg = {"hourly": {"bot": {"live_exit": {"max_adopted_contracts": 6}}}}
+    cfg = {
+      "hourly": {
+        "bot": {
+          "live_exit": {"max_orphan_adopted_contracts": 6},
+          "entry_strategy": {"max_contracts_per_entry": 0},
+        },
+      },
+    }
     adopt_filled_resting_enters(store, kalshi, "EV1", cfg=cfg, kind="hourly")
     open_pos = store.open_positions("KXBTCD-EV1")
-    assert open_pos[0]["contracts"] == 6
+    assert open_pos[0]["contracts"] == 8
+
+
+def test_adopt_filled_resting_enter_tracks_three_contracts():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "status": "resting",
+      "mode": "live",
+      "market_ticker": "KXBTCD-EV1-T59400",
+      "side": "yes",
+      "contracts": 3,
+      "price_cents": 45,
+      "entry_price_cents": 45,
+      "kalshi_order_id": "ord-three",
+    })
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.get_market_position.return_value = 3
+    adopt_filled_resting_enters(store, kalshi, "EV1")
+    open_pos = store.open_positions("KXBTCD-EV1")
+    assert len(open_pos) == 1
+    assert open_pos[0]["contracts"] == 3
+    assert open_pos[0]["contracts_fp"] == 3.0
 
 
 def test_adopt_filled_resting_enter_cross_hour_event():
@@ -548,10 +580,63 @@ def test_sync_live_positions_from_kalshi_updates_contracts_and_merges_duplicates
     assert any(c.get("action") == "synced" for c in out["changes"])
 
 
+def test_adopt_kalshi_orphan_inventory_caps_at_twelve():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    kalshi = MagicMock()
+    kalshi.authenticated = True
+    kalshi.list_market_positions.return_value = [{
+      "ticker": "KXBTCD-26JUN3006-T59399.99",
+      "position_fp": -15.0,
+      "market_exposure_dollars": 12.0,
+    }]
+    kalshi.get_market_position.return_value = -15.0
+    cfg = {"hourly": {"bot": {"live_exit": {"max_orphan_adopted_contracts": 12}}}}
+    out = adopt_kalshi_orphan_inventory(
+      store, kalshi, "KXBTCD-26JUN3006", cfg=cfg, kind="hourly",
+    )
+    open_pos = store.open_positions("KXBTCD-26JUN3006")
+    assert len(open_pos) == 1
+    assert open_pos[0]["contracts"] == 12
+    assert open_pos[0]["contracts_fp"] == 12.0
+    assert any(c.get("action") == "adopted_kalshi_orphan" for c in out["changes"])
+
+
+def test_kalshi_contracts_for_adoption_resting_fill_uses_full_size():
+  snap = {"contracts": 2.0, "entry_price_cents": 70}
+  cfg = {
+    "hourly": {
+      "bot": {
+        "live_exit": {"max_orphan_adopted_contracts": 6},
+        "entry_strategy": {"max_contracts_per_entry": 0},
+      },
+    },
+  }
+  contracts, contracts_fp, raw = kalshi_contracts_for_adoption(
+    8.0, snap, cfg, kind="hourly", adoption_source="resting_fill",
+  )
+  assert raw == 8.0
+  assert contracts == 8
+  assert contracts_fp == 8.0
+
+
+def test_kalshi_contracts_for_adoption_orphan_caps():
+  snap = {"contracts": 15.0, "entry_price_cents": 70}
+  cfg = {"hourly": {"bot": {"live_exit": {"max_orphan_adopted_contracts": 12}}}}
+  contracts, contracts_fp, raw = kalshi_contracts_for_adoption(
+    15.0, snap, cfg, kind="hourly", adoption_source="orphan",
+  )
+  assert raw == 15.0
+  assert contracts == 12
+  assert contracts_fp == 12.0
+
+
 def test_kalshi_contracts_for_adoption_uses_sellable_over_snap():
   snap = {"contracts": 2.0, "entry_price_cents": 70}
-  cfg = {"hourly": {"bot": {"live_exit": {"max_adopted_contracts": 6}}}}
-  contracts, contracts_fp, raw = kalshi_contracts_for_adoption(6.0, snap, cfg, kind="hourly")
+  cfg = {"hourly": {"bot": {"live_exit": {"max_orphan_adopted_contracts": 6}}}}
+  contracts, contracts_fp, raw = kalshi_contracts_for_adoption(
+    6.0, snap, cfg, kind="hourly", adoption_source="orphan",
+  )
   assert raw == 6.0
   assert contracts == 6
   assert contracts_fp == 6.0

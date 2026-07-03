@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
+
+AdoptionSource = Literal["resting_fill", "orphan", "failed_exit_restore"]
 
 from src.trading.bot_profit_exit import position_hold_seconds
 from src.trading.entry_strategy import EntryStrategyConfig, is_tail_entry_price
@@ -29,8 +31,10 @@ class LiveExitConfig:
   mid_price_max_entry_cents: int = 60
   adopted_leg_cut_loss_min_hold_seconds: int = 300
   adopted_leg_cut_loss_min_usd: float = 0.50
-  # Align with max_contracts_per_entry / Kelly stake (~$4 @ 70¢ ≈ 5–6 contracts).
-  # Orthogonal to live_inventory.max_concurrent_positions (leg count, not size).
+  # Orphan / kalshi-only adoption cap (resting-fill adoption uses full Kalshi size).
+  max_orphan_adopted_contracts: int = 12
+  resting_fill_adopt_full_size: bool = True
+  # Deprecated alias for max_orphan_adopted_contracts (backtests / legacy config).
   max_adopted_contracts: int = 6
   max_resting_enters_per_hour: int = 6
 
@@ -43,7 +47,7 @@ class LiveExitConfig:
 # 4. live_adaptive + soft_rally — entry gates only; soft_rally narrows defense to
 #    threshold mid-band YES; complements (not conflicts with) quick_exit scalps.
 # 5. hour_momentum — stake/entry caps; conservative state also enables quick_exit.
-# 6. max_adopted_contracts — per-leg size at adoption; max_concurrent is leg count.
+# 6. max_orphan_adopted_contracts — kalshi-only adopt cap; resting fills use full size.
 
 
 @dataclass(frozen=True)
@@ -228,19 +232,56 @@ def is_adopted_live_leg(pos: dict[str, Any]) -> bool:
   return src.startswith("adopted_")
 
 
-def cap_adopted_contracts(contracts_fp: float, cfg: dict[str, Any] | None, *, kind: str) -> tuple[int, float]:
-  """Clamp adopted inventory to live_exit max (0 = no cap)."""
+def _max_contracts_per_entry(cfg: dict[str, Any] | None, *, kind: str) -> int:
+  if not cfg:
+    return 0
+  if kind == "slot15":
+    bot = ((cfg.get("intra_slot") or {}).get("bot") or {})
+  else:
+    bot = ((cfg.get("hourly") or {}).get("bot") or {})
+  return int((bot.get("entry_strategy") or {}).get("max_contracts_per_entry") or 0)
+
+
+def _orphan_adoption_cap(cfg: dict[str, Any] | None, *, kind: str) -> int:
+  raw = _bot_cfg(cfg, kind=kind)
+  if "max_orphan_adopted_contracts" in raw:
+    return int(raw["max_orphan_adopted_contracts"])
+  if "max_adopted_contracts" in raw:
+    return int(raw["max_adopted_contracts"])
+  return int(live_exit_config(cfg, kind=kind).max_orphan_adopted_contracts)
+
+
+def cap_adopted_contracts(
+  contracts_fp: float,
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str,
+  adoption_source: AdoptionSource = "orphan",
+) -> tuple[int, float]:
+  """Clamp adopted inventory by source-specific rules (0 cap = no limit)."""
   import logging
 
-  cap = int(live_exit_config(cfg, kind=kind).max_adopted_contracts)
   rounded = max(1, int(round(contracts_fp)))
+  live_exit = live_exit_config(cfg, kind=kind)
+
+  if adoption_source == "resting_fill":
+    if not live_exit.resting_fill_adopt_full_size:
+      cap = _orphan_adoption_cap(cfg, kind=kind)
+    else:
+      cap = _max_contracts_per_entry(cfg, kind=kind)
+  elif adoption_source == "failed_exit_restore":
+    cap = _max_contracts_per_entry(cfg, kind=kind)
+  else:
+    cap = _orphan_adoption_cap(cfg, kind=kind)
+
   if cap <= 0:
     return rounded, float(contracts_fp)
   capped = min(rounded, cap)
   capped_fp = min(float(contracts_fp), float(cap))
   if capped < rounded:
     logging.getLogger(__name__).warning(
-      "Adopted contract cap partial fill: kalshi=%s capped to %s (max_adopted_contracts=%s)",
+      "Adopted contract cap partial fill (%s): kalshi=%s capped to %s (cap=%s)",
+      adoption_source,
       contracts_fp,
       capped_fp,
       cap,

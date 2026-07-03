@@ -34,9 +34,10 @@ def kalshi_contracts_for_adoption(
   cfg: dict[str, Any] | None,
   *,
   kind: str,
+  adoption_source: str = "orphan",
 ) -> tuple[int, float, float]:
   """Kalshi sellable inventory at adoption (same source as exit refresh), then cap."""
-  from src.trading.bot_live_exit import cap_adopted_contracts
+  from src.trading.bot_live_exit import AdoptionSource, cap_adopted_contracts
 
   snap_ct = float((snap or {}).get("contracts") or 0)
   if sellable is not None and sellable >= 0.05:
@@ -51,7 +52,12 @@ def kalshi_contracts_for_adoption(
       raw_fp,
       snap_ct,
     )
-  contracts, contracts_fp = cap_adopted_contracts(raw_fp, cfg, kind=kind)
+  src: AdoptionSource = adoption_source  # type: ignore[assignment]
+  if adoption_source not in ("resting_fill", "orphan", "failed_exit_restore"):
+    src = "orphan"
+  contracts, contracts_fp = cap_adopted_contracts(
+    raw_fp, cfg, kind=kind, adoption_source=src,
+  )
   return contracts, contracts_fp, raw_fp
 
 
@@ -814,7 +820,7 @@ def adopt_filled_resting_enters(
       "entry_price_cents": int(trade.get("entry_price_cents") or trade.get("price_cents") or 0),
     }
     contracts, contracts_fp, _raw_fp = kalshi_contracts_for_adoption(
-      sellable, snap, cfg, kind=kind,
+      sellable, snap, cfg, kind=kind, adoption_source="resting_fill",
     )
     if contracts_fp < 0.05:
       continue
@@ -972,7 +978,7 @@ def adopt_kalshi_orphan_inventory(
       continue
     sellable = kalshi_sellable_contracts(kalshi, ticker, side, critical=critical)
     contracts, contracts_fp, _raw_fp = kalshi_contracts_for_adoption(
-      sellable, snap, cfg, kind=kind,
+      sellable, snap, cfg, kind=kind, adoption_source="orphan",
     )
     if contracts_fp < 0.05:
       continue
@@ -1304,7 +1310,7 @@ def _ensure_live_leg_after_failed_exit(
     return
   snap = kalshi_position_leg(kalshi, ticker, side, critical=True)
   contracts, contracts_fp, _raw_fp = kalshi_contracts_for_adoption(
-    sellable, snap, cfg, kind=kind,
+    sellable, snap, cfg, kind=kind, adoption_source="failed_exit_restore",
   )
   if contracts_fp < 0.05:
     return
