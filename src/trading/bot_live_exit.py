@@ -217,12 +217,22 @@ def is_adopted_live_leg(pos: dict[str, Any]) -> bool:
 
 def cap_adopted_contracts(contracts_fp: float, cfg: dict[str, Any] | None, *, kind: str) -> tuple[int, float]:
   """Clamp adopted inventory to live_exit max (0 = no cap)."""
+  import logging
+
   cap = int(live_exit_config(cfg, kind=kind).max_adopted_contracts)
   rounded = max(1, int(round(contracts_fp)))
   if cap <= 0:
     return rounded, float(contracts_fp)
   capped = min(rounded, cap)
-  return capped, min(float(contracts_fp), float(cap))
+  capped_fp = min(float(contracts_fp), float(cap))
+  if capped < rounded:
+    logging.getLogger(__name__).warning(
+      "Adopted contract cap partial fill: kalshi=%s capped to %s (max_adopted_contracts=%s)",
+      contracts_fp,
+      capped_fp,
+      cap,
+    )
+  return capped, capped_fp
 
 
 def resting_enter_cap_reached(

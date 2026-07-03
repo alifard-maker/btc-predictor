@@ -417,6 +417,37 @@ class PredictionLoop:
 
           acfg = self._acfg(asset)
           row["market_hours_open"] = index_trading_allowed(acfg)
+        kalshi = self._kalshi_for(asset)
+        if (
+          settings.mode == "live"
+          and kalshi
+          and kalshi.authenticated
+        ):
+          from src.trading.live_reconcile import build_live_reconcile_report
+
+          positions = store.all_open_live_positions() if hasattr(store, "all_open_live_positions") else []
+          recon = build_live_reconcile_report(bot_positions=positions, kalshi=kalshi)
+          kalshi_heavy = [
+            m for m in (recon.get("mismatches") or [])
+            if float(m.get("kalshi_contracts") or 0) > float(m.get("contracts") or 0) + 0.24
+          ]
+          if kalshi_heavy or recon.get("kalshi_only"):
+            row["contract_mismatch"] = {
+              "ok": False,
+              "mismatches": len(kalshi_heavy),
+              "kalshi_only": len(recon.get("kalshi_only") or []),
+              "legs": [
+                {
+                  "ticker": m.get("ticker"),
+                  "side": m.get("side"),
+                  "bot": m.get("contracts"),
+                  "kalshi": m.get("kalshi_contracts"),
+                }
+                for m in kalshi_heavy[:3]
+              ],
+            }
+          else:
+            row["contract_mismatch"] = {"ok": True}
         out[asset] = row
       except Exception as exc:
         out[asset] = {"error": str(exc)[:200]}

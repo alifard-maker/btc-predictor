@@ -121,6 +121,8 @@ def build_hourly_exit_context(
     adaptive_mode=adaptive_mode,
     hour_momentum_state=hour_momentum_state,
   )
+  if pos.get("contract_mismatch"):
+    ctx["contract_mismatch"] = pos["contract_mismatch"]
 
   return ctx
 

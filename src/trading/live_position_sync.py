@@ -48,6 +48,20 @@ def refresh_live_leg_contracts_from_kalshi(
   bot_ct = _position_contracts(pos)
   if sellable <= bot_ct + 0.04:
     return pos
+  mismatch = {
+    "bot_contracts": round(bot_ct, 2),
+    "kalshi_contracts": round(float(sellable), 2),
+    "delta": round(float(sellable) - bot_ct, 2),
+    "ticker": ticker,
+    "side": side,
+  }
+  log.warning(
+    "Contract mismatch before exit refresh: %s %s bot=%s kalshi=%s — syncing up",
+    ticker,
+    side.upper(),
+    bot_ct,
+    sellable,
+  )
   entry_c = int(pos.get("entry_price_cents") or 0)
   if entry_c <= 0:
     snap = kalshi_position_leg(kalshi, ticker, side, critical=True)
@@ -71,6 +85,7 @@ def refresh_live_leg_contracts_from_kalshi(
   updated["contracts"] = contracts
   updated["contracts_fp"] = contracts_fp
   updated["cost_usd"] = cost_usd
+  updated["contract_mismatch"] = mismatch
   if entry_c > 0:
     updated["entry_price_cents"] = entry_c
   return updated
