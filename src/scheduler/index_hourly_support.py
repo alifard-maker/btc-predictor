@@ -38,6 +38,15 @@ def init_index_assets(loop: Any) -> None:
     loop._latest_hourly_predictions[asset] = None
     log.info("Initialized %s index hourly asset", asset.upper())
 
+  try:
+    from src.data.index_candle_bootstrap import bootstrap_index_candles_if_missing
+
+    queued = bootstrap_index_candles_if_missing(loop.cfg, background=True)
+    if queued:
+      log.info("Index candle bootstrap queued (background): %s", ", ".join(queued))
+  except Exception:
+    log.exception("Index candle bootstrap check failed")
+
 
 def acfg_for(loop: Any, asset: str) -> dict[str, Any]:
   asset = asset.lower()

@@ -107,6 +107,7 @@ class PredictionLoop:
     self._last_kalshi_sync: dict[str, dict[str, Any]] = {}
     self._kalshi_sync_inflight: dict[str, bool] = {}
     self._slot15_tab_cache: dict[str, tuple[dict[str, Any], float]] = {}
+    self._index_kalshi: dict[str, KalshiClient] = {}
     if asset_enabled(self.cfg, "eth"):
       self._eth_cfg = asset_cfg(self.cfg, "eth")
       ensure_dirs(self._eth_cfg)
@@ -174,11 +175,18 @@ class PredictionLoop:
     return self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
 
   def _kalshi_for(self, asset: str) -> KalshiClient:
+    asset = asset.lower()
     if asset == "btc":
       return self.kalshi
-    if self._eth_kalshi is None:
-      self._eth_kalshi = KalshiClient(self._eth_cfg or asset_cfg(self.cfg, "eth"))
-    return self._eth_kalshi
+    if asset == "eth":
+      if self._eth_kalshi is None:
+        self._eth_kalshi = KalshiClient(self._eth_cfg or asset_cfg(self.cfg, "eth"))
+      return self._eth_kalshi
+    if is_index_asset(asset):
+      if asset not in self._index_kalshi:
+        self._index_kalshi[asset] = KalshiClient(self._acfg(asset))
+      return self._index_kalshi[asset]
+    raise ValueError(f"Unknown asset for Kalshi: {asset}")
 
   def _calibration_for(self, asset: str) -> CalibrationTracker:
     if asset == "btc":
@@ -385,14 +393,14 @@ class PredictionLoop:
   def _live_hourly_pulse(self) -> dict[str, Any]:
     """Compact live-bot heartbeat for post-deploy /health checks (no auth)."""
     out: dict[str, Any] = {}
-    for asset in ("btc", "eth"):
-      if asset == "eth" and not asset_enabled(self.cfg, "eth"):
+    for asset in ("btc", "eth", "spx", "ndx"):
+      if asset in ("eth", "spx", "ndx") and not asset_enabled(self.cfg, asset):
         continue
       try:
         store = self.hourly_bot_store(asset, kind="hourly")
         settings = store.get_settings()
         runtime = store.get_runtime()
-        out[asset] = {
+        row: dict[str, Any] = {
           "enabled": bool(settings.enabled),
           "continuous": bool(settings.continuous),
           "mode": settings.mode,
@@ -404,6 +412,12 @@ class PredictionLoop:
           "last_cycle_active": runtime.get("last_cycle_active"),
           "cycles_total": runtime.get("cycles_total"),
         }
+        if is_index_asset(asset):
+          from src.trading.us_market_hours import index_trading_allowed
+
+          acfg = self._acfg(asset)
+          row["market_hours_open"] = index_trading_allowed(acfg)
+        out[asset] = row
       except Exception as exc:
         out[asset] = {"error": str(exc)[:200]}
     return out
@@ -471,7 +485,7 @@ class PredictionLoop:
     if key not in self._hourly_bot_stores:
       from src.trading.hourly_bot_store import HourlyBotStore
 
-      acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+      acfg = self._acfg(asset)
       logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
       db_name = self._hourly_bot_db_name(kind, asset)
       self._hourly_bot_stores[key] = HourlyBotStore(logs / db_name)
@@ -3188,6 +3202,27 @@ class PredictionLoop:
         "date",
         run_date=datetime.now(timezone.utc) + timedelta(seconds=18),
         id="eth_hourly_now",
+      )
+    from src.assets import INDEX_ASSETS
+
+    for i, asset in enumerate(INDEX_ASSETS):
+      if not asset_enabled(self.cfg, asset):
+        continue
+      acfg = asset_cfg(self.cfg, asset)
+      if not acfg.get("hourly", {}).get("enabled", True):
+        continue
+      offset = 20 + i * 4
+      scheduler.add_job(
+        lambda a=asset: self._run_hourly_open_for_asset(a),
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=offset),
+        id=f"{asset}_hourly_open_now",
+      )
+      scheduler.add_job(
+        lambda a=asset: self._run_hourly_prediction_for_asset(a),
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=offset + 2),
+        id=f"{asset}_hourly_now",
       )
     scheduler.add_job(self.run_second_chance, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=20), id="second_chance_now")
     scheduler.add_job(self.collect_auxiliary, "interval", hours=6, id="auxiliary", max_instances=1)
