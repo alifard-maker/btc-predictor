@@ -93,7 +93,13 @@ from src.trading.hourly_regime import (
   entry_too_close_to_settle_skip_reason,
   entry_too_far_from_settle_skip_reason,
   is_late_entry_path,
-  late_entry_config,
+)
+from src.trading.hour_momentum import (
+  HourMomentumContext,
+  apply_hour_momentum_policy,
+  compute_hour_momentum,
+  hour_momentum_payload,
+  resolve_late_entry_config,
 )
 from src.trading.hourly_trial_position_alert import assess_hourly_trial_leg_position_alert
 from src.backtest.mechanics_profiles import (
@@ -177,6 +183,25 @@ def _adaptive_settings_payload(decision: AdaptiveDecision | None) -> dict[str, A
     "intrahour_highlight": decision.intrahour_highlight,
     "realized_pnl_usd": round(decision.realized_pnl_usd, 2),
   }
+
+
+def _sum_open_unrealized_usd(
+  positions: list[dict[str, Any]],
+  live: dict[str, Any],
+) -> float:
+  total = 0.0
+  for pos in positions:
+    pick = _find_contract_in_live(live, pos["market_ticker"])
+    if not pick:
+      continue
+    exit_fill = paper_exit_fill(pick=pick, side=str(pos["side"]))
+    mark = int(exit_fill["price_cents"]) if exit_fill.get("ok") else None
+    if mark is None:
+      continue
+    u = _unrealized_pnl_usd(pos, mark)
+    if u is not None:
+      total += u
+  return round(total, 2)
 
 
 def _find_contract_in_live(live: dict[str, Any], market_ticker: str) -> dict[str, Any] | None:
@@ -1036,6 +1061,39 @@ class HourlyBot:
     estrat = apply_live_exit_entry_guards(
       estrat, cfg, mode=settings.mode, kind=entry_kind_for_bot(self.kind),
     )
+
+    from src.trading.bot_position_mode import normalize_position_mode
+
+    mode_filter = normalize_position_mode(settings.mode)
+    exit_stats = self.store.hour_closed_exit_stats(event_ticker, mode=mode_filter)
+    open_pos_pre = self.store.open_positions(event_ticker)
+    unrealized_total = _sum_open_unrealized_usd(open_pos_pre, live)
+    realized_total = self.store.realized_pnl_usd(event_ticker)
+    primary = live.get("primary_pick") or {}
+    primary_edge_raw = primary.get("edge")
+    try:
+      primary_edge_f = float(primary_edge_raw) if primary_edge_raw is not None else None
+    except (TypeError, ValueError):
+      primary_edge_f = None
+    momentum_ctx = HourMomentumContext(
+      realized_pnl_usd=realized_total,
+      unrealized_pnl_usd=unrealized_total,
+      closed_wins=exit_stats["wins"],
+      closed_losses=exit_stats["losses"],
+      exit_count=exit_stats["exits"],
+      adaptive_mode=adaptive.mode,
+      primary_pick_edge=primary_edge_f,
+    )
+    momentum_policy = compute_hour_momentum(momentum_ctx, cfg)
+    momentum_snap = hour_momentum_payload(
+      momentum_policy,
+      realized_pnl_usd=realized_total,
+      unrealized_pnl_usd=unrealized_total,
+    )
+    self.store.set_hour_momentum(momentum_snap)
+    estrat = apply_hour_momentum_policy(estrat, momentum_policy)
+    late_entry_effective = resolve_late_entry_config(cfg, momentum_policy)
+
     ranked = rank_hourly_candidates(candidates, estrat=estrat)
     if not ranked:
       self.store.set_last_skip_reason("no_buy_yes_no_candidates")
@@ -1080,6 +1138,7 @@ class HourlyBot:
 
       settle_skip = entry_pick_settle_skip_reason(
         live.get("hours_to_settle"), cfg, pick=pick, side=side,
+        le_override=late_entry_effective,
       )
       if settle_skip:
         last_reason = settle_skip
@@ -1189,8 +1248,10 @@ class HourlyBot:
         side=side,
         entries_left=entries_left,
       )
-      if is_late_entry_path(live.get("hours_to_settle"), pick, side, cfg):
-        stake = min(stake, late_entry_config(cfg).max_stake_usd)
+      if is_late_entry_path(
+        live.get("hours_to_settle"), pick, side, cfg, le_override=late_entry_effective,
+      ):
+        stake = min(stake, late_entry_effective.max_stake_usd)
 
       if settings.mode == "paper":
         entry_fill = paper_entry_fill(pick=pick, side=side, remaining_budget_usd=stake)
@@ -1275,6 +1336,7 @@ class HourlyBot:
           cfg=cfg,
           entry_execution_detail=live_entry_detail,
           adaptive=adaptive,
+          hour_momentum=momentum_snap,
         )
       else:
         self.store.open_position({
@@ -1319,7 +1381,9 @@ class HourlyBot:
           "detail": detail,
           "position_id": pid,
           "entry_settings": hourly_entry_settings_snapshot(
-            settings, adaptive=_adaptive_settings_payload(adaptive),
+            settings,
+            adaptive=_adaptive_settings_payload(adaptive),
+            hour_momentum=momentum_snap,
           ),
           **entry_quote_log_fields(entry_fill),
         })
@@ -1332,6 +1396,8 @@ class HourlyBot:
       open_pos = self.store.open_positions(event_ticker)
 
     if not results:
+      if momentum_snap and momentum_snap.get("state"):
+        last_reason = f"hour_momentum:{momentum_snap['state']}:{last_reason}"
       self.store.set_last_skip_reason(last_reason)
     return results
 
@@ -1350,10 +1416,13 @@ class HourlyBot:
     cfg: dict[str, Any] | None = None,
     entry_execution_detail: str | None = None,
     adaptive: AdaptiveDecision | None = None,
+    hour_momentum: dict[str, Any] | None = None,
   ) -> dict[str, Any]:
     exec_note = f" · {entry_execution_detail}" if entry_execution_detail else ""
     entry_settings = hourly_entry_settings_snapshot(
-      settings, adaptive=_adaptive_settings_payload(adaptive),
+      settings,
+      adaptive=_adaptive_settings_payload(adaptive),
+      hour_momentum=hour_momentum,
     )
     if not self.kalshi or not getattr(self.kalshi, "authenticated", False):
       return self.store.log_trade({

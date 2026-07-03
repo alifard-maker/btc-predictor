@@ -140,6 +140,7 @@ class HourlyBotStore:
     self.db_path.parent.mkdir(parents=True, exist_ok=True)
     self._last_period_key: str | None = None
     self._last_skip_reason: str | None = None
+    self._last_hour_momentum: dict[str, Any] | None = None
     self._position_peaks: dict[str, dict[str, float]] = {}
     self._init_db()
 
@@ -148,6 +149,12 @@ class HourlyBotStore:
 
   def last_skip_reason(self) -> str | None:
     return self._last_skip_reason
+
+  def set_hour_momentum(self, payload: dict[str, Any] | None) -> None:
+    self._last_hour_momentum = payload
+
+  def hour_momentum(self) -> dict[str, Any] | None:
+    return self._last_hour_momentum
 
   def record_cycle(self, *, active: bool) -> None:
     from src.trading.bot_runtime import record_bot_cycle
@@ -779,6 +786,39 @@ class HourlyBotStore:
       total += float(pnl or 0)
     return round(total, 2)
 
+  def hour_closed_exit_stats(
+    self,
+    event_ticker: str,
+    *,
+    mode: str | None = None,
+  ) -> dict[str, int]:
+    """Win/loss counts for realized exits in the current hour."""
+    clause, params = "", []
+    if mode:
+      clause = " AND mode = ?"
+      params = [mode]
+    with self._connect() as conn:
+      rows = conn.execute(
+        f"""
+        SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
+        FROM bot_trades
+        WHERE event_ticker = ? AND action = 'exit' AND status IN ('filled', 'reconciled'){clause}
+        """,
+        [event_ticker, *params],
+      ).fetchall()
+    wins = losses = 0
+    for r in rows:
+      row = dict(r)
+      pnl = row.get("pnl_usd")
+      if pnl is None:
+        pnl = self._exit_pnl_from_prices(row)
+      pnl_f = float(pnl or 0)
+      if pnl_f > 0:
+        wins += 1
+      elif pnl_f < 0:
+        losses += 1
+    return {"wins": wins, "losses": losses, "exits": wins + losses}
+
   def _enrich_trade(self, row: dict[str, Any]) -> dict[str, Any]:
     action = row.get("action") or "enter"
     entry_c = row.get("entry_price_cents")
@@ -1107,5 +1147,6 @@ class HourlyBotStore:
         auto_stop_row.get("detail") if auto_stop_row else None
       ),
       "last_skip_reason": self._last_skip_reason,
+      "hour_momentum": self._last_hour_momentum,
       "server_runtime": self.get_runtime(),
     }

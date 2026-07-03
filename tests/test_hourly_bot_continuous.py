@@ -1225,3 +1225,55 @@ def test_hourly_trial_neutral_take_profit_when_edge_fades():
     exits = [a for a in actions if a.get("action") == "exit"]
     assert len(exits) == 1
     assert "REASSESS NEUTRAL TP" in exits[0]["detail"]
+
+
+def test_hour_momentum_conservative_after_losing_exit():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=25.0,
+      allow_strong=False,
+      allow_actionable=False,
+    ))
+    store.log_trade({
+      "event_ticker": "KXTEST-1H",
+      "action": "exit",
+      "mode": "paper",
+      "market_ticker": "KXTEST-1H-T1",
+      "side": "yes",
+      "contracts": 5,
+      "price_cents": 30,
+      "entry_price_cents": 40,
+      "exit_price_cents": 30,
+      "pnl_usd": -0.50,
+      "status": "filled",
+    })
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab()
+    tab["live"]["hours_to_settle"] = 0.9
+    cfg = {
+      "hourly": {
+        "regime": {"min_edge": 0.05, "min_expected_move_pct": 0.12},
+        "intrahour": {"enabled": False},
+        "bot": {
+          "live_adaptive": {"enabled": False},
+          "live_inventory": {"enabled": False},
+          "hour_momentum": {"enabled": True},
+          "entry_strategy": {
+            "max_entries_per_cycle": 4,
+            "max_stake_per_entry_usd": 5.0,
+            "min_kelly_stake_usd": 1.0,
+            "kelly_enabled": False,
+          },
+        },
+      },
+    }
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    assert len(actions) == 1
+    assert actions[0]["action"] == "enter"
+    momentum = store.hour_momentum()
+    assert momentum is not None
+    assert momentum["state"] == "conservative"
+    assert actions[0]["entry_settings"]["hour_momentum"]["state"] == "conservative"
+

@@ -356,6 +356,31 @@ hourly:
       defense_block_range_bands: true
       defense_skip_all_entries: false
       defense_threshold_only: false
+    hour_momentum:
+      enabled: true
+      losing_pnl_usd: -0.01
+      choppy_min_exits: 2
+      choppy_pnl_band_usd: 0.25
+      profit_protect_pnl_usd: 0.75
+      min_closed_wins_to_press: 1
+      conservative:
+        max_entries_per_cycle: 2
+        stake_mult: 0.8
+        late_entry_min_ask_edge_cents: 18
+      normal:
+        max_entries_per_cycle: 4
+        stake_mult: 1.0
+        late_entry_min_ask_edge_cents: 15
+      pressing:
+        max_entries_per_cycle: 6
+        stake_mult: 1.0
+        max_stake_per_entry_usd: 4.0
+        late_entry_min_ask_edge_cents: 12
+      locked:
+        max_entries_per_cycle: 2
+        stake_mult: 0.7
+        late_entry_min_ask_edge_cents: 20
+        block_late_entry: true
     rally_only:
       enabled: true
       defense_skip_all_entries: true

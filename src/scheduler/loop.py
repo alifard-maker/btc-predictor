@@ -351,6 +351,7 @@ class PredictionLoop:
           "auto_stopped": bool(settings.auto_stopped),
           "auto_stop_reason": settings.auto_stop_reason,
           "last_skip_reason": store.last_skip_reason(),
+          "hour_momentum": store.hour_momentum(),
           "last_cycle_at": runtime.get("last_cycle_at"),
           "last_cycle_active": runtime.get("last_cycle_active"),
           "cycles_total": runtime.get("cycles_total"),

@@ -100,11 +100,13 @@ def late_entry_pick_allowed(
   pick: dict[str, Any],
   side: str,
   cfg: dict[str, Any] | None,
+  *,
+  le_override: LateEntryConfig | None = None,
 ) -> bool:
   """True when a pick may enter in the late-hour window (strong ask-edge exception)."""
   if hours_to_settle is None:
     return False
-  le = late_entry_config(cfg)
+  le = le_override or late_entry_config(cfg)
   if not le.enabled:
     return False
   h = float(hours_to_settle)
@@ -122,8 +124,10 @@ def is_late_entry_path(
   pick: dict[str, Any],
   side: str,
   cfg: dict[str, Any] | None,
+  *,
+  le_override: LateEntryConfig | None = None,
 ) -> bool:
-  return late_entry_pick_allowed(hours_to_settle, pick, side, cfg)
+  return late_entry_pick_allowed(hours_to_settle, pick, side, cfg, le_override=le_override)
 
 
 def entry_too_close_to_settle_skip_reason(
@@ -152,18 +156,19 @@ def entry_pick_settle_skip_reason(
   *,
   pick: dict[str, Any],
   side: str,
+  le_override: LateEntryConfig | None = None,
 ) -> str | None:
   """Per-pick settle gate — applies late-entry exception when configured."""
   if hours_to_settle is None:
     return None
   h = float(hours_to_settle)
   min_h = min_hours_to_settle_for_entry(cfg)
-  le = late_entry_config(cfg)
+  le = le_override or late_entry_config(cfg)
   floor_h = le.min_hours if le.enabled else min_h
   if h < floor_h:
     return "too_late_for_new_entries"
   if h < min_h:
-    if late_entry_pick_allowed(hours_to_settle, pick, side, cfg):
+    if late_entry_pick_allowed(hours_to_settle, pick, side, cfg, le_override=le_override):
       return None
     return "too_late_for_new_entries"
   return None

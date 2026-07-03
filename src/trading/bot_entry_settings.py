@@ -46,10 +46,13 @@ def hourly_entry_settings_snapshot(
   settings: HourlySettingsLike,
   *,
   adaptive: dict[str, Any] | None = None,
+  hour_momentum: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
   snap = _core_snapshot(settings, max_spend=settings.max_spend_per_hour_usd)
   if adaptive:
     snap["adaptive"] = adaptive
+  if hour_momentum:
+    snap["hour_momentum"] = hour_momentum
   return snap
 
 
