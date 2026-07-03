@@ -29,10 +29,18 @@ def interval_summary_row(
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
       COALESCE(SUM(CASE WHEN action = 'exit' AND {REALIZED_EXIT_STATUS_SQL} THEN 1 ELSE 0 END), 0) AS exit_count,
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN COALESCE(cost_usd, 0) ELSE 0 END), 0) AS total_entered_usd,
-      COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'resting' THEN 1 ELSE 0 END), 0) AS resting_enter_count,
+      COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'resting' THEN 1 ELSE 0 END), 0) AS resting_enter_attempt_count,
       COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'resting' THEN 1 ELSE 0 END), 0) AS resting_exit_count
     FROM bot_trades
     WHERE event_ticker = ?{clause}
+    """,
+    [event_ticker, *params],
+  ).fetchone()
+  resting_row = conn.execute(
+    f"""
+    SELECT COUNT(DISTINCT market_ticker) AS resting_enter_count
+    FROM bot_trades
+    WHERE event_ticker = ? AND action = 'enter' AND status = 'resting'{clause}
     """,
     [event_ticker, *params],
   ).fetchone()
@@ -47,6 +55,9 @@ def interval_summary_row(
       "filled_enter_count_this_hour": 0,
     }
   out = dict(row)
+  out["resting_enter_count"] = int(
+    (dict(resting_row) if resting_row else {}).get("resting_enter_count") or 0
+  )
   out["filled_enter_count_this_hour"] = int(out.get("enter_count") or 0)
   return out
 

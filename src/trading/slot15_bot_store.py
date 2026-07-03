@@ -929,11 +929,50 @@ class Slot15BotStore:
       ).fetchone()
     return self._enrich_trade(dict(row)) if row else None
 
+  def cancel_resting_enter_rows(
+    self,
+    *,
+    event_ticker: str | None = None,
+    market_ticker: str | None = None,
+    kalshi_order_id: str | None = None,
+    mode: str = "live",
+    reason: str = "cancelled",
+  ) -> int:
+    """Mark unfilled resting enter rows cancelled (not filled — not a real entry)."""
+    clauses = ["action = 'enter'", "status = 'resting'", "mode = ?"]
+    params: list[Any] = [mode]
+    if event_ticker:
+      clauses.append("event_ticker = ?")
+      params.append(event_ticker)
+    if market_ticker:
+      clauses.append("market_ticker = ?")
+      params.append(market_ticker)
+    if kalshi_order_id:
+      clauses.append("kalshi_order_id = ?")
+      params.append(kalshi_order_id)
+    where = " AND ".join(clauses)
+    with self._connect() as conn:
+      cur = conn.execute(
+        f"""
+        UPDATE bot_trades
+        SET status = 'cancelled',
+            detail = CASE
+              WHEN detail IS NULL OR TRIM(detail) = '' THEN ?
+              WHEN detail LIKE '%' || ? || '%' THEN detail
+              ELSE detail || ' — ' || ?
+            END
+        WHERE {where}
+        """,
+        [reason, reason, reason, *params],
+      )
+    return int(cur.rowcount or 0)
+
   def count_resting_live_enters(self, event_ticker: str, *, mode: str = "live") -> int:
+    """Concurrent unfilled resting buy markets this slot (distinct tickers only)."""
     with self._connect() as conn:
       row = conn.execute(
         """
-        SELECT COUNT(*) FROM bot_trades
+        SELECT COUNT(DISTINCT market_ticker) FROM bot_trades
         WHERE event_ticker = ? AND action = 'enter'
           AND status = 'resting' AND mode = ?
         """,

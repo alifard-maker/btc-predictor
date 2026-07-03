@@ -299,7 +299,7 @@ def resting_enter_cap_reached(
   *,
   kind: str = "hourly",
 ) -> bool:
-  """True when too many unfilled resting live enters exist for this hour/slot."""
+  """True when too many concurrent unfilled resting buy markets exist for this hour/slot."""
   cap = int(live_exit_config(cfg, kind=kind).max_resting_enters_per_hour)
   if cap <= 0:
     return False

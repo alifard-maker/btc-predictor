@@ -3809,11 +3809,27 @@
 
     function compareSideSummary(side) {
       const sm = side?.summary || {};
+      const pending = (side?.pending_resting || []).length;
+      const pendingNote = pending
+        ? `<div class="perf-stat muted">Pending limits<strong>${pending}</strong></div>`
+        : '';
       return `<div class="perf-grid" style="margin:.35rem 0 .5rem">
-        <div class="perf-stat muted">Entries<strong>${sm.enter_count ?? 0}</strong></div>
+        <div class="perf-stat muted">Filled entries<strong>${sm.enter_count ?? 0}</strong></div>
         <div class="perf-stat muted">Exits<strong>${sm.exit_count ?? 0}</strong></div>
         <div class="perf-stat muted">Net P&amp;L<strong>${botPnlUsd(side?.net_pnl_usd)}</strong></div>
+        ${pendingNote}
       </div>`;
+    }
+
+    function comparePendingRestingTable(rows) {
+      if (!rows?.length) return '';
+      const body = rows.map((e) => {
+        const side = (e.side || '—').toUpperCase();
+        const mkt = e.label || e.market_ticker || '—';
+        const px = e.entry_price_cents != null ? `${e.entry_price_cents}¢` : '—';
+        return `<tr><td>${time(e.created_at)}</td><td>${side}</td><td>${px}</td><td style="font-size:.65rem">${mkt}</td><td class="muted">unfilled limit</td></tr>`;
+      }).join('');
+      return `<table class="compare-mini-table" style="opacity:.85"><thead><tr><th>Time</th><th>Side</th><th>Limit</th><th>Contract</th><th>Status</th></tr></thead><tbody>${body}</tbody></table>`;
     }
 
     function compareEntriesTable(entries) {
@@ -3842,8 +3858,9 @@
       return `<div class="compare-col ${cssClass}">
         <h4>${title} <span class="muted" style="font-weight:500;font-size:.65rem">(${side?.mode || '—'})</span></h4>
         ${compareSideSummary(side)}
-        <p class="muted" style="font-size:.65rem;margin:.15rem 0 .25rem;text-transform:uppercase;letter-spacing:.04em">Entries</p>
+        <p class="muted" style="font-size:.65rem;margin:.15rem 0 .25rem;text-transform:uppercase;letter-spacing:.04em">Filled entries</p>
         ${compareEntriesTable(side?.entries)}
+        ${(side?.pending_resting?.length) ? `<p class="muted" style="font-size:.65rem;margin:.45rem 0 .25rem;text-transform:uppercase;letter-spacing:.04em">Pending limits (not filled)</p>${comparePendingRestingTable(side.pending_resting)}` : ''}
         <p class="muted" style="font-size:.65rem;margin:.45rem 0 .25rem;text-transform:uppercase;letter-spacing:.04em">Exits</p>
         ${compareExitsTable(side?.exits)}
       </div>`;

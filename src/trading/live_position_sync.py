@@ -276,10 +276,52 @@ def _ticker_in_hourly_event(ticker: str, event_ticker: str, allowed_tickers: set
   return t == e or t.startswith(f"{e}-")
 
 
+def reconcile_stale_resting_enters(store: Any, kalshi: Any) -> dict[str, Any]:
+  """Mark resting enter rows cancelled when Kalshi order is gone and no inventory."""
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return {"ok": True, "cancelled": 0}
+  cancel_fn = getattr(store, "cancel_resting_enter_rows", None)
+  if not callable(cancel_fn):
+    return {"ok": True, "cancelled": 0}
+
+  cancelled = 0
+  with store._connect() as conn:
+    rows = conn.execute(
+      """
+      SELECT id, kalshi_order_id, market_ticker, side
+      FROM bot_trades
+      WHERE action = 'enter' AND status = 'resting' AND mode = 'live'
+      ORDER BY created_at DESC
+      LIMIT 100
+      """,
+    ).fetchall()
+
+  for raw in rows:
+    trade = dict(raw)
+    oid = str(trade.get("kalshi_order_id") or "")
+    ticker = str(trade.get("market_ticker") or "")
+    side = str(trade.get("side") or "").lower()
+    if oid and order_still_resting(kalshi, oid):
+      continue
+    if ticker and side in ("yes", "no"):
+      sellable = kalshi_sellable_contracts(kalshi, ticker, side)
+      if sellable is not None and sellable >= 0.05:
+        continue
+    n = cancel_fn(
+      kalshi_order_id=oid or None,
+      market_ticker=ticker or None,
+      mode="live",
+      reason="order gone unfilled",
+    )
+    cancelled += n
+  return {"ok": True, "cancelled": cancelled}
+
+
 def cancel_resting_enter_orders_for_hourly_event(
   kalshi: Any,
   event_ticker: str,
   tab: dict[str, Any],
+  store: Any | None = None,
 ) -> int:
   """Cancel unfilled resting BUY orders on the current hourly event only."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
@@ -298,6 +340,14 @@ def cancel_resting_enter_orders_for_hourly_event(
     try:
       kalshi.cancel_order(str(oid))
       cancelled += 1
+      if store is not None and hasattr(store, "cancel_resting_enter_rows"):
+        store.cancel_resting_enter_rows(
+          event_ticker=event_ticker,
+          market_ticker=ticker,
+          kalshi_order_id=str(oid),
+          mode="live",
+          reason="cancelled on Kalshi",
+        )
       log.info("Cancelled resting enter %s on %s (event %s)", oid, ticker, event_ticker)
     except Exception as e:
       log.warning("Cancel resting enter %s on %s failed: %s", oid, ticker, e)
@@ -1080,6 +1130,7 @@ def run_live_position_hygiene(
   adopted_resting = adopt_filled_resting_enters(
     store, kalshi, event_ticker, cfg=cfg, kind=kind, critical=critical,
   )
+  stale_resting = reconcile_stale_resting_enters(store, kalshi)
   adopted_orphans = adopt_kalshi_orphan_inventory(
     store, kalshi, event_ticker, cfg=cfg, kind=kind, critical=critical, asset=asset,
   )
@@ -1097,11 +1148,12 @@ def run_live_position_hygiene(
   resting_cancelled = 0
   if not settings_enabled:
     resting_cancelled = cancel_resting_enter_orders_for_hourly_event(
-      kalshi, event_ticker, tab,
+      kalshi, event_ticker, tab, store=store,
     )
   adopted_changes = (
     (foreign_purge.get("changes") or [])
     + (adopted_resting.get("changes") or [])
+    + ([{"action": "stale_resting_cancelled", "count": stale_resting.get("cancelled", 0)}] if stale_resting.get("cancelled") else [])
     + (adopted_orphans.get("changes") or [])
     + (fill_sync.get("changes") or [])
   )

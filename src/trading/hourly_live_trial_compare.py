@@ -8,7 +8,8 @@ from typing import Any
 
 from src.trading.hourly_bot_store import HourlyBotStore
 
-_FILLED_ENTER = ("filled", "reconciled", "resting")
+_FILLED_ENTER = ("filled", "reconciled")
+_PENDING_RESTING = ("resting",)
 _REALIZED_EXIT = ("filled", "reconciled")
 _EXIT_REASON_RE = re.compile(r"EXIT\s*\(([^)]+)\)", re.IGNORECASE)
 
@@ -189,6 +190,11 @@ def _hour_side(
     for t in trades
     if t.get("action") == "enter" and str(t.get("status") or "") in _FILLED_ENTER
   ]
+  pending_resting = [
+    _entry_row(t)
+    for t in trades
+    if t.get("action") == "enter" and str(t.get("status") or "") in _PENDING_RESTING
+  ]
   exits = [
     _exit_row(t)
     for t in trades
@@ -202,9 +208,11 @@ def _hour_side(
     "mode": mode,
     "summary": summary,
     "entries": entries,
+    "pending_resting": pending_resting,
     "exits": exits,
     "net_pnl_usd": round(realized, 2),
     "has_activity": bool(entries or exits),
+    "has_pending_resting": bool(pending_resting),
   }
 
 

@@ -1586,6 +1586,13 @@ class HourlyBot:
       prior = self.store.latest_resting_enter(event_ticker, ticker, mode="live")
       if prior and order_still_resting(self.kalshi, str(prior.get("kalshi_order_id") or "")):
         return prior
+      if hasattr(self.store, "cancel_resting_enter_rows"):
+        self.store.cancel_resting_enter_rows(
+          event_ticker=event_ticker,
+          market_ticker=ticker,
+          mode="live",
+          reason="superseded by new limit",
+        )
       cancel_resting_orders_for_ticker(self.kalshi, ticker)
       order = self.kalshi.create_order(
         ticker=str(pick["ticker"]),
