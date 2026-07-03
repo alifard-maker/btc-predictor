@@ -97,6 +97,28 @@ def test_allow_live_cut_loss_quick_exit_shorter_hold():
   )
 
 
+def test_allow_live_cut_loss_quick_exit_overrides_adopted_leg_hold():
+  cfg = _cfg_with_quick_exit()
+  cfg["hourly"]["bot"]["live_exit"] = {
+    "adopted_leg_cut_loss_min_hold_seconds": 300,
+    "adopted_leg_cut_loss_min_usd": 0.50,
+  }
+  pos = {
+    "opened_at": (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat(),
+    "entry_source": "adopted_resting",
+    "entry_price_cents": 50,
+  }
+  assert allow_live_cut_loss(
+    exit_reason="CUT LOSSES",
+    unrealized_usd=-0.20,
+    pos=pos,
+    settings_min_hold=90,
+    cfg=cfg,
+    kind="hourly",
+    adaptive_mode="defense",
+  )
+
+
 def test_apply_entry_profile_overlays_soft_rally_on_live_hourly():
   cfg = {
     "hourly": {

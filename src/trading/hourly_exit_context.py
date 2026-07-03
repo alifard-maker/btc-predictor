@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.trading.bot_profit_exit import hourly_mark_cut_allowed
+from src.trading.bot_live_exit import quick_exit_applies
+from src.trading.bot_profit_exit import hourly_mark_cut_allowed, position_hold_seconds
 from src.trading.hourly_position_alert import (
   _signal_favors_held_side,
   _spot_favors_held_side,
@@ -56,6 +57,9 @@ def build_hourly_exit_context(
   standard_hourly_alert: str | None = None,
   bot_kind: str = "hourly",
   hours_to_settle: float | None = None,
+  cfg: dict[str, Any] | None = None,
+  adaptive_mode: str | None = None,
+  hour_momentum_state: str | None = None,
 ) -> dict[str, Any]:
   """Snapshot index, contract, and thesis state at exit for post-trade review."""
   live = tab.get("live") or tab
@@ -108,6 +112,15 @@ def build_hourly_exit_context(
     ctx["position_alert_detail"] = position_alert.get("detail")
   if standard_hourly_alert:
     ctx["standard_hourly_alert"] = standard_hourly_alert
+
+  hold = position_hold_seconds(pos)
+  ctx["hold_seconds"] = hold
+  ctx["quick_exit_applied"] = quick_exit_applies(
+    cfg,
+    kind="hourly",
+    adaptive_mode=adaptive_mode,
+    hour_momentum_state=hour_momentum_state,
+  )
 
   return ctx
 

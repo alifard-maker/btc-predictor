@@ -245,6 +245,85 @@ def test_allow_live_cut_loss_quick_exit_lowers_thresholds():
   )
 
 
+def test_allow_live_cut_loss_quick_exit_overrides_adopted_leg_hold():
+  cfg = {
+    "hourly": {
+      "bot": {
+        "live_exit": {
+          "adopted_leg_cut_loss_min_usd": 0.50,
+          "adopted_leg_cut_loss_min_hold_seconds": 300,
+        },
+        "quick_exit": {
+          "enabled": True,
+          "min_hold_seconds": 30,
+          "cut_loss_min_hold_seconds": 30,
+          "cut_loss_min_usd": 0.12,
+        },
+      }
+    }
+  }
+  pos = {
+    "opened_at": (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat(),
+    "entry_source": "adopted_resting",
+    "entry_price_cents": 40,
+  }
+  assert allow_live_cut_loss(
+    exit_reason="CUT LOSSES",
+    unrealized_usd=-0.15,
+    pos=pos,
+    settings_min_hold=120,
+    cfg=cfg,
+    kind="hourly",
+    adaptive_mode="defense",
+  )
+  assert not allow_live_cut_loss(
+    exit_reason="CUT LOSSES",
+    unrealized_usd=-0.55,
+    pos=pos,
+    settings_min_hold=120,
+    cfg=cfg,
+    kind="hourly",
+    adaptive_mode="rally",
+    hour_momentum_state="normal",
+  )
+
+
+def test_overlay_live_profit_settings_quick_exit_for_adopted_leg():
+  settings = HourlyBotSettings(
+    take_profit_usd=0.0,
+    take_profit_pct=0.25,
+    min_hold_seconds=120,
+    profit_exit_cooldown_seconds=60,
+  )
+  cfg = {
+    "hourly": {
+      "bot": {
+        "live_exit": {
+          "adopted_leg_cut_loss_min_hold_seconds": 300,
+        },
+        "quick_exit": {
+          "enabled": True,
+          "min_hold_seconds": 30,
+          "take_profit_pct": 0.12,
+          "take_profit_usd": 0.06,
+        },
+      }
+    }
+  }
+  pos = {"entry_price_cents": 42, "entry_source": "adopted_kalshi"}
+  out = overlay_live_profit_settings(
+    settings,
+    pos,
+    cfg,
+    mode="live",
+    kind="hourly",
+    adaptive_mode="defense",
+  )
+  assert out.min_hold_seconds == 30
+  assert out.take_profit_pct == 0.12
+  assert out.take_profit_usd == 0.06
+
+
 def test_reconcile_close_blocked_for_young_position():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")

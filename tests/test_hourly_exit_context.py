@@ -5,6 +5,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from datetime import datetime, timedelta, timezone
+
 from src.trading.hourly_bot import HourlyBot
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 from src.trading.hourly_exit_context import (
@@ -53,10 +55,31 @@ def test_build_hourly_exit_context_includes_index_and_thesis():
   assert ctx["contract_label"] == "$1,610.00–$1,629.99"
   assert ctx["signal_favors_held_side"] is True
   assert ctx["thesis_broken"] is False
+  assert ctx["hold_seconds"] is None
+  assert ctx["quick_exit_applied"] is False
   detail = format_hourly_exit_context_detail(ctx)
   assert "ERTI $1,629.00" in detail
   assert "signal supports" in detail
   assert "BUY NO" in detail
+
+
+def test_build_hourly_exit_context_includes_quick_exit_and_hold():
+  opened = (datetime.now(timezone.utc) - timedelta(seconds=90)).isoformat()
+  pos = {"side": "yes", "opened_at": opened, "market_ticker": "T1"}
+  cfg = {"hourly": {"bot": {"quick_exit": {"enabled": True}}}}
+  ctx = build_hourly_exit_context(
+    pos=pos,
+    pick=None,
+    tab={"live": {"index_id": "BRTI"}},
+    live_price=None,
+    unrealized_pnl_usd=-0.10,
+    exit_reason="CUT LOSSES",
+    cfg=cfg,
+    adaptive_mode="defense",
+  )
+  assert ctx["quick_exit_applied"] is True
+  assert ctx["hold_seconds"] is not None
+  assert ctx["hold_seconds"] >= 89.0
 
 
 def test_hourly_exit_trade_logs_exit_context_json():

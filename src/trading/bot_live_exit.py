@@ -313,7 +313,7 @@ def allow_live_cut_loss(
       adaptive_mode=adaptive_mode,
       hour_momentum_state=hour_momentum_state,
     )
-  if is_adopted_live_leg(pos):
+  if is_adopted_live_leg(pos) and not quick:
     min_loss = max(min_loss, float(live_exit.adopted_leg_cut_loss_min_usd))
     min_hold = max(min_hold, int(live_exit.adopted_leg_cut_loss_min_hold_seconds))
   if unrealized_usd >= -min_loss:

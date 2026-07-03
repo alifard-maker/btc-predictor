@@ -840,6 +840,9 @@ class HourlyBot:
           standard_hourly_alert=standard_alert,
           bot_kind=self.kind,
           hours_to_settle=float(hours_left) if hours_left is not None else None,
+          cfg=cfg,
+          adaptive_mode=adaptive.mode,
+          hour_momentum_state=hour_momentum_state,
         )
         vet_line = format_hourly_exit_context_detail(exit_context)
         live_out = try_live_position_exit(
@@ -905,6 +908,9 @@ class HourlyBot:
           standard_hourly_alert=standard_alert,
           bot_kind=self.kind,
           hours_to_settle=float(hours_left) if hours_left is not None else None,
+          cfg=cfg,
+          adaptive_mode=adaptive.mode,
+          hour_momentum_state=hour_momentum_state,
         )
         vet_line = format_hourly_exit_context_detail(exit_context)
       detail = (
