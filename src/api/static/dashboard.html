@@ -3175,6 +3175,16 @@
 
     function botSkipReasonBrief(raw) {
       if (!raw) return '';
+      if (raw.startsWith('hour_momentum:')) {
+        const rest = raw.slice('hour_momentum:'.length);
+        const colon = rest.indexOf(':');
+        if (colon > 0) {
+          const state = rest.slice(0, colon);
+          const innerBrief = botSkipReasonBrief(rest.slice(colon + 1));
+          const stateBrief = state.replace(/_/g, ' ');
+          return innerBrief ? `${stateBrief} · ${innerBrief}` : stateBrief;
+        }
+      }
       if (raw.startsWith('already_open:')) return 'already open on this contract';
       if (raw.startsWith('ask_edge_too_low:')) return `ask-edge thin (${raw.slice('ask_edge_too_low:'.length)})`;
       if (raw.startsWith('reentry_cooldown:')) return 're-entry cooldown';
