@@ -30,7 +30,11 @@ def is_cheap_leg_cut_reason(reason: str | None) -> bool:
 
 def is_label_cut_cooldown_reason(reason: str | None) -> bool:
   """Exits that block re-entry on the same event + label identity."""
-  return is_cheap_leg_cut_reason(reason) or reason == "CUT LOSSES"
+  return (
+    is_cheap_leg_cut_reason(reason)
+    or reason == "CUT LOSSES"
+    or reason == "LEG STOP"
+  )
 
 
 def market_identity_label(label: str | None, market_ticker: str) -> str:
@@ -80,6 +84,16 @@ def cut_loss_label_cooldown_seconds(
   return base
 
 
+def leg_stop_reentry_cooldown_seconds(cfg: dict[str, Any] | None, *, kind: str) -> int:
+  """Per-label cooldown after LEG STOP when live_trial_align is enabled."""
+  bot_cfg = _bot_cfg_for_kind(cfg, kind)
+  align = dict(bot_cfg.get("live_trial_align") or {})
+  exits = dict(align.get("exits") or {})
+  if not align.get("enabled", False):
+    return DEFAULT_CUT_LOSS_LABEL_COOLDOWN_SECONDS
+  return int(exits.get("leg_stop_reentry_cooldown_seconds", DEFAULT_CUT_LOSS_LABEL_COOLDOWN_SECONDS))
+
+
 def resolve_label_reentry_cooldown_seconds(
   exit_reason: str | None,
   cfg: dict[str, Any] | None,
@@ -87,7 +101,7 @@ def resolve_label_reentry_cooldown_seconds(
   bot_kind: str,
   hours_to_settle: float | None = None,
 ) -> int:
-  """Cooldown stored on event+label after cheap-leg or CUT LOSSES exits."""
+  """Cooldown stored on event+label after cheap-leg, CUT LOSSES, or LEG STOP exits."""
   cfg_kind = "slot15" if bot_kind == "slot15" else "hourly"
   if is_cheap_leg_cut_reason(exit_reason):
     return cheap_leg_cut_cooldown_seconds(cfg, kind=cfg_kind)
@@ -95,6 +109,8 @@ def resolve_label_reentry_cooldown_seconds(
     return cut_loss_label_cooldown_seconds(
       cfg, kind=cfg_kind, hours_to_settle=hours_to_settle,
     )
+  if exit_reason == "LEG STOP":
+    return leg_stop_reentry_cooldown_seconds(cfg, kind=cfg_kind)
   return 0
 
 
@@ -181,6 +197,70 @@ def is_in_cheap_leg_cut_cooldown(
   if effective is None:
     effective = cooldown_seconds
   if int(effective) <= 0:
+    return False
+  exited_at = datetime.fromisoformat(str(row["exited_at"]).replace("Z", "+00:00"))
+  if exited_at.tzinfo is None:
+    exited_at = exited_at.replace(tzinfo=timezone.utc)
+  elapsed = (datetime.now(timezone.utc) - exited_at).total_seconds()
+  return elapsed < float(effective)
+
+
+_LEG_STOP_EVENT_COOLDOWNS_DDL = """
+CREATE TABLE IF NOT EXISTS leg_stop_event_cooldowns (
+  event_ticker TEXT PRIMARY KEY,
+  exited_at TEXT NOT NULL,
+  cooldown_seconds INTEGER NOT NULL
+);
+"""
+
+
+def migrate_leg_stop_event_cooldowns(conn: sqlite3.Connection) -> None:
+  conn.executescript(_LEG_STOP_EVENT_COOLDOWNS_DDL)
+
+
+def leg_stop_event_cooldown_seconds(cfg: dict[str, Any] | None, *, kind: str) -> int:
+  bot_cfg = _bot_cfg_for_kind(cfg, kind)
+  align = dict(bot_cfg.get("live_trial_align") or {})
+  exits = dict(align.get("exits") or {})
+  if not align.get("enabled", False):
+    return 0
+  return int(exits.get("leg_stop_event_cooldown_seconds", 300))
+
+
+def record_leg_stop_event_cooldown(
+  conn: sqlite3.Connection,
+  event_ticker: str,
+  *,
+  cooldown_seconds: int,
+  exited_at: str | None = None,
+) -> None:
+  if cooldown_seconds <= 0:
+    return
+  now = exited_at or datetime.now(timezone.utc).isoformat()
+  conn.execute(
+    """
+    INSERT INTO leg_stop_event_cooldowns (event_ticker, exited_at, cooldown_seconds)
+    VALUES (?, ?, ?)
+    ON CONFLICT(event_ticker) DO UPDATE SET
+      exited_at = excluded.exited_at,
+      cooldown_seconds = excluded.cooldown_seconds
+    """,
+    (event_ticker, now, int(cooldown_seconds)),
+  )
+
+
+def is_in_leg_stop_event_cooldown(
+  conn: sqlite3.Connection,
+  event_ticker: str,
+) -> bool:
+  row = conn.execute(
+    "SELECT exited_at, cooldown_seconds FROM leg_stop_event_cooldowns WHERE event_ticker = ?",
+    (event_ticker,),
+  ).fetchone()
+  if not row:
+    return False
+  effective = int(row["cooldown_seconds"] or 0)
+  if effective <= 0:
     return False
   exited_at = datetime.fromisoformat(str(row["exited_at"]).replace("Z", "+00:00"))
   if exited_at.tzinfo is None:

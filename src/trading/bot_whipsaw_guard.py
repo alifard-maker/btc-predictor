@@ -170,10 +170,16 @@ def whipsaw_pick_entry_blocked(
   signal_gate_active: bool,
   block_scale_in_after_quick_exit_cut: bool = False,
   quick_exit_cuts: int = 0,
+  mirror_trial_scale_in: bool = False,
 ) -> str | None:
   if not wcfg.enabled:
     return None
-  if is_scale_in and wcfg.block_scale_in_when_regime_blocked and "regime_blocked" in adaptive.reasons:
+  if (
+    is_scale_in
+    and wcfg.block_scale_in_when_regime_blocked
+    and "regime_blocked" in adaptive.reasons
+    and not mirror_trial_scale_in
+  ):
     return "whipsaw_scale_in_regime_blocked"
   if (
     block_scale_in_after_quick_exit_cut

@@ -206,6 +206,9 @@ class HourlyBotStore:
     from src.trading.bot_whipsaw_guard import migrate_whipsaw_signal_gates
 
     migrate_whipsaw_signal_gates(conn)
+    from src.trading.bot_cheap_leg_cooldown import migrate_leg_stop_event_cooldowns
+
+    migrate_leg_stop_event_cooldowns(conn)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(bot_trades)").fetchall()}
     if cols and "action" not in cols:
       conn.execute("ALTER TABLE bot_trades ADD COLUMN action TEXT NOT NULL DEFAULT 'enter'")
@@ -1163,6 +1166,25 @@ class HourlyBotStore:
         (event_ticker, mode),
       ).fetchone()
     return int(row[0] or 0) if row else 0
+
+  def record_leg_stop_event_cooldown(
+    self,
+    event_ticker: str,
+    *,
+    cooldown_seconds: int,
+  ) -> None:
+    from src.trading.bot_cheap_leg_cooldown import record_leg_stop_event_cooldown
+
+    with self._connect() as conn:
+      record_leg_stop_event_cooldown(
+        conn, event_ticker, cooldown_seconds=cooldown_seconds,
+      )
+
+  def is_in_leg_stop_event_cooldown(self, event_ticker: str) -> bool:
+    from src.trading.bot_cheap_leg_cooldown import is_in_leg_stop_event_cooldown
+
+    with self._connect() as conn:
+      return is_in_leg_stop_event_cooldown(conn, event_ticker)
 
   def list_trades(self, *, limit: int = 30, event_ticker: str | None = None) -> list[dict[str, Any]]:
     with self._connect() as conn:

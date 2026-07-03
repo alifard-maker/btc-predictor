@@ -409,7 +409,7 @@ hourly:
       event_cut_cooldown_seconds: 600
     live_trial_align:
       enabled: true
-      live_exit_mode: hybrid
+      live_exit_mode: trial_legs
       hybrid:
         adaptive_modes: [defense]
         hour_momentum_states: [conservative]
@@ -419,9 +419,18 @@ hourly:
       quick_exit:
         min_hold_seconds: 60
         cut_loss_min_hold_seconds: 60
+      exits:
+        leg_stop_reentry_cooldown_seconds: 600
+        leg_stop_event_cooldown_seconds: 300
+      stake:
+        max_stake_per_entry_usd: 4.0
+        max_budget_fraction_per_entry: 0.30
+        max_contracts_per_entry: 8
       execution:
         mirror_trial_entry_execution: true
         block_reentry_while_resting: true
+        mirror_trial_stake_sizing: true
+        mirror_trial_scale_in: true
         prefer_passive_below_edge_cents: 12
         block_scale_in_after_quick_exit_cut: true
       whipsaw:
@@ -832,7 +841,7 @@ eth:
         event_cut_cooldown_seconds: 600
       live_trial_align:
         enabled: true
-        live_exit_mode: hybrid
+        live_exit_mode: trial_legs
         hybrid:
           adaptive_modes: [defense]
           hour_momentum_states: [conservative]
@@ -842,9 +851,18 @@ eth:
         quick_exit:
           min_hold_seconds: 60
           cut_loss_min_hold_seconds: 60
+        exits:
+          leg_stop_reentry_cooldown_seconds: 600
+          leg_stop_event_cooldown_seconds: 300
+        stake:
+          max_stake_per_entry_usd: 4.0
+          max_budget_fraction_per_entry: 0.30
+          max_contracts_per_entry: 8
         execution:
           mirror_trial_entry_execution: true
           block_reentry_while_resting: true
+          mirror_trial_stake_sizing: true
+          mirror_trial_scale_in: true
           prefer_passive_below_edge_cents: 12
           block_scale_in_after_quick_exit_cut: true
         whipsaw:

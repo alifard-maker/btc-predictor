@@ -40,9 +40,12 @@ from src.trading.bot_whipsaw_guard import (
 from src.trading.hourly_live_trial_align import (
   HourlyLiveTrialAlignConfig,
   apply_align_entry_pricing,
+  apply_mirror_trial_entry_estrat,
   count_live_entry_slots_used,
+  leg_stop_entry_blocked,
   live_trial_align_active,
   merge_whipsaw_align_overrides,
+  mirror_trial_live_contract_count,
   pending_resting_enter_blocks_entry,
   should_mirror_trial_entry_execution,
   should_use_trial_leg_exits,
@@ -1004,6 +1007,17 @@ class HourlyBot:
           market_ticker=pos["market_ticker"],
           cooldown_seconds=label_cd,
         )
+      if (
+        settings.mode == "live"
+        and exit_reason == "LEG STOP"
+        and live_trial_align_active(cfg, kind=self.kind, mode=settings.mode)
+      ):
+        align_exits = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
+        if align_exits.leg_stop_event_cooldown_seconds > 0:
+          self.store.record_leg_stop_event_cooldown(
+            event_ticker,
+            cooldown_seconds=align_exits.leg_stop_event_cooldown_seconds,
+          )
       wcfg = WhipsawGuardConfig.from_cfg(cfg, kind="hourly")
       if (
         wcfg.enabled
@@ -1187,6 +1201,13 @@ class HourlyBot:
       self.store.set_last_skip_reason(whipsaw_block)
       return results
 
+    leg_stop_block = leg_stop_entry_blocked(
+      self.store, event_ticker, cfg=cfg, kind=self.kind, mode=settings.mode,
+    )
+    if leg_stop_block:
+      self.store.set_last_skip_reason(leg_stop_block)
+      return results
+
     estrat = effective_bot_entry_strategy(
       cfg,
       kind=self.kind,
@@ -1202,6 +1223,9 @@ class HourlyBot:
     )
 
     estrat = apply_hour_momentum_policy(estrat, momentum_policy)
+    estrat = apply_mirror_trial_entry_estrat(
+      estrat, cfg, kind=self.kind, mode=settings.mode,
+    )
     estrat = apply_whipsaw_momentum_contract_cap(estrat, momentum_policy, wcfg)
     late_entry_effective = resolve_late_entry_config(cfg, momentum_policy)
 
@@ -1306,6 +1330,7 @@ class HourlyBot:
           signal_gate_active=False,
           block_scale_in_after_quick_exit_cut=align_cfg.block_scale_in_after_quick_exit_cut,
           quick_exit_cuts=quick_exit_cuts,
+          mirror_trial_scale_in=align_cfg.mirror_trial_scale_in,
         )
         if scale_block:
           last_reason = scale_block
@@ -1473,15 +1498,18 @@ class HourlyBot:
         if not ok_fill:
           last_reason = fill_reason or "tail_entry_blocked"
           continue
-        count = _contracts_for_budget(stake, price_cents)
-        if settings.mode == "live":
-          count = cap_live_entry_contracts(
-            count=count,
-            price_cents=price_cents,
-            max_spend_per_hour_usd=float(settings.max_spend_per_hour_usd),
-            estrat=estrat_entry,
-          )
-        if count <= 0:
+        count = mirror_trial_live_contract_count(
+          pick=pick,
+          side=side,
+          stake_usd=stake,
+          price_cents=price_cents,
+          max_spend_per_hour_usd=float(settings.max_spend_per_hour_usd),
+          estrat=estrat_entry,
+          cfg=cfg,
+          kind=self.kind,
+          mode=settings.mode,
+        )
+        if settings.mode == "live" and count <= 0:
           last_reason = "budget_too_small_for_contract"
           continue
         live_entry_detail = format_live_entry_execution_detail(live_resolved)
