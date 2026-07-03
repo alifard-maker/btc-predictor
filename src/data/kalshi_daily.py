@@ -93,6 +93,13 @@ class KalshiDailyMarkets:
   def _cache_fresh(self, ts: float) -> bool:
     return time.monotonic() - ts < self._discovery_cache_ttl()
 
+  @staticmethod
+  def _normalize_strike_type(strike_type: str) -> str:
+    st = str(strike_type or "").lower()
+    if st in ("greater_or_equal", "ge"):
+      return "greater"
+    return st
+
   def _parse_market(self, row: dict[str, Any], series: str) -> KalshiContractMarket | None:
     close_raw = row.get("close_time")
     open_raw = row.get("open_time")
@@ -104,7 +111,7 @@ class KalshiDailyMarkets:
       ticker=str(row.get("ticker", "")),
       event_ticker=str(row.get("event_ticker", "")),
       title=str(row.get("title", "")),
-      strike_type=str(row.get("strike_type", "")),
+      strike_type=self._normalize_strike_type(row.get("strike_type", "")),
       floor_strike=float(floor) if floor not in (None, "") else None,
       cap_strike=float(cap) if cap not in (None, "") else None,
       close_time=self.kalshi._parse_ts(close_raw),

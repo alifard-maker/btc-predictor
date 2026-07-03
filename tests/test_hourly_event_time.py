@@ -20,6 +20,11 @@ def test_ticker_belongs_to_hourly_event_siblings():
   assert not ticker_belongs_to_hourly_event("KXBTCD-26JUN3017-T59749.99", ev)
 
 
+def test_index_u_range_siblings():
+  ev = "KXINXU-26JUL06H1000"
+  assert ticker_belongs_to_hourly_event("KXINX-26JUL06H1000-B7537", ev)
+
+
 def test_hourly_event_settle_utc_parses_suffix():
   settle = hourly_event_settle_utc("KXBTCD-26JUN3017")
   assert settle is not None

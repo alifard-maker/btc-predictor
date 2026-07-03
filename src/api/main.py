@@ -2074,3 +2074,14 @@ def admin_backup_logs(_: None = Depends(_verify_admin)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return {"status": "ok", **_loop.run_log_backup(reason="manual")}
+
+
+from src.api.index_hourly_routes import register_index_hourly_routes
+
+register_index_hourly_routes(
+  app,
+  lambda: _loop,
+  lambda: _cfg,
+  _session_user,
+  _apply_hourly_bot_settings,
+)

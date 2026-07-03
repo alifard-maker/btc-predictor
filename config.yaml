@@ -832,6 +832,180 @@ eth:
       continuous_enabled: true
       poll_seconds: 10
 
+# S&P 500 — hourly threshold ladder (KXINXU) + range bands (KXINX)
+spx:
+  enabled: true
+  price_feed:
+    live: yfinance
+    yfinance_ticker: "^GSPC"
+    label: Yahoo Finance ^GSPC (S&P 500)
+    index_id: SPX
+    cache_sec: 30
+    settlement_reference: S&P 500 index (^GSPC) — Kalshi KXINXU / KXINX
+  kalshi:
+    enabled: true
+    brti_index_id: SPX
+  market_hours:
+    enabled: true
+    timezone: America/New_York
+    open: "09:30"
+    close: "16:00"
+    weekdays_only: true
+  daily:
+    enabled: true
+    threshold_series: [KXINXU]
+    range_series: [KXINX]
+    discovery_cache_sec: 75
+    nearby_strikes: 30
+    top_bands: 30
+    max_markets_per_event: 1000
+    max_event_candidates: 6
+    strike_sigma_window: 2.5
+    band_sigma_window: 2.5
+    min_edge: 0.05
+    vol_lookback_1h: 24
+    drift_lookback_1h: 6
+    single_binary:
+      enabled: false
+      series: [KXINXDUD]
+  hourly:
+    enabled: true
+    hour_open_snapshot: true
+    open_log_minute: 0
+    log_minute: 5
+    late_call_minute: 45
+    min_train_samples: 200
+    fetch_candles_1h: 720
+    blend:
+      ml_weight: 0.4
+      structure_weight: 0.6
+    regime:
+      enabled: true
+      min_expected_move_pct: 0.08
+      min_edge: 0.08
+      min_hours_to_settle: 0.25
+      max_sigma_pct: 1.5
+      min_reasons_to_block: 2
+    intrahour:
+      enabled: true
+      min_shock_pct: 0.5
+      min_edge_for_highlight: 0.08
+      min_edge_override_regime: 0.10
+    bot:
+      mirror_btc_settings: true
+      enabled: true
+      mode: live
+      max_spend_per_hour_usd: 15
+      continuous_enabled: true
+      poll_seconds: 12
+      experiment_start_at: "2026-07-03T14:30:00+00:00"
+      entry_strategy:
+        enabled: true
+        max_entries_per_cycle: 3
+        max_concurrent_positions: 8
+        max_stake_per_entry_usd: 3.00
+      live_inventory:
+        enabled: true
+        max_concurrent_positions: 4
+        max_entries_per_cycle: 3
+      live_adaptive:
+        enabled: true
+      quick_exit:
+        enabled: true
+      soft_rally:
+        enabled: true
+    sigma_calibration: true
+  live_settlement_index:
+    enabled: true
+    require_for_live_entries: true
+
+# Nasdaq-100 — hourly threshold ladder (KXNASDAQ100U) + range bands (KXNASDAQ100)
+ndx:
+  enabled: true
+  price_feed:
+    live: yfinance
+    yfinance_ticker: "^NDX"
+    label: Yahoo Finance ^NDX (Nasdaq-100)
+    index_id: NDX
+    cache_sec: 30
+    settlement_reference: Nasdaq-100 index (^NDX) — Kalshi KXNASDAQ100U / KXNASDAQ100
+  kalshi:
+    enabled: true
+    brti_index_id: NDX
+  market_hours:
+    enabled: true
+    timezone: America/New_York
+    open: "09:30"
+    close: "16:00"
+    weekdays_only: true
+  daily:
+    enabled: true
+    threshold_series: [KXNASDAQ100U]
+    range_series: [KXNASDAQ100]
+    discovery_cache_sec: 75
+    nearby_strikes: 30
+    top_bands: 30
+    max_markets_per_event: 1000
+    max_event_candidates: 6
+    strike_sigma_window: 2.5
+    band_sigma_window: 2.5
+    min_edge: 0.05
+    vol_lookback_1h: 24
+    drift_lookback_1h: 6
+    single_binary:
+      enabled: false
+      series: [KXNASDAQDUD]
+  hourly:
+    enabled: true
+    hour_open_snapshot: true
+    open_log_minute: 0
+    log_minute: 5
+    late_call_minute: 45
+    min_train_samples: 200
+    fetch_candles_1h: 720
+    blend:
+      ml_weight: 0.4
+      structure_weight: 0.6
+    regime:
+      enabled: true
+      min_expected_move_pct: 0.10
+      min_edge: 0.08
+      min_hours_to_settle: 0.25
+      max_sigma_pct: 2.0
+      min_reasons_to_block: 2
+    intrahour:
+      enabled: true
+      min_shock_pct: 0.6
+      min_edge_for_highlight: 0.08
+      min_edge_override_regime: 0.10
+    bot:
+      mirror_btc_settings: true
+      enabled: true
+      mode: live
+      max_spend_per_hour_usd: 15
+      continuous_enabled: true
+      poll_seconds: 12
+      experiment_start_at: "2026-07-03T14:30:00+00:00"
+      entry_strategy:
+        enabled: true
+        max_entries_per_cycle: 3
+        max_concurrent_positions: 8
+        max_stake_per_entry_usd: 3.00
+      live_inventory:
+        enabled: true
+        max_concurrent_positions: 4
+        max_entries_per_cycle: 3
+      live_adaptive:
+        enabled: true
+      quick_exit:
+        enabled: true
+      soft_rally:
+        enabled: true
+    sigma_calibration: true
+  live_settlement_index:
+    enabled: true
+    require_for_live_entries: true
+
 # Walk-forward backtest — realistic fills, fees, and ML validation
 backtest:
   horizon: hourly              # hourly | 15m

@@ -6,7 +6,15 @@ from typing import Any
 
 from src.assets import index_id_for_cfg
 
-SETTLEMENT_INDEX_SOURCES = frozenset({"brti_live", "erti_live", "ethusd_rti_live"})
+SETTLEMENT_INDEX_SOURCES = frozenset({
+  "brti_live",
+  "erti_live",
+  "ethusd_rti_live",
+  "yfinance_gspc_live",
+  "yfinance_ndx_live",
+  "yfinance__gspc_live",
+  "yfinance__ndx_live",
+})
 SKIP_SETTLEMENT_INDEX_UNAVAILABLE = "settlement_index_unavailable"
 SKIP_SETTLEMENT_INDEX_NOT_LIVE_PREFIX = "settlement_index_not_live:"
 

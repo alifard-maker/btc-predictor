@@ -8,6 +8,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 _HOURLY_SUFFIX_RE = re.compile(r"^(\d{2})([A-Z]{3})(\d{2})(\d{2})$")
+_INDEX_SUFFIX_RE = re.compile(r"^(\d{2})([A-Z]{3})(\d{2})H(\d{2})(\d{2})$")
+
+_SPX_PREFIXES = ("KXINXU-", "KXINX-", "KXINXDUD-")
+_NDX_PREFIXES = ("KXNASDAQ100U-", "KXNASDAQ100-", "KXNASDAQDUD-")
+_CRYPTO_PREFIXES = ("KXBTCD-", "KXBTC-", "KXETHD-", "KXETH-")
 
 
 def hourly_event_time_suffix(event_ticker: str) -> str | None:
@@ -28,16 +33,20 @@ def market_ticker_event_ticker(market_ticker: str) -> str:
 
 def is_kalshi_hourly_event(event_ticker: str) -> bool:
   e = str(event_ticker)
-  return e.startswith(("KXBTCD-", "KXBTC-", "KXETHD-", "KXETH-"))
+  return e.startswith(_CRYPTO_PREFIXES + _SPX_PREFIXES + _NDX_PREFIXES)
 
 
 def hourly_asset_for_event(event_ticker: str) -> str | None:
-  """btc | eth for Kalshi hourly series, else None."""
+  """btc | eth | spx | ndx for Kalshi hourly series, else None."""
   e = str(event_ticker)
   if e.startswith(("KXBTCD-", "KXBTC-")):
     return "btc"
   if e.startswith(("KXETHD-", "KXETH-")):
     return "eth"
+  if e.startswith(_SPX_PREFIXES):
+    return "spx"
+  if e.startswith(_NDX_PREFIXES):
+    return "ndx"
   return None
 
 
@@ -46,56 +55,70 @@ def hourly_asset_for_ticker(ticker: str) -> str | None:
 
 
 def hourly_fill_belongs_to_asset(ticker: str, asset: str) -> bool:
-  """True when a market/event ticker belongs to the bot asset (BTC vs ETH)."""
+  """True when a market/event ticker belongs to the bot asset."""
   leg_asset = hourly_asset_for_ticker(ticker)
   if leg_asset is None:
     return True
   return leg_asset == str(asset).lower()
 
 
+def _sibling_prefixes(event_ticker: str) -> tuple[str, ...]:
+  e = str(event_ticker)
+  if e.startswith("KXBTCD-"):
+    return ("KXBTC-",)
+  if e.startswith("KXETHD-"):
+    return ("KXETH-",)
+  if e.startswith("KXINXU-"):
+    return ("KXINX-",)
+  if e.startswith("KXNASDAQ100U-"):
+    return ("KXNASDAQ100-",)
+  return ()
+
+
 def ticker_belongs_to_hourly_event(ticker: str, event_ticker: str) -> bool:
-  """True when a market ticker belongs to an hourly event (KXBTCD + KXBTC siblings)."""
+  """True when a market ticker belongs to an hourly event (threshold + range siblings)."""
   t = str(ticker)
   e = str(event_ticker)
   if t == e or t.startswith(f"{e}-"):
     return True
   if not is_kalshi_hourly_event(e):
-    # For synthetic / test tickers, skip strict series matching.
     return True
   suffix = hourly_event_time_suffix(e)
   if not suffix:
     return True
-  # Some tests use Kalshi-like prefixes with non-standard suffixes.
-  if not _HOURLY_SUFFIX_RE.match(suffix):
+  if not (_HOURLY_SUFFIX_RE.match(suffix) or _INDEX_SUFFIX_RE.match(suffix)):
     return True
-  sibling_prefixes: tuple[str, ...] = ()
-  if e.startswith("KXBTCD-"):
-    sibling_prefixes = ("KXBTC-",)
-  elif e.startswith("KXETHD-"):
-    sibling_prefixes = ("KXETH-",)
-  for prefix in sibling_prefixes:
+  for prefix in _sibling_prefixes(e):
     root = f"{prefix}{suffix}"
     if t == root or t.startswith(f"{root}-"):
       return True
   return False
 
 
-def hourly_event_settle_utc(
-  event_ticker: str,
-  *,
-  tz_name: str = "America/New_York",
-) -> datetime | None:
-  """Settlement instant for a Kalshi hourly event suffix (YYMMMDDHH in Eastern)."""
-  suffix = hourly_event_time_suffix(event_ticker)
-  if not suffix:
-    return None
+def _parse_suffix_to_local(suffix: str, *, tz_name: str = "America/New_York") -> datetime | None:
+  m = _INDEX_SUFFIX_RE.match(suffix)
+  if m:
+    yy, mon, dd, hh, mm = m.groups()
+    try:
+      month = datetime.strptime(mon, "%b").month
+      return datetime(
+        2000 + int(yy),
+        month,
+        int(dd),
+        int(hh),
+        int(mm),
+        0,
+        tzinfo=ZoneInfo(tz_name),
+      )
+    except ValueError:
+      return None
   m = _HOURLY_SUFFIX_RE.match(suffix)
   if not m:
     return None
   yy, mon, dd, hh = m.groups()
   try:
     month = datetime.strptime(mon, "%b").month
-    local = datetime(
+    return datetime(
       2000 + int(yy),
       month,
       int(dd),
@@ -105,6 +128,20 @@ def hourly_event_settle_utc(
       tzinfo=ZoneInfo(tz_name),
     )
   except ValueError:
+    return None
+
+
+def hourly_event_settle_utc(
+  event_ticker: str,
+  *,
+  tz_name: str = "America/New_York",
+) -> datetime | None:
+  """Settlement instant for a Kalshi hourly event suffix (Eastern)."""
+  suffix = hourly_event_time_suffix(event_ticker)
+  if not suffix:
+    return None
+  local = _parse_suffix_to_local(suffix, tz_name=tz_name)
+  if local is None:
     return None
   return local.astimezone(timezone.utc)
 

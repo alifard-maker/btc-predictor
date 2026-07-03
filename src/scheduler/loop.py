@@ -17,7 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from src.calibration.sources import KALSHI_EXIT_SOURCE, KALSHI_REF_SOURCE
 from src.calibration.hourly_tracker import HourlyCalibrationTracker
 from src.calibration.tracker import CalibrationTracker
-from src.assets import asset_cfg, asset_enabled, asset_v2_enabled, index_id_for_cfg
+from src.assets import asset_cfg, asset_enabled, asset_v2_enabled, index_id_for_cfg, is_index_asset
 from src.config import ensure_dirs, load_config
 from src.data.fetcher import DataFetcher
 from src.data.kalshi import KalshiClient, KalshiPriceQuote
@@ -117,13 +117,50 @@ class PredictionLoop:
     from src.scheduler.hourly_v2_support import init_hourly_v2
 
     init_hourly_v2(self)
+    from src.scheduler.index_hourly_support import init_index_assets
+
+    init_index_assets(self)
 
   def _asset_hourly_calibration(self, asset: str) -> HourlyCalibrationTracker:
+    asset = asset.lower()
+    if is_index_asset(asset):
+      from src.scheduler.index_hourly_support import index_hourly_calibration
+
+      return index_hourly_calibration(self, asset)
     if asset == "eth":
       if self.eth_hourly_calibration is None:
         raise RuntimeError("ETH hourly is disabled")
       return self.eth_hourly_calibration
     return self.hourly_calibration
+
+  def _hourly_predictor_for(self, asset: str):
+    asset = asset.lower()
+    if asset == "btc":
+      return self.hourly_predictor()
+    if asset == "eth":
+      return self.eth_hourly_predictor()
+    if is_index_asset(asset):
+      from src.scheduler.index_hourly_support import index_hourly_predictor
+
+      return index_hourly_predictor(self, asset)
+    raise ValueError(f"Unknown hourly asset: {asset}")
+
+  def _storage_for_hourly(self, asset: str) -> CandleStorage:
+    asset = asset.lower()
+    if asset == "btc":
+      return self.storage
+    if asset == "eth":
+      return self.eth_storage()
+    if is_index_asset(asset):
+      from src.scheduler.index_hourly_support import index_storage
+
+      return index_storage(self, asset)
+    raise ValueError(f"Unknown hourly asset: {asset}")
+
+  def _acfg(self, asset: str) -> dict[str, Any]:
+    from src.scheduler.index_hourly_support import acfg_for
+
+    return acfg_for(self, asset)
 
   def _slot15m_enabled(self, asset: str) -> bool:
     if asset == "btc":
@@ -247,6 +284,15 @@ class PredictionLoop:
   def eth_hourly_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
     return self._hourly_tab_prediction_cached("eth", include_bot=include_bot)
 
+  def spx_hourly_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
+    return self._hourly_tab_prediction_cached("spx", include_bot=include_bot)
+
+  def ndx_hourly_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
+    return self._hourly_tab_prediction_cached("ndx", include_bot=include_bot)
+
+  def index_hourly_prediction(self, asset: str, *, include_bot: bool = True) -> dict[str, Any]:
+    return self._hourly_tab_prediction_cached(asset.lower(), include_bot=include_bot)
+
   def _hourly_prediction_age_sec(self, asset: str) -> float | None:
     ts = self._hourly_prediction_mono.get(asset.lower())
     if ts is None:
@@ -280,10 +326,9 @@ class PredictionLoop:
     return self._hourly_tab_prediction(asset, include_bot=include_bot)
 
   def _cached_hourly_tab(self, asset: str) -> dict[str, Any] | None:
-    cached = self.latest_hourly_prediction if asset == "btc" else self.latest_eth_hourly_prediction
-    if cached and cached.get("ok"):
-      return cached
-    return None
+    from src.scheduler.index_hourly_support import cached_hourly_tab
+
+    return cached_hourly_tab(self, asset.lower())
 
   def _hourly_tab_for_bot_status(self, asset: str) -> dict[str, Any] | None:
     """Reuse latest prediction tab when possible — avoids rebuilding on every /bot poll."""
@@ -312,6 +357,9 @@ class PredictionLoop:
       stores.append(self.hourly_trial_bot_store("eth"))
       if self._slot15m_enabled("eth"):
         stores.append(self.slot15_bot_store("eth"))
+    for asset in ("spx", "ndx"):
+      if asset_enabled(self.cfg, asset):
+        stores.append(self.hourly_bot_store(asset))
     if asset_v2_enabled(self.cfg, "btc"):
       stores.append(self.hourly_bot_store("btc", kind="hourly_v2"))
     if asset_v2_enabled(self.cfg, "eth"):
@@ -772,7 +820,14 @@ class PredictionLoop:
     store = self.hourly_bot_store(asset, kind=kind)
     settings = store.get_settings()
     active = settings.enabled and settings.continuous
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    acfg = self._acfg(asset)
+    if is_index_asset(asset):
+      from src.trading.us_market_hours import index_trading_allowed
+
+      if not index_trading_allowed(acfg):
+        store.set_last_skip_reason("outside_market_hours")
+        store.record_cycle(active=active)
+        return
     tab: dict[str, Any] | None = None
     try:
       if not active:
@@ -967,6 +1022,16 @@ class PredictionLoop:
     if not asset_enabled(self.cfg, "eth"):
       return
     self._run_hourly_bot_continuous("eth")
+
+  def run_spx_hourly_bot_continuous(self) -> None:
+    from src.scheduler.index_hourly_support import run_index_hourly_bot_continuous
+
+    run_index_hourly_bot_continuous(self, "spx")
+
+  def run_ndx_hourly_bot_continuous(self) -> None:
+    from src.scheduler.index_hourly_support import run_index_hourly_bot_continuous
+
+    run_index_hourly_bot_continuous(self, "ndx")
 
   def run_hourly_trial_bot_continuous(self) -> None:
     self._run_hourly_bot_continuous("btc", kind="hourly_trial")
@@ -1266,24 +1331,29 @@ class PredictionLoop:
     self._run_slot15_bot_continuous("eth")
 
   def _hourly_tab_prediction(self, asset: str, *, include_bot: bool = True) -> dict[str, Any]:
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    asset = asset.lower()
+    acfg = self._acfg(asset)
     if not acfg.get("daily", {}).get("enabled", True):
       return {"ok": False, "error": f"{asset.upper()} hourly predictions disabled"}
     quote = self.live_price_quote(fresh=False, asset=asset)
     price = quote.price if quote else None
-    storage = self.storage if asset == "btc" else self.eth_storage()
+    storage = self._storage_for_hourly(asset)
     if price is None:
       df_1m = storage.load("1m")
       if not df_1m.empty:
         price = float(df_1m["close"].iloc[-1])
+      else:
+        df_1h_fallback = storage.load("1h")
+        if not df_1h_fallback.empty:
+          price = float(df_1h_fallback["close"].iloc[-1])
     index_label = index_id_for_cfg(acfg)
     if price is None or price <= 0:
       return {"ok": False, "error": f"Live {index_label} unavailable"}
     df_1h = self._ohlc_1h(storage=storage)
     df_15m = storage.load("15m")
-    predictor = self.hourly_predictor() if asset == "btc" else self.eth_hourly_predictor()
+    predictor = self._hourly_predictor_for(asset)
     tracker = self._asset_hourly_calibration(asset)
-    cal_15m = self._calibration_for(asset) if asset == "eth" else self.calibration
+    cal_15m = self._calibration_for(asset) if asset == "eth" else (self.calibration if asset == "btc" else None)
     live = predictor.predict(
       current_price=float(price),
       df_1h=df_1h,
@@ -1392,16 +1462,23 @@ class PredictionLoop:
     out["intrahour_opportunity"] = intrahour
     out["has_intrahour_opportunity"] = bool(intrahour and intrahour.get("highlight"))
 
+    from src.scheduler.index_hourly_support import set_cached_hourly_tab
+
     if asset == "btc":
       self.latest_hourly_prediction = out
       self._hourly_prediction_mono["btc"] = time.monotonic()
       if include_bot:
         out["bot"] = self.hourly_bot_status("btc", out)
-    else:
+    elif asset == "eth":
       self.latest_eth_hourly_prediction = out
       self._hourly_prediction_mono["eth"] = time.monotonic()
       if include_bot:
         out["bot"] = self.hourly_bot_status("eth", out)
+    else:
+      set_cached_hourly_tab(self, asset, out)
+      self._hourly_prediction_mono[asset] = time.monotonic()
+      if include_bot:
+        out["bot"] = self.hourly_bot_status(asset, out)
     return out
 
   def run_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
@@ -1425,6 +1502,36 @@ class PredictionLoop:
     if not acfg.get("hourly", {}).get("enabled", True):
       return None
     return self._run_hourly_prediction_for_asset("eth", force=force)
+
+  def run_spx_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
+    from src.scheduler.index_hourly_support import run_index_hourly_prediction
+
+    return run_index_hourly_prediction(self, "spx", force=force)
+
+  def run_ndx_hourly_prediction(self, *, force: bool = False) -> dict[str, Any] | None:
+    from src.scheduler.index_hourly_support import run_index_hourly_prediction
+
+    return run_index_hourly_prediction(self, "ndx", force=force)
+
+  def run_spx_hourly_open_snapshot(self) -> dict[str, Any] | None:
+    from src.scheduler.index_hourly_support import run_index_hourly_open_snapshot
+
+    return run_index_hourly_open_snapshot(self, "spx")
+
+  def run_ndx_hourly_open_snapshot(self) -> dict[str, Any] | None:
+    from src.scheduler.index_hourly_support import run_index_hourly_open_snapshot
+
+    return run_index_hourly_open_snapshot(self, "ndx")
+
+  def run_spx_hourly_late_call(self, *, force: bool = False) -> dict[str, Any] | None:
+    from src.scheduler.index_hourly_support import run_index_hourly_late_call
+
+    return run_index_hourly_late_call(self, "spx", force=force)
+
+  def run_ndx_hourly_late_call(self, *, force: bool = False) -> dict[str, Any] | None:
+    from src.scheduler.index_hourly_support import run_index_hourly_late_call
+
+    return run_index_hourly_late_call(self, "ndx", force=force)
 
   def hourly_v2_prediction(self, *, include_bot: bool = True) -> dict[str, Any]:
     from src.scheduler.hourly_v2_support import hourly_v2_tab_prediction
@@ -1511,7 +1618,7 @@ class PredictionLoop:
 
     from src.models.hourly_late_call_log import prediction_to_late_call_row
 
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    acfg = self._acfg(asset)
     if not acfg.get("hourly", {}).get("enabled", True):
       return None
     try:
@@ -1542,7 +1649,7 @@ class PredictionLoop:
       return None
 
   def _run_hourly_prediction_for_asset(self, asset: str, *, force: bool = False) -> dict[str, Any] | None:
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    acfg = self._acfg(asset)
     if not acfg.get("hourly", {}).get("enabled", True):
       return None
     try:
@@ -1550,7 +1657,7 @@ class PredictionLoop:
       out = self._hourly_tab_prediction(asset)
       if not out.get("ok"):
         return out
-      predictor = self.hourly_predictor() if asset == "btc" else self.eth_hourly_predictor()
+      predictor = self._hourly_predictor_for(asset)
       row = predictor.to_log_row(out.get("live") or out)
       tracker = self._asset_hourly_calibration(asset)
       if row.get("event_ticker"):
@@ -1571,7 +1678,7 @@ class PredictionLoop:
 
   def _run_hourly_open_for_asset(self, asset: str) -> dict[str, Any] | None:
     """Log hour-open snapshot at :00 ET — preview only, not used for calibration."""
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    acfg = self._acfg(asset)
     if not acfg.get("hourly", {}).get("enabled", True):
       return None
     if not acfg.get("hourly", {}).get("hour_open_snapshot", True):
@@ -1580,7 +1687,7 @@ class PredictionLoop:
       preview = self._hourly_tab_prediction(asset)
       if not preview.get("ok"):
         return preview
-      predictor = self.hourly_predictor() if asset == "btc" else self.eth_hourly_predictor()
+      predictor = self._hourly_predictor_for(asset)
       row = predictor.to_log_row(preview.get("live") or preview)
       tracker = self._asset_hourly_calibration(asset)
       if row.get("event_ticker"):
@@ -2389,6 +2496,9 @@ class PredictionLoop:
             id="hourly_trial_bot_continuous_eth",
             max_instances=1,
           )
+    from src.scheduler.index_hourly_support import schedule_index_hourly_jobs
+
+    schedule_index_hourly_jobs(self, scheduler)
 
   def _schedule_hourly_v2(self, scheduler) -> None:
     from src.assets import asset_v2_cfg
@@ -2586,6 +2696,15 @@ class PredictionLoop:
 
   def _exchange_live_quote(self, *, fresh: bool = True, asset: str = "btc") -> KalshiPriceQuote | None:
     """Fresh exchange last trade — used when index auth is missing or stale."""
+    asset = asset.lower()
+    if is_index_asset(asset):
+      acfg = self._acfg(asset)
+      pf = acfg.get("price_feed") or {}
+      if pf.get("live") == "yfinance":
+        from src.data.index_price import fetch_yfinance_quote
+
+        ticker = str(pf.get("yfinance_ticker") or "^GSPC")
+        return fetch_yfinance_quote(ticker, cfg=acfg, fresh=fresh)
     cache = self._ticker_cache if asset == "btc" else self._eth_ticker_cache
     now_mono = time.monotonic()
     cache_sec = self._exchange_tick_cache_sec()
@@ -2617,8 +2736,14 @@ class PredictionLoop:
     return self.kalshi.live_quote(fresh=fresh)
 
   def live_price_quote(self, *, fresh: bool = True, asset: str = "btc") -> KalshiPriceQuote | None:
-    """CF Benchmarks index when authed; otherwise fresh exchange tick."""
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    """CF Benchmarks index when authed; yfinance for indices; otherwise exchange tick."""
+    acfg = self._acfg(asset)
+    pf = acfg.get("price_feed") or {}
+    if pf.get("live") == "yfinance":
+      from src.data.index_price import fetch_yfinance_quote
+
+      ticker = str(pf.get("yfinance_ticker") or "^GSPC")
+      return fetch_yfinance_quote(ticker, cfg=acfg, fresh=fresh)
     index_id = index_id_for_cfg(acfg)
     max_stale = float(self.cfg.get("kalshi", {}).get("brti_max_stale_sec", 5))
     if self.kalshi.authenticated:

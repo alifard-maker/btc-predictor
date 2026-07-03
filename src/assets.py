@@ -6,8 +6,13 @@ import copy
 from pathlib import Path
 from typing import Any
 
-SUPPORTED_ASSETS = ("btc", "eth")
+SUPPORTED_ASSETS = ("btc", "eth", "spx", "ndx")
 DEFAULT_ASSET = "btc"
+INDEX_ASSETS = ("spx", "ndx")
+
+
+def is_index_asset(asset: str) -> bool:
+  return str(asset).lower() in INDEX_ASSETS
 
 
 def _deep_merge_dict(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:

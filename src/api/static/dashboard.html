@@ -245,6 +245,8 @@
       <button type="button" class="tab" id="tab-eth-15m" data-panel="panel-eth-15m" onclick="switchTab('eth-15m')">ETH 15m</button>
       <button type="button" class="tab" id="tab-daily" data-panel="panel-daily" onclick="switchTab('daily')">BTC Hourly</button>
       <button type="button" class="tab" id="tab-eth-hourly" data-panel="panel-eth-hourly" onclick="switchTab('eth-hourly')">ETH Hourly</button>
+      <button type="button" class="tab" id="tab-spx-hourly" data-panel="panel-spx-hourly" onclick="switchTab('spx-hourly')">SPX Hourly</button>
+      <button type="button" class="tab" id="tab-ndx-hourly" data-panel="panel-ndx-hourly" onclick="switchTab('ndx-hourly')">NDX Hourly</button>
       <button type="button" class="tab" id="tab-trials" data-panel="panel-trials" onclick="switchTab('trials')">Trials</button>
       <button type="button" class="tab" id="tab-hourly-v2" data-panel="panel-hourly-v2" onclick="switchTab('hourly-v2')">Hourly V2</button>
     </nav>
@@ -593,6 +595,60 @@
       </div>
     </div>
 
+    <div id="panel-spx-hourly" style="display:none">
+      <div class="card" id="spx-hourly-bot-card">
+        <h2>SPX hourly auto-bet (KXINXU)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live S&amp;P 500 hourly threshold ladder. US RTH only (9:30–16:00 ET). Price via ^GSPC.</p>
+        <div id="spx-hourly-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="spx-daily-summary-card">
+        <h2>SPX Kalshi event <span id="spx-daily-freq-badge"></span></h2>
+        <p class="muted" id="spx-daily-meta">Loading…</p>
+        <div id="spx-intrahour-opportunity"></div>
+        <div id="spx-daily-primary-signal"></div>
+        <div id="spx-daily-summary"></div>
+      </div>
+      <div class="card">
+        <h2>Hourly calibration</h2>
+        <div id="spx-hourly-calibration"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Strategy 1 · Threshold</h2>
+        <div id="spx-daily-threshold"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Strategy 2 · Range bands</h2>
+        <div id="spx-daily-range"><p class="muted">Loading…</p></div>
+      </div>
+    </div>
+
+    <div id="panel-ndx-hourly" style="display:none">
+      <div class="card" id="ndx-hourly-bot-card">
+        <h2>NDX hourly auto-bet (KXNASDAQ100U)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live Nasdaq-100 hourly threshold ladder. US RTH only (9:30–16:00 ET). Price via ^NDX.</p>
+        <div id="ndx-hourly-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="ndx-daily-summary-card">
+        <h2>NDX Kalshi event <span id="ndx-daily-freq-badge"></span></h2>
+        <p class="muted" id="ndx-daily-meta">Loading…</p>
+        <div id="ndx-intrahour-opportunity"></div>
+        <div id="ndx-daily-primary-signal"></div>
+        <div id="ndx-daily-summary"></div>
+      </div>
+      <div class="card">
+        <h2>Hourly calibration</h2>
+        <div id="ndx-hourly-calibration"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Strategy 1 · Threshold</h2>
+        <div id="ndx-daily-threshold"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Strategy 2 · Range bands</h2>
+        <div id="ndx-daily-range"><p class="muted">Loading…</p></div>
+      </div>
+    </div>
+
     <div id="panel-trials" style="display:none">
       <div class="card">
         <h2>Paper trial benchmarks</h2>
@@ -736,7 +792,7 @@
     let hourlyV2FetchGen = 0;
     let slot15FetchGen = 0;
     let hourlyGuideCheatOpen = false;
-    const lastBotStatus = { btc: null, eth: null };
+    const lastBotStatus = { btc: null, eth: null, spx: null, ndx: null };
     const lastV2BotStatus = { btc: null, eth: null };
     const lastHourlyTrialBotStatusByKey = {};
     const HOURLY_TRIAL_KINDS = new Set(['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft', 'hourly_trial_mech']);
@@ -801,7 +857,21 @@
     }
 
     function hourlyPrefix() {
-      return hourlyRenderTab === 'eth-hourly' ? 'eth-' : '';
+      if (hourlyRenderTab === 'eth-hourly') return 'eth-';
+      if (hourlyRenderTab === 'spx-hourly') return 'spx-';
+      if (hourlyRenderTab === 'ndx-hourly') return 'ndx-';
+      return '';
+    }
+
+    function hourlyAssetForTab(tab) {
+      if (tab === 'eth-hourly') return 'eth';
+      if (tab === 'spx-hourly') return 'spx';
+      if (tab === 'ndx-hourly') return 'ndx';
+      return 'btc';
+    }
+
+    function isHourlyTab(tab) {
+      return tab === 'daily' || tab === 'eth-hourly' || tab === 'spx-hourly' || tab === 'ndx-hourly';
     }
 
     function h$(id) {
@@ -817,6 +887,22 @@
           indexLabel: 'ERTI',
         };
       }
+      if (tab === 'spx-hourly') {
+        return {
+          prediction: '/api/spx/hourly/prediction?include_bot=false',
+          calibration: '/api/spx/hourly/calibration',
+          history: '/api/spx/hourly/predictions?limit=20',
+          indexLabel: 'SPX',
+        };
+      }
+      if (tab === 'ndx-hourly') {
+        return {
+          prediction: '/api/ndx/hourly/prediction?include_bot=false',
+          calibration: '/api/ndx/hourly/calibration',
+          history: '/api/ndx/hourly/predictions?limit=20',
+          indexLabel: 'NDX',
+        };
+      }
       return {
         prediction: '/api/daily/prediction?include_bot=false',
         calibration: '/api/hourly/calibration',
@@ -826,7 +912,7 @@
     }
 
     function hourlyApi() {
-      return hourlyApiFor(activeTab === 'eth-hourly' ? 'eth-hourly' : 'daily');
+      return hourlyApiFor(isHourlyTab(activeTab) ? activeTab : 'daily');
     }
     const TZ = 'America/New_York';
     const pct = (n) => (n * 100).toFixed(1) + '%';
@@ -1734,12 +1820,16 @@
       $('panel-eth-15m').style.display = name === 'eth-15m' ? '' : 'none';
       $('panel-daily').style.display = name === 'daily' ? '' : 'none';
       $('panel-eth-hourly').style.display = name === 'eth-hourly' ? '' : 'none';
+      $('panel-spx-hourly').style.display = name === 'spx-hourly' ? '' : 'none';
+      $('panel-ndx-hourly').style.display = name === 'ndx-hourly' ? '' : 'none';
       $('panel-trials').style.display = name === 'trials' ? '' : 'none';
       $('panel-hourly-v2').style.display = name === 'hourly-v2' ? '' : 'none';
       $('tab-15m').classList.toggle('active', name === '15m');
       $('tab-eth-15m').classList.toggle('active', name === 'eth-15m');
       $('tab-daily').classList.toggle('active', name === 'daily');
       $('tab-eth-hourly').classList.toggle('active', name === 'eth-hourly');
+      $('tab-spx-hourly').classList.toggle('active', name === 'spx-hourly');
+      $('tab-ndx-hourly').classList.toggle('active', name === 'ndx-hourly');
       $('tab-trials').classList.toggle('active', name === 'trials');
       $('tab-hourly-v2').classList.toggle('active', name === 'hourly-v2');
       if (name === 'hourly-v2') {
@@ -1769,8 +1859,8 @@
         loadTrials();
         return;
       }
-      if (name === 'daily' || name === 'eth-hourly') {
-        const asset = name === 'eth-hourly' ? 'eth' : 'btc';
+      if (isHourlyTab(name)) {
+        const asset = hourlyAssetForTab(name);
         const cached = lastBotStatus[asset];
         const key = botUiKey('hourly', asset);
         if (cached?.settings && !pendingBotPatch[key]) {
@@ -2346,7 +2436,10 @@
       if (isHourlyV2Kind(kind)) {
         return asset === 'eth' ? '/api/eth/hourly-v2/bot/settings' : '/api/hourly-v2/bot/settings';
       }
-      return asset === 'eth' ? '/api/eth/hourly/bot/settings' : '/api/hourly/bot/settings';
+      if (asset === 'eth') return '/api/eth/hourly/bot/settings';
+      if (asset === 'spx') return '/api/spx/hourly/bot/settings';
+      if (asset === 'ndx') return '/api/ndx/hourly/bot/settings';
+      return '/api/hourly/bot/settings';
     }
 
     function hourlyBotResetBankrollUrl(asset) {
@@ -4462,10 +4555,10 @@
 
     async function loadDaily() {
       const tabAtStart = activeTab;
-      if (tabAtStart !== 'daily' && tabAtStart !== 'eth-hourly') return;
+      if (tabAtStart !== 'daily' && !isHourlyTab(tabAtStart)) return;
       const gen = ++dailyFetchGen;
       const api = hourlyApiFor(tabAtStart);
-      const asset = tabAtStart === 'eth-hourly' ? 'eth' : 'btc';
+      const asset = hourlyAssetForTab(tabAtStart);
       hourlyRenderTab = tabAtStart;
       const cached = lastBotStatus[asset];
       if (cached) renderHourlyBot(cached, asset);
@@ -4572,7 +4665,7 @@
         if (activeTab === '15m') {
           tasks.push(get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])));
         }
-      } else if (activeTab === 'daily' || activeTab === 'eth-hourly') {
+      } else if (isHourlyTab(activeTab)) {
         loadDaily();
       } else if (activeTab === 'trials') {
         tasks.push(loadTrials());
