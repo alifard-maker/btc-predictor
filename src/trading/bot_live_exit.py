@@ -41,8 +41,8 @@ class QuickExitConfig:
   min_hold_seconds: int = 30
   cut_loss_min_hold_seconds: int = 30
   cut_loss_min_usd: float = 0.12
-  take_profit_pct: float = 0.12
-  take_profit_usd: float = 0.06
+  take_profit_pct: float = 0.06
+  take_profit_usd: float = 0.04
   apply_when_adaptive_mode: str | None = "defense"
   apply_when_hour_momentum_state: str | None = "conservative"
 
@@ -553,7 +553,8 @@ def overlay_live_profit_settings(
   )
   if quick:
     qcfg = quick_exit_config(cfg, kind=kind)
-    kw["take_profit_pct"] = float(qcfg.take_profit_pct)
+    # USD-only micro-scalp: fire at min_hold once +$take_profit_usd (no % gate).
+    kw["take_profit_pct"] = 0.0
     kw["take_profit_usd"] = float(qcfg.take_profit_usd)
     kw["take_profit_either_threshold"] = True
 

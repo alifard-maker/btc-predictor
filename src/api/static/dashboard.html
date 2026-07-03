@@ -601,11 +601,16 @@
         <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live S&amp;P 500 hourly threshold ladder. US RTH only (9:30–16:00 ET). Price via ^GSPC.</p>
         <div id="spx-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="spx-hourly-guide-card">
+        <h2>How to read this tab</h2>
+        <div id="spx-hourly-guide"><p class="muted">Loading…</p></div>
+      </div>
       <div class="card" id="spx-daily-summary-card">
         <h2>SPX Kalshi event <span id="spx-daily-freq-badge"></span></h2>
         <p class="muted" id="spx-daily-meta">Loading…</p>
         <div id="spx-intrahour-opportunity"></div>
         <div id="spx-daily-primary-signal"></div>
+        <div id="spx-daily-late-call"></div>
         <div id="spx-daily-summary"></div>
       </div>
       <div class="card">
@@ -613,12 +618,21 @@
         <div id="spx-hourly-calibration"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
+        <h2>Hourly prediction history</h2>
+        <div style="overflow-x:auto" id="spx-hourly-history"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
         <h2>Strategy 1 · Threshold</h2>
         <div id="spx-daily-threshold"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
         <h2>Strategy 2 · Range bands</h2>
+        <div id="spx-daily-range-summary" style="margin-bottom:.75rem"></div>
         <div id="spx-daily-range"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Chart structure</h2>
+        <div id="spx-daily-structure"><p class="muted">Loading…</p></div>
       </div>
     </div>
 
@@ -628,11 +642,16 @@
         <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live Nasdaq-100 hourly threshold ladder. US RTH only (9:30–16:00 ET). Price via ^NDX.</p>
         <div id="ndx-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="ndx-hourly-guide-card">
+        <h2>How to read this tab</h2>
+        <div id="ndx-hourly-guide"><p class="muted">Loading…</p></div>
+      </div>
       <div class="card" id="ndx-daily-summary-card">
         <h2>NDX Kalshi event <span id="ndx-daily-freq-badge"></span></h2>
         <p class="muted" id="ndx-daily-meta">Loading…</p>
         <div id="ndx-intrahour-opportunity"></div>
         <div id="ndx-daily-primary-signal"></div>
+        <div id="ndx-daily-late-call"></div>
         <div id="ndx-daily-summary"></div>
       </div>
       <div class="card">
@@ -640,12 +659,21 @@
         <div id="ndx-hourly-calibration"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
+        <h2>Hourly prediction history</h2>
+        <div style="overflow-x:auto" id="ndx-hourly-history"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
         <h2>Strategy 1 · Threshold</h2>
         <div id="ndx-daily-threshold"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
         <h2>Strategy 2 · Range bands</h2>
+        <div id="ndx-daily-range-summary" style="margin-bottom:.75rem"></div>
         <div id="ndx-daily-range"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Chart structure</h2>
+        <div id="ndx-daily-structure"><p class="muted">Loading…</p></div>
       </div>
     </div>
 
@@ -876,6 +904,48 @@
 
     function h$(id) {
       return $(hourlyPrefix() + id);
+    }
+
+    function hHtml(id, html) {
+      const el = h$(id);
+      if (el) el.innerHTML = html;
+      return el;
+    }
+
+    function hText(id, text) {
+      const el = h$(id);
+      if (el) el.textContent = text;
+      return el;
+    }
+
+    function hourlyTabForAsset(asset) {
+      if (asset === 'eth') return 'eth-hourly';
+      if (asset === 'spx') return 'spx-hourly';
+      if (asset === 'ndx') return 'ndx-hourly';
+      return 'daily';
+    }
+
+    function assetDisplayLabel(asset) {
+      if (asset === 'eth') return 'ETH';
+      if (asset === 'spx') return 'SPX';
+      if (asset === 'ndx') return 'NDX';
+      return 'BTC';
+    }
+
+    function formatHourlyError(data) {
+      const err = data?.error || 'Hourly prediction unavailable';
+      const skip = data?.bot?.last_skip_reason || '';
+      if (skip === 'outside_market_hours' || /outside.*market/i.test(String(err))) {
+        return 'Outside US market hours (9:30–16:00 ET, weekdays). Predictions and bot resume when RTH opens.';
+      }
+      return err;
+    }
+
+    function hourlyBotApiBase(asset) {
+      if (asset === 'eth') return '/api/eth/hourly/bot';
+      if (asset === 'spx') return '/api/spx/hourly/bot';
+      if (asset === 'ndx') return '/api/ndx/hourly/bot';
+      return '/api/hourly/bot';
     }
 
     function hourlyApiFor(tab) {
@@ -2083,6 +2153,7 @@
     function renderDailyContracts(rows, containerId, highlightLabels) {
       const tags = highlightLabels || {};
       const el = h$(containerId);
+      if (!el) return;
       if (!rows || !rows.length) {
         el.innerHTML = '<p class="muted">No contracts in this book.</p>';
         return;
@@ -2112,6 +2183,7 @@
 
     function renderDailyStructure(st) {
       const el = h$('daily-structure');
+      if (!el) return;
       if (!st) { el.innerHTML = '<p class="muted">No structure data.</p>'; return; }
       const sup = (st.support_levels || []).map(l =>
         `<li><span class="up">Support</span> $${Number(l.price).toLocaleString()} · ${l.touches} touches · wick ${(l.wick_score*100).toFixed(0)}%${l.volume_confirmed ? ' · vol ✓' : ''}</li>`
@@ -2188,13 +2260,15 @@
       const sr = s.strategy_range || {};
       const at = s.all_time?.open || {};
       const hasRange = (sr.most_likely_band?.n || 0) > 0 || (sr.all_lean_bands?.n || 0) > 0 || (sr.settlement_zone?.n || 0) > 0;
+      const calEl = h$('hourly-calibration');
+      if (!calEl) return;
       if (!s.n_resolved && !at.n_resolved && !hasRange) {
-        h$('hourly-calibration').innerHTML = '<p class="muted">No resolved hourly events yet — logged each hour at :05 ET when a Kalshi book is open.</p><div id="' + hourlyPrefix() + 'forecast-vs-settle"></div>';
+        calEl.innerHTML = '<p class="muted">No resolved hourly events yet — logged each hour at :05 ET when a Kalshi book is open.</p><div id="' + hourlyPrefix() + 'forecast-vs-settle"></div>';
         renderForecastVsSettle(s.forecast_vs_settle, hourlyPrefix() + 'forecast-vs-settle', hourlyApi().indexLabel);
         return;
       }
       const idx = hourlyApi().indexLabel;
-      h$('hourly-calibration').innerHTML = `
+      calEl.innerHTML = `
         ${renderAllTimeStats({ open: at, epochs_archived: s.all_time?.epochs_archived, snapshot_through: s.all_time?.snapshot_through, snapshot_note: s.all_time?.snapshot_note, late_entry: {}, flip: {} })}
         <div class="stats-block epoch" style="margin-top:.75rem">
           <h3>Strategy 1 · Threshold (primary pick)</h3>
@@ -2381,12 +2455,14 @@
     }
 
     function renderHourlyHistory(rows) {
+      const histEl = h$('hourly-history');
+      if (!histEl) return;
       if (!rows || !rows.length) {
-        h$('hourly-history').innerHTML = '<p class="muted">No hourly predictions logged yet.</p>';
+        histEl.innerHTML = '<p class="muted">No hourly predictions logged yet.</p>';
         return;
       }
       const idx = hourlyApi().indexLabel;
-      h$('hourly-history').innerHTML = `<table>
+      histEl.innerHTML = `<table>
         <thead><tr><th>Logged</th><th>Primary pick (S1)</th><th>Signal</th><th>Range band @ lock (S2)</th><th>Outcome (S1)</th></tr></thead>
         <tbody>${rows.map(r => {
           const wrong = hourlyPickWrong(r);
@@ -2436,32 +2512,29 @@
       if (isHourlyV2Kind(kind)) {
         return asset === 'eth' ? '/api/eth/hourly-v2/bot/settings' : '/api/hourly-v2/bot/settings';
       }
-      if (asset === 'eth') return '/api/eth/hourly/bot/settings';
-      if (asset === 'spx') return '/api/spx/hourly/bot/settings';
-      if (asset === 'ndx') return '/api/ndx/hourly/bot/settings';
-      return '/api/hourly/bot/settings';
+      return `${hourlyBotApiBase(asset)}/settings`;
     }
 
     function hourlyBotResetBankrollUrl(asset) {
-      return asset === 'eth' ? '/api/eth/hourly/bot/reset-bankroll' : '/api/hourly/bot/reset-bankroll';
+      return `${hourlyBotApiBase(asset)}/reset-bankroll`;
     }
 
     function hourlyBotFreshStartUrl(asset, kind = 'hourly') {
       if (isHourlyV2Kind(kind)) {
         return asset === 'eth' ? '/api/eth/hourly-v2/bot/fresh-start' : '/api/hourly-v2/bot/fresh-start';
       }
-      return asset === 'eth' ? '/api/eth/hourly/bot/fresh-start' : '/api/hourly/bot/fresh-start';
+      return `${hourlyBotApiBase(asset)}/fresh-start`;
     }
 
     function hourlyBotClearHistoryUrl(asset, kind = 'hourly') {
       if (isHourlyV2Kind(kind)) {
         return asset === 'eth' ? '/api/eth/hourly-v2/bot/clear-history' : '/api/hourly-v2/bot/clear-history';
       }
-      return asset === 'eth' ? '/api/eth/hourly/bot/clear-history' : '/api/hourly/bot/clear-history';
+      return `${hourlyBotApiBase(asset)}/clear-history`;
     }
 
     function hourlyBotSyncKalshiUrl(asset) {
-      return asset === 'eth' ? '/api/eth/hourly/bot/sync-kalshi-fills' : '/api/hourly/bot/sync-kalshi-fills';
+      return `${hourlyBotApiBase(asset)}/sync-kalshi-fills`;
     }
 
     function hourlyBotStatusUrl(asset, kind = 'hourly', lightweight = true) {
@@ -2470,7 +2543,7 @@
         const base = asset === 'eth' ? '/api/eth/hourly-v2/bot' : '/api/hourly-v2/bot';
         return `${base}?lightweight=${lightweight}`;
       }
-      const base = asset === 'eth' ? '/api/eth/hourly/bot' : '/api/hourly/bot';
+      const base = hourlyBotApiBase(asset);
       return lightweight ? `${base}?lightweight=true` : `${base}?lightweight=false`;
     }
 
@@ -2687,8 +2760,7 @@
     function shouldRenderHourlyBot(asset, kind = 'hourly') {
       if (isHourlyV2Kind(kind)) return activeTab === 'hourly-v2';
       if (isHourlyTrialKind(kind)) return activeTab === 'trials';
-      const tab = asset === 'eth' ? 'eth-hourly' : 'daily';
-      return activeTab === tab;
+      return activeTab === hourlyTabForAsset(asset);
     }
 
     function readBotSettingsFromDom(asset, kind = 'hourly') {
@@ -4122,7 +4194,7 @@
       const realizedCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
       const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
       const hourId = hs.event_ticker || bot.event_ticker || '—';
-      const assetLabel = asset === 'eth' ? 'ETH' : 'BTC';
+      const assetLabel = assetDisplayLabel(asset);
       const tradeSource = (() => {
         const all = bot.recent_trades || [];
         if (s.mode !== 'live') {
@@ -4315,17 +4387,17 @@
     function renderDaily(data) {
       if (activeTab !== hourlyRenderTab) return;
       if (!data || !data.ok) {
-        h$('daily-meta').textContent = data?.error || 'Hourly prediction unavailable';
-        h$('hourly-guide').innerHTML = '<p class="muted">—</p>';
-        h$('daily-freq-badge').innerHTML = '';
-        h$('daily-primary-signal').innerHTML = '';
-        h$('intrahour-opportunity').innerHTML = '';
-        h$('daily-late-call').innerHTML = '';
-        h$('daily-summary').innerHTML = '';
-        h$('daily-threshold').innerHTML = '<p class="muted">—</p>';
-        h$('daily-range-summary').innerHTML = '';
-        h$('daily-range').innerHTML = '<p class="muted">—</p>';
-        h$('daily-structure').innerHTML = '<p class="muted">—</p>';
+        hText('daily-meta', formatHourlyError(data));
+        hHtml('hourly-guide', '<p class="muted">—</p>');
+        hHtml('daily-freq-badge', '');
+        hHtml('daily-primary-signal', '');
+        hHtml('intrahour-opportunity', '');
+        hHtml('daily-late-call', '');
+        hHtml('daily-summary', '');
+        hHtml('daily-threshold', '<p class="muted">—</p>');
+        hHtml('daily-range-summary', '');
+        hHtml('daily-range', '<p class="muted">—</p>');
+        hHtml('daily-structure', '<p class="muted">—</p>');
         return;
       }
       const live = data.live || data;
@@ -4351,7 +4423,10 @@
       const titleEl = h$('daily-event-title');
       if (titleEl) {
         const iv = g.interval || {};
-        const fallback = hourlyRenderTab === 'eth-hourly' ? 'ETH Kalshi' : 'BTC Kalshi';
+        const fallback = hourlyRenderTab === 'eth-hourly' ? 'ETH Kalshi'
+          : hourlyRenderTab === 'spx-hourly' ? 'SPX Kalshi'
+          : hourlyRenderTab === 'ndx-hourly' ? 'NDX Kalshi'
+          : 'BTC Kalshi';
         titleEl.textContent = `${iv.badge || fallback} event`;
       }
       renderHourlyGuidance(g);
@@ -4501,7 +4576,7 @@
     }
 
     function refreshHourlyBotTradeLog(asset, tabAtStart, gen) {
-      const url = asset === 'eth' ? '/api/eth/hourly/bot/trades?limit=200' : '/api/hourly/bot/trades?limit=200';
+      const url = `${hourlyBotApiBase(asset)}/trades?limit=200`;
       getWithTimeout(url, 15000).then((data) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         const cached = lastBotStatus[asset];
