@@ -173,6 +173,7 @@ def place_live_exit_sell(
   side: str,
   contracts: int,
   limit_cents: int,
+  time_in_force: str = "immediate_or_cancel",
 ) -> dict[str, Any]:
   """Marketable limit sell when software exit fires in live mode."""
   empty: dict[str, Any] = {"order_id": None, "fill_count": 0, "remaining_count": 0}
@@ -187,6 +188,7 @@ def place_live_exit_sell(
       action="sell",
       yes_price=price if side == "yes" else None,
       no_price=price if side == "no" else None,
+      time_in_force=time_in_force,
     )
     from src.data.kalshi import parse_v2_order_response
 

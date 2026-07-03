@@ -1095,6 +1095,83 @@ def verify_kalshi_exit_fill(
   return 0
 
 
+def _cancel_pending_resting_exit(kalshi: Any, store: Any, position_id: str) -> str | None:
+  """Cancel a stale bot resting-exit order when inventory is still held."""
+  pending_oid = resting_exit_order_id(store, position_id)
+  if not pending_oid:
+    return None
+  if order_still_resting(kalshi, pending_oid):
+    try:
+      kalshi.cancel_order(str(pending_oid))
+      log.info("Cancelled stale resting exit %s for position %s", pending_oid, position_id)
+    except Exception as e:
+      log.warning("Cancel stale resting exit %s failed: %s", pending_oid, e)
+  return pending_oid
+
+
+def _attempt_live_exit_sell(
+  kalshi: Any,
+  *,
+  ticker: str,
+  side: str,
+  sell_int: int,
+  sell_cents: int,
+  time_in_force: str,
+) -> dict[str, Any]:
+  """Place one live exit sell and refresh sellable inventory for verification."""
+  exit_result = place_live_exit_sell(
+    kalshi,
+    market_ticker=ticker,
+    side=side,
+    contracts=sell_int,
+    limit_cents=sell_cents,
+    time_in_force=time_in_force,
+  )
+  sellable_after = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
+  return {**exit_result, "sellable_after": sellable_after}
+
+
+def _log_unverified_live_exit(
+  store: Any,
+  *,
+  period_key: str,
+  pos: dict[str, Any],
+  pos_mode: str,
+  pick: dict[str, Any],
+  exit_reason: str,
+  detail_suffix: str,
+  extra_detail: str,
+  sell_count: float,
+  sell_cents: int,
+  entry_c: int,
+  live_exit_oid: str | None,
+  claimed_fill: int,
+) -> dict[str, Any]:
+  return store.log_trade({
+    "event_ticker": period_key,
+    "trigger": "continuous",
+    "action": "exit",
+    "mode": pos_mode,
+    "market_ticker": str(pos["market_ticker"]),
+    "side": str(pos["side"]),
+    "contracts": sell_count,
+    "price_cents": sell_cents,
+    "entry_price_cents": entry_c,
+    "exit_price_cents": sell_cents,
+    "cost_usd": 0,
+    "pnl_usd": 0,
+    "signal": pick.get("signal"),
+    "label": pos.get("label"),
+    "status": "skipped",
+    "detail": (
+      f"Live EXIT unverified (API claimed {claimed_fill} fill(s) but Kalshi inventory unchanged) — "
+      f"bot leg kept open · {exit_reason}: {detail_suffix}{extra_detail}"
+    ),
+    "position_id": pos["id"],
+    "kalshi_order_id": live_exit_oid,
+  })
+
+
 def try_live_position_exit(
   *,
   kalshi: Any,
@@ -1115,13 +1192,17 @@ def try_live_position_exit(
   """Place or skip a live Kalshi exit. Returns a trade row when logged."""
   cancel_resting_orders(kalshi, pos)
 
-  pending_oid = resting_exit_order_id(store, pos["id"])
-  if pending_oid and order_still_resting(kalshi, pending_oid):
-    return None
-
   ticker = str(pos["market_ticker"])
   side = str(pos["side"])
-  sellable = kalshi_sellable_contracts(kalshi, ticker, side)
+  sellable = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
+
+  pending_oid = resting_exit_order_id(store, pos["id"])
+  if pending_oid and order_still_resting(kalshi, pending_oid):
+    if sellable is not None and sellable > 0.05:
+      _cancel_pending_resting_exit(kalshi, store, str(pos["id"]))
+    else:
+      return None
+
   if sellable is not None and sellable <= 0:
     if resting_sell_contracts(kalshi, ticker, side) > 0.05:
       return None
@@ -1160,21 +1241,58 @@ def try_live_position_exit(
   sell_int = max(1, int(sell_count)) if sell_count >= 0.99 else 0
   if sell_int <= 0:
     return None
-  exit_result = place_live_exit_sell(
+
+  attempt = _attempt_live_exit_sell(
     kalshi,
-    market_ticker=ticker,
+    ticker=ticker,
     side=side,
-    contracts=sell_int,
-    limit_cents=sell_cents,
+    sell_int=sell_int,
+    sell_cents=sell_cents,
+    time_in_force="immediate_or_cancel",
   )
-  live_exit_oid = exit_result.get("order_id")
-  claimed_fill = int(exit_result.get("fill_count") or 0)
-  sellable_after = kalshi_sellable_contracts(kalshi, ticker, side)
+  live_exit_oid = attempt.get("order_id")
+  claimed_fill = int(attempt.get("fill_count") or 0)
+  sellable_after = attempt.get("sellable_after")
   fill_count = verify_kalshi_exit_fill(
     sellable_before=sellable_before,
     sellable_after=sellable_after,
     claimed_fill=claimed_fill,
   )
+  last_attempt = attempt
+
+  if claimed_fill > 0 and fill_count <= 0:
+    log.warning(
+      "Live exit order %s claimed %s fills but Kalshi inventory unchanged on %s — retrying floor sell",
+      live_exit_oid,
+      claimed_fill,
+      ticker,
+    )
+    if live_exit_oid:
+      try:
+        kalshi.cancel_order(str(live_exit_oid))
+      except Exception as e:
+        log.warning("Cancel unverified exit %s failed: %s", live_exit_oid, e)
+    sellable_before = kalshi_sellable_contracts(kalshi, ticker, side, critical=True)
+    if sellable_before is not None and sellable_before > 0.05:
+      sell_int = max(1, int(round(min(float(sell_int), float(sellable_before)))))
+      retry = _attempt_live_exit_sell(
+        kalshi,
+        ticker=ticker,
+        side=side,
+        sell_int=sell_int,
+        sell_cents=1,
+        time_in_force="fill_or_kill",
+      )
+      live_exit_oid = retry.get("order_id") or live_exit_oid
+      claimed_fill = int(retry.get("fill_count") or 0)
+      sellable_after = retry.get("sellable_after")
+      fill_count = verify_kalshi_exit_fill(
+        sellable_before=sellable_before,
+        sellable_after=sellable_after,
+        claimed_fill=claimed_fill,
+      )
+      last_attempt = retry
+
   if claimed_fill > 0 and fill_count <= 0:
     log.warning(
       "Live exit order %s claimed %s fills but Kalshi inventory unchanged on %s",
@@ -1182,56 +1300,52 @@ def try_live_position_exit(
       claimed_fill,
       ticker,
     )
-    return store.log_trade({
-      "event_ticker": period_key,
-      "trigger": "continuous",
-      "action": "exit",
-      "mode": pos_mode,
-      "market_ticker": ticker,
-      "side": side,
-      "contracts": sell_count,
-      "price_cents": sell_cents,
-      "entry_price_cents": entry_c,
-      "exit_price_cents": sell_cents,
-      "cost_usd": 0,
-      "pnl_usd": 0,
-      "signal": pick.get("signal"),
-      "label": pos.get("label"),
-      "status": "skipped",
-      "detail": (
-        f"Live EXIT unverified (API claimed {claimed_fill} fill(s) but Kalshi inventory unchanged) — "
-        f"bot leg kept open · {exit_reason}: {detail_suffix}{extra_detail}"
-      ),
-      "position_id": pos["id"],
-      "kalshi_order_id": live_exit_oid,
-    })
+    return _log_unverified_live_exit(
+      store,
+      period_key=period_key,
+      pos=pos,
+      pos_mode=pos_mode,
+      pick=pick,
+      exit_reason=exit_reason,
+      detail_suffix=detail_suffix,
+      extra_detail=extra_detail,
+      sell_count=sell_count,
+      sell_cents=sell_cents,
+      entry_c=entry_c,
+      live_exit_oid=live_exit_oid,
+      claimed_fill=claimed_fill,
+    )
+
   if fill_count <= 0:
-    return store.log_trade({
-      "event_ticker": period_key,
-      "trigger": "continuous",
-      "action": "exit",
-      "mode": pos_mode,
-      "market_ticker": ticker,
-      "side": side,
-      "contracts": sell_count,
-      "price_cents": sell_cents,
-      "entry_price_cents": entry_c,
-      "exit_price_cents": sell_cents,
-      "cost_usd": 0,
-      "signal": pick.get("signal"),
-      "label": pos.get("label"),
-      "status": "resting",
-      "detail": (
-        f"Live EXIT order {live_exit_oid} (0 filled — resting on Kalshi; "
-        f"{int(exit_result.get('remaining_count') or sell_count)} remaining) "
-        f"@ {sell_cents}¢"
-      ),
-      "position_id": pos["id"],
-      "kalshi_order_id": live_exit_oid,
-    })
+    remaining = int(last_attempt.get("remaining_count") or sell_count)
+    if remaining > 0 and str(last_attempt.get("order_id") or ""):
+      return store.log_trade({
+        "event_ticker": period_key,
+        "trigger": "continuous",
+        "action": "exit",
+        "mode": pos_mode,
+        "market_ticker": ticker,
+        "side": side,
+        "contracts": sell_count,
+        "price_cents": sell_cents,
+        "entry_price_cents": entry_c,
+        "exit_price_cents": sell_cents,
+        "cost_usd": 0,
+        "signal": pick.get("signal"),
+        "label": pos.get("label"),
+        "status": "resting",
+        "detail": (
+          f"Live EXIT order {live_exit_oid} (0 filled — resting on Kalshi; "
+          f"{remaining} remaining) "
+          f"@ {sell_cents}¢"
+        ),
+        "position_id": pos["id"],
+        "kalshi_order_id": live_exit_oid,
+      })
+    return None
 
   return {
-    "exit_result": exit_result,
+    "exit_result": last_attempt,
     "live_exit_oid": live_exit_oid,
     "fill_count": fill_count,
     "sell_cents": sell_cents,

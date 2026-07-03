@@ -68,6 +68,8 @@ from src.trading.bot_live_exit import (
   apply_live_exit_entry_guards,
   live_cut_loss_min_usd,
   overlay_live_profit_settings,
+  quick_exit_applies,
+  quick_exit_config,
   resting_enter_cap_reached,
 )
 from src.trading.bot_scale_in import evaluate_scale_in
@@ -615,6 +617,8 @@ class HourlyBot:
     pick: dict[str, Any] | None = None,
     live_price: float | None = None,
     standard_hourly_alert: str | None = None,
+    adaptive_mode: str | None = None,
+    hour_momentum_state: str | None = None,
   ) -> tuple[str | None, str]:
     """Return (exit_reason, detail_suffix) or (None, '') if position should stay open."""
     if is_hourly_trial_kind(self.kind):
@@ -664,17 +668,26 @@ class HourlyBot:
         settings_min_hold=settings.min_hold_seconds,
         cfg=cfg,
         kind="hourly",
+        adaptive_mode=adaptive_mode,
+        hour_momentum_state=hour_momentum_state,
       ):
         return None, ""
       return cheap_reason, cheap_detail
     if kind == "CUT LOSSES":
       if unrealized is None:
         return None, ""
-      min_loss = (
-        live_cut_loss_min_usd(cfg, kind="hourly")
-        if settings.mode == "live"
-        else CUT_LOSS_EXIT_MIN_LOSS_USD
+      quick = quick_exit_applies(
+        cfg,
+        kind="hourly",
+        adaptive_mode=adaptive_mode,
+        hour_momentum_state=hour_momentum_state,
       )
+      if settings.mode == "live" and quick:
+        min_loss = quick_exit_config(cfg, kind="hourly").cut_loss_min_usd
+      elif settings.mode == "live":
+        min_loss = live_cut_loss_min_usd(cfg, kind="hourly")
+      else:
+        min_loss = CUT_LOSS_EXIT_MIN_LOSS_USD
       if unrealized >= -min_loss:
         return None, ""
       if settings.mode == "live" and not allow_live_cut_loss(
@@ -684,12 +697,16 @@ class HourlyBot:
         settings_min_hold=settings.min_hold_seconds,
         cfg=cfg,
         kind="hourly",
+        adaptive_mode=adaptive_mode,
+        hour_momentum_state=hour_momentum_state,
       ):
         return None, ""
       return "CUT LOSSES", str(alert.get("detail", ""))
     profit_settings = (
       overlay_live_profit_settings(
         settings, pos, cfg, mode=settings.mode, kind="hourly",
+        adaptive_mode=adaptive_mode,
+        hour_momentum_state=hour_momentum_state,
       )
       if settings.mode == "live"
       else settings
@@ -718,6 +735,16 @@ class HourlyBot:
     hours_left = live.get("hours_to_settle")
     seconds_remaining = float(hours_left) * 3600.0 if hours_left is not None else None
     results: list[dict[str, Any]] = []
+    realized_total = self.store.realized_pnl_usd(event_ticker)
+    adaptive = assess_adaptive_passive_mode(
+      tab=tab,
+      cfg=cfg,
+      realized_pnl_usd=realized_total,
+      aggressive=settings.aggressive_entries,
+      mode=settings.mode,
+    )
+    mom_snap = self.store.hour_momentum() or {}
+    hour_momentum_state = str(mom_snap.get("state") or "") or None
 
     for pos in self.store.open_positions(event_ticker):
       pick = _find_contract_in_live(live, pos["market_ticker"])
@@ -775,6 +802,8 @@ class HourlyBot:
         mark_cents=exit_price, cfg=cfg, pick=pick,
         live_price=float(price) if price is not None else None,
         standard_hourly_alert=standard_alert,
+        adaptive_mode=adaptive.mode,
+        hour_momentum_state=hour_momentum_state,
       )
       if not exit_reason:
         continue

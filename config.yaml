@@ -336,6 +336,16 @@ hourly:
       adopted_leg_cut_loss_min_usd: 0.50
       max_adopted_contracts: 2
       max_resting_enters_per_hour: 6
+    quick_exit:
+      enabled: true
+      min_hold_seconds: 30
+      cut_loss_min_hold_seconds: 30
+      cut_loss_min_usd: 0.12
+      take_profit_pct: 0.12
+      take_profit_usd: 0.06
+      apply_when:
+        adaptive_mode: defense
+        hour_momentum_state: conservative
     live_adaptive:
       enabled: true
       profit_lock_usd: 1.25

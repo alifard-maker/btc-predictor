@@ -33,7 +33,35 @@ class LiveExitConfig:
   max_resting_enters_per_hour: int = 6
 
 
+@dataclass(frozen=True)
+class QuickExitConfig:
+  """Defense/chop exit tier — shorter anti-flicker, profit/edge-governed exits."""
+
+  enabled: bool = False
+  min_hold_seconds: int = 30
+  cut_loss_min_hold_seconds: int = 30
+  cut_loss_min_usd: float = 0.12
+  take_profit_pct: float = 0.12
+  take_profit_usd: float = 0.06
+  apply_when_adaptive_mode: str | None = "defense"
+  apply_when_hour_momentum_state: str | None = "conservative"
+
+
+@dataclass(frozen=True)
+class HoldOverlayConfig:
+  """Mode-aware anti-flicker floors (profit exits still govern after hold)."""
+
+  defense_min_hold_seconds: int = 30
+  conservative_min_hold_seconds: int = 30
+  rally_min_hold_seconds: int = 90
+  pressing_min_hold_seconds: int = 90
+  normal_min_hold_seconds: int | None = None
+  locked_min_hold_seconds: int | None = None
+
+
 _DEFAULTS = LiveExitConfig()
+_QUICK_EXIT_DEFAULTS = QuickExitConfig()
+_HOLD_OVERLAY_DEFAULTS = HoldOverlayConfig()
 
 
 def _bot_cfg(cfg: dict[str, Any] | None, *, kind: str) -> dict[str, Any]:
@@ -53,6 +81,105 @@ def live_exit_config(cfg: dict[str, Any] | None, *, kind: str = "hourly") -> Liv
     if field in raw:
       kw[field] = raw[field]
   return replace(_DEFAULTS, **kw)
+
+
+def _quick_exit_cfg(cfg: dict[str, Any] | None, *, kind: str) -> dict[str, Any]:
+  if not cfg or kind != "hourly":
+    return {}
+  return dict(((cfg.get("hourly") or {}).get("bot") or {}).get("quick_exit") or {})
+
+
+def quick_exit_config(cfg: dict[str, Any] | None, *, kind: str = "hourly") -> QuickExitConfig:
+  raw = _quick_exit_cfg(cfg, kind=kind)
+  if not raw:
+    return _QUICK_EXIT_DEFAULTS
+  apply_when = dict(raw.get("apply_when") or {})
+  kw: dict[str, Any] = {}
+  for field in QuickExitConfig.__dataclass_fields__:
+    if field.startswith("apply_when_"):
+      continue
+    if field in raw:
+      kw[field] = raw[field]
+  if "adaptive_mode" in apply_when:
+    kw["apply_when_adaptive_mode"] = apply_when.get("adaptive_mode")
+  if "hour_momentum_state" in apply_when:
+    kw["apply_when_hour_momentum_state"] = apply_when.get("hour_momentum_state")
+  return replace(_QUICK_EXIT_DEFAULTS, **kw)
+
+
+def quick_exit_applies(
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str = "hourly",
+  adaptive_mode: str | None = None,
+  hour_momentum_state: str | None = None,
+) -> bool:
+  """True when quick-exit tier should overlay live profit/cut-loss guards."""
+  qcfg = quick_exit_config(cfg, kind=kind)
+  if not qcfg.enabled:
+    return False
+  mode_l = str(adaptive_mode or "").lower()
+  mom_l = str(hour_momentum_state or "").lower()
+  if qcfg.apply_when_adaptive_mode and mode_l == str(qcfg.apply_when_adaptive_mode).lower():
+    return True
+  if (
+    qcfg.apply_when_hour_momentum_state
+    and mom_l == str(qcfg.apply_when_hour_momentum_state).lower()
+  ):
+    return True
+  return False
+
+
+def _hold_overlay_raw(cfg: dict[str, Any] | None, *, kind: str) -> dict[str, Any]:
+  if not cfg or kind != "hourly":
+    return {}
+  return dict(((cfg.get("hourly") or {}).get("bot") or {}).get("hold_overlays") or {})
+
+
+def hold_overlay_config(cfg: dict[str, Any] | None, *, kind: str = "hourly") -> HoldOverlayConfig:
+  raw = _hold_overlay_raw(cfg, kind=kind)
+  if not raw:
+    return _HOLD_OVERLAY_DEFAULTS
+  kw: dict[str, Any] = {}
+  for field in HoldOverlayConfig.__dataclass_fields__:
+    if field in raw:
+      kw[field] = raw[field]
+  return replace(_HOLD_OVERLAY_DEFAULTS, **kw)
+
+
+def effective_min_hold_seconds(
+  settings_min_hold: int,
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str = "hourly",
+  adaptive_mode: str | None = None,
+  hour_momentum_state: str | None = None,
+) -> int:
+  """Mode-aware anti-flicker floor; quick-exit tier wins in defense/chop."""
+  if quick_exit_applies(
+    cfg,
+    kind=kind,
+    adaptive_mode=adaptive_mode,
+    hour_momentum_state=hour_momentum_state,
+  ):
+    return int(quick_exit_config(cfg, kind=kind).min_hold_seconds)
+
+  hcfg = hold_overlay_config(cfg, kind=kind)
+  mom = str(hour_momentum_state or "").lower()
+  mode = str(adaptive_mode or "").lower()
+  if mom == "conservative":
+    return int(hcfg.conservative_min_hold_seconds)
+  if mom == "pressing":
+    return int(hcfg.pressing_min_hold_seconds)
+  if mom == "locked" and hcfg.locked_min_hold_seconds is not None:
+    return int(hcfg.locked_min_hold_seconds)
+  if mode == "rally":
+    return int(hcfg.rally_min_hold_seconds)
+  if mode == "defense":
+    return int(hcfg.defense_min_hold_seconds)
+  if hcfg.normal_min_hold_seconds is not None:
+    return int(hcfg.normal_min_hold_seconds)
+  return int(settings_min_hold)
 
 
 def apply_live_exit_entry_guards(
@@ -120,10 +247,19 @@ def live_cut_loss_min_hold_seconds(
   *,
   kind: str,
   settings_min_hold: int,
+  adaptive_mode: str | None = None,
+  hour_momentum_state: str | None = None,
 ) -> int:
-  """Live cut-loss hold floor; never below bot min_hold_seconds."""
+  """Live cut-loss hold floor; respects mode-aware anti-flicker."""
+  mode_hold = effective_min_hold_seconds(
+    settings_min_hold,
+    cfg,
+    kind=kind,
+    adaptive_mode=adaptive_mode,
+    hour_momentum_state=hour_momentum_state,
+  )
   configured = live_exit_config(cfg, kind=kind).cut_loss_min_hold_seconds
-  return max(int(settings_min_hold), int(configured))
+  return max(mode_hold, int(configured))
 
 
 def allow_live_cut_loss(
@@ -134,11 +270,20 @@ def allow_live_cut_loss(
   settings_min_hold: int,
   cfg: dict[str, Any] | None,
   kind: str = "hourly",
+  adaptive_mode: str | None = None,
+  hour_momentum_state: str | None = None,
 ) -> bool:
   """Tighter live guards before CUT LOSSES / CHEAP LEG CUT LOSS fire."""
   if exit_reason not in ("CUT LOSSES", "CHEAP LEG CUT LOSS"):
     return True
   live_exit = live_exit_config(cfg, kind=kind)
+  quick = quick_exit_applies(
+    cfg,
+    kind=kind,
+    adaptive_mode=adaptive_mode,
+    hour_momentum_state=hour_momentum_state,
+  )
+  qcfg = quick_exit_config(cfg, kind=kind) if quick else None
   if unrealized_usd is None:
     return False
   if live_exit.block_cut_when_profitable and unrealized_usd >= 0:
@@ -148,13 +293,26 @@ def allow_live_cut_loss(
     if exit_reason == "CHEAP LEG CUT LOSS"
     else live_exit.cut_loss_min_usd
   )
-  min_hold = (
-    live_exit.cheap_leg_cut_min_hold_seconds
-    if exit_reason == "CHEAP LEG CUT LOSS"
-    else live_cut_loss_min_hold_seconds(
-      cfg, kind=kind, settings_min_hold=settings_min_hold,
-    )
+  mode_hold = effective_min_hold_seconds(
+    settings_min_hold,
+    cfg,
+    kind=kind,
+    adaptive_mode=adaptive_mode,
+    hour_momentum_state=hour_momentum_state,
   )
+  if quick and qcfg and exit_reason == "CUT LOSSES":
+    min_loss = qcfg.cut_loss_min_usd
+    min_hold = max(mode_hold, int(qcfg.cut_loss_min_hold_seconds))
+  elif exit_reason == "CHEAP LEG CUT LOSS":
+    min_hold = max(mode_hold, int(live_exit.cheap_leg_cut_min_hold_seconds))
+  else:
+    min_hold = live_cut_loss_min_hold_seconds(
+      cfg,
+      kind=kind,
+      settings_min_hold=settings_min_hold,
+      adaptive_mode=adaptive_mode,
+      hour_momentum_state=hour_momentum_state,
+    )
   if is_adopted_live_leg(pos):
     min_loss = max(min_loss, float(live_exit.adopted_leg_cut_loss_min_usd))
     min_hold = max(min_hold, int(live_exit.adopted_leg_cut_loss_min_hold_seconds))
@@ -316,21 +474,36 @@ def overlay_live_profit_settings(
   *,
   mode: str,
   kind: str = "hourly",
+  adaptive_mode: str | None = None,
+  hour_momentum_state: str | None = None,
 ) -> Any:
-  """Apply live_exit profit-take overlays (take_profit_usd, cooldown)."""
+  """Apply live_exit and quick_exit profit-take overlays."""
   if mode != "live":
     return settings
   from dataclasses import replace
 
-  tp_usd = effective_live_take_profit_usd(
-    pos,
-    float(getattr(settings, "take_profit_usd", 0.0)),
+  quick = quick_exit_applies(
     cfg,
     kind=kind,
+    adaptive_mode=adaptive_mode,
+    hour_momentum_state=hour_momentum_state,
   )
+  qcfg = quick_exit_config(cfg, kind=kind) if quick else None
+
+  base_tp_usd = float(getattr(settings, "take_profit_usd", 0.0))
+  tp_usd = effective_live_take_profit_usd(pos, base_tp_usd, cfg, kind=kind)
+  if quick and qcfg:
+    tp_usd = float(qcfg.take_profit_usd)
   cd = live_profit_exit_cooldown_seconds(
     int(getattr(settings, "profit_exit_cooldown_seconds", 60)),
     cfg,
     kind=kind,
   )
-  return replace(settings, take_profit_usd=tp_usd, profit_exit_cooldown_seconds=cd)
+  out = replace(settings, take_profit_usd=tp_usd, profit_exit_cooldown_seconds=cd)
+  if quick and qcfg:
+    out = replace(
+      out,
+      min_hold_seconds=int(qcfg.min_hold_seconds),
+      take_profit_pct=float(qcfg.take_profit_pct),
+    )
+  return out

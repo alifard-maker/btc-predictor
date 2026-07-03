@@ -331,6 +331,7 @@ class KalshiClient:
     order_type: str = "limit",
     action: str = "buy",
     client_order_id: str | None = None,
+    time_in_force: str = "good_till_canceled",
   ) -> dict[str, Any]:
     """Place a limit order on Kalshi via V2 event-order API (requires auth)."""
     del order_type  # V2 create endpoint is limit-only; kept for caller compatibility.
@@ -344,7 +345,7 @@ class KalshiClient:
       "side": v2_book_side(side=side, action=action),
       "count": f"{int(count)}.00",
       "price": v2_price_dollars(v2_cents),
-      "time_in_force": "good_till_canceled",
+      "time_in_force": time_in_force,
       "self_trade_prevention_type": "taker_at_cross",
     }
     critical = str(action).lower() == "sell"

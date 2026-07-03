@@ -48,6 +48,14 @@ def test_asset_cfg_eth_inherits_hour_momentum_from_btc(base_cfg):
   assert eth["hourly"]["bot"].get("experiment_start_at")
 
 
+def test_asset_cfg_eth_inherits_quick_exit_from_btc(base_cfg):
+  eth = asset_cfg(base_cfg, "eth")
+  qx = ((eth.get("hourly") or {}).get("bot") or {}).get("quick_exit") or {}
+  assert qx.get("enabled") is True
+  assert qx.get("min_hold_seconds") == 30
+  assert qx.get("cut_loss_min_usd") == 0.12
+
+
 def test_kalshi_daily_hourly_frequency_for_eth_series():
   cfg = {
     "kalshi": {"enabled": False},

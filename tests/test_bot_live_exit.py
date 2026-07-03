@@ -13,6 +13,8 @@ from src.trading.bot_live_exit import (
   apply_live_exit_entry_guards,
   live_exit_config,
   overlay_live_profit_settings,
+  quick_exit_applies,
+  quick_exit_config,
   reconcile_close_blocked,
 )
 from src.trading.entry_strategy import EntryStrategyConfig
@@ -143,6 +145,103 @@ def test_overlay_live_profit_settings_lowers_mid_price_tp():
   out = overlay_live_profit_settings(settings, pos, cfg, mode="live", kind="hourly")
   assert out.take_profit_usd == 0.06
   assert out.profit_exit_cooldown_seconds == 30
+
+
+def test_quick_exit_config_reads_hourly_section():
+  cfg = {
+    "hourly": {
+      "bot": {
+        "quick_exit": {
+          "enabled": True,
+          "min_hold_seconds": 30,
+          "cut_loss_min_usd": 0.12,
+          "apply_when": {"adaptive_mode": "defense"},
+        }
+      }
+    }
+  }
+  q = quick_exit_config(cfg, kind="hourly")
+  assert q.enabled is True
+  assert q.min_hold_seconds == 30
+  assert q.cut_loss_min_usd == 0.12
+  assert q.apply_when_adaptive_mode == "defense"
+
+
+def test_quick_exit_applies_for_defense_or_conservative():
+  cfg = {"hourly": {"bot": {"quick_exit": {"enabled": True}}}}
+  assert quick_exit_applies(cfg, adaptive_mode="defense")
+  assert quick_exit_applies(cfg, hour_momentum_state="conservative")
+  assert not quick_exit_applies(cfg, adaptive_mode="rally", hour_momentum_state="normal")
+
+
+def test_overlay_live_profit_settings_quick_exit_in_defense():
+  settings = HourlyBotSettings(
+    take_profit_usd=0.0,
+    take_profit_pct=0.25,
+    min_hold_seconds=120,
+    profit_exit_cooldown_seconds=60,
+  )
+  cfg = {
+    "hourly": {
+      "bot": {
+        "quick_exit": {
+          "enabled": True,
+          "min_hold_seconds": 30,
+          "take_profit_pct": 0.12,
+          "take_profit_usd": 0.06,
+        }
+      }
+    }
+  }
+  out = overlay_live_profit_settings(
+    settings,
+    {"entry_price_cents": 42},
+    cfg,
+    mode="live",
+    kind="hourly",
+    adaptive_mode="defense",
+  )
+  assert out.min_hold_seconds == 30
+  assert out.take_profit_pct == 0.12
+  assert out.take_profit_usd == 0.06
+
+
+def test_allow_live_cut_loss_quick_exit_lowers_thresholds():
+  cfg = {
+    "hourly": {
+      "bot": {
+        "live_exit": {"cut_loss_min_usd": 0.20, "cut_loss_min_hold_seconds": 120},
+        "quick_exit": {
+          "enabled": True,
+          "cut_loss_min_usd": 0.12,
+          "cut_loss_min_hold_seconds": 30,
+        },
+      }
+    }
+  }
+  pos = {
+    "opened_at": (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat(),
+    "entry_price_cents": 40,
+  }
+  assert allow_live_cut_loss(
+    exit_reason="CUT LOSSES",
+    unrealized_usd=-0.15,
+    pos=pos,
+    settings_min_hold=120,
+    cfg=cfg,
+    kind="hourly",
+    adaptive_mode="defense",
+  )
+  assert not allow_live_cut_loss(
+    exit_reason="CUT LOSSES",
+    unrealized_usd=-0.15,
+    pos=pos,
+    settings_min_hold=120,
+    cfg=cfg,
+    kind="hourly",
+    adaptive_mode="rally",
+    hour_momentum_state="normal",
+  )
 
 
 def test_reconcile_close_blocked_for_young_position():
