@@ -3422,15 +3422,16 @@
       }
     }
 
-    const BOT_TRADES_SCROLL_PIN = 5;
+    const BOT_TRADES_SCROLL_PIN = 50;
 
     function captureBotTradesScroll(statusWrap) {
       const logEl = statusWrap?.querySelector('.bot-trades');
       if (!logEl) return null;
+      const maxScroll = Math.max(0, logEl.scrollHeight - logEl.clientHeight);
       return {
         scrollTop: logEl.scrollTop,
-        scrollHeight: logEl.scrollHeight,
         wasAtTop: logEl.scrollTop <= BOT_TRADES_SCROLL_PIN,
+        wasAtBottom: maxScroll - logEl.scrollTop <= BOT_TRADES_SCROLL_PIN,
       };
     }
 
@@ -3438,11 +3439,15 @@
       if (!saved) return;
       const logEl = statusWrap?.querySelector('.bot-trades');
       if (!logEl) return;
+      // Trade log is newest-first (DESC). Pin top when following live; pin bottom when
+      // reading oldest rows; otherwise keep exact scrollTop (no height-delta — full
+      // re-renders change scrollHeight for reasons other than prepend).
       if (saved.wasAtTop) {
         logEl.scrollTop = 0;
+      } else if (saved.wasAtBottom) {
+        logEl.scrollTop = logEl.scrollHeight;
       } else {
-        const delta = logEl.scrollHeight - saved.scrollHeight;
-        logEl.scrollTop = saved.scrollTop + Math.max(0, delta);
+        logEl.scrollTop = saved.scrollTop;
       }
     }
 
