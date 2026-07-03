@@ -7,6 +7,9 @@ from typing import Any
 
 import pandas as pd
 
+from src.trading.contract_signals import is_actionable_buy
+from src.trading.entry_strategy import passes_ask_edge_gate
+
 
 @dataclass(frozen=True)
 class HourlyRegimeDecision:
@@ -73,14 +76,95 @@ def max_hours_to_settle_for_entry(cfg: dict[str, Any] | None) -> float:
   return 1.25
 
 
+@dataclass(frozen=True)
+class LateEntryConfig:
+  enabled: bool = True
+  min_hours: float = 0.08
+  min_ask_edge_cents: float = 15.0
+  max_stake_usd: float = 2.50
+
+
+def late_entry_config(cfg: dict[str, Any] | None) -> LateEntryConfig:
+  bot = ((cfg or {}).get("hourly") or {}).get("bot") or {}
+  raw = bot.get("late_entry") or {}
+  return LateEntryConfig(
+    enabled=bool(raw.get("enabled", True)),
+    min_hours=float(raw.get("min_hours", 0.08)),
+    min_ask_edge_cents=float(raw.get("min_ask_edge_cents", 15)),
+    max_stake_usd=float(raw.get("max_stake_usd", 2.50)),
+  )
+
+
+def late_entry_pick_allowed(
+  hours_to_settle: float | None,
+  pick: dict[str, Any],
+  side: str,
+  cfg: dict[str, Any] | None,
+) -> bool:
+  """True when a pick may enter in the late-hour window (strong ask-edge exception)."""
+  if hours_to_settle is None:
+    return False
+  le = late_entry_config(cfg)
+  if not le.enabled:
+    return False
+  h = float(hours_to_settle)
+  min_h = min_hours_to_settle_for_entry(cfg)
+  if h < le.min_hours or h >= min_h:
+    return False
+  if not is_actionable_buy(pick.get("signal")):
+    return False
+  ok, _ = passes_ask_edge_gate(pick, side, le.min_ask_edge_cents)
+  return ok
+
+
+def is_late_entry_path(
+  hours_to_settle: float | None,
+  pick: dict[str, Any],
+  side: str,
+  cfg: dict[str, Any] | None,
+) -> bool:
+  return late_entry_pick_allowed(hours_to_settle, pick, side, cfg)
+
+
 def entry_too_close_to_settle_skip_reason(
   hours_to_settle: float | None,
   cfg: dict[str, Any] | None,
 ) -> str | None:
+  """Cycle-level settle gate — blocks only below late-entry floor or normal min when disabled."""
   if hours_to_settle is None:
     return None
+  h = float(hours_to_settle)
   min_h = min_hours_to_settle_for_entry(cfg)
-  if float(hours_to_settle) < min_h:
+  le = late_entry_config(cfg)
+  floor_h = le.min_hours if le.enabled else min_h
+  if h < floor_h:
+    return "too_late_for_new_entries"
+  if le.enabled and h < min_h:
+    return None
+  if h < min_h:
+    return "too_late_for_new_entries"
+  return None
+
+
+def entry_pick_settle_skip_reason(
+  hours_to_settle: float | None,
+  cfg: dict[str, Any] | None,
+  *,
+  pick: dict[str, Any],
+  side: str,
+) -> str | None:
+  """Per-pick settle gate — applies late-entry exception when configured."""
+  if hours_to_settle is None:
+    return None
+  h = float(hours_to_settle)
+  min_h = min_hours_to_settle_for_entry(cfg)
+  le = late_entry_config(cfg)
+  floor_h = le.min_hours if le.enabled else min_h
+  if h < floor_h:
+    return "too_late_for_new_entries"
+  if h < min_h:
+    if late_entry_pick_allowed(hours_to_settle, pick, side, cfg):
+      return None
     return "too_late_for_new_entries"
   return None
 

@@ -89,8 +89,11 @@ from src.trading.hourly_exit_context import build_hourly_exit_context, format_ho
 from src.trading.hourly_intrahour_alert import assess_intrahour_opportunity
 from src.trading.hourly_position_alert import assess_held_hourly_position_alert
 from src.trading.hourly_regime import (
+  entry_pick_settle_skip_reason,
   entry_too_close_to_settle_skip_reason,
   entry_too_far_from_settle_skip_reason,
+  is_late_entry_path,
+  late_entry_config,
 )
 from src.trading.hourly_trial_position_alert import assess_hourly_trial_leg_position_alert
 from src.backtest.mechanics_profiles import (
@@ -1075,6 +1078,13 @@ class HourlyBot:
         last_reason = "unrecognized_signal"
         continue
 
+      settle_skip = entry_pick_settle_skip_reason(
+        live.get("hours_to_settle"), cfg, pick=pick, side=side,
+      )
+      if settle_skip:
+        last_reason = settle_skip
+        continue
+
       range_block = adaptive_range_band_block_reason(pick, adaptive, cfg)
       if range_block:
         last_reason = range_block
@@ -1179,6 +1189,8 @@ class HourlyBot:
         side=side,
         entries_left=entries_left,
       )
+      if is_late_entry_path(live.get("hours_to_settle"), pick, side, cfg):
+        stake = min(stake, late_entry_config(cfg).max_stake_usd)
 
       if settings.mode == "paper":
         entry_fill = paper_entry_fill(pick=pick, side=side, remaining_budget_usd=stake)

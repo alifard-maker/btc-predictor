@@ -682,13 +682,86 @@ def test_skips_new_entries_too_close_to_settle_even_in_free_mode():
     cfg = {
       "hourly": {
         "regime": {"min_hours_to_settle": 0.25},
-        "bot": {"min_hours_to_settle_for_entry": 0.25},
+        "bot": {
+          "min_hours_to_settle_for_entry": 0.25,
+          "late_entry": {"enabled": True, "min_hours": 0.08, "min_ask_edge_cents": 15},
+        },
         "intrahour": {"enabled": False},
       },
     }
     actions = bot.run_continuous_cycle(tab, cfg=cfg)
     assert actions == []
     assert store.last_skip_reason() == "too_late_for_new_entries"
+
+
+def _late_entry_cfg():
+  return {
+    "hourly": {
+      "bot": {
+        "min_hours_to_settle_for_entry": 0.25,
+        "max_hours_to_settle_for_entry": 1.25,
+        "late_entry": {
+          "enabled": True,
+          "min_hours": 0.08,
+          "min_ask_edge_cents": 15,
+          "max_stake_usd": 2.50,
+        },
+      },
+      "intrahour": {"enabled": False},
+    },
+  }
+
+
+def test_late_hour_entry_allowed_with_strong_ask_edge():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(regime_allow=True)
+    tab["live"]["hours_to_settle"] = 0.12
+    actions = bot.run_continuous_cycle(tab, cfg=_late_entry_cfg())
+    assert len(actions) == 1
+    assert actions[0]["action"] == "enter"
+
+
+def test_late_hour_entry_blocked_when_ask_edge_too_low():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    pick = {
+      "ticker": "KXTEST-1H-T1",
+      "signal": "BUY YES",
+      "label": "$2,500+",
+      "kalshi_mid": 0.40,
+      "yes_bid": 0.40,
+      "yes_ask": 0.40,
+      "edge": 0.05,
+      "model_prob": 0.50,
+    }
+    tab = _live_tab(regime_allow=True, pick=pick)
+    tab["live"]["hours_to_settle"] = 0.12
+    actions = bot.run_continuous_cycle(tab, cfg=_late_entry_cfg())
+    assert actions == []
+    assert store.last_skip_reason() == "too_late_for_new_entries"
+
+
+def test_late_hour_entry_caps_stake():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=25.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    tab = _live_tab(regime_allow=True)
+    tab["live"]["hours_to_settle"] = 0.12
+    actions = bot.run_continuous_cycle(tab, cfg=_late_entry_cfg())
+    assert len(actions) == 1
+    assert actions[0]["cost_usd"] <= 2.50
 
 
 def test_allows_entries_when_enough_time_to_settle():
