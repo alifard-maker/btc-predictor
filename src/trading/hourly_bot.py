@@ -1027,6 +1027,43 @@ class HourlyBot:
       self.store.set_last_skip_reason(idx_gate)
       return results
 
+    adaptive = assess_adaptive_passive_mode(
+      tab=tab,
+      cfg=cfg,
+      realized_pnl_usd=self.store.realized_pnl_usd(event_ticker),
+      aggressive=settings.aggressive_entries,
+      mode=settings.mode,
+    )
+    from src.trading.bot_position_mode import normalize_position_mode
+
+    mode_filter = normalize_position_mode(settings.mode)
+    exit_stats = self.store.hour_closed_exit_stats(event_ticker, mode=mode_filter)
+    open_pos_pre = self.store.open_positions(event_ticker)
+    unrealized_total = _sum_open_unrealized_usd(open_pos_pre, live)
+    realized_total = self.store.realized_pnl_usd(event_ticker)
+    primary = live.get("primary_pick") or {}
+    primary_edge_raw = primary.get("edge")
+    try:
+      primary_edge_f = float(primary_edge_raw) if primary_edge_raw is not None else None
+    except (TypeError, ValueError):
+      primary_edge_f = None
+    momentum_ctx = HourMomentumContext(
+      realized_pnl_usd=realized_total,
+      unrealized_pnl_usd=unrealized_total,
+      closed_wins=exit_stats["wins"],
+      closed_losses=exit_stats["losses"],
+      exit_count=exit_stats["exits"],
+      adaptive_mode=adaptive.mode,
+      primary_pick_edge=primary_edge_f,
+    )
+    momentum_policy = compute_hour_momentum(momentum_ctx, cfg)
+    momentum_snap = hour_momentum_payload(
+      momentum_policy,
+      realized_pnl_usd=realized_total,
+      unrealized_pnl_usd=unrealized_total,
+    )
+    self.store.set_hour_momentum(momentum_snap)
+
     settle_gate = entry_too_close_to_settle_skip_reason(
       live.get("hours_to_settle"), cfg,
     )
@@ -1074,13 +1111,6 @@ class HourlyBot:
       self.store.set_last_skip_reason("no_buy_yes_no_candidates")
       return results
 
-    adaptive = assess_adaptive_passive_mode(
-      tab=tab,
-      cfg=cfg,
-      realized_pnl_usd=self.store.realized_pnl_usd(event_ticker),
-      aggressive=settings.aggressive_entries,
-      mode=settings.mode,
-    )
     if adaptive.mode == "locked":
       self.store.set_last_skip_reason(
         f"hour_profit_locked:{adaptive.realized_pnl_usd:.2f}"
@@ -1104,35 +1134,6 @@ class HourlyBot:
       estrat, cfg, mode=settings.mode, kind=entry_kind_for_bot(self.kind),
     )
 
-    from src.trading.bot_position_mode import normalize_position_mode
-
-    mode_filter = normalize_position_mode(settings.mode)
-    exit_stats = self.store.hour_closed_exit_stats(event_ticker, mode=mode_filter)
-    open_pos_pre = self.store.open_positions(event_ticker)
-    unrealized_total = _sum_open_unrealized_usd(open_pos_pre, live)
-    realized_total = self.store.realized_pnl_usd(event_ticker)
-    primary = live.get("primary_pick") or {}
-    primary_edge_raw = primary.get("edge")
-    try:
-      primary_edge_f = float(primary_edge_raw) if primary_edge_raw is not None else None
-    except (TypeError, ValueError):
-      primary_edge_f = None
-    momentum_ctx = HourMomentumContext(
-      realized_pnl_usd=realized_total,
-      unrealized_pnl_usd=unrealized_total,
-      closed_wins=exit_stats["wins"],
-      closed_losses=exit_stats["losses"],
-      exit_count=exit_stats["exits"],
-      adaptive_mode=adaptive.mode,
-      primary_pick_edge=primary_edge_f,
-    )
-    momentum_policy = compute_hour_momentum(momentum_ctx, cfg)
-    momentum_snap = hour_momentum_payload(
-      momentum_policy,
-      realized_pnl_usd=realized_total,
-      unrealized_pnl_usd=unrealized_total,
-    )
-    self.store.set_hour_momentum(momentum_snap)
     estrat = apply_hour_momentum_policy(estrat, momentum_policy)
     late_entry_effective = resolve_late_entry_config(cfg, momentum_policy)
 

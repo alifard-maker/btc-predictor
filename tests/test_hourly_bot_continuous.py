@@ -796,13 +796,18 @@ def test_skips_new_entries_too_far_from_settle():
     tab["live"]["hours_to_settle"] = 12.0
     cfg = {
       "hourly": {
-        "bot": {"min_hours_to_settle_for_entry": 0.25, "max_hours_to_settle_for_entry": 1.25},
+        "bot": {
+          "min_hours_to_settle_for_entry": 0.25,
+          "max_hours_to_settle_for_entry": 1.25,
+          "hour_momentum": {"enabled": True},
+        },
         "intrahour": {"enabled": False},
       },
     }
     actions = bot.run_continuous_cycle(tab, cfg=cfg)
     assert actions == []
     assert store.last_skip_reason() == "too_far_for_new_entries"
+    assert store.hour_momentum() is not None
 
 
 def test_skips_entry_when_pick_ticker_wrong_hour_event():
