@@ -105,6 +105,7 @@ from src.trading.hour_momentum import (
 )
 from src.trading.hourly_trial_position_alert import assess_hourly_trial_leg_position_alert
 from src.backtest.mechanics_profiles import (
+  apply_entry_profile_overlays,
   cfg_with_profile_for_kind,
   entry_kind_for_bot,
   is_hourly_trial_kind,
@@ -418,6 +419,7 @@ class HourlyBot:
 
     if cfg is not None:
       cfg = cfg_with_profile_for_kind(cfg, self.kind)
+      cfg = apply_entry_profile_overlays(cfg, kind=self.kind)
     entry_kind = entry_kind_for_bot(self.kind)
 
     settings, prev_period = self.store.sync_period(str(event_ticker), self.store.get_settings())
@@ -702,14 +704,14 @@ class HourlyBot:
       ):
         return None, ""
       return "CUT LOSSES", str(alert.get("detail", ""))
-    profit_settings = (
-      overlay_live_profit_settings(
-        settings, pos, cfg, mode=settings.mode, kind="hourly",
-        adaptive_mode=adaptive_mode,
-        hour_momentum_state=hour_momentum_state,
-      )
-      if settings.mode == "live"
-      else settings
+    profit_settings = overlay_live_profit_settings(
+      settings,
+      pos or {},
+      cfg,
+      mode=settings.mode,
+      kind="hourly",
+      adaptive_mode=adaptive_mode,
+      hour_momentum_state=hour_momentum_state,
     )
     reason, detail = evaluate_adaptive_profit_exit(
       settings=profit_settings,

@@ -266,7 +266,7 @@ hourly:
     trail_arm_profit_usd: 0.50
     min_take_profit_pct: 0.10
     max_take_profit_pct: 0.40
-    min_hold_seconds: 120
+    min_hold_seconds: 90
     min_hours_to_settle_for_entry: 0.25  # block new legs in last 15m of hour (FREE mode too)
     max_hours_to_settle_for_entry: 1.25  # block entries on far-future hourly events (hour-edge guard)
     late_entry:
@@ -320,9 +320,9 @@ hourly:
       allow_scale_in: false
     live_exit:
       cut_loss_min_usd: 0.20
-      cut_loss_min_hold_seconds: 120
+      cut_loss_min_hold_seconds: 90
       block_cut_when_profitable: true
-      cheap_leg_cut_min_hold_seconds: 90
+      cheap_leg_cut_min_hold_seconds: 30
       cheap_leg_cut_min_loss_usd: 0.15
       block_tail_entries: true
       tail_block_max_cents: 20
@@ -336,16 +336,6 @@ hourly:
       adopted_leg_cut_loss_min_usd: 0.50
       max_adopted_contracts: 2
       max_resting_enters_per_hour: 6
-    quick_exit:
-      enabled: true
-      min_hold_seconds: 30
-      cut_loss_min_hold_seconds: 30
-      cut_loss_min_usd: 0.12
-      take_profit_pct: 0.12
-      take_profit_usd: 0.06
-      apply_when:
-        adaptive_mode: defense
-        hour_momentum_state: conservative
     live_adaptive:
       enabled: true
       profit_lock_usd: 1.25
@@ -366,6 +356,21 @@ hourly:
       defense_block_range_bands: true
       defense_skip_all_entries: false
       defense_threshold_only: false
+    hold_overlays:
+      defense_min_hold_seconds: 30
+      conservative_min_hold_seconds: 30
+      rally_min_hold_seconds: 90
+      pressing_min_hold_seconds: 90
+    quick_exit:
+      enabled: true
+      min_hold_seconds: 30
+      cut_loss_min_hold_seconds: 30
+      cut_loss_min_usd: 0.12
+      take_profit_pct: 0.12
+      take_profit_usd: 0.06
+      apply_when:
+        adaptive_mode: defense
+        hour_momentum_state: conservative
     hour_momentum:
       enabled: true
       losing_pnl_usd: -0.01
@@ -392,7 +397,7 @@ hourly:
         late_entry_min_ask_edge_cents: 20
         block_late_entry: true
     rally_only:
-      enabled: true
+      enabled: false
       defense_skip_all_entries: true
       profit_lock_usd: 1.25
       rally_block_range_bands: true
@@ -662,7 +667,7 @@ eth:
       trail_arm_profit_usd: 0.50
       min_take_profit_pct: 0.10
       max_take_profit_pct: 0.40
-      min_hold_seconds: 120
+      min_hold_seconds: 90
       min_hours_to_settle_for_entry: 0.25
       max_hours_to_settle_for_entry: 1.25
       late_entry:
@@ -716,9 +721,9 @@ eth:
         allow_scale_in: false
       live_exit:
         cut_loss_min_usd: 0.20
-        cut_loss_min_hold_seconds: 120
+        cut_loss_min_hold_seconds: 90
         block_cut_when_profitable: true
-        cheap_leg_cut_min_hold_seconds: 90
+        cheap_leg_cut_min_hold_seconds: 30
         cheap_leg_cut_min_loss_usd: 0.15
         block_tail_entries: true
         tail_block_max_cents: 20
@@ -752,8 +757,23 @@ eth:
         defense_block_range_bands: true
         defense_skip_all_entries: false
         defense_threshold_only: false
-      rally_only:
+      hold_overlays:
+        defense_min_hold_seconds: 30
+        conservative_min_hold_seconds: 30
+        rally_min_hold_seconds: 90
+        pressing_min_hold_seconds: 90
+      quick_exit:
         enabled: true
+        min_hold_seconds: 30
+        cut_loss_min_hold_seconds: 30
+        cut_loss_min_usd: 0.12
+        take_profit_pct: 0.12
+        take_profit_usd: 0.06
+        apply_when:
+          adaptive_mode: defense
+          hour_momentum_state: conservative
+      rally_only:
+        enabled: false
         defense_skip_all_entries: true
         profit_lock_usd: 1.25
         rally_block_range_bands: true

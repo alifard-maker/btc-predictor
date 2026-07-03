@@ -477,10 +477,17 @@ def overlay_live_profit_settings(
   adaptive_mode: str | None = None,
   hour_momentum_state: str | None = None,
 ) -> Any:
-  """Apply live_exit and quick_exit profit-take overlays."""
-  if mode != "live":
-    return settings
+  """Apply mode-aware holds and quick-exit / live profit overlays."""
   from dataclasses import replace
+
+  min_hold = effective_min_hold_seconds(
+    int(getattr(settings, "min_hold_seconds", 0)),
+    cfg,
+    kind=kind,
+    adaptive_mode=adaptive_mode,
+    hour_momentum_state=hour_momentum_state,
+  )
+  kw: dict[str, Any] = {"min_hold_seconds": min_hold}
 
   quick = quick_exit_applies(
     cfg,
@@ -488,22 +495,21 @@ def overlay_live_profit_settings(
     adaptive_mode=adaptive_mode,
     hour_momentum_state=hour_momentum_state,
   )
-  qcfg = quick_exit_config(cfg, kind=kind) if quick else None
+  if quick:
+    qcfg = quick_exit_config(cfg, kind=kind)
+    kw["take_profit_pct"] = float(qcfg.take_profit_pct)
+    kw["take_profit_usd"] = float(qcfg.take_profit_usd)
 
-  base_tp_usd = float(getattr(settings, "take_profit_usd", 0.0))
-  tp_usd = effective_live_take_profit_usd(pos, base_tp_usd, cfg, kind=kind)
-  if quick and qcfg:
-    tp_usd = float(qcfg.take_profit_usd)
-  cd = live_profit_exit_cooldown_seconds(
-    int(getattr(settings, "profit_exit_cooldown_seconds", 60)),
-    cfg,
-    kind=kind,
-  )
-  out = replace(settings, take_profit_usd=tp_usd, profit_exit_cooldown_seconds=cd)
-  if quick and qcfg:
-    out = replace(
-      out,
-      min_hold_seconds=int(qcfg.min_hold_seconds),
-      take_profit_pct=float(qcfg.take_profit_pct),
+  if mode == "live":
+    base_tp = float(kw.get("take_profit_usd", getattr(settings, "take_profit_usd", 0.0)))
+    if quick:
+      kw["take_profit_usd"] = base_tp
+    else:
+      kw["take_profit_usd"] = effective_live_take_profit_usd(pos, base_tp, cfg, kind=kind)
+    kw["profit_exit_cooldown_seconds"] = live_profit_exit_cooldown_seconds(
+      int(getattr(settings, "profit_exit_cooldown_seconds", 60)),
+      cfg,
+      kind=kind,
     )
-  return out
+
+  return replace(settings, **kw)

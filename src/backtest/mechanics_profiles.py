@@ -121,6 +121,40 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
   return c
 
 
+_ENTRY_PROFILE_OVERLAY_KEYS = (
+  "defense_skip_all_entries",
+  "defense_threshold_only",
+  "defense_min_ask_edge_cents",
+  "defense_yes_mid_min_cents",
+  "defense_yes_mid_max_cents",
+  "defense_block_range_bands",
+  "rally_block_range_bands",
+  "profit_lock_usd",
+)
+
+
+def apply_entry_profile_overlays(cfg: dict[str, Any], *, kind: str = "hourly") -> dict[str, Any]:
+  """Merge enabled soft_rally / rally_only blocks onto live_adaptive for production bots."""
+  if is_hourly_trial_kind(kind) and mechanics_profile_for_kind(kind):
+    return cfg
+  c = copy.deepcopy(cfg)
+  bot = (c.get("hourly") or {}).get("bot") or {}
+  live_adaptive = dict(bot.get("live_adaptive") or {})
+  soft = dict(bot.get("soft_rally") or {})
+  rally = dict(bot.get("rally_only") or {})
+  overlay: dict[str, Any] | None = None
+  if soft.get("enabled"):
+    overlay = soft
+  elif rally.get("enabled"):
+    overlay = rally
+  if overlay:
+    for key in _ENTRY_PROFILE_OVERLAY_KEYS:
+      if key in overlay:
+        live_adaptive[key] = overlay[key]
+    c.setdefault("hourly", {}).setdefault("bot", {})["live_adaptive"] = live_adaptive
+  return c
+
+
 def replay_entry_pricing(
   cfg: dict[str, Any],
   *,

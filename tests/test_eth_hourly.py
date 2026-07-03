@@ -48,12 +48,25 @@ def test_asset_cfg_eth_inherits_hour_momentum_from_btc(base_cfg):
   assert eth["hourly"]["bot"].get("experiment_start_at")
 
 
-def test_asset_cfg_eth_inherits_quick_exit_from_btc(base_cfg):
+def test_asset_cfg_eth_inherits_quick_exit_and_hold_overlays(base_cfg):
   eth = asset_cfg(base_cfg, "eth")
-  qx = ((eth.get("hourly") or {}).get("bot") or {}).get("quick_exit") or {}
+  bot = (eth.get("hourly") or {}).get("bot") or {}
+  qx = bot.get("quick_exit") or {}
   assert qx.get("enabled") is True
   assert qx.get("min_hold_seconds") == 30
   assert qx.get("cut_loss_min_usd") == 0.12
+  holds = bot.get("hold_overlays") or {}
+  assert holds.get("defense_min_hold_seconds") == 30
+  assert holds.get("conservative_min_hold_seconds") == 30
+  assert holds.get("rally_min_hold_seconds") == 90
+  assert holds.get("pressing_min_hold_seconds") == 90
+
+
+def test_asset_cfg_eth_inherits_soft_rally(base_cfg):
+  eth = asset_cfg(base_cfg, "eth")
+  soft = ((eth.get("hourly") or {}).get("bot") or {}).get("soft_rally") or {}
+  assert soft.get("enabled") is True
+  assert soft.get("defense_threshold_only") is True
 
 
 def test_kalshi_daily_hourly_frequency_for_eth_series():
