@@ -1074,14 +1074,20 @@ def bots_hourly_live_trial_compare(
   if _loop is None:
     raise HTTPException(503, "Service starting")
   from src.trading.hourly_live_trial_compare import build_hourly_live_trial_compare
+  from src.trading.hourly_live_trial_align import HourlyLiveTrialAlignConfig
+  from src.assets import asset_cfg
 
   live_store = _loop.hourly_bot_store(asset, kind="hourly")
   trial_store = _loop.hourly_bot_store(asset, kind="hourly_trial")
+  acfg = asset
+  cfg = asset_cfg(_cfg, acfg)
+  align = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
   return build_hourly_live_trial_compare(
     live_store,
     trial_store,
     asset=asset,
     limit_hours=limit_hours,
+    pair_window_seconds=align.compare_pair_window_seconds,
   )
 
 

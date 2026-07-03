@@ -137,6 +137,10 @@ def apply_entry_profile_overlays(cfg: dict[str, Any], *, kind: str = "hourly") -
   """Merge enabled soft_rally / rally_only blocks onto live_adaptive for production bots."""
   if is_hourly_trial_kind(kind) and mechanics_profile_for_kind(kind):
     return cfg
+  from src.trading.hourly_live_trial_align import skip_soft_rally_entry_overlay
+
+  if skip_soft_rally_entry_overlay(cfg, kind=kind):
+    return cfg
   c = copy.deepcopy(cfg)
   bot = (c.get("hourly") or {}).get("bot") or {}
   live_adaptive = dict(bot.get("live_adaptive") or {})

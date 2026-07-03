@@ -22,6 +22,81 @@ def _parse_ts(raw: str | None) -> datetime | None:
     return None
 
 
+def _entry_key(entry: dict[str, Any]) -> tuple[str, str]:
+  return (
+    str(entry.get("market_ticker") or "").upper(),
+    str(entry.get("side") or "").lower(),
+  )
+
+
+def pair_entries_across_bots(
+  live_entries: list[dict[str, Any]],
+  trial_entries: list[dict[str, Any]],
+  *,
+  window_seconds: int = 180,
+) -> dict[str, Any]:
+  """Match entries on market_ticker + side within a time window."""
+  used_trial: set[int] = set()
+  pairs: list[dict[str, Any]] = []
+  unpaired_live: list[dict[str, Any]] = []
+
+  for live in live_entries:
+    live_ts = _parse_ts(live.get("created_at"))
+    live_key = _entry_key(live)
+    best_idx: int | None = None
+    best_delta: float | None = None
+    for idx, trial in enumerate(trial_entries):
+      if idx in used_trial:
+        continue
+      if _entry_key(trial) != live_key:
+        continue
+      trial_ts = _parse_ts(trial.get("created_at"))
+      if live_ts is None or trial_ts is None:
+        if best_idx is None:
+          best_idx = idx
+          best_delta = None
+        continue
+      delta = abs((live_ts - trial_ts).total_seconds())
+      if delta > window_seconds:
+        continue
+      if best_delta is None or delta < best_delta:
+        best_idx = idx
+        best_delta = delta
+    if best_idx is None:
+      unpaired_live.append(live)
+      continue
+    used_trial.add(best_idx)
+    trial = trial_entries[best_idx]
+    live_px = live.get("entry_price_cents")
+    trial_px = trial.get("entry_price_cents")
+    px_delta = None
+    if live_px is not None and trial_px is not None:
+      px_delta = int(live_px) - int(trial_px)
+    pairs.append(
+      {
+        "market_ticker": live.get("market_ticker"),
+        "side": live.get("side"),
+        "label": live.get("label") or trial.get("label"),
+        "live": live,
+        "trial": trial,
+        "time_delta_seconds": round(best_delta, 1) if best_delta is not None else None,
+        "entry_price_delta_cents": px_delta,
+      }
+    )
+
+  unpaired_trial = [e for i, e in enumerate(trial_entries) if i not in used_trial]
+  deltas = [p["entry_price_delta_cents"] for p in pairs if p["entry_price_delta_cents"] is not None]
+  avg_px_delta = round(sum(deltas) / len(deltas), 1) if deltas else None
+  return {
+    "pairs": pairs,
+    "unpaired_live": unpaired_live,
+    "unpaired_trial": unpaired_trial,
+    "paired_count": len(pairs),
+    "avg_entry_price_delta_cents": avg_px_delta,
+    "pair_window_seconds": window_seconds,
+  }
+
+
 def _exit_reason(trade: dict[str, Any]) -> str:
   ctx = trade.get("exit_context")
   if isinstance(ctx, dict):
@@ -141,6 +216,7 @@ def build_hourly_live_trial_compare(
   limit_hours: int = 24,
   live_mode: str = "live",
   trial_mode: str | None = None,
+  pair_window_seconds: int = 180,
 ) -> dict[str, Any]:
   """Compare live hourly bot vs hourly_trial for matched event_tickers."""
   if trial_mode is None:
@@ -174,6 +250,11 @@ def build_hourly_live_trial_compare(
   for event_ticker in event_tickers:
     live = _hour_side(live_store, event_ticker, mode=live_mode)
     trial = _hour_side(trial_store, event_ticker, mode=trial_mode)
+    entry_pairs = pair_entries_across_bots(
+      live["entries"],
+      trial["entries"],
+      window_seconds=pair_window_seconds,
+    )
     hours.append(
       {
         "event_ticker": event_ticker,
@@ -181,6 +262,7 @@ def build_hourly_live_trial_compare(
         "both_active": live["has_activity"] and trial["has_activity"],
         "live": live,
         "trial": trial,
+        "entry_pairs": entry_pairs,
         "pnl_delta_usd": round(live["net_pnl_usd"] - trial["net_pnl_usd"], 2),
       }
     )
@@ -193,6 +275,7 @@ def build_hourly_live_trial_compare(
     "live_mode": live_mode,
     "trial_mode": trial_mode,
     "limit_hours": limit_hours,
+    "pair_window_seconds": pair_window_seconds,
     "matched_event_count": len(matched),
     "hours": hours,
     "generated_at": datetime.now(timezone.utc).isoformat(),

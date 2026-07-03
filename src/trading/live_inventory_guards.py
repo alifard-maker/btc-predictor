@@ -39,6 +39,10 @@ def apply_live_inventory_guards(
   """Tighten entry strategy in live mode to limit correlated inventory sprawl."""
   if mode != "live":
     return estrat
+  from src.trading.hourly_live_trial_align import skip_live_inventory_guards
+
+  if skip_live_inventory_guards(cfg, kind=kind, mode=mode):
+    return estrat
   inv = _live_inventory_cfg(cfg, kind=kind)
   if not inv.get("enabled", _DEFAULTS["enabled"]):
     return estrat

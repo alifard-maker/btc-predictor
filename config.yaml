@@ -407,6 +407,25 @@ hourly:
       require_signal_refresh_after_spot_against_cut: true
       conservative_max_contracts_per_entry: 2
       event_cut_cooldown_seconds: 600
+    live_trial_align:
+      enabled: true
+      live_exit_mode: hybrid
+      hybrid:
+        adaptive_modes: [defense]
+        hour_momentum_states: [conservative]
+        max_hold_seconds: 600
+      entry_align_with_trial: true
+      align_live_inventory: true
+      quick_exit:
+        min_hold_seconds: 60
+        cut_loss_min_hold_seconds: 60
+      execution:
+        prefer_passive_below_edge_cents: 12
+        block_scale_in_after_quick_exit_cut: true
+      whipsaw:
+        max_quick_exit_cuts_per_hour: 2
+      compare:
+        pair_window_seconds: 180
     rally_only:
       enabled: false
       defense_skip_all_entries: true
@@ -668,7 +687,7 @@ eth:
       profit_use_pct: 100
       paper_auto_refill: true
       continuous_enabled: true
-      poll_seconds: 12
+      poll_seconds: 10
       take_profit_enabled: true
       take_profit_mode: hybrid
       take_profit_pct: 0.25
@@ -809,6 +828,25 @@ eth:
         require_signal_refresh_after_spot_against_cut: true
         conservative_max_contracts_per_entry: 2
         event_cut_cooldown_seconds: 600
+      live_trial_align:
+        enabled: true
+        live_exit_mode: hybrid
+        hybrid:
+          adaptive_modes: [defense]
+          hour_momentum_states: [conservative]
+          max_hold_seconds: 600
+        entry_align_with_trial: true
+        align_live_inventory: true
+        quick_exit:
+          min_hold_seconds: 60
+          cut_loss_min_hold_seconds: 60
+        execution:
+          prefer_passive_below_edge_cents: 12
+          block_scale_in_after_quick_exit_cut: true
+        whipsaw:
+          max_quick_exit_cuts_per_hour: 2
+        compare:
+          pair_window_seconds: 180
       trial:
         continuous_enabled: true
         poll_seconds: 10

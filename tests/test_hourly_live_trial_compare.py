@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.trading.hourly_bot_store import HourlyBotStore
-from src.trading.hourly_live_trial_compare import build_hourly_live_trial_compare
+from src.trading.hourly_live_trial_compare import (
+  build_hourly_live_trial_compare,
+  pair_entries_across_bots,
+)
 
 
 def _log_trade(store: HourlyBotStore, **kwargs):
@@ -109,3 +112,46 @@ def test_compare_filters_by_mode(tmp_path: Path):
   assert live_hour is not None
   assert live_hour["live"]["has_activity"] is False
   assert live_hour["trial"]["has_activity"] is True
+
+
+def test_compare_pairs_entries_within_window(tmp_path):
+  from pathlib import Path
+
+  live_db = tmp_path / "hourly_bot_btc.db"
+  trial_db = tmp_path / "hourly_trial_bot_btc.db"
+  live_store = HourlyBotStore(live_db)
+  trial_store = HourlyBotStore(trial_db)
+
+  _log_trade(
+    live_store,
+    market_ticker="KXBTCD-26JUL0206-T95000",
+    created_at="2026-07-02T10:05:00+00:00",
+    mode="live",
+    entry_price_cents=44,
+    cost_usd=4.40,
+  )
+  _log_trade(
+    trial_store,
+    market_ticker="KXBTCD-26JUL0206-T95000",
+    created_at="2026-07-02T10:06:30+00:00",
+    mode="paper",
+    entry_price_cents=42,
+    cost_usd=4.20,
+  )
+
+  out = build_hourly_live_trial_compare(
+    live_store,
+    trial_store,
+    asset="btc",
+    limit_hours=5,
+    live_mode="live",
+    trial_mode="paper",
+    pair_window_seconds=180,
+  )
+
+  hour = out["hours"][0]
+  pairs = hour["entry_pairs"]
+  assert pairs["paired_count"] == 1
+  assert pairs["pairs"][0]["entry_price_delta_cents"] == 2
+  assert pairs["pairs"][0]["time_delta_seconds"] == 90.0
+  assert pairs["avg_entry_price_delta_cents"] == 2.0

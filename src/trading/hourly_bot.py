@@ -37,6 +37,13 @@ from src.trading.bot_whipsaw_guard import (
   whipsaw_hour_entry_blocked,
   whipsaw_pick_entry_blocked,
 )
+from src.trading.hourly_live_trial_align import (
+  HourlyLiveTrialAlignConfig,
+  apply_align_entry_pricing,
+  live_trial_align_active,
+  merge_whipsaw_align_overrides,
+  should_use_trial_leg_exits,
+)
 from src.trading.bot_adaptive_calibration import (
   adaptive_entry_allowed,
   record_adaptive_probe_entry,
@@ -632,7 +639,15 @@ class HourlyBot:
     hour_momentum_state: str | None = None,
   ) -> tuple[str | None, str]:
     """Return (exit_reason, detail_suffix) or (None, '') if position should stay open."""
-    if is_hourly_trial_kind(self.kind):
+    hold_seconds = position_hold_seconds(pos)
+    if should_use_trial_leg_exits(
+      cfg,
+      kind=self.kind,
+      mode=settings.mode,
+      hold_seconds=hold_seconds,
+      adaptive_mode=adaptive_mode,
+      hour_momentum_state=hour_momentum_state,
+    ):
       trial_settings = effective_hourly_trial_settings(settings, cfg)
       return evaluate_slot15_contract_exits(
         pos=pos,
@@ -640,13 +655,13 @@ class HourlyBot:
         unrealized_usd=unrealized,
         monitor={},
         peaks=peaks,
-        hold_seconds=position_hold_seconds(pos),
+        hold_seconds=hold_seconds,
         settings=trial_settings,
         exit_ctx=exit_ctx,
         cfg=cfg,
         include_monitor_fallback=False,
         cut_loss_min_usd=CUT_LOSS_EXIT_MIN_LOSS_USD,
-        bot_kind=self.kind,
+        bot_kind="hourly_trial",
         pick=pick,
         live_price=live_price,
         standard_hourly_alert=standard_hourly_alert,
@@ -803,6 +818,8 @@ class HourlyBot:
           hours_to_settle=float(hours_left) if hours_left is not None else None,
           cfg=cfg,
         )
+        if live_trial_align_active(cfg, kind=self.kind, mode=settings.mode):
+          standard_alert = str(alert.get("alert") or "")
       cost_usd = float(pos.get("cost_usd") or 0)
       peaks = self.store.update_position_peaks(
         pos["id"],
@@ -1155,7 +1172,10 @@ class HourlyBot:
       self.store.set_last_skip_reason("adaptive_defense_skip")
       return results
 
-    wcfg = WhipsawGuardConfig.from_cfg(cfg, kind="hourly")
+    wcfg = merge_whipsaw_align_overrides(
+      WhipsawGuardConfig.from_cfg(cfg, kind="hourly"), cfg, kind="hourly",
+    )
+    align_cfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
     quick_exit_cuts = self.store.count_quick_exit_cuts(event_ticker) if wcfg.enabled else 0
     whipsaw_block = whipsaw_hour_entry_blocked(
       wcfg=wcfg, quick_exit_cuts=quick_exit_cuts, adaptive=adaptive,
@@ -1256,6 +1276,8 @@ class HourlyBot:
           signal=pick.get("signal"),
           is_scale_in=True,
           signal_gate_active=False,
+          block_scale_in_after_quick_exit_cut=align_cfg.block_scale_in_after_quick_exit_cut,
+          quick_exit_cuts=quick_exit_cuts,
         )
         if scale_block:
           last_reason = scale_block
@@ -1277,6 +1299,8 @@ class HourlyBot:
         signal=pick.get("signal"),
         is_scale_in=False,
         signal_gate_active=signal_gate,
+        block_scale_in_after_quick_exit_cut=align_cfg.block_scale_in_after_quick_exit_cut,
+        quick_exit_cuts=quick_exit_cuts,
       )
       if pick_block:
         last_reason = pick_block
@@ -1388,6 +1412,9 @@ class HourlyBot:
       else:
         pricing = live_entry_pricing_from_cfg(
           cfg, kind=self.kind, aggressive=settings.aggressive_entries
+        )
+        pricing = apply_align_entry_pricing(
+          pricing, pick, cfg=cfg, kind=self.kind, mode=settings.mode,
         )
         pricing = adaptive_live_entry_pricing(pricing, adaptive, cfg)
         live_resolved = resolve_live_entry_price(

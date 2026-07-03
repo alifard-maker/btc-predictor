@@ -3849,6 +3849,45 @@
       </div>`;
     }
 
+    function comparePairsTable(pairs, unpairedLive, unpairedTrial) {
+      let html = '';
+      if (pairs?.length) {
+        const rows = pairs.map((p) => {
+          const label = p.label || p.market_ticker || '—';
+          const side = (p.side || '—').toUpperCase();
+          const liveT = time(p.live?.created_at);
+          const trialT = time(p.trial?.created_at);
+          const liveStake = p.live?.cost_usd != null ? `$${Number(p.live.cost_usd).toFixed(2)}` : '—';
+          const trialStake = p.trial?.cost_usd != null ? `$${Number(p.trial.cost_usd).toFixed(2)}` : '—';
+          const livePx = p.live?.entry_price_cents != null ? `${p.live.entry_price_cents}¢` : '—';
+          const trialPx = p.trial?.entry_price_cents != null ? `${p.trial.entry_price_cents}¢` : '—';
+          const pxDelta = p.entry_price_delta_cents != null
+            ? `${p.entry_price_delta_cents > 0 ? '+' : ''}${p.entry_price_delta_cents}¢`
+            : '—';
+          const tDelta = p.time_delta_seconds != null ? `${p.time_delta_seconds}s` : '—';
+          return `<tr>
+            <td style="font-size:.65rem">${label}</td>
+            <td>${side}</td>
+            <td>${liveT}<br><span class="muted">${liveStake} @ ${livePx}</span></td>
+            <td>${trialT}<br><span class="muted">${trialStake} @ ${trialPx}</span></td>
+            <td>${tDelta}</td>
+            <td>${pxDelta}</td>
+          </tr>`;
+        }).join('');
+        html += `<table class="compare-mini-table"><thead><tr>
+          <th>Contract</th><th>Side</th><th>Live entry</th><th>Trial entry</th><th>Δ time</th><th>Δ price (live−trial)</th>
+        </tr></thead><tbody>${rows}</tbody></table>`;
+      } else {
+        html += '<p class="muted" style="margin:.25rem 0">No paired entries in window.</p>';
+      }
+      const unL = unpairedLive?.length || 0;
+      const unT = unpairedTrial?.length || 0;
+      if (unL || unT) {
+        html += `<p class="muted" style="font-size:.65rem;margin:.35rem 0 0">Unpaired: ${unL} live-only · ${unT} trial-only</p>`;
+      }
+      return html;
+    }
+
     function renderHourlyLiveTrialCompare(data) {
       const el = $('hourly-live-trial-compare');
       if (!el) return;
@@ -3861,18 +3900,28 @@
         el.innerHTML = `<p class="muted">No matched hourly events yet for ${String(data.asset || compareAsset).toUpperCase()} (live hourly + paper trial).</p>`;
         return;
       }
-      const meta = `<p class="muted" style="font-size:.68rem;margin:0 0 .65rem">${hours.length} hour(s) · ${data.matched_event_count ?? 0} with both bots active · live <strong>${data.live_mode}</strong> vs trial <strong>${data.trial_mode}</strong></p>`;
+      const meta = `<p class="muted" style="font-size:.68rem;margin:0 0 .65rem">${hours.length} hour(s) · ${data.matched_event_count ?? 0} with both bots active · live <strong>${data.live_mode}</strong> vs trial <strong>${data.trial_mode}</strong> · pair window <strong>${data.pair_window_seconds ?? 180}s</strong></p>`;
       const blocks = hours.map((h) => {
         const bothBadge = h.both_active
           ? '<span class="up" style="font-size:.65rem">both active</span>'
           : '<span class="muted" style="font-size:.65rem">partial</span>';
         const delta = botPnlUsd(h.pnl_delta_usd);
+        const ep = h.entry_pairs || {};
+        const pairMeta = ep.paired_count
+          ? `<span class="muted" style="font-size:.65rem"> · ${ep.paired_count} paired`
+            + (ep.avg_entry_price_delta_cents != null
+              ? ` · avg fill Δ ${ep.avg_entry_price_delta_cents > 0 ? '+' : ''}${ep.avg_entry_price_delta_cents}¢`
+              : '')
+            + '</span>'
+          : '';
         return `<div class="compare-hour-block">
           <div class="compare-hour-head">
-            <div><strong style="font-size:.85rem">${h.event_ticker}</strong> ${bothBadge}</div>
+            <div><strong style="font-size:.85rem">${h.event_ticker}</strong> ${bothBadge}${pairMeta}</div>
             <div class="muted" style="font-size:.68rem">Δ live−trial ${delta}</div>
           </div>
-          <div class="compare-grid">
+          <p class="muted" style="font-size:.65rem;margin:.15rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Paired entries (same contract + side)</p>
+          ${comparePairsTable(ep.pairs, ep.unpaired_live, ep.unpaired_trial)}
+          <div class="compare-grid" style="margin-top:.55rem">
             ${compareSideColumn('Live hourly', h.live, 'compare-col-live')}
             ${compareSideColumn('Paper trial', h.trial, 'compare-col-trial')}
           </div>

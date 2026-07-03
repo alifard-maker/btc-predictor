@@ -121,7 +121,10 @@ def quick_exit_config(cfg: dict[str, Any] | None, *, kind: str = "hourly") -> Qu
     kw["apply_when_adaptive_mode"] = apply_when.get("adaptive_mode")
   if "hour_momentum_state" in apply_when:
     kw["apply_when_hour_momentum_state"] = apply_when.get("hour_momentum_state")
-  return replace(_QUICK_EXIT_DEFAULTS, **kw)
+  qcfg = replace(_QUICK_EXIT_DEFAULTS, **kw)
+  from src.trading.hourly_live_trial_align import merge_quick_exit_align_overrides
+
+  return merge_quick_exit_align_overrides(qcfg, cfg, kind=kind)
 
 
 def quick_exit_applies(
