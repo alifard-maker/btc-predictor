@@ -104,6 +104,7 @@ HOURLY_BOT_KINDS_BY_ASSET: dict[str, tuple[str, ...]] = {
 }
 SLOT15_ASSETS = ("btc", "eth")
 BACKUP_ASSETS = tuple(HOURLY_BOT_KINDS_BY_ASSET.keys())
+SLOT15_TRIAL_KIND = "slot15_trial"
 
 
 def _asset_logs_dir(data_dir: Path, asset: str) -> Path:
@@ -137,6 +138,7 @@ def bot_db_specs(cfg: dict[str, Any]) -> list[tuple[str, str, Path]]:
   for asset in SLOT15_ASSETS:
     logs = _asset_logs_dir(data_dir, asset)
     specs.append((asset, "slot15", logs / f"slot15_bot_{asset}.db"))
+    specs.append((asset, SLOT15_TRIAL_KIND, logs / f"slot15_trial_bot_{asset}.db"))
   return specs
 
 

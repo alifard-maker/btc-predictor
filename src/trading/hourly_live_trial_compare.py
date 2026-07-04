@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.trading.hourly_bot_store import HourlyBotStore
+from src.trading.slot15_bot_store import Slot15BotStore
+
+BotStore = HourlyBotStore | Slot15BotStore
 
 _FILLED_ENTER = ("filled", "reconciled")
 _PENDING_RESTING = ("resting",)
@@ -112,7 +115,7 @@ def _exit_reason(trade: dict[str, Any]) -> str:
 
 
 def _recent_event_tickers(
-  store: HourlyBotStore,
+  store: BotStore,
   *,
   mode: str,
   limit: int,
@@ -175,8 +178,15 @@ def _exit_row(trade: dict[str, Any]) -> dict[str, Any]:
   }
 
 
-def _hour_side(
-  store: HourlyBotStore,
+def _interval_summary(store: BotStore, event_ticker: str, *, mode: str) -> dict[str, Any]:
+  slot_fn = getattr(store, "slot_interval_summary", None)
+  if callable(slot_fn):
+    return slot_fn(event_ticker, mode=mode)
+  return store.hour_interval_summary(event_ticker, mode=mode)
+
+
+def _period_side(
+  store: BotStore,
   event_ticker: str,
   *,
   mode: str,
@@ -202,7 +212,7 @@ def _hour_side(
   ]
   entries.sort(key=lambda r: r.get("created_at") or "")
   exits.sort(key=lambda r: r.get("created_at") or "")
-  summary = store.hour_interval_summary(event_ticker, mode=mode)
+  summary = _interval_summary(store, event_ticker, mode=mode)
   realized = float(summary.get("realized_pnl_usd") or 0)
   return {
     "mode": mode,
@@ -217,17 +227,18 @@ def _hour_side(
 
 
 def build_hourly_live_trial_compare(
-  live_store: HourlyBotStore,
-  trial_store: HourlyBotStore,
+  live_store: BotStore,
+  trial_store: BotStore,
   *,
   asset: str,
   limit_hours: int = 24,
   live_mode: str = "live",
   trial_mode: str | None = None,
   trial_kind: str = "hourly_trial",
+  live_kind: str = "hourly",
   pair_window_seconds: int = 180,
 ) -> dict[str, Any]:
-  """Compare live hourly bot vs paper trial for matched event_tickers."""
+  """Compare live bot vs paper trial for matched event_tickers (hourly or 15m slot)."""
   if trial_mode is None:
     trial_mode = trial_store.get_settings().mode or "paper"
 
@@ -257,8 +268,8 @@ def build_hourly_live_trial_compare(
 
   hours: list[dict[str, Any]] = []
   for event_ticker in event_tickers:
-    live = _hour_side(live_store, event_ticker, mode=live_mode)
-    trial = _hour_side(trial_store, event_ticker, mode=trial_mode)
+    live = _period_side(live_store, event_ticker, mode=live_mode)
+    trial = _period_side(trial_store, event_ticker, mode=trial_mode)
     entry_pairs = pair_entries_across_bots(
       live["entries"],
       trial["entries"],
@@ -279,7 +290,7 @@ def build_hourly_live_trial_compare(
   return {
     "ok": True,
     "asset": asset,
-    "live_kind": "hourly",
+    "live_kind": live_kind,
     "trial_kind": trial_kind,
     "live_mode": live_mode,
     "trial_mode": trial_mode,
@@ -289,3 +300,23 @@ def build_hourly_live_trial_compare(
     "hours": hours,
     "generated_at": datetime.now(timezone.utc).isoformat(),
   }
+
+
+def build_slot15_live_trial_compare(
+  live_store: Slot15BotStore,
+  trial_store: Slot15BotStore,
+  *,
+  asset: str,
+  limit_slots: int = 48,
+  pair_window_seconds: int = 180,
+) -> dict[str, Any]:
+  """Compare live 15m bot vs paper 15m trial per slot_key."""
+  return build_hourly_live_trial_compare(
+    live_store,
+    trial_store,
+    asset=asset,
+    limit_hours=limit_slots,
+    trial_kind="slot15_trial",
+    live_kind="slot15",
+    pair_window_seconds=pair_window_seconds,
+  )

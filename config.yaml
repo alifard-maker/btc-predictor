@@ -189,6 +189,11 @@ intra_slot:
       exits:
         leg_stop_reentry_cooldown_seconds: 600
         leg_stop_event_cooldown_seconds: 300
+    trial:
+      continuous_enabled: true
+      poll_seconds: 10
+      enabled: true
+      mode: paper
 
 # Late entry — reassess NO-TRADE slots mid-window (conservative)
 late_entry:
@@ -667,6 +672,11 @@ eth:
       leg_stop_gate_min_remaining_seconds: 60
       bot_adaptive_calibration:
         enabled: false
+      trial:
+        continuous_enabled: true
+        poll_seconds: 10
+        enabled: true
+        mode: paper
   daily:
     enabled: true
     threshold_series: [KXETHD]

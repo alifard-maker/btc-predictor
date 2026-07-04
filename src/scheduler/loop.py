@@ -365,6 +365,7 @@ class PredictionLoop:
       stores.append(self.hourly_trial_bot_store("eth"))
       if self._slot15m_enabled("eth"):
         stores.append(self.slot15_bot_store("eth"))
+        stores.append(self.slot15_trial_bot_store("eth"))
     for asset in ("spx", "ndx"):
       if asset_enabled(self.cfg, asset):
         stores.append(self.hourly_bot_store(asset))
@@ -1117,6 +1118,17 @@ class PredictionLoop:
       self._slot15_bot_stores[asset] = Slot15BotStore(logs / f"slot15_bot_{asset}.db")
     return self._slot15_bot_stores[asset]
 
+  def slot15_trial_bot_store(self, asset: str):
+    asset = asset.lower()
+    key = f"trial:{asset}"
+    if key not in self._slot15_bot_stores:
+      from src.trading.slot15_bot_store import Slot15BotStore
+
+      acfg = self._acfg_15m(asset)
+      logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
+      self._slot15_bot_stores[key] = Slot15BotStore(logs / f"slot15_trial_bot_{asset}.db")
+    return self._slot15_bot_stores[key]
+
   def slot15_bot(self, asset: str):
     asset = asset.lower()
     if asset not in self._slot15_bots:
@@ -1124,8 +1136,21 @@ class PredictionLoop:
 
       store = self.slot15_bot_store(asset)
       kalshi = self._kalshi_for(asset)
-      self._slot15_bots[asset] = Slot15Bot(store, kalshi_client=kalshi, asset=asset)
+      self._slot15_bots[asset] = Slot15Bot(store, kalshi_client=kalshi, asset=asset, kind="slot15")
     return self._slot15_bots[asset]
+
+  def slot15_trial_bot(self, asset: str):
+    asset = asset.lower()
+    key = f"trial:{asset}"
+    if key not in self._slot15_bots:
+      from src.trading.slot15_bot import Slot15Bot
+
+      store = self.slot15_trial_bot_store(asset)
+      kalshi = self._kalshi_for(asset)
+      self._slot15_bots[key] = Slot15Bot(
+        store, kalshi_client=kalshi, asset=asset, kind="slot15_trial",
+      )
+    return self._slot15_bots[key]
 
   def _slot_times_match(
     self,
@@ -1217,18 +1242,27 @@ class PredictionLoop:
       "index_id": index_label,
     }
 
-  def slot15_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+  def slot15_bot_status(
+    self,
+    asset: str,
+    tab: dict[str, Any] | None = None,
+    *,
+    store=None,
+    risk_kind: str = "slot15",
+    bot_kind: str = "slot15",
+  ) -> dict[str, Any]:
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):
       return {"ok": False, "error": "ETH 15m disabled"}
     if tab is None:
       tab = self._slot15_tab(asset)
     slot_key = tab.get("slot_key") if tab.get("ok") else None
-    status = self.slot15_bot_store(asset).status(slot_key)
+    store = store or self.slot15_bot_store(asset)
+    status = store.status(slot_key)
     status["ok"] = True
     status["asset"] = asset
+    status["bot_kind"] = bot_kind
     status["slot_label"] = tab.get("slot_label") if tab else None
-    store = self.slot15_bot_store(asset)
     status["recent_trades"] = store.list_trades(limit=100)
     status["slot_trades"] = (
       store.list_trades(limit=50, event_ticker=slot_key) if slot_key else []
@@ -1275,7 +1309,7 @@ class PredictionLoop:
         "late_entry_action": monitor.get("late_entry_action") or "",
         "flip_action": monitor.get("flip_action") or "",
         "monitor_action": monitor.get("action"),
-        "last_entry_attempt": self.slot15_bot_store(asset).last_entry_attempt(),
+        "last_entry_attempt": store.last_entry_attempt(),
       }
     from src.trading.bot_auto_tuning import effective_entry_strategy
 
@@ -1306,9 +1340,14 @@ class PredictionLoop:
       ss["stake_cap_utilization"] = stake_cap
       status["slot_summary"] = ss
     self._attach_settlement_index_status(status, tab, asset=asset)
-    self._attach_bot_daily_loss(status, kind="slot15", asset=asset)
+    self._attach_bot_daily_loss(status, kind=risk_kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
-    if status.get("settings", {}).get("mode") == "live" and kalshi and kalshi.authenticated:
+    if (
+      bot_kind == "slot15"
+      and status.get("settings", {}).get("mode") == "live"
+      and kalshi
+      and kalshi.authenticated
+    ):
       from src.trading.live_reconcile import build_live_reconcile_report
 
       market_tickers: set[str] = set()
@@ -1325,6 +1364,15 @@ class PredictionLoop:
         market_tickers=market_tickers or None,
       )
     return status
+
+  def slot15_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+    return self.slot15_bot_status(
+      asset,
+      tab,
+      store=self.slot15_trial_bot_store(asset),
+      risk_kind="slot15_trial",
+      bot_kind="slot15_trial",
+    )
 
   def _ensure_slot_prediction_current(self, asset: str) -> None:
     """Refresh in-memory prediction when the active slot rolled but cron has not run yet."""
@@ -1375,6 +1423,37 @@ class PredictionLoop:
     if not self._slot15m_enabled("eth"):
       return
     self._run_slot15_bot_continuous("eth")
+
+  def _run_slot15_trial_bot_continuous(self, asset: str) -> None:
+    asset = asset.lower()
+    if asset == "eth" and not self._slot15m_enabled("eth"):
+      return
+    self.all_bot_stores()
+    store = self.slot15_trial_bot_store(asset)
+    settings = store.get_settings()
+    active = settings.enabled and settings.continuous
+    try:
+      if not active:
+        if not settings.enabled:
+          store.set_last_skip_reason("auto_bet_off")
+        return
+      self._ensure_slot_prediction_current(asset)
+      tab = self._cached_tab_if_throttled(self._slot15_tab_cache, asset)
+      if tab is None:
+        tab = self._slot15_tab(asset)
+        self._store_tab_cache(self._slot15_tab_cache, asset, tab)
+      if tab.get("ok"):
+        acfg = self._acfg_15m(asset)
+        self.slot15_trial_bot(asset).run_continuous_cycle(tab, cfg=acfg)
+    except Exception as e:
+      log.exception("%s 15m trial bot continuous cycle failed: %s", asset.upper(), e)
+    finally:
+      store.record_cycle(active=active)
+
+  def run_eth_slot15_trial_bot_continuous(self) -> None:
+    if not self._slot15m_enabled("eth"):
+      return
+    self._run_slot15_trial_bot_continuous("eth")
 
   def _hourly_tab_prediction(self, asset: str, *, include_bot: bool = True) -> dict[str, Any]:
     asset = asset.lower()
@@ -3184,6 +3263,16 @@ class PredictionLoop:
           "interval",
           seconds=poll_sec,
           id="eth_slot15_bot_continuous",
+          max_instances=1,
+        )
+      trial_cfg = ebot_cfg.get("trial") or {}
+      if trial_cfg.get("continuous_enabled", False):
+        trial_poll = int(trial_cfg.get("poll_seconds", poll_sec))
+        scheduler.add_job(
+          self.run_eth_slot15_trial_bot_continuous,
+          "interval",
+          seconds=trial_poll,
+          id="eth_slot15_trial_bot_continuous",
           max_instances=1,
         )
 

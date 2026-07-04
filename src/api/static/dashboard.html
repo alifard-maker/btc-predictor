@@ -492,10 +492,20 @@
 
     <div id="panel-eth-15m" style="display:none">
     <div class="card" id="eth-slot15-bot-card">
-      <h2>ETH 15m auto-bet</h2>
-      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> (browser not required when Auto-bet is ON) — continuous enter/exit within your <strong>max at-risk $/slot</strong>. Uses LONG/SHORT, late entry, and flip signals from the monitor. <strong>Both filters off</strong> = free mode.</p>
+      <h2>ETH 15m auto-bet (live)</h2>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> (browser not required when Auto-bet is ON) — live entries aligned with paper via <strong>live_trial_align</strong> (cross spread when edge allows). Uses LONG/SHORT, late entry, and flip signals.</p>
       <div id="eth-slot15-bot"><p class="muted">Loading…</p></div>
     </div>
+    <div class="card" id="eth-slot15-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
+      <h2>ETH 15m Trial (paper)</h2>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper shadow for ETH 15m live — same slot signals and entries, pure paper fills (+3¢ / −4¢ leg exits). Enable Auto-bet for A/B comparison below.</p>
+      <div id="eth-slot15-trial-bot"><p class="muted">Loading…</p></div>
+    </div>
+    <details class="card" id="eth-slot15-live-trial-compare-card" open>
+      <summary style="cursor:pointer;font-weight:600">ETH 15m live vs paper trial · slot-by-slot</summary>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Same 15m slot (<code>slot_key</code>) — live ETH 15m vs paper trial bot.</p>
+      <div id="eth-slot15-live-trial-compare"><p class="muted">Loading…</p></div>
+    </details>
     <div class="card ref-override" id="eth15-ref-override-panel">
       <label for="eth15-ref-override-input">Override Kalshi t=0 (optional)</label>
       <div class="ref-override-row">
@@ -863,6 +873,9 @@
     let trialsFetchGen = 0;
     let hourlyV2FetchGen = 0;
     let slot15FetchGen = 0;
+    let slot15TrialFetchGen = 0;
+    const SLOT15_TRIAL_KIND = 'slot15_trial';
+    function isSlot15TrialKind(kind) { return kind === SLOT15_TRIAL_KIND; }
     let hourlyGuideCheatOpen = false;
     const lastBotStatus = { btc: null, eth: null, spx: null, ndx: null };
     const lastV2BotStatus = { btc: null, eth: null };
@@ -883,6 +896,7 @@
       lastHourlyTrialBotStatusByKey[botUiKey(kind, asset)] = data;
     }
     const lastSlot15BotStatus = { btc: null, eth: null };
+    const lastSlot15TrialBotStatus = { eth: null };
     const lastKnownBotSettings = {};
     const pendingBotPatch = {};
     const botAutoStoppedPrev = {};
@@ -1993,6 +2007,14 @@
           lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_slot_usd');
         }
         if (cached) renderSlot15Bot(cached, asset);
+        if (name === 'eth-15m') {
+          const trialCached = lastSlot15TrialBotStatus.eth;
+          const trialKey = botUiKey(SLOT15_TRIAL_KIND, 'eth');
+          if (trialCached?.settings && !pendingBotPatch[trialKey]) {
+            lastKnownBotSettings[trialKey] = normalizeBotSettings(trialCached.settings, 'max_spend_per_slot_usd');
+          }
+          if (trialCached) renderSlot15TrialBot(trialCached, 'eth');
+        }
         loadAll();
         return;
       }
@@ -2758,6 +2780,7 @@
 
     function botForceKey(kind, asset) {
       if (isHourlyTrialKind(kind) || isHourlyV2Kind(kind)) return botUiKey(kind, asset);
+      if (isSlot15TrialKind(kind)) return `${asset}-trial`;
       return asset;
     }
 
@@ -2805,9 +2828,10 @@
 
     const botForceSettingsRender = { btc: true, eth: true };
     const hourlyTrialForceSettingsRender = {};
-    const slot15BotForceSettingsRender = { btc: true, eth: true };
+    const slot15BotForceSettingsRender = { btc: true, eth: true, 'eth-trial': true };
 
     function botDomPrefix(kind, asset) {
+      if (kind === 'slot15_trial') return `slot15-trial-${asset}`;
       if (kind === 'slot15') return `slot15-${asset}`;
       if (kind === 'hourly_trial_rally') return `trial-rally-${asset}`;
       if (kind === 'hourly_trial_soft') return `trial-soft-${asset}`;
@@ -3042,14 +3066,17 @@
     async function resetPaperBankroll(period, asset, kind = 'hourly') {
       const url = period === 'hour'
         ? (isHourlyTrialKind(kind) ? hourlyTrialBotResetBankrollUrl(asset, kind) : hourlyBotResetBankrollUrl(asset))
-        : slot15BotResetBankrollUrl(asset);
-      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (period === 'hour' ? 'hourly' : '15m');
+        : (isSlot15TrialKind(kind) ? slot15TrialBotResetBankrollUrl(asset) : slot15BotResetBankrollUrl(asset));
+      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind)
+        : isSlot15TrialKind(kind) ? '15m trial'
+        : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Reset ${asset.toUpperCase()} ${label} paper bankroll to max at-risk cap? Trade log is kept.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
         if (period === 'hour') renderHourlyBot(bot, asset, kind);
+        else if (isSlot15TrialKind(kind)) renderSlot15TrialBot(bot, asset);
         else renderSlot15Bot(bot, asset);
       } catch (e) {
         showError('Reset bankroll: ' + e.message);
@@ -3059,14 +3086,17 @@
     async function clearBotHistory(period, asset, kind = 'hourly') {
       const url = period === 'hour'
         ? (isHourlyTrialKind(kind) ? hourlyTrialBotClearHistoryUrl(asset, kind) : hourlyBotClearHistoryUrl(asset))
-        : slot15BotClearHistoryUrl(asset);
-      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (period === 'hour' ? 'hourly' : '15m');
+        : (isSlot15TrialKind(kind) ? slot15TrialBotClearHistoryUrl(asset) : slot15BotClearHistoryUrl(asset));
+      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind)
+        : isSlot15TrialKind(kind) ? '15m trial'
+        : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Clear ${asset.toUpperCase()} ${label} bot history?\n\nRemoves trade log and open bot legs from the server DB. Does not touch your Kalshi account or wallet.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
         if (period === 'hour') renderHourlyBot(bot, asset, kind);
+        else if (isSlot15TrialKind(kind)) renderSlot15TrialBot(bot, asset);
         else renderSlot15Bot(bot, asset);
       } catch (e) {
         showError('Clear history: ' + e.message);
@@ -3076,14 +3106,17 @@
     async function freshStartPaperBot(period, asset, kind = 'hourly') {
       const url = period === 'hour'
         ? (isHourlyTrialKind(kind) ? hourlyTrialBotFreshStartUrl(asset, kind) : hourlyBotFreshStartUrl(asset))
-        : slot15BotFreshStartUrl(asset);
-      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (period === 'hour' ? 'hourly' : '15m');
+        : (isSlot15TrialKind(kind) ? slot15TrialBotFreshStartUrl(asset) : slot15BotFreshStartUrl(asset));
+      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind)
+        : isSlot15TrialKind(kind) ? '15m trial'
+        : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Fresh start ${asset.toUpperCase()} ${label} paper bot?\n\nClears trade log, open positions, cooldowns, and resets bankroll to max at-risk.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
         if (period === 'hour') renderHourlyBot(bot, asset, kind);
+        else if (isSlot15TrialKind(kind)) renderSlot15TrialBot(bot, asset);
         else renderSlot15Bot(bot, asset);
       } catch (e) {
         showError('Fresh start: ' + e.message);
@@ -3235,9 +3268,12 @@
       botRestingTradesVisible[key] = !botRestingTradesVisible[key];
       const cache = kind === 'slot15'
         ? lastSlot15BotStatus[asset]
-        : hourlyBotCache(kind, asset);
+        : kind === 'slot15_trial'
+          ? lastSlot15TrialBotStatus[asset]
+          : hourlyBotCache(kind, asset);
       if (!cache) return;
       if (kind === 'slot15') renderSlot15Bot(cache, asset);
+      else if (kind === 'slot15_trial') renderSlot15TrialBot(cache, asset);
       else renderHourlyBot(cache, asset, kind);
     }
 
@@ -3405,16 +3441,20 @@
         'hourly_trial:ndx': '/api/ndx/hourly-trial/bot/override-daily-cap',
         'slot15:btc': '/api/slot15/bot/override-daily-cap',
         'slot15:eth': '/api/eth/15m/bot/override-daily-cap',
+        'slot15_trial:eth': '/api/eth/15m-trial/bot/override-daily-cap',
       };
       const path = paths[`${kind}:${asset}`];
       if (!path) return;
-      const kindLabel = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (kind === 'hourly' ? 'hourly' : '15m');
+      const kindLabel = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind)
+        : isSlot15TrialKind(kind) ? '15m trial'
+        : (kind === 'hourly' ? 'hourly' : '15m');
       if (!confirm(`Resume ${asset.toUpperCase()} ${kindLabel} entries for the rest of today?\n\nDaily loss is still tracked; the $ cap will not block this bot until tomorrow (ET).`)) return;
       try {
         const res = await fetch(path, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
         if (kind === 'hourly' || isHourlyTrialKind(kind)) renderHourlyBot(bot, asset, kind);
+        else if (isSlot15TrialKind(kind)) renderSlot15TrialBot(bot, asset);
         else renderSlot15Bot(bot, asset);
         const h = await get('/api/health');
         if (h) renderStatus(h);
@@ -3627,7 +3667,7 @@
 
     function applyBotSettingsToDom(kind, asset, settings) {
       const p = botDomPrefix(kind, asset);
-      const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+      const maxKey = (kind === 'slot15' || kind === 'slot15_trial') ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
       const s = normalizeBotSettings(settings, maxKey);
       if (!s) return;
       const set = (id, checked) => {
@@ -3652,27 +3692,34 @@
     }
 
     function syncBotSettingsUi(kind, asset, serverSettings, forceFlags) {
-      const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+      const isSlot15Kind = kind === 'slot15' || kind === 'slot15_trial';
+      const maxKey = isSlot15Kind ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
       const key = botUiKey(kind, asset);
-      const settingsWrapId = kind === 'slot15'
-        ? `${asset}-slot15-bot-settings`
-        : hourlyBotSettingsWrapId(kind, asset);
+      const settingsWrapId = kind === 'slot15_trial'
+        ? `${asset}-slot15-trial-bot-settings`
+        : kind === 'slot15'
+          ? `${asset}-slot15-bot-settings`
+          : hourlyBotSettingsWrapId(kind, asset);
       const settingsWrap = $(settingsWrapId);
       if (!settingsWrap) return normalizeBotSettings(serverSettings, maxKey) || serverSettings || {};
 
       const pending = pendingBotPatch[key];
-      const domSettings = kind === 'slot15'
-        ? readSlot15BotSettingsFromDom(asset)
-        : readBotSettingsFromDom(asset, kind);
+      const domSettings = kind === 'slot15_trial'
+        ? readSlot15TrialBotSettingsFromDom(asset)
+        : kind === 'slot15'
+          ? readSlot15BotSettingsFromDom(asset)
+          : readBotSettingsFromDom(asset, kind);
       const lastKnown = lastKnownBotSettings[key];
       const patchConfirmed = settingsPatchConfirmed[key];
       const forceKey = botForceKey(kind, asset);
       const needStructure = !botSettingsDomReady[key] && (!domSettings || forceFlags[forceKey]);
 
       if (needStructure) {
-        settingsWrap.innerHTML = kind === 'slot15'
-          ? slot15BotSettingsHtml(asset, serverSettings)
-          : botSettingsHtml(asset, serverSettings, kind);
+        settingsWrap.innerHTML = kind === 'slot15_trial'
+          ? slot15TrialBotSettingsHtml(asset, serverSettings)
+          : kind === 'slot15'
+            ? slot15BotSettingsHtml(asset, serverSettings)
+            : botSettingsHtml(asset, serverSettings, kind);
         forceFlags[forceKey] = false;
         botSettingsDomReady[key] = true;
         const norm = normalizeBotSettings(serverSettings, maxKey);
@@ -3713,7 +3760,7 @@
       botAutoStoppedPrev[key] = !!autoStopped;
       if (autoStopped && !wasStopped) {
         applyBotSettingsToDom(kind, asset, serverSettings);
-        const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+        const maxKey = (kind === 'slot15' || kind === 'slot15_trial') ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
         lastKnownBotSettings[key] = normalizeBotSettings(serverSettings, maxKey);
       }
     }
@@ -4021,12 +4068,16 @@
       }
       const hours = data.hours || [];
       if (!hours.length) {
-        const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : 'standard trial';
-        el.innerHTML = `<p class="muted">No matched hourly events yet for ${String(data.asset || compareAsset).toUpperCase()} (live hourly + paper ${trialLabel}).</p>`;
+        const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : (data.trial_kind === 'slot15_trial' ? '15m trial' : 'standard trial');
+        const periodNoun = data.live_kind === 'slot15' ? '15m slots' : 'hourly events';
+        el.innerHTML = `<p class="muted">No matched ${periodNoun} yet for ${String(data.asset || compareAsset).toUpperCase()} (live + paper ${trialLabel}).</p>`;
         return;
       }
-      const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : 'standard trial';
-      const meta = `<p class="muted" style="font-size:.68rem;margin:0 0 .65rem">${hours.length} hour(s) · ${data.matched_event_count ?? 0} with both bots active · live <strong>${data.live_mode}</strong> vs paper <strong>${trialLabel}</strong> · pair window <strong>${data.pair_window_seconds ?? 180}s</strong></p>`;
+      const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : (data.trial_kind === 'slot15_trial' ? '15m trial' : 'standard trial');
+      const periodWord = data.live_kind === 'slot15' ? 'slot(s)' : 'hour(s)';
+      const liveColTitle = data.live_kind === 'slot15' ? 'Live 15m' : 'Live hourly';
+      const trialColTitle = data.live_kind === 'slot15' ? 'Paper trial' : `Paper ${trialLabel}`;
+      const meta = `<p class="muted" style="font-size:.68rem;margin:0 0 .65rem">${hours.length} ${periodWord} · ${data.matched_event_count ?? 0} with both bots active · live <strong>${data.live_mode}</strong> vs paper <strong>${trialLabel}</strong> · pair window <strong>${data.pair_window_seconds ?? 180}s</strong></p>`;
       const blocks = hours.map((h) => {
         const bothBadge = h.both_active
           ? '<span class="up" style="font-size:.65rem">both active</span>'
@@ -4048,8 +4099,8 @@
           <p class="muted" style="font-size:.65rem;margin:.15rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Paired entries (same contract + side)</p>
           ${comparePairsTable(ep.pairs, ep.unpaired_live, ep.unpaired_trial)}
           <div class="compare-grid" style="margin-top:.55rem">
-            ${compareSideColumn('Live hourly', h.live, 'compare-col-live')}
-            ${compareSideColumn(`Paper ${trialLabel}`, h.trial, 'compare-col-trial')}
+            ${compareSideColumn(liveColTitle, h.live, 'compare-col-live')}
+            ${compareSideColumn(trialColTitle, h.trial, 'compare-col-trial')}
           </div>
         </div>`;
       }).join('');
@@ -4070,6 +4121,16 @@
       const targetId = `${asset}-hourly-live-trial-compare`;
       try {
         const data = await get(`/api/bots/hourly-live-trial-compare?asset=${encodeURIComponent(asset)}&limit_hours=24`);
+        renderHourlyLiveTrialCompare(data, targetId);
+      } catch (e) {
+        renderHourlyLiveTrialCompare({ ok: false, error: e.message }, targetId);
+      }
+    }
+
+    async function loadSlot15LiveTrialCompare() {
+      const targetId = 'eth-slot15-live-trial-compare';
+      try {
+        const data = await get('/api/bots/slot15-live-trial-compare?asset=eth&limit_slots=48');
         renderHourlyLiveTrialCompare(data, targetId);
       } catch (e) {
         renderHourlyLiveTrialCompare({ ok: false, error: e.message }, targetId);
@@ -4211,6 +4272,101 @@
 
     function slot15BotClearHistoryUrl(asset) {
       return asset === 'eth' ? '/api/eth/15m/bot/clear-history' : '/api/slot15/bot/clear-history';
+    }
+
+    function slot15TrialBotStatusUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot' : null;
+    }
+
+    function slot15TrialBotSettingsUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot/settings' : null;
+    }
+
+    function slot15TrialBotResetBankrollUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot/reset-bankroll' : null;
+    }
+
+    function slot15TrialBotFreshStartUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot/fresh-start' : null;
+    }
+
+    function slot15TrialBotClearHistoryUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot/clear-history' : null;
+    }
+
+    function mergeSlot15TrialBotStatus(asset, incoming) {
+      if (!incoming || !incoming.ok || (incoming.asset && incoming.asset !== asset)) {
+        return lastSlot15TrialBotStatus[asset];
+      }
+      const prev = lastSlot15TrialBotStatus[asset];
+      if (!prev) {
+        lastSlot15TrialBotStatus[asset] = incoming;
+        return incoming;
+      }
+      const eventTicker = incoming.event_ticker
+        || (incoming.slot_summary || {}).event_ticker
+        || prev.event_ticker;
+      const mergedSs = mergeSlot15Summary(prev.slot_summary || {}, incoming.slot_summary || {}, eventTicker);
+      const merged = {
+        ...prev,
+        ...incoming,
+        event_ticker: eventTicker,
+        settings: mergeBotSettingsForCache(SLOT15_TRIAL_KIND, asset, incoming.settings, prev.settings),
+        slot_summary: mergedSs,
+        open_positions: incoming.open_positions ?? prev.open_positions,
+        recent_trades: incoming.recent_trades ?? prev.recent_trades,
+      };
+      lastSlot15TrialBotStatus[asset] = merged;
+      return merged;
+    }
+
+    function readSlot15TrialBotSettingsFromDom(asset) {
+      const p = `slot15-trial-${asset}`;
+      const enabledEl = $(`bot-enabled-${p}`);
+      if (!enabledEl) return null;
+      return {
+        enabled: !!enabledEl.checked,
+        mode: 'paper',
+        max_spend_per_slot_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
+        allow_strong: !!$(`bot-strong-${p}`)?.checked,
+        allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
+        use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
+        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
+      };
+    }
+
+    function slot15TrialBotSettingsHtml(asset, s) {
+      const p = `slot15-trial-${asset}`;
+      return `
+        <div class="bot-row">
+          <label class="bot-label">Auto-bet
+            <label class="switch"><input type="checkbox" id="bot-enabled-${p}" ${s.enabled ? 'checked' : ''} onchange="saveSlot15TrialBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <span class="muted" style="font-size:.72rem;align-self:center">Paper only — shadow of live ETH 15m</span>
+        </div>
+        <div class="bot-row">
+          <label class="bot-label" title="Max open exposure at once this slot — not cumulative spend">Max at-risk $ / slot
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_slot_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="saveSlot15TrialBotSettings('${asset}')">
+          </label>
+          <label class="bot-label">STRONG bets
+            <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="saveSlot15TrialBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label">ACTIONABLE bets
+            <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveSlot15TrialBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="When ON, wins increase deployable capital and cumulative $ entered per slot can exceed max at-risk. When OFF, capped at max at-risk $ for this slot only.">Use profits
+            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit ? 'checked' : ''} onchange="onBotUseProfitsToggle('${asset}', 'slot15_trial')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="% of interval profit deployable when Use profits is ON (0–100).">Profit use %
+            <input type="number" id="bot-profit-use-pct-${p}" min="0" max="100" step="5" value="${s.profit_use_pct ?? 100}" style="width:3.5rem;margin-left:.35rem" ${s.use_accumulated_profit ? '' : 'disabled'} onchange="saveSlot15TrialBotSettings('${asset}')">
+          </label>
+          <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
+            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="saveSlot15TrialBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          ${botAggressiveToggleHtml(p, s, `saveSlot15TrialBotSettings('${asset}')`)}
+        </div>`;
     }
 
     function readSlot15BotSettingsFromDom(asset) {
@@ -4456,6 +4612,136 @@
       }
     }
 
+    function renderSlot15TrialBot(bot, asset) {
+      const kind = SLOT15_TRIAL_KIND;
+      const el = $(`${asset}-slot15-trial-bot`);
+      if (!el) return;
+      if (activeTab !== 'eth-15m' || asset !== 'eth') return;
+      if (bot && bot.asset && bot.asset !== asset) return;
+      if (bot && bot.ok) bot = mergeSlot15TrialBotStatus(asset, bot) || bot;
+      if (!bot || !bot.ok) {
+        const statusWrap = $(`${asset}-slot15-trial-bot-status`);
+        const msg = `<p class="muted">Trial bot unavailable${bot?.error ? `: ${bot.error}` : ''}.</p>`;
+        if (statusWrap) {
+          statusWrap.innerHTML = msg;
+        } else {
+          el.innerHTML = msg;
+          slot15BotForceSettingsRender[`${asset}-trial`] = true;
+        }
+        return;
+      }
+      const serverSettings = bot.settings || {};
+      noteAutoStoppedTransition(kind, asset, bot.auto_stopped, serverSettings);
+      const settingsWrapId = `${asset}-slot15-trial-bot-settings`;
+      const statusWrapId = `${asset}-slot15-trial-bot-status`;
+      if (!$(settingsWrapId)) {
+        el.innerHTML = `<div class="bot-panel"><div id="${settingsWrapId}"></div><div id="${statusWrapId}"></div></div>`;
+      }
+      const settingsWrap = $(settingsWrapId);
+      const statusWrap = $(statusWrapId);
+      if (!settingsWrap || !statusWrap) return;
+
+      const s = syncBotSettingsUi(kind, asset, serverSettings, slot15BotForceSettingsRender);
+      const modeCls = 'bot-mode-paper';
+      const freeMode = !s.allow_strong && !s.allow_actionable;
+      const openN = bot.open_position_count ?? 0;
+      const ss = bot.slot_summary || {};
+      const realized = ss.realized_pnl_usd ?? 0;
+      const unrealized = ss.unrealized_pnl_usd ?? 0;
+      const totalPnl = ss.total_pnl_usd ?? (realized + unrealized);
+      const totalCls = totalPnl > 0 ? 'up' : totalPnl < 0 ? 'down' : 'muted';
+      const realizedCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
+      const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
+      const slotId = bot.slot_label || ss.event_ticker || bot.event_ticker || '—';
+      const tradeSource = (bot.slot_trades && bot.slot_trades.length) ? bot.slot_trades : (bot.recent_trades || []);
+      const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
+        indexLabel: bot.index_label || 'ERTI',
+        indexNow: bot.index_now_price,
+        dualLegSlotView: true,
+        slotMonitor: bot.slot_monitor,
+      });
+      const tradesScroll = captureBotTradesScroll(statusWrap);
+      const autoStopHtml = botAutoStopBanner(bot, 'slot', kind, asset);
+      const watchHtml = botEntryWatchHtml(bot, 'slot', freeMode);
+      const serverBanner = botServerBanner(bot, s);
+      const emptyLog = s.enabled
+        ? `No trial activity yet${freeMode ? ' — free mode waits for any live LONG/SHORT on the 15m tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
+        : 'No filled trades this slot yet. Auto-bet is off.';
+      const tradeLogHtml = botTradeLogHtml(bot, tradeSource, {
+        kind,
+        asset,
+        periodColLabel: 'Slot',
+        currentPeriodId: ss.event_ticker || bot.event_ticker,
+        intervalSummary: ss,
+        emptyLog,
+      });
+      statusWrap.innerHTML = `
+        ${serverBanner}
+        ${autoStopHtml}
+        ${watchHtml}
+        <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>ETH</strong> · <strong class="${modeCls}">PAPER TRIAL</strong> P&amp;L for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
+        <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
+          <div class="bot-stat"><span class="muted">Slot total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Realized (closed)</span><strong class="${realizedCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Unrealized (open)</span><strong class="${unrealCls}">${unrealized >= 0 ? '+' : ''}$${Number(unrealized).toFixed(2)}</strong></div>
+        </div>
+        <div class="bot-row" style="padding:0 .15rem .35rem">
+          <div class="bot-stat"><span class="muted">Filled enters / exits (slot)</span><strong>${ss.filled_enter_count_this_slot ?? ss.enter_count ?? 0} / ${ss.exit_count ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Sum of all filled enter costs this slot">Cumulative entered (churn)</span><strong>$${Number(ss.total_entered_usd ?? 0).toFixed(2)}</strong></div>
+        </div>
+        ${botIntervalPerformanceHtml(bot, s, 'slot')}
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Paper bankroll persists across slots. Max at-risk caps concurrent open exposure. <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
+        ${botPaperBankrollHtml(bot, s, 'slot')}
+        ${openPosHtml}
+        <div class="bot-row">
+          <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">PAPER TRIAL${freeMode ? ' · FREE' : ''}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Persistent paper capital">Paper bankroll</span><strong>$${Number(bot.slot_bankroll_usd ?? (Number(s.max_spend_per_slot_usd || 25) + realized)).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Open exposure from bot-tracked legs right now">Bot at-risk now</span><strong>${botAtRiskHtml(bot)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
+        </div>
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log shows filled + skipped by default. Use <strong>Fresh start</strong> to wipe the server log and reset bankroll.</p>
+        ${tradeLogHtml}
+      `;
+      restoreBotTradesScroll(statusWrap, tradesScroll);
+    }
+
+    async function saveSlot15TrialBotSettings(asset) {
+      const kind = SLOT15_TRIAL_KIND;
+      const maxKey = 'max_spend_per_slot_usd';
+      const key = botUiKey(kind, asset);
+      const body = readSlot15TrialBotSettingsFromDom(asset);
+      if (!body) return false;
+      const previousKnown = lastKnownBotSettings[key];
+      pendingBotPatch[key] = normalizeBotSettings(body, maxKey);
+      try {
+        const res = await fetch(slot15TrialBotSettingsUrl(asset), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const msg = await parseSettingsError(res);
+          pendingBotPatch[key] = null;
+          if (previousKnown) applyBotSettingsToDom(kind, asset, previousKnown);
+          showError('15m trial bot settings: ' + msg);
+          return false;
+        }
+        pendingBotPatch[key] = null;
+        if (activeTab === 'eth-15m') {
+          const bot = await res.json();
+          recordSettingsPatchConfirm(kind, asset, bot.settings || body, maxKey);
+          renderSlot15TrialBot(bot, asset);
+        }
+        return true;
+      } catch (e) {
+        pendingBotPatch[key] = null;
+        if (previousKnown) applyBotSettingsToDom(kind, asset, previousKnown);
+        showError('15m trial bot settings: ' + e.message);
+        return false;
+      }
+    }
+
     function renderHourlyBot(bot, asset, kind = 'hourly') {
       const isTrial = isHourlyTrialKind(kind);
       const el = $(hourlyBotPanelId(kind, asset));
@@ -4627,6 +4913,7 @@
       const useProfits = !!$(`bot-use-profits-${p}`)?.checked;
       if (pctEl) pctEl.disabled = !useProfits;
       if (kind === 'slot15') saveSlot15BotSettings(asset);
+      else if (isSlot15TrialKind(kind)) saveSlot15TrialBotSettings(asset);
       else if (isHourlyTrialKind(kind)) saveHourlyTrialBotSettings(asset, undefined, kind);
       else saveHourlyBotSettings(asset, undefined, kind);
     }
@@ -4878,11 +5165,32 @@
         }
         bot = mergeSlot15BotStatus(asset, bot);
         if (bot) renderSlot15Bot(bot, asset);
+        if (asset === 'eth') {
+          loadSlot15TrialBot();
+          loadSlot15LiveTrialCompare();
+        }
       } catch (_) {
         if (gen !== slot15FetchGen || activeTab !== tabAtStart) return;
         const cached = lastSlot15BotStatus[asset];
         if (cached) renderSlot15Bot(cached, asset);
         else if (predictionBot) renderSlot15Bot(mergeSlot15BotStatus(asset, predictionBot), asset);
+      }
+    }
+
+    async function loadSlot15TrialBot() {
+      const tabAtStart = activeTab;
+      if (tabAtStart !== 'eth-15m') return;
+      const gen = ++slot15TrialFetchGen;
+      const asset = 'eth';
+      try {
+        const botDirect = await get(slot15TrialBotStatusUrl(asset));
+        if (gen !== slot15TrialFetchGen || activeTab !== tabAtStart) return;
+        const bot = mergeSlot15TrialBotStatus(asset, botDirect);
+        if (bot) renderSlot15TrialBot(bot, asset);
+      } catch (_) {
+        if (gen !== slot15TrialFetchGen || activeTab !== tabAtStart) return;
+        const cached = lastSlot15TrialBotStatus[asset];
+        if (cached) renderSlot15TrialBot(cached, asset);
       }
     }
 
@@ -5060,6 +5368,10 @@
         );
         if (activeTab === '15m') {
           tasks.push(get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])));
+        }
+        if (activeTab === 'eth-15m') {
+          loadSlot15TrialBot();
+          loadSlot15LiveTrialCompare();
         }
       } else if (isHourlyTab(activeTab)) {
         loadDaily();

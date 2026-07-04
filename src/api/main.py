@@ -956,7 +956,7 @@ def _hourly_bot_fresh_start(store, tab_fn, asset: str, *, kind: str = "hourly"):
   return _hourly_bot_clear_history(store, tab_fn, asset, kind=kind)
 
 
-def _slot15_bot_clear_history(store, tab_fn, asset: str):
+def _slot15_bot_clear_history(store, tab_fn, asset: str, *, kind: str = "slot15", status_fn=None):
   from src.trading.bot_risk_state import bot_risk_key, get_bot_risk_coordinator
 
   settings = store.get_settings()
@@ -964,13 +964,20 @@ def _slot15_bot_clear_history(store, tab_fn, asset: str):
   store.clear_history(cap, mode=str(settings.mode or "paper"))
   coord = get_bot_risk_coordinator()
   if coord:
-    coord.reset_bot_daily_pnl(bot_risk_key("slot15", asset))
+    coord.reset_bot_daily_pnl(bot_risk_key(kind, asset))
   tab = tab_fn()
-  return _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+  if status_fn is None:
+    return _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+  return status_fn(asset, tab if tab.get("ok") else None)
 
 
-def _slot15_bot_fresh_start(store, tab_fn, asset: str):
-  return _slot15_bot_clear_history(store, tab_fn, asset)
+def _slot15_bot_fresh_start(store, tab_fn, asset: str, *, kind: str = "slot15", status_fn=None):
+  return _slot15_bot_clear_history(store, tab_fn, asset, kind=kind, status_fn=status_fn)
+
+
+def _apply_slot15_trial_bot_settings(store, body: dict[str, Any], *, cfg: dict[str, Any] | None = None):
+  body = {**body, "mode": "paper"}
+  return _apply_slot15_bot_settings(store, body, cfg=cfg)
 
 
 def _override_daily_cap_hourly(asset: str, *, kind: str = "hourly") -> dict[str, Any]:
@@ -986,15 +993,24 @@ def _override_daily_cap_hourly(asset: str, *, kind: str = "hourly") -> dict[str,
   return status
 
 
-def _override_daily_cap_slot15(asset: str) -> dict[str, Any]:
+def _override_daily_cap_slot15(
+  asset: str,
+  *,
+  kind: str = "slot15",
+  store=None,
+  status_fn=None,
+) -> dict[str, Any]:
   from src.assets import asset_cfg
   from src.trading.bot_risk_gates import override_daily_loss_cap
 
-  store = _loop.slot15_bot_store(asset)
+  store = store or _loop.slot15_bot_store(asset)
   acfg = _loop._acfg_15m(asset) if asset == "btc" else (_loop._eth_cfg or asset_cfg(_cfg, asset))
-  daily = override_daily_loss_cap(store, kind="slot15", asset=asset, cfg=acfg)
+  daily = override_daily_loss_cap(store, kind=kind, asset=asset, cfg=acfg)
   tab = _loop._slot15_tab(asset)
-  status = _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+  if status_fn is None:
+    status = _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+  else:
+    status = status_fn(asset, tab if tab.get("ok") else None)
   status["daily_loss"] = daily
   return status
 
@@ -1092,6 +1108,33 @@ def bots_hourly_live_trial_compare(
     asset=asset,
     limit_hours=limit_hours,
     trial_kind=trial_kind,
+    pair_window_seconds=align.compare_pair_window_seconds,
+  )
+
+
+@app.get("/api/bots/slot15-live-trial-compare")
+def bots_slot15_live_trial_compare(
+  asset: str = Query(default="eth", pattern="^(btc|eth)$"),
+  limit_slots: int = Query(default=48, ge=1, le=96),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if asset == "eth" and _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  from src.trading.hourly_live_trial_align import HourlyLiveTrialAlignConfig
+  from src.trading.hourly_live_trial_compare import build_slot15_live_trial_compare
+  from src.assets import asset_cfg
+
+  live_store = _loop.slot15_bot_store(asset)
+  trial_store = _loop.slot15_trial_bot_store(asset)
+  acfg = _loop._acfg_15m(asset) if asset == "btc" else (_loop._eth_cfg or asset_cfg(_cfg, asset))
+  align = HourlyLiveTrialAlignConfig.from_cfg(acfg, kind="slot15")
+  return build_slot15_live_trial_compare(
+    live_store,
+    trial_store,
+    asset=asset,
+    limit_slots=limit_slots,
     pair_window_seconds=align.compare_pair_window_seconds,
   )
 
@@ -1832,6 +1875,107 @@ def eth_slot15_bot_trades(
   if _loop.eth_calibration is None:
     raise HTTPException(503, "ETH 15m disabled")
   store = _loop.slot15_bot_store("eth")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["slot_summary"] = store.slot_interval_summary(event_ticker)
+  return out
+
+
+@app.get("/api/eth/15m-trial/bot")
+def eth_slot15_trial_bot_status(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  tab = _loop._slot15_tab("eth")
+  return _loop.slot15_trial_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/15m-trial/bot/settings")
+async def eth_slot15_trial_bot_settings(request: Request, _: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  body = await request.json()
+  store = _loop.slot15_trial_bot_store("eth")
+  from src.assets import asset_cfg
+
+  eth_cfg = _loop._eth_cfg or asset_cfg(_cfg, "eth")
+  _apply_slot15_trial_bot_settings(store, body, cfg=eth_cfg)
+  tab = _loop._slot15_tab("eth")
+  return _loop.slot15_trial_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/15m-trial/bot/reset-bankroll")
+def eth_slot15_trial_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  store = _loop.slot15_trial_bot_store("eth")
+  settings = store.get_settings()
+  store.reset_paper_bankroll(settings.max_spend_per_slot_usd)
+  tab = _loop._slot15_tab("eth")
+  return _loop.slot15_trial_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/15m-trial/bot/fresh-start")
+def eth_slot15_trial_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _slot15_bot_fresh_start(
+    _loop.slot15_trial_bot_store("eth"),
+    lambda: _loop._slot15_tab("eth"),
+    "eth",
+    kind="slot15_trial",
+    status_fn=_loop.slot15_trial_bot_status,
+  )
+
+
+@app.post("/api/eth/15m-trial/bot/clear-history")
+def eth_slot15_trial_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _slot15_bot_clear_history(
+    _loop.slot15_trial_bot_store("eth"),
+    lambda: _loop._slot15_tab("eth"),
+    "eth",
+    kind="slot15_trial",
+    status_fn=_loop.slot15_trial_bot_status,
+  )
+
+
+@app.post("/api/eth/15m-trial/bot/override-daily-cap")
+def eth_slot15_trial_bot_override_daily_cap(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _override_daily_cap_slot15(
+    "eth",
+    kind="slot15_trial",
+    store=_loop.slot15_trial_bot_store("eth"),
+    status_fn=_loop.slot15_trial_bot_status,
+  )
+
+
+@app.get("/api/eth/15m-trial/bot/trades")
+def eth_slot15_trial_bot_trades(
+  limit: int = Query(default=100, le=200),
+  event_ticker: str | None = Query(default=None),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  store = _loop.slot15_trial_bot_store("eth")
   trades = store.list_trades(limit=limit, event_ticker=event_ticker)
   out: dict[str, Any] = {"trades": trades}
   if event_ticker:

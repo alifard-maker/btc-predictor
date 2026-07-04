@@ -112,6 +112,7 @@ def test_bot_db_specs_cover_every_bot():
       assert f"{asset}_{kind}" in labels
   assert "btc_slot15" in labels
   assert "eth_slot15" in labels
+  assert "eth_slot15_trial" in labels
   assert set(BACKUP_ASSETS) == {"btc", "eth", "spx", "ndx"}
 
 
@@ -121,6 +122,7 @@ def test_parse_bot_db_meta_for_index_and_trial_bots():
   assert parse_bot_db_meta(Path("hourly_trial_mech_bot_btc.db")) == ("btc", "hourly_trial_mech")
   assert parse_bot_db_meta(Path("hourly_v2_bot_eth.db")) == ("eth", "hourly_v2")
   assert parse_bot_db_meta(Path("slot15_bot_btc.db")) == ("btc", "slot15")
+  assert parse_bot_db_meta(Path("slot15_trial_bot_eth.db")) == ("eth", "slot15_trial")
 
 
 def test_full_backup_exports_index_live_trades():

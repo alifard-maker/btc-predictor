@@ -24,6 +24,7 @@ def parse_bot_db_meta(db_path: Path) -> tuple[str, str]:
   """Return (asset, kind) from a bot SQLite filename."""
   name = db_path.stem
   prefixes = (
+    ("slot15_trial_bot_", "slot15_trial"),
     ("slot15_bot_", "slot15"),
     ("hourly_v2_bot_", "hourly_v2"),
     ("hourly_trial_rally_bot_", "hourly_trial_rally"),

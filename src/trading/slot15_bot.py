@@ -323,13 +323,21 @@ def enrich_open_positions_live(
 
 
 class Slot15Bot:
-  def __init__(self, store: Slot15BotStore, kalshi_client: Any | None = None, *, asset: str = "btc"):
+  def __init__(
+    self,
+    store: Slot15BotStore,
+    kalshi_client: Any | None = None,
+    *,
+    asset: str = "btc",
+    kind: str = "slot15",
+  ):
     self.store = store
     self.kalshi = kalshi_client
     self.asset = asset.lower()
+    self.kind = kind
     from src.trading.bot_risk_state import bot_risk_key
 
-    self._bot_risk_key = bot_risk_key("slot15", self.asset)
+    self._bot_risk_key = bot_risk_key(kind, self.asset)
 
   def run_continuous_cycle(self, tab: dict[str, Any], *, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """Evaluate exits then entries on live 15m data. Returns actions taken."""
