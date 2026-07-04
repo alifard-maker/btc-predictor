@@ -45,6 +45,14 @@ from src.trading.bot_entry_presets import (
   apply_bot_runtime_settings,
   effective_bot_entry_strategy,
 )
+from src.trading.hourly_live_trial_align import (
+  apply_align_entry_pricing,
+  apply_mirror_trial_entry_estrat,
+  leg_stop_entry_blocked,
+  mirror_trial_live_contract_count,
+  pending_resting_enter_blocks_entry,
+  should_use_trial_leg_exits,
+)
 from src.trading.live_inventory_guards import apply_live_inventory_guards
 from src.trading.bot_live_exit import (
   allow_live_cut_loss,
@@ -55,7 +63,6 @@ from src.trading.bot_live_exit import (
 )
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
-  cap_live_entry_contracts,
   entry_budget_usd,
   passes_tail_entry_gate,
 )
@@ -523,6 +530,29 @@ class Slot15Bot:
     mark_cents: int | None = None,
     cfg: dict[str, Any] | None = None,
   ) -> tuple[str | None, str]:
+    hold_seconds = position_hold_seconds(pos)
+    if should_use_trial_leg_exits(
+      cfg,
+      kind="slot15",
+      mode=settings.mode,
+      hold_seconds=hold_seconds,
+      adaptive_mode=None,
+      hour_momentum_state=None,
+    ):
+      return evaluate_slot15_contract_exits(
+        pos=pos,
+        mark_cents=mark_cents,
+        unrealized_usd=unrealized,
+        monitor=monitor,
+        peaks=peaks,
+        hold_seconds=hold_seconds,
+        settings=settings,
+        exit_ctx=exit_ctx,
+        cfg=cfg,
+        include_monitor_fallback=False,
+        cut_loss_min_usd=CUT_LOSS_EXIT_MIN_LOSS_USD,
+        bot_kind="slot15",
+      )
     profit_settings = (
       overlay_live_profit_settings(
         settings, pos, cfg, mode=settings.mode, kind="slot15",
@@ -536,7 +566,7 @@ class Slot15Bot:
       unrealized_usd=unrealized,
       monitor=monitor,
       peaks=peaks,
-      hold_seconds=position_hold_seconds(pos),
+      hold_seconds=hold_seconds,
       settings=profit_settings,
       exit_ctx=exit_ctx,
       cfg=cfg,
@@ -856,6 +886,15 @@ class Slot15Bot:
     )
     estrat = apply_live_inventory_guards(estrat, cfg, mode=settings.mode, kind="slot15")
     estrat = apply_live_exit_entry_guards(estrat, cfg, mode=settings.mode, kind="slot15")
+    estrat = apply_mirror_trial_entry_estrat(
+      estrat, cfg, kind="slot15", mode=settings.mode,
+    )
+    leg_stop_block = leg_stop_entry_blocked(
+      self.store, slot_key, cfg=cfg, kind="slot15", mode=settings.mode,
+    )
+    if leg_stop_block:
+      self.store.set_last_skip_reason(leg_stop_block)
+      return []
     entries_this_cycle = 0
     max_entries = estrat.max_entries_per_cycle if estrat.enabled else 1
 
@@ -905,6 +944,20 @@ class Slot15Bot:
         identity = pick.get("label") or market_ticker
         last_reason = f"cheap_leg_cut_cooldown:{identity}"
         continue
+
+      if settings.mode == "live":
+        resting_block = pending_resting_enter_blocks_entry(
+          self.store,
+          self.kalshi,
+          slot_key,
+          market_ticker,
+          cfg=cfg,
+          kind="slot15",
+          mode=settings.mode,
+        )
+        if resting_block:
+          last_reason = resting_block
+          continue
 
       from dataclasses import replace
       from src.trading.entry_strategy import ask_cents_for_side
@@ -996,6 +1049,9 @@ class Slot15Bot:
         pricing = live_entry_pricing_from_cfg(
           cfg, kind="slot15", aggressive=settings.aggressive_entries
         )
+        pricing = apply_align_entry_pricing(
+          pricing, pick_kelly, cfg=cfg, kind="slot15", mode=settings.mode,
+        )
         live_resolved = resolve_live_entry_price(
           pick_kelly, side, pricing=pricing, estrat=estrat_entry
         )
@@ -1010,14 +1066,17 @@ class Slot15Bot:
         if not ok_fill:
           last_reason = fill_reason or "tail_entry_blocked"
           continue
-        count = _contracts_for_budget(stake, price_cents)
-        if settings.mode == "live":
-          count = cap_live_entry_contracts(
-            count=count,
-            price_cents=price_cents,
-            max_spend_per_hour_usd=float(settings.max_spend_per_slot_usd),
-            estrat=estrat_entry,
-          )
+        count = mirror_trial_live_contract_count(
+          pick=pick_kelly,
+          side=side,
+          stake_usd=stake,
+          price_cents=price_cents,
+          max_spend_per_hour_usd=float(settings.max_spend_per_slot_usd),
+          estrat=estrat_entry,
+          cfg=cfg,
+          kind="slot15",
+          mode=settings.mode,
+        )
         if count <= 0:
           last_reason = "budget_too_small_for_contract"
           continue

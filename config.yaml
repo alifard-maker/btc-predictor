@@ -121,7 +121,7 @@ intra_slot:
     cheap_leg_cut_loss_cents: 10
     cheap_leg_cut_cooldown_seconds: 180
     leg_take_profit_cents: 3
-    leg_stop_loss_cents: 8
+    leg_stop_loss_cents: 4
     leg_stop_gate_min_remaining_seconds: 180
     leg_take_profit_usd: 0.10
     leg_trail_arm_usd: 0.10
@@ -169,6 +169,26 @@ intra_slot:
       enabled: false
       min_prob: 0.58
       min_elapsed_pct: 7.0
+    live_entry:
+      cross_spread_enabled: true
+      cross_spread_min_edge_cents: 12
+      passive_limit_at: mid
+    live_trial_align:
+      enabled: true
+      live_exit_mode: trial_legs
+      entry_align_with_trial: true
+      execution:
+        mirror_trial_entry_execution: true
+        block_reentry_while_resting: true
+        mirror_trial_stake_sizing: true
+        prefer_passive_below_edge_cents: 12
+      stake:
+        max_stake_per_entry_usd: 4.0
+        max_budget_fraction_per_entry: 0.30
+        max_contracts_per_entry: 8
+      exits:
+        leg_stop_reentry_cooldown_seconds: 600
+        leg_stop_event_cooldown_seconds: 300
 
 # Late entry — reassess NO-TRADE slots mid-window (conservative)
 late_entry:
@@ -641,9 +661,10 @@ eth:
     brti_index_id: ETHUSD_RTI
   intra_slot:
     bot:
+      max_spend_per_slot_usd: 25
       cheap_leg_cut_cooldown_seconds: 180
-      leg_stop_loss_cents: 8
-      leg_stop_gate_min_remaining_seconds: 180
+      leg_stop_loss_cents: 4
+      leg_stop_gate_min_remaining_seconds: 60
       bot_adaptive_calibration:
         enabled: false
   daily:

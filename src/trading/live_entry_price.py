@@ -44,7 +44,7 @@ def live_entry_pricing_from_cfg(
   if not cfg:
     pricing = LiveEntryPricingConfig()
   elif kind == "slot15":
-    pricing = LiveEntryPricingConfig.from_bot_cfg((cfg.get("slot15") or {}).get("bot"))
+    pricing = LiveEntryPricingConfig.from_bot_cfg((cfg.get("intra_slot") or {}).get("bot"))
   else:
     from src.backtest.mechanics_profiles import entry_kind_for_bot
 

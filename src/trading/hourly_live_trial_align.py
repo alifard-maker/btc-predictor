@@ -99,7 +99,9 @@ class HourlyLiveTrialAlignConfig:
 
 
 def _live_hourly_align_enabled(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
-  if is_hourly_trial_kind(kind) or kind != "hourly":
+  if is_hourly_trial_kind(kind):
+    return False
+  if kind not in ("hourly", "slot15"):
     return False
   if str(mode).lower() != "live":
     return False
@@ -354,7 +356,7 @@ def apply_mirror_trial_entry_estrat(
   if not live_entry_stake_mirror_active(cfg, kind=kind, mode=mode):
     return estrat
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
-  bot = (cfg.get("hourly") or {}).get("bot") or {}
+  bot = _bot_block(cfg, kind=kind)
   es = dict(bot.get("entry_strategy") or {})
   kw: dict[str, Any] = {}
   if acfg.mirror_trial_scale_in:

@@ -93,6 +93,16 @@ def asset_cfg(base_cfg: dict[str, Any], asset: str) -> dict[str, Any]:
     if aligned:
       merged_hourly["bot"] = _deep_merge_dict(merged_hourly.get("bot") or {}, aligned)
   cfg["hourly"] = merged_hourly
+  base_intra = base_cfg.get("intra_slot") or {}
+  block_intra = block.get("intra_slot") or {}
+  if block_intra or base_intra:
+    merged_intra = {**base_intra, **block_intra}
+    if "bot" in base_intra or "bot" in block_intra:
+      merged_intra["bot"] = _deep_merge_dict(
+        base_intra.get("bot") or {},
+        block_intra.get("bot") or {},
+      )
+    cfg["intra_slot"] = merged_intra
   cfg["paths"]["db"] = str(Path(cfg["paths"]["logs"]) / "predictions.db")
   cfg["_asset"] = asset
   return cfg
