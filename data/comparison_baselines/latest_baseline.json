@@ -1,0 +1,147 @@
+{
+  "baseline_at_utc": "2026-07-04T11:47:52Z",
+  "baseline_at_local": "2026-07-04 13:47:52 CEST",
+  "compare_from_utc": "2026-07-04T11:47:52Z",
+  "note": "Use created_at >= baseline_at_utc when measuring post-deploy live vs trial parity.",
+  "deployment": {
+    "base_url": "https://btc-predictor-production-f460.up.railway.app",
+    "version": "Beta 4.0.50",
+    "status": "ok"
+  },
+  "pairs": {
+    "btc": {
+      "live": "btc_live",
+      "trial_benchmark": "btc_trial_mech",
+      "trial_kind": "hourly_trial_mech"
+    },
+    "eth": {
+      "live": "eth_live",
+      "trial_benchmark": "eth_trial",
+      "trial_kind": "hourly_trial"
+    }
+  },
+  "bots": {
+    "btc_live": {
+      "event_ticker": "KXBTCD-26JUL0408",
+      "mode": "live",
+      "enabled": true,
+      "max_spend_per_hour_usd": 15.0,
+      "open_positions": 0,
+      "current_hour": {
+        "realized_pnl_usd": -0.2,
+        "enter_count": 4,
+        "exit_count": 4,
+        "open_exposure_usd": 0
+      },
+      "all_time": {
+        "realized_pnl_usd": -50.37,
+        "enter_count": 632,
+        "exit_count": 578,
+        "first_trade_at": "2026-06-30T07:20:06.350839+00:00"
+      },
+      "intervals": {
+        "scored": 85,
+        "win_rate_pct": 25.9,
+        "net_pnl_usd": -50.31
+      },
+      "last_skip_reason": "hour_momentum:conservative:too_late_for_new_entries"
+    },
+    "btc_trial_mech": {
+      "event_ticker": "KXBTCD-26JUL0408",
+      "mode": "paper",
+      "enabled": true,
+      "max_spend_per_hour_usd": 15.0,
+      "open_positions": 0,
+      "current_hour": {
+        "realized_pnl_usd": 2.23,
+        "enter_count": 7,
+        "exit_count": 7,
+        "open_exposure_usd": 0
+      },
+      "all_time": {
+        "realized_pnl_usd": null,
+        "enter_count": null,
+        "exit_count": null,
+        "first_trade_at": null
+      },
+      "intervals": {
+        "scored": 50,
+        "win_rate_pct": 78.0,
+        "net_pnl_usd": 101.5
+      },
+      "last_skip_reason": "hour_momentum:locked:too_late_for_new_entries"
+    },
+    "eth_live": {
+      "event_ticker": "KXETHD-26JUL0408",
+      "mode": "live",
+      "enabled": true,
+      "max_spend_per_hour_usd": 15.0,
+      "open_positions": 0,
+      "current_hour": {
+        "realized_pnl_usd": 0.0,
+        "enter_count": 0,
+        "exit_count": 0,
+        "open_exposure_usd": 0
+      },
+      "all_time": {
+        "realized_pnl_usd": -14.48,
+        "enter_count": 125,
+        "exit_count": 113,
+        "first_trade_at": "2026-07-02T21:00:32.922090+00:00"
+      },
+      "intervals": {
+        "scored": 27,
+        "win_rate_pct": 40.7,
+        "net_pnl_usd": -14.48
+      },
+      "last_skip_reason": "no_buy_yes_no_candidates"
+    },
+    "eth_trial": {
+      "event_ticker": "KXETHD-26JUL0408",
+      "mode": "paper",
+      "enabled": true,
+      "max_spend_per_hour_usd": 10.0,
+      "open_positions": 0,
+      "current_hour": {
+        "realized_pnl_usd": 0.36,
+        "enter_count": 1,
+        "exit_count": 1,
+        "open_exposure_usd": 0
+      },
+      "all_time": {
+        "realized_pnl_usd": null,
+        "enter_count": null,
+        "exit_count": null,
+        "first_trade_at": null
+      },
+      "intervals": {
+        "scored": 40,
+        "win_rate_pct": 62.5,
+        "net_pnl_usd": 86.71
+      },
+      "last_skip_reason": "no_buy_yes_no_candidates"
+    }
+  },
+  "compare_24h_pre_baseline": {
+    "btc": {
+      "trial_kind": "hourly_trial",
+      "matched_event_count": 41,
+      "hours_in_window": 24,
+      "live_net_pnl_24h_usd": -12.36,
+      "trial_net_pnl_24h_usd": 13.85,
+      "live_minus_trial_24h_usd": -26.21,
+      "live_enters_24h": 153,
+      "trial_enters_24h": 170
+    },
+    "eth": {
+      "trial_kind": "hourly_trial",
+      "matched_event_count": 28,
+      "hours_in_window": 24,
+      "live_net_pnl_24h_usd": -14.5,
+      "trial_net_pnl_24h_usd": -2.1,
+      "live_minus_trial_24h_usd": -12.4,
+      "live_enters_24h": 123,
+      "trial_enters_24h": 82
+    }
+  }
+}
