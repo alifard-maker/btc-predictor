@@ -113,6 +113,18 @@ def live_trial_align_active(cfg: dict[str, Any] | None, *, kind: str, mode: str)
   return live_mechanics_profile_for_cfg(cfg) is None
 
 
+def live_entry_execution_mirror_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
+  """Cross-spread / ask-style execution mirror — also on for mechanical_fixes live."""
+  if live_trial_align_active(cfg, kind=kind, mode=mode):
+    return True
+  if not _live_hourly_align_enabled(cfg, kind=kind, mode=mode):
+    return False
+  return (
+    live_mechanics_profile_for_cfg(cfg) == "mechanical_fixes"
+    and HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind).mirror_trial_entry_execution
+  )
+
+
 def live_trial_exit_align_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
   """Trial leg exits + leg-stop cooldowns — stays on for live_mechanics_profile."""
   return _live_hourly_align_enabled(cfg, kind=kind, mode=mode)
@@ -209,7 +221,7 @@ def apply_align_entry_pricing(
   kind: str = "hourly",
   mode: str,
 ) -> LiveEntryPricingConfig:
-  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+  if not live_entry_execution_mirror_active(cfg, kind=kind, mode=mode):
     return pricing
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
   if acfg.mirror_trial_entry_execution:
@@ -231,7 +243,7 @@ def should_mirror_trial_entry_execution(
   kind: str,
   mode: str,
 ) -> bool:
-  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+  if not live_entry_execution_mirror_active(cfg, kind=kind, mode=mode):
     return False
   return HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind).mirror_trial_entry_execution
 

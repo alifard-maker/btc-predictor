@@ -326,7 +326,7 @@ hourly:
       block_cut_when_profitable: true
       cheap_leg_cut_min_hold_seconds: 30
       cheap_leg_cut_min_loss_usd: 0.15
-      block_tail_entries: true
+      block_tail_entries: false
       tail_block_max_cents: 20
       reconcile_min_position_age_seconds: 45
       reconcile_grace_after_exit_seconds: 90
@@ -338,7 +338,7 @@ hourly:
       adopted_leg_cut_loss_min_usd: 0.50
       max_orphan_adopted_contracts: 12
       resting_fill_adopt_full_size: true
-      max_resting_enters_per_hour: 6
+      max_resting_enters_per_hour: 24
     live_adaptive:
       enabled: true
       profit_lock_usd: 1.25
@@ -429,7 +429,7 @@ hourly:
         max_contracts_per_entry: 8
       execution:
         mirror_trial_entry_execution: true
-        block_reentry_while_resting: true
+        block_reentry_while_resting: false
         mirror_trial_stake_sizing: true
         mirror_trial_scale_in: true
         prefer_passive_below_edge_cents: 12
@@ -761,6 +761,9 @@ eth:
         max_concurrent_positions: 4
         max_entries_per_cycle: 4
         allow_scale_in: false
+        max_contracts_per_range_band_per_hour: 8
+        allow_scale_in_range: false
+        scale_in_max_legs_per_ticker_range: 1
       live_exit:
         cut_loss_min_usd: 0.20
         cut_loss_min_hold_seconds: 90
@@ -778,6 +781,8 @@ eth:
         adopted_leg_cut_loss_min_hold_seconds: 300
         adopted_leg_cut_loss_min_usd: 0.50
         max_orphan_adopted_contracts: 12
+        max_orphan_adopted_range_contracts: 4
+        max_resting_adopted_range_contracts: 4
         resting_fill_adopt_full_size: true
         max_resting_enters_per_hour: 6
       live_adaptive:

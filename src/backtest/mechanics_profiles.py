@@ -116,7 +116,8 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     live_inventory["enabled"] = True
     live_adaptive["enabled"] = False
     live_entry["cross_spread_enabled"] = True
-    live_exit.setdefault("max_resting_enters_per_hour", 6)
+    live_exit["block_tail_entries"] = False
+    live_exit.setdefault("max_resting_enters_per_hour", 24)
     live_exit.setdefault("max_orphan_adopted_contracts", 6)
     return c
 

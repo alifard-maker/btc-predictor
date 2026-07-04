@@ -1311,6 +1311,23 @@ class HourlyBot:
         last_reason = defense_block
         continue
 
+      if settings.mode == "live":
+        from src.trading.live_range_guards import range_band_hour_cap_block_reason
+
+        rb_cap = range_band_hour_cap_block_reason(
+          store=self.store,
+          event_ticker=event_ticker,
+          market_ticker=market_ticker,
+          side=side,
+          open_positions=open_pos,
+          cfg=cfg,
+          kind=self.kind,
+          pick=pick,
+        )
+        if rb_cap:
+          last_reason = rb_cap
+          continue
+
       existing_on_ticker = [p for p in open_pos if p["market_ticker"] == market_ticker]
       pending_block = pending_resting_enter_blocks_entry(
         self.store,
@@ -1325,8 +1342,13 @@ class HourlyBot:
         last_reason = pending_block
         continue
       allow_scale_in_ticker: str | None = None
+      from src.trading.live_range_guards import estrat_for_range_scale_in
+
+      estrat_scale = estrat_for_range_scale_in(
+        estrat, pick, cfg, kind=self.kind, mode=settings.mode,
+      )
       if existing_on_ticker:
-        ok_scale, scale_reason = evaluate_scale_in(existing_on_ticker, pick, side, estrat)
+        ok_scale, scale_reason = evaluate_scale_in(existing_on_ticker, pick, side, estrat_scale)
         if not ok_scale:
           last_reason = scale_reason or f"already_open:{market_ticker}"
           continue
@@ -1518,6 +1540,21 @@ class HourlyBot:
           kind=self.kind,
           mode=settings.mode,
         )
+        if settings.mode == "live":
+          from src.trading.live_range_guards import clamp_range_band_hour_contracts, is_range_pick
+
+          if is_range_pick(pick):
+            count, _ = clamp_range_band_hour_contracts(
+              count,
+              float(count),
+              store=self.store,
+              event_ticker=event_ticker,
+              market_ticker=market_ticker,
+              side=side,
+              open_positions=open_pos,
+              cfg=cfg,
+              kind=self.kind,
+            )
         if settings.mode == "live" and count <= 0:
           last_reason = "budget_too_small_for_contract"
           continue

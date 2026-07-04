@@ -631,6 +631,31 @@ def test_kalshi_contracts_for_adoption_orphan_caps():
   assert contracts_fp == 12.0
 
 
+def test_kalshi_contracts_for_adoption_orphan_range_cap():
+  snap = {"contracts": 12.0, "entry_price_cents": 40}
+  cfg = {
+    "hourly": {
+      "bot": {
+        "live_exit": {
+          "max_orphan_adopted_contracts": 12,
+          "max_orphan_adopted_range_contracts": 4,
+        },
+      },
+    },
+  }
+  contracts, contracts_fp, raw = kalshi_contracts_for_adoption(
+    12.0,
+    snap,
+    cfg,
+    kind="hourly",
+    adoption_source="orphan",
+    market_ticker="KXETH-26JUL0405-B1750",
+  )
+  assert raw == 12.0
+  assert contracts == 4
+  assert contracts_fp == 4.0
+
+
 def test_kalshi_contracts_for_adoption_uses_sellable_over_snap():
   snap = {"contracts": 2.0, "entry_price_cents": 70}
   cfg = {"hourly": {"bot": {"live_exit": {"max_orphan_adopted_contracts": 6}}}}
