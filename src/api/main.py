@@ -312,7 +312,7 @@ def _volume_health_fields() -> dict[str, Any]:
 
 
 @app.get("/health")
-def health():
+def health(lite: bool = Query(default=False)):
   """Always return 200 so Railway healthchecks pass."""
   base = {
     "status": "starting",
@@ -322,6 +322,24 @@ def health():
   }
   if _loop is None:
     return base
+  if lite:
+    st = _loop.status()
+    kalshi = st.get("kalshi") or {}
+    return {
+      "status": "ok",
+      "service": "btc-predictor",
+      "version": APP_VERSION,
+      **_volume_health_fields(),
+      "scheduler_running": st.get("scheduler_running"),
+      "data_dir": st.get("data_dir"),
+      "volume_mounted_at_data": st.get("volume_mounted_at_data"),
+      "kalshi": {
+        "authenticated": bool(kalshi.get("authenticated")),
+        "balance_usd": kalshi.get("balance_usd"),
+        "balance_cents": kalshi.get("balance_cents"),
+      },
+      "bots_paused": st.get("bots_paused"),
+    }
   status = _loop.status()
   out = {
     "status": "ok",
@@ -1813,13 +1831,20 @@ def slot15_bot_trades(
 
 
 @app.get("/api/eth/15m/bot")
-def eth_slot15_bot_status(_: None = Depends(_session_user)):
+def eth_slot15_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   if _loop.eth_calibration is None:
     raise HTTPException(503, "ETH 15m disabled")
-  tab = _loop._slot15_tab("eth")
-  return _loop.slot15_bot_status("eth", tab if tab.get("ok") else None)
+  tab = _loop._slot15_tab_cached("eth")
+  return _loop.slot15_bot_status(
+    "eth",
+    tab if tab.get("ok") else None,
+    lightweight=lightweight,
+  )
 
 
 @app.post("/api/eth/15m/bot/settings")
@@ -1899,13 +1924,20 @@ def eth_slot15_bot_trades(
 
 
 @app.get("/api/eth/15m-trial/bot")
-def eth_slot15_trial_bot_status(_: None = Depends(_session_user)):
+def eth_slot15_trial_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   if _loop.eth_calibration is None:
     raise HTTPException(503, "ETH 15m disabled")
-  tab = _loop._slot15_tab("eth")
-  return _loop.slot15_trial_bot_status("eth", tab if tab.get("ok") else None)
+  tab = _loop._slot15_tab_cached("eth")
+  return _loop.slot15_trial_bot_status(
+    "eth",
+    tab if tab.get("ok") else None,
+    lightweight=lightweight,
+  )
 
 
 @app.post("/api/eth/15m-trial/bot/settings")

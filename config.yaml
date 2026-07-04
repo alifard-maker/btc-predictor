@@ -664,17 +664,20 @@ eth:
     enabled: true
     series_ticker: KXETH15M
     brti_index_id: ETHUSD_RTI
+    cache_sec: 25
   intra_slot:
     bot:
       max_spend_per_slot_usd: 25
+      poll_seconds: 15
+      tab_cache_seconds: 12
       cheap_leg_cut_cooldown_seconds: 180
       leg_stop_loss_cents: 4
       leg_stop_gate_min_remaining_seconds: 60
       bot_adaptive_calibration:
         enabled: false
       trial:
-        continuous_enabled: true
-        poll_seconds: 10
+        continuous_enabled: false
+        poll_seconds: 15
         enabled: true
         mode: paper
   daily:

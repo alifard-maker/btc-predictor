@@ -142,14 +142,14 @@ def test_loop_slot15_trial_store_path(monkeypatch):
     assert str(trial_db) != str(live_db)
 
 
-def test_eth_intra_slot_trial_continuous_enabled():
+def test_eth_intra_slot_trial_continuous_off_by_default():
   cfg = load_config()
   eth_bot = asset_cfg(cfg, "eth")["intra_slot"]["bot"]
   trial = eth_bot.get("trial") or {}
-  assert trial.get("continuous_enabled") is True
+  assert trial.get("continuous_enabled") is False
 
 
-def test_scheduler_registers_eth_slot15_trial_job(monkeypatch):
+def test_scheduler_registers_eth_slot15_combined_job(monkeypatch):
   with tempfile.TemporaryDirectory() as tmp:
     monkeypatch.setenv("DATA_DIR", str(Path(tmp) / "data"))
     cfg = load_config()
@@ -162,7 +162,7 @@ def test_scheduler_registers_eth_slot15_trial_job(monkeypatch):
 
     scheduler.add_job = capture_add_job
     loop._schedule_slot15_bot(scheduler)
-    assert "eth_slot15_trial_bot_continuous" in added
+    assert "eth_slot15_bots_continuous" in added
 
 
 def test_dashboard_eth_slot15_trial_api_paths():

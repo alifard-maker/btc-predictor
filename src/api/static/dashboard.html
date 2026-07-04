@@ -875,6 +875,10 @@
     let slot15FetchGen = 0;
     let slot15TrialFetchGen = 0;
     let loadAllInFlight = false;
+    let liveMonitorInFlight = false;
+    let liveMonitorLastAt = 0;
+    const LIVE_MONITOR_INTERVAL_MS = 3000;
+    const LOAD_ALL_INTERVAL_MS = 10000;
     let slot15CompareLastAt = 0;
     let slot15CompareInFlight = false;
     const SLOT15_COMPARE_INTERVAL_MS = 30000;
@@ -1659,10 +1663,11 @@
     function renderStatus(h) {
       if (h.version) $('app-version').textContent = h.version;
       renderKalshiBalanceHeader(h.kalshi);
-      renderBotRiskBanner(h.bot_risk);
+      if (h.bot_risk) renderBotRiskBanner(h.bot_risk);
       schedulerRunning = !!h.scheduler_running;
-      serverDataDir = h.data_dir || '';
-      volumeMountedAtData = h.volume_mounted_at_data === true;
+      if (h.data_dir) serverDataDir = h.data_dir;
+      if (h.volume_mounted_at_data != null) volumeMountedAtData = h.volume_mounted_at_data === true;
+      if (!h.candles_15m && !h.eth_15m) return;
       const api = slot15Api();
       const data = activeTab === 'eth-15m' ? (h.eth_15m || h) : h;
       const series = data.series_ticker || api.series;
@@ -1936,6 +1941,9 @@
 
     async function loadLiveMonitor() {
       if (activeTab !== '15m' && activeTab !== 'eth-15m') return;
+      const now = Date.now();
+      if (liveMonitorInFlight || now - liveMonitorLastAt < LIVE_MONITOR_INTERVAL_MS) return;
+      liveMonitorInFlight = true;
       try {
         const api = slot15Api();
         let refQ = '';
@@ -1943,13 +1951,20 @@
         if (stored?.slot_start && stored.price > 0) {
           refQ = `?reference_override=${encodeURIComponent(stored.price)}`;
         }
-        const m = await get(api.monitor + refQ);
+        const m = await getWithTimeout(api.monitor + refQ, 8000);
+        liveMonitorLastAt = Date.now();
         if (stored?.slot_start && m?.slot_start && stored.slot_start !== m.slot_start) {
           clearStoredRefOverride();
-          return get(api.monitor).then(renderSlotMonitor);
+          const m2 = await getWithTimeout(api.monitor, 8000);
+          renderSlotMonitor(m2);
+          return;
         }
         renderSlotMonitor(m);
-      } catch (_) {}
+      } catch (_) {
+        liveMonitorLastAt = Date.now();
+      } finally {
+        liveMonitorInFlight = false;
+      }
     }
 
     function switchTab(name) {
@@ -4262,7 +4277,8 @@
     }
 
     function slot15BotStatusUrl(asset) {
-      return asset === 'eth' ? '/api/eth/15m/bot' : '/api/slot15/bot';
+      const q = '?lightweight=true';
+      return asset === 'eth' ? `/api/eth/15m/bot${q}` : `/api/slot15/bot${q}`;
     }
 
     function mergeSlot15Summary(prev, next, eventTicker) {
@@ -4321,7 +4337,7 @@
     }
 
     function slot15TrialBotStatusUrl(asset) {
-      return asset === 'eth' ? '/api/eth/15m-trial/bot' : null;
+      return asset === 'eth' ? '/api/eth/15m-trial/bot?lightweight=true' : null;
     }
 
     function slot15TrialBotSettingsUrl(asset) {
@@ -5380,7 +5396,7 @@
       }
 
       const tasks = [
-        getWithTimeout('/health', 10000).then(renderStatus).catch(e => showError('Health: ' + e.message)),
+        getWithTimeout('/health?lite=1', 8000).then(renderStatus).catch(e => showError('Health: ' + e.message)),
       ];
       if (!isHourlyTab(activeTab) && activeTab !== '15m' && activeTab !== 'eth-15m') {
         loadBotPerformanceReport();
@@ -5437,8 +5453,8 @@
 
     loadAll();
     updateEdtClock();
-    setInterval(loadAll, 5000);
-    setInterval(loadLiveMonitor, 1000);
+    setInterval(loadAll, LOAD_ALL_INTERVAL_MS);
+    setInterval(loadLiveMonitor, LIVE_MONITOR_INTERVAL_MS);
     setInterval(updateEdtClock, 1000);
 
     (function initDashboardZoom() {

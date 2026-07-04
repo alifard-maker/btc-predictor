@@ -1242,6 +1242,31 @@ class PredictionLoop:
       "index_id": index_label,
     }
 
+  def _slot15_tab_cached(
+    self,
+    asset: str,
+    reference_override: float | None = None,
+    *,
+    max_age_sec: float | None = None,
+  ) -> dict[str, Any]:
+    """Reuse recent slot15 tab payload to cut Kalshi discovery calls."""
+    asset = asset.lower()
+    if max_age_sec is None:
+      acfg = self._acfg_15m(asset)
+      max_age_sec = float(
+        ((acfg.get("intra_slot") or {}).get("bot") or {}).get("tab_cache_seconds", 10)
+      )
+    if reference_override is None:
+      row = self._slot15_tab_cache.get(asset)
+      if row:
+        tab, ts = row
+        if time.monotonic() - ts < max_age_sec:
+          return tab
+    tab = self._slot15_tab(asset, reference_override)
+    if reference_override is None and tab.get("ok"):
+      self._store_tab_cache(self._slot15_tab_cache, asset, tab)
+    return tab
+
   def slot15_bot_status(
     self,
     asset: str,
@@ -1250,12 +1275,13 @@ class PredictionLoop:
     store=None,
     risk_kind: str = "slot15",
     bot_kind: str = "slot15",
+    lightweight: bool = False,
   ) -> dict[str, Any]:
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):
       return {"ok": False, "error": "ETH 15m disabled"}
     if tab is None:
-      tab = self._slot15_tab(asset)
+      tab = self._slot15_tab_cached(asset)
     slot_key = tab.get("slot_key") if tab.get("ok") else None
     store = store or self.slot15_bot_store(asset)
     status = store.status(slot_key)
@@ -1263,9 +1289,10 @@ class PredictionLoop:
     status["asset"] = asset
     status["bot_kind"] = bot_kind
     status["slot_label"] = tab.get("slot_label") if tab else None
-    status["recent_trades"] = store.list_trades(limit=100)
+    trade_limit = 35 if lightweight else 100
+    status["recent_trades"] = store.list_trades(limit=trade_limit)
     status["slot_trades"] = (
-      store.list_trades(limit=50, event_ticker=slot_key) if slot_key else []
+      store.list_trades(limit=35 if lightweight else 50, event_ticker=slot_key) if slot_key else []
     )
     open_pos = list(status.get("open_positions") or [])
     if tab and tab.get("ok"):
@@ -1343,7 +1370,8 @@ class PredictionLoop:
     self._attach_bot_daily_loss(status, kind=risk_kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
     if (
-      bot_kind == "slot15"
+      not lightweight
+      and bot_kind == "slot15"
       and status.get("settings", {}).get("mode") == "live"
       and kalshi
       and kalshi.authenticated
@@ -1365,13 +1393,20 @@ class PredictionLoop:
       )
     return status
 
-  def slot15_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+  def slot15_trial_bot_status(
+    self,
+    asset: str,
+    tab: dict[str, Any] | None = None,
+    *,
+    lightweight: bool = False,
+  ) -> dict[str, Any]:
     return self.slot15_bot_status(
       asset,
       tab,
       store=self.slot15_trial_bot_store(asset),
       risk_kind="slot15_trial",
       bot_kind="slot15_trial",
+      lightweight=lightweight,
     )
 
   def _ensure_slot_prediction_current(self, asset: str) -> None:
@@ -1390,7 +1425,7 @@ class PredictionLoop:
     except Exception as e:
       log.warning("%s 15m: could not refresh slot prediction at rollover: %s", asset.upper(), e)
 
-  def _run_slot15_bot_continuous(self, asset: str) -> None:
+  def _run_slot15_bot_continuous(self, asset: str, tab: dict[str, Any] | None = None) -> None:
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):
       return
@@ -1404,10 +1439,10 @@ class PredictionLoop:
           store.set_last_skip_reason("auto_bet_off")
         return
       self._ensure_slot_prediction_current(asset)
-      tab = self._cached_tab_if_throttled(self._slot15_tab_cache, asset)
       if tab is None:
-        tab = self._slot15_tab(asset)
-        self._store_tab_cache(self._slot15_tab_cache, asset, tab)
+        tab = self._cached_tab_if_throttled(self._slot15_tab_cache, asset)
+      if tab is None:
+        tab = self._slot15_tab_cached(asset)
       if tab.get("ok"):
         acfg = self._acfg_15m(asset)
         self.slot15_bot(asset).run_continuous_cycle(tab, cfg=acfg)
@@ -1424,7 +1459,19 @@ class PredictionLoop:
       return
     self._run_slot15_bot_continuous("eth")
 
-  def _run_slot15_trial_bot_continuous(self, asset: str) -> None:
+  def run_eth_slot15_bots_continuous(self) -> None:
+    """Single ETH 15m tick — one Kalshi tab fetch for main + optional trial bot."""
+    if not self._slot15m_enabled("eth"):
+      return
+    tab = self._slot15_tab_cached("eth")
+    self._run_slot15_bot_continuous("eth", tab=tab)
+    eth_cfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+    trial_cfg = ((eth_cfg.get("intra_slot") or {}).get("bot") or {}).get("trial") or {}
+    if not trial_cfg.get("continuous_enabled", False):
+      return
+    self._run_slot15_trial_bot_continuous("eth", tab=tab)
+
+  def _run_slot15_trial_bot_continuous(self, asset: str, tab: dict[str, Any] | None = None) -> None:
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):
       return
@@ -1438,10 +1485,10 @@ class PredictionLoop:
           store.set_last_skip_reason("auto_bet_off")
         return
       self._ensure_slot_prediction_current(asset)
-      tab = self._cached_tab_if_throttled(self._slot15_tab_cache, asset)
       if tab is None:
-        tab = self._slot15_tab(asset)
-        self._store_tab_cache(self._slot15_tab_cache, asset, tab)
+        tab = self._cached_tab_if_throttled(self._slot15_tab_cache, asset)
+      if tab is None:
+        tab = self._slot15_tab_cached(asset)
       if tab.get("ok"):
         acfg = self._acfg_15m(asset)
         self.slot15_trial_bot(asset).run_continuous_cycle(tab, cfg=acfg)
@@ -3259,21 +3306,12 @@ class PredictionLoop:
       if ebot_cfg.get("continuous_enabled", True):
         poll_sec = int(ebot_cfg.get("poll_seconds", 10))
         scheduler.add_job(
-          self.run_eth_slot15_bot_continuous,
+          self.run_eth_slot15_bots_continuous,
           "interval",
           seconds=poll_sec,
-          id="eth_slot15_bot_continuous",
+          id="eth_slot15_bots_continuous",
           max_instances=1,
-        )
-      trial_cfg = ebot_cfg.get("trial") or {}
-      if trial_cfg.get("continuous_enabled", False):
-        trial_poll = int(trial_cfg.get("poll_seconds", poll_sec))
-        scheduler.add_job(
-          self.run_eth_slot15_trial_bot_continuous,
-          "interval",
-          seconds=trial_poll,
-          id="eth_slot15_trial_bot_continuous",
-          max_instances=1,
+          replace_existing=True,
         )
 
   def _schedule_predictions(self, scheduler) -> None:
