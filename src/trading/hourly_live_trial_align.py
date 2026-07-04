@@ -113,16 +113,25 @@ def live_trial_align_active(cfg: dict[str, Any] | None, *, kind: str, mode: str)
   return live_mechanics_profile_for_cfg(cfg) is None
 
 
-def live_entry_execution_mirror_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
-  """Cross-spread / ask-style execution mirror — also on for mechanical_fixes live."""
-  if live_trial_align_active(cfg, kind=kind, mode=mode):
-    return True
+def live_mech_paper_mirror_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
+  """BTC live hourly mirrors hourly_trial_mech (mechanical_fixes paper bot)."""
   if not _live_hourly_align_enabled(cfg, kind=kind, mode=mode):
     return False
-  return (
-    live_mechanics_profile_for_cfg(cfg) == "mechanical_fixes"
-    and HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind).mirror_trial_entry_execution
-  )
+  return live_mechanics_profile_for_cfg(cfg) == "mechanical_fixes"
+
+
+def live_entry_stake_mirror_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
+  """Stake / scale-in / entry_strategy mirror — standard trial align or Mech paper mirror."""
+  if live_trial_align_active(cfg, kind=kind, mode=mode):
+    return True
+  return live_mech_paper_mirror_active(cfg, kind=kind, mode=mode)
+
+
+def live_entry_execution_mirror_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
+  """Cross-spread / ask-style execution mirror — standard trial align or Mech paper mirror."""
+  if not (live_trial_align_active(cfg, kind=kind, mode=mode) or live_mech_paper_mirror_active(cfg, kind=kind, mode=mode)):
+    return False
+  return HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind).mirror_trial_entry_execution
 
 
 def live_trial_exit_align_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
@@ -136,13 +145,17 @@ def live_resting_entry_guards_active(cfg: dict[str, Any] | None, *, kind: str, m
 
 
 def skip_soft_rally_entry_overlay(cfg: dict[str, Any] | None, *, kind: str) -> bool:
-  acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
-  return acfg.enabled and acfg.entry_align_with_trial and kind == "hourly"
+  """Skip soft_rally overlay only for BTC Mech live (mirrors trial mech, not soft_rally trial)."""
+  if kind != "hourly":
+    return False
+  return live_mechanics_profile_for_cfg(cfg) is not None
 
 
 def skip_live_inventory_guards(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
-  acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
-  return acfg.enabled and acfg.align_live_inventory and kind == "hourly" and str(mode).lower() == "live"
+  """Skip live_inventory caps only for BTC Mech live (paper trial never applies them)."""
+  if kind != "hourly" or str(mode).lower() != "live":
+    return False
+  return live_mechanics_profile_for_cfg(cfg) is not None
 
 
 def should_use_trial_leg_exits(
@@ -221,7 +234,7 @@ def apply_align_entry_pricing(
   kind: str = "hourly",
   mode: str,
 ) -> LiveEntryPricingConfig:
-  if not live_entry_execution_mirror_active(cfg, kind=kind, mode=mode):
+  if not live_entry_stake_mirror_active(cfg, kind=kind, mode=mode):
     return pricing
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
   if acfg.mirror_trial_entry_execution:
@@ -321,7 +334,7 @@ def should_mirror_trial_stake_sizing(
   kind: str,
   mode: str,
 ) -> bool:
-  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+  if not live_entry_stake_mirror_active(cfg, kind=kind, mode=mode):
     return False
   return HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind).mirror_trial_stake_sizing
 
@@ -338,7 +351,7 @@ def apply_mirror_trial_entry_estrat(
 
   from src.trading.entry_strategy import EntryStrategyConfig
 
-  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+  if not live_entry_stake_mirror_active(cfg, kind=kind, mode=mode):
     return estrat
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
   bot = (cfg.get("hourly") or {}).get("bot") or {}

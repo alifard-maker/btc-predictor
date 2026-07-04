@@ -868,7 +868,7 @@ eth:
           mirror_trial_entry_execution: true
           block_reentry_while_resting: true
           mirror_trial_stake_sizing: true
-          mirror_trial_scale_in: true
+          mirror_trial_scale_in: false
           prefer_passive_below_edge_cents: 12
           block_scale_in_after_quick_exit_cut: true
         whipsaw:

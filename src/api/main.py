@@ -1078,7 +1078,12 @@ def bots_hourly_live_trial_compare(
   from src.assets import asset_cfg
 
   live_store = _loop.hourly_bot_store(asset, kind="hourly")
-  trial_store = _loop.hourly_bot_store(asset, kind="hourly_trial")
+  if asset == "btc":
+    trial_kind = "hourly_trial_mech"
+    trial_store = _loop.hourly_bot_store(asset, kind=trial_kind)
+  else:
+    trial_kind = "hourly_trial"
+    trial_store = _loop.hourly_bot_store(asset, kind=trial_kind)
   acfg = asset
   cfg = asset_cfg(_cfg, acfg)
   align = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
@@ -1087,6 +1092,7 @@ def bots_hourly_live_trial_compare(
     trial_store,
     asset=asset,
     limit_hours=limit_hours,
+    trial_kind=trial_kind,
     pair_window_seconds=align.compare_pair_window_seconds,
   )
 

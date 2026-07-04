@@ -224,9 +224,10 @@ def build_hourly_live_trial_compare(
   limit_hours: int = 24,
   live_mode: str = "live",
   trial_mode: str | None = None,
+  trial_kind: str = "hourly_trial",
   pair_window_seconds: int = 180,
 ) -> dict[str, Any]:
-  """Compare live hourly bot vs hourly_trial for matched event_tickers."""
+  """Compare live hourly bot vs paper trial for matched event_tickers."""
   if trial_mode is None:
     trial_mode = trial_store.get_settings().mode or "paper"
 
@@ -279,7 +280,7 @@ def build_hourly_live_trial_compare(
     "ok": True,
     "asset": asset,
     "live_kind": "hourly",
-    "trial_kind": "hourly_trial",
+    "trial_kind": trial_kind,
     "live_mode": live_mode,
     "trial_mode": trial_mode,
     "limit_hours": limit_hours,

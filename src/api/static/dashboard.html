@@ -274,7 +274,7 @@
 
     <details class="card" id="hourly-live-trial-compare-card" open>
       <summary style="cursor:pointer;font-weight:600">Live hourly vs paper trial · hour-by-hour</summary>
-      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Side-by-side comparison for the <strong>same Kalshi hour</strong> (<code>event_ticker</code>): live BTC/ETH hourly bot (<strong>mode=live</strong>) vs paper <strong>hourly trial</strong>. Shows entries, exit reasons, and realized net P&amp;L per hour.</p>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Side-by-side for the <strong>same Kalshi hour</strong> (<code>event_ticker</code>). <strong>BTC</strong> live hourly vs paper <strong>Trial Mech</strong>. <strong>ETH</strong> live hourly vs paper <strong>standard trial</strong>. Entries, exit reasons, and realized net P&amp;L per hour.</p>
       <div class="compare-toolbar">
         <span class="muted" style="font-size:.72rem">Asset:</span>
         <button type="button" class="btn-secondary compare-asset-btn active" data-asset="btc" onclick="setCompareAsset('btc')">BTC</button>
@@ -3960,10 +3960,12 @@
       }
       const hours = data.hours || [];
       if (!hours.length) {
-        el.innerHTML = `<p class="muted">No matched hourly events yet for ${String(data.asset || compareAsset).toUpperCase()} (live hourly + paper trial).</p>`;
+        const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : 'standard trial';
+        el.innerHTML = `<p class="muted">No matched hourly events yet for ${String(data.asset || compareAsset).toUpperCase()} (live hourly + paper ${trialLabel}).</p>`;
         return;
       }
-      const meta = `<p class="muted" style="font-size:.68rem;margin:0 0 .65rem">${hours.length} hour(s) · ${data.matched_event_count ?? 0} with both bots active · live <strong>${data.live_mode}</strong> vs trial <strong>${data.trial_mode}</strong> · pair window <strong>${data.pair_window_seconds ?? 180}s</strong></p>`;
+      const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : 'standard trial';
+      const meta = `<p class="muted" style="font-size:.68rem;margin:0 0 .65rem">${hours.length} hour(s) · ${data.matched_event_count ?? 0} with both bots active · live <strong>${data.live_mode}</strong> vs paper <strong>${trialLabel}</strong> · pair window <strong>${data.pair_window_seconds ?? 180}s</strong></p>`;
       const blocks = hours.map((h) => {
         const bothBadge = h.both_active
           ? '<span class="up" style="font-size:.65rem">both active</span>'
@@ -3986,7 +3988,7 @@
           ${comparePairsTable(ep.pairs, ep.unpaired_live, ep.unpaired_trial)}
           <div class="compare-grid" style="margin-top:.55rem">
             ${compareSideColumn('Live hourly', h.live, 'compare-col-live')}
-            ${compareSideColumn('Paper trial', h.trial, 'compare-col-trial')}
+            ${compareSideColumn(`Paper ${trialLabel}`, h.trial, 'compare-col-trial')}
           </div>
         </div>`;
       }).join('');
