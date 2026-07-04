@@ -874,6 +874,16 @@
     let hourlyV2FetchGen = 0;
     let slot15FetchGen = 0;
     let slot15TrialFetchGen = 0;
+    let loadAllInFlight = false;
+    let slot15CompareLastAt = 0;
+    let slot15CompareInFlight = false;
+    const SLOT15_COMPARE_INTERVAL_MS = 30000;
+    const HOURLY_COMPARE_INTERVAL_MS = 30000;
+    const PERF_REPORT_INTERVAL_MS = 60000;
+    let hourlyCompareLastAt = 0;
+    let hourlyCompareInFlight = false;
+    let perfReportLastAt = 0;
+    let perfReportInFlight = false;
     const SLOT15_TRIAL_KIND = 'slot15_trial';
     function isSlot15TrialKind(kind) { return kind === SLOT15_TRIAL_KIND; }
     let hourlyGuideCheatOpen = false;
@@ -1989,6 +1999,7 @@
       }
       if (isHourlyTab(name)) {
         const asset = hourlyAssetForTab(name);
+        setCompareAsset(asset);
         const cached = lastBotStatus[asset];
         const key = botUiKey('hourly', asset);
         if (cached?.settings && !pendingBotPatch[key]) {
@@ -3942,12 +3953,20 @@
       el.innerHTML = html;
     }
 
-    async function loadBotPerformanceReport() {
+    async function loadBotPerformanceReport(force = false) {
+      const now = Date.now();
+      if (!force && perfReportInFlight) return;
+      if (!force && now - perfReportLastAt < PERF_REPORT_INTERVAL_MS) return;
+      perfReportInFlight = true;
       try {
-        const report = await get('/api/bots/performance-report');
+        const report = await getWithTimeout('/api/bots/performance-report', 20000);
+        perfReportLastAt = Date.now();
         renderBotPerformanceReport(report);
       } catch (e) {
+        perfReportLastAt = Date.now();
         renderBotPerformanceReport({ ok: false, error: e.message });
+      } finally {
+        perfReportInFlight = false;
       }
     }
 
@@ -4070,12 +4089,19 @@
       if (!hours.length) {
         const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : (data.trial_kind === 'slot15_trial' ? '15m trial' : 'standard trial');
         const periodNoun = data.live_kind === 'slot15' ? '15m slots' : 'hourly events';
-        el.innerHTML = `<p class="muted">No matched ${periodNoun} yet for ${String(data.asset || compareAsset).toUpperCase()} (live + paper ${trialLabel}).</p>`;
+        const paperHint = data.live_kind === 'slot15' && data.live_mode === 'paper'
+          ? ' Enable Auto-bet on both the main ETH 15m bot (paper) and the trial bot, then wait for the same slot to trade on both.'
+          : (data.live_kind === 'slot15'
+            ? ' Enable Auto-bet on both the live ETH 15m bot and the trial bot for matched slots.'
+            : '');
+        el.innerHTML = `<p class="muted">No matched ${periodNoun} yet for ${String(data.asset || compareAsset).toUpperCase()} (main ${data.live_mode || 'live'} + paper ${trialLabel}).${paperHint}</p>`;
         return;
       }
       const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : (data.trial_kind === 'slot15_trial' ? '15m trial' : 'standard trial');
       const periodWord = data.live_kind === 'slot15' ? 'slot(s)' : 'hour(s)';
-      const liveColTitle = data.live_kind === 'slot15' ? 'Live 15m' : 'Live hourly';
+      const liveColTitle = data.live_kind === 'slot15'
+        ? (data.live_mode === 'paper' ? 'Main 15m (paper)' : 'Live 15m')
+        : 'Live hourly';
       const trialColTitle = data.live_kind === 'slot15' ? 'Paper trial' : `Paper ${trialLabel}`;
       const meta = `<p class="muted" style="font-size:.68rem;margin:0 0 .65rem">${hours.length} ${periodWord} · ${data.matched_event_count ?? 0} with both bots active · live <strong>${data.live_mode}</strong> vs paper <strong>${trialLabel}</strong> · pair window <strong>${data.pair_window_seconds ?? 180}s</strong></p>`;
       const blocks = hours.map((h) => {
@@ -4108,12 +4134,23 @@
       el.innerHTML = `${meta}${blocks}<p class="muted" style="font-size:.65rem;margin:.35rem 0 0">Generated ${gen}</p>`;
     }
 
-    async function loadHourlyLiveTrialCompare() {
+    async function loadHourlyLiveTrialCompare(force = false) {
+      if (!force && hourlyCompareInFlight) return;
+      const now = Date.now();
+      if (!force && now - hourlyCompareLastAt < HOURLY_COMPARE_INTERVAL_MS) return;
+      hourlyCompareInFlight = true;
       try {
-        const data = await get(`/api/bots/hourly-live-trial-compare?asset=${encodeURIComponent(compareAsset)}&limit_hours=24`);
+        const data = await getWithTimeout(
+          `/api/bots/hourly-live-trial-compare?asset=${encodeURIComponent(compareAsset)}&limit_hours=24`,
+          15000,
+        );
+        hourlyCompareLastAt = Date.now();
         renderHourlyLiveTrialCompare(data);
       } catch (e) {
+        hourlyCompareLastAt = Date.now();
         renderHourlyLiveTrialCompare({ ok: false, error: e.message });
+      } finally {
+        hourlyCompareInFlight = false;
       }
     }
 
@@ -4127,13 +4164,22 @@
       }
     }
 
-    async function loadSlot15LiveTrialCompare() {
+    async function loadSlot15LiveTrialCompare(force = false) {
       const targetId = 'eth-slot15-live-trial-compare';
+      if (activeTab !== 'eth-15m') return;
+      const now = Date.now();
+      if (!force && slot15CompareInFlight) return;
+      if (!force && now - slot15CompareLastAt < SLOT15_COMPARE_INTERVAL_MS) return;
+      slot15CompareInFlight = true;
       try {
-        const data = await get('/api/bots/slot15-live-trial-compare?asset=eth&limit_slots=48');
-        renderHourlyLiveTrialCompare(data, targetId);
+        const data = await getWithTimeout('/api/bots/slot15-live-trial-compare?asset=eth&limit_slots=24', 12000);
+        slot15CompareLastAt = Date.now();
+        if (activeTab === 'eth-15m') renderHourlyLiveTrialCompare(data, targetId);
       } catch (e) {
-        renderHourlyLiveTrialCompare({ ok: false, error: e.message }, targetId);
+        slot15CompareLastAt = Date.now();
+        if (activeTab === 'eth-15m') renderHourlyLiveTrialCompare({ ok: false, error: e.message }, targetId);
+      } finally {
+        slot15CompareInFlight = false;
       }
     }
 
@@ -5151,7 +5197,7 @@
       const gen = ++slot15FetchGen;
       const asset = tabAtStart === 'eth-15m' ? 'eth' : 'btc';
       try {
-        const botDirect = await get(slot15BotStatusUrl(asset));
+        const botDirect = await getWithTimeout(slot15BotStatusUrl(asset), 12000);
         if (gen !== slot15FetchGen || activeTab !== tabAtStart) return;
         let bot = botDirect || predictionBot;
         if (botDirect && predictionBot) {
@@ -5165,10 +5211,6 @@
         }
         bot = mergeSlot15BotStatus(asset, bot);
         if (bot) renderSlot15Bot(bot, asset);
-        if (asset === 'eth') {
-          loadSlot15TrialBot();
-          loadSlot15LiveTrialCompare();
-        }
       } catch (_) {
         if (gen !== slot15FetchGen || activeTab !== tabAtStart) return;
         const cached = lastSlot15BotStatus[asset];
@@ -5183,7 +5225,7 @@
       const gen = ++slot15TrialFetchGen;
       const asset = 'eth';
       try {
-        const botDirect = await get(slot15TrialBotStatusUrl(asset));
+        const botDirect = await getWithTimeout(slot15TrialBotStatusUrl(asset), 12000);
         if (gen !== slot15TrialFetchGen || activeTab !== tabAtStart) return;
         const bot = mergeSlot15TrialBotStatus(asset, botDirect);
         if (bot) renderSlot15TrialBot(bot, asset);
@@ -5325,6 +5367,9 @@
     }
 
     async function loadAll() {
+      if (loadAllInFlight) return;
+      loadAllInFlight = true;
+      try {
       $('error').style.display = 'none';
       $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { timeZone: TZ });
 
@@ -5335,10 +5380,12 @@
       }
 
       const tasks = [
-        get('/health').then(renderStatus).catch(e => showError('Health: ' + e.message)),
+        getWithTimeout('/health', 10000).then(renderStatus).catch(e => showError('Health: ' + e.message)),
       ];
-      loadBotPerformanceReport();
-      loadHourlyLiveTrialCompare();
+      if (!isHourlyTab(activeTab) && activeTab !== '15m' && activeTab !== 'eth-15m') {
+        loadBotPerformanceReport();
+        loadHourlyLiveTrialCompare();
+      }
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();
         tasks.push(
@@ -5375,12 +5422,17 @@
         }
       } else if (isHourlyTab(activeTab)) {
         loadDaily();
+        loadBotPerformanceReport();
+        loadHourlyLiveTrialCompare();
       } else if (activeTab === 'trials') {
         tasks.push(loadTrials());
       } else if (activeTab === 'hourly-v2') {
         tasks.push(loadHourlyV2());
       }
       await Promise.all(tasks);
+      } finally {
+        loadAllInFlight = false;
+      }
     }
 
     loadAll();

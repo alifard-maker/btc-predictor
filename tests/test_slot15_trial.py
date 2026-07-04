@@ -37,6 +37,7 @@ def test_slot15_trial_compare_matched_slot_pnl(tmp_path: Path):
   trial_db = tmp_path / "slot15_trial_bot_eth.db"
   live_store = Slot15BotStore(live_db)
   trial_store = Slot15BotStore(trial_db)
+  live_store.save_settings(Slot15BotSettings(enabled=True, mode="live"))
 
   _log_slot15_trade(
     live_store,
@@ -83,6 +84,36 @@ def test_slot15_trial_compare_matched_slot_pnl(tmp_path: Path):
   assert slot["live"]["net_pnl_usd"] == 0.65
   assert slot["trial"]["net_pnl_usd"] == 0.30
   assert slot["pnl_delta_usd"] == 0.35
+
+
+def test_slot15_compare_uses_main_bot_paper_mode(tmp_path: Path):
+  live_db = tmp_path / "slot15_bot_eth.db"
+  trial_db = tmp_path / "slot15_trial_bot_eth.db"
+  live_store = Slot15BotStore(live_db)
+  trial_store = Slot15BotStore(trial_db)
+  live_store.save_settings(Slot15BotSettings(enabled=True, mode="paper"))
+
+  _log_slot15_trade(
+    live_store,
+    created_at="2026-07-04T13:05:00+00:00",
+    mode="paper",
+  )
+  _log_slot15_trade(
+    trial_store,
+    created_at="2026-07-04T13:06:00+00:00",
+    mode="paper",
+  )
+
+  out = build_slot15_live_trial_compare(
+    live_store,
+    trial_store,
+    asset="eth",
+    limit_slots=5,
+  )
+
+  assert out["live_mode"] == "paper"
+  assert out["matched_event_count"] == 1
+  assert out["hours"][0]["both_active"] is True
 
 
 def test_slot15_trial_bot_store_separate_from_live(tmp_path: Path):

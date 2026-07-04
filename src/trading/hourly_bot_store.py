@@ -186,9 +186,9 @@ class HourlyBotStore:
     return settings, prev if rolled else None
 
   def _connect(self) -> sqlite3.Connection:
-    conn = sqlite3.connect(self.db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    from src.trading.bot_sqlite import connect_bot_db
+
+    return connect_bot_db(self.db_path)
 
   def _migrate(self, conn: sqlite3.Connection) -> None:
     from src.trading.bot_runtime import migrate_bot_runtime

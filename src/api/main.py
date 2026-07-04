@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import sqlite3
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -1071,7 +1072,12 @@ def bots_performance_report(_: None = Depends(_session_user)):
     raise HTTPException(503, "Service starting")
   from src.trading.bot_performance_report import build_all_bots_performance_report
 
-  return build_all_bots_performance_report(_loop)
+  try:
+    return build_all_bots_performance_report(_loop)
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
 
 
 @app.get("/api/bots/risk-status")
@@ -1102,20 +1108,25 @@ def bots_hourly_live_trial_compare(
     trial_store = _loop.hourly_trial_bot_store(asset)
   cfg = asset_cfg(_cfg, asset)
   align = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
-  return build_hourly_live_trial_compare(
-    live_store,
-    trial_store,
-    asset=asset,
-    limit_hours=limit_hours,
-    trial_kind=trial_kind,
-    pair_window_seconds=align.compare_pair_window_seconds,
-  )
+  try:
+    return build_hourly_live_trial_compare(
+      live_store,
+      trial_store,
+      asset=asset,
+      limit_hours=limit_hours,
+      trial_kind=trial_kind,
+      pair_window_seconds=align.compare_pair_window_seconds,
+    )
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
 
 
 @app.get("/api/bots/slot15-live-trial-compare")
 def bots_slot15_live_trial_compare(
   asset: str = Query(default="eth", pattern="^(btc|eth)$"),
-  limit_slots: int = Query(default=48, ge=1, le=96),
+  limit_slots: int = Query(default=24, ge=1, le=48),
   _: None = Depends(_session_user),
 ):
   if _loop is None:
@@ -1130,13 +1141,18 @@ def bots_slot15_live_trial_compare(
   trial_store = _loop.slot15_trial_bot_store(asset)
   acfg = _loop._acfg_15m(asset) if asset == "btc" else (_loop._eth_cfg or asset_cfg(_cfg, asset))
   align = HourlyLiveTrialAlignConfig.from_cfg(acfg, kind="slot15")
-  return build_slot15_live_trial_compare(
-    live_store,
-    trial_store,
-    asset=asset,
-    limit_slots=limit_slots,
-    pair_window_seconds=align.compare_pair_window_seconds,
-  )
+  try:
+    return build_slot15_live_trial_compare(
+      live_store,
+      trial_store,
+      asset=asset,
+      limit_slots=limit_slots,
+      pair_window_seconds=align.compare_pair_window_seconds,
+    )
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
 
 
 @app.post("/api/admin/bots/auto-tune")

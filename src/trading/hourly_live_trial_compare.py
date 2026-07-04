@@ -310,12 +310,20 @@ def build_slot15_live_trial_compare(
   limit_slots: int = 48,
   pair_window_seconds: int = 180,
 ) -> dict[str, Any]:
-  """Compare live 15m bot vs paper 15m trial per slot_key."""
+  """Compare main 15m bot vs paper 15m trial per slot_key.
+
+  Uses the main bot's current settings mode (paper or live) so paper-only
+  trials still populate the compare panel before switching live on.
+  """
+  main_mode = str(live_store.get_settings().mode or "live").lower()
+  if main_mode not in ("live", "paper"):
+    main_mode = "live"
   return build_hourly_live_trial_compare(
     live_store,
     trial_store,
     asset=asset,
     limit_hours=limit_slots,
+    live_mode=main_mode,
     trial_kind="slot15_trial",
     live_kind="slot15",
     pair_window_seconds=pair_window_seconds,
