@@ -65,6 +65,32 @@ def cfg_with_profile_for_kind(cfg: dict[str, Any], kind: str) -> dict[str, Any]:
   return cfg
 
 
+def live_mechanics_profile_for_cfg(cfg: dict[str, Any] | None) -> MechanicsProfile | None:
+  """Optional production-live profile under hourly.bot (BTC live only in config)."""
+  raw = dict(((cfg or {}).get("hourly") or {}).get("bot") or {}).get("live_mechanics_profile")
+  if not raw:
+    return None
+  profile = str(raw).strip().lower()
+  if profile in PROFILE_LABELS:
+    return profile  # type: ignore[return-value]
+  return None
+
+
+def apply_live_production_mechanics(
+  cfg: dict[str, Any],
+  *,
+  kind: str,
+  mode: str,
+) -> dict[str, Any]:
+  """Apply hourly.bot.live_mechanics_profile for production live bots (not trials)."""
+  if kind != "hourly" or str(mode).lower() != "live":
+    return cfg
+  profile = live_mechanics_profile_for_cfg(cfg)
+  if not profile:
+    return cfg
+  return apply_mechanics_profile(cfg, profile)
+
+
 def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> dict[str, Any]:
   """Return a deep-copied config with bot mechanics matching a deployment era."""
   c = copy.deepcopy(cfg)

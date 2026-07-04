@@ -72,7 +72,9 @@ def test_quick_exit_align_override():
 
 
 def test_whipsaw_align_override():
-  w = merge_whipsaw_align_overrides(WhipsawGuardConfig.from_cfg(_cfg(), kind="hourly"), _cfg())
+  w = merge_whipsaw_align_overrides(
+    WhipsawGuardConfig.from_cfg(_cfg(), kind="hourly"), _cfg(), kind="hourly", mode="live",
+  )
   assert w.max_quick_exit_cuts_per_hour == 2
 
 

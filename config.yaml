@@ -276,6 +276,7 @@ hourly:
       min_ask_edge_cents: 15
       max_stake_usd: 2.50
     experiment_start_at: "2026-07-02T07:20:00+00:00"  # Jul 2 2026 3:20 AM EDT — paper trials vs live
+    live_mechanics_profile: mechanical_fixes  # BTC live mirrors Hourly Trial — Mech (adaptive off, inventory caps)
     profit_exit_cooldown_seconds: 60
     cheap_leg_max_entry_cents: 20
     cheap_leg_cut_loss_cents: 10

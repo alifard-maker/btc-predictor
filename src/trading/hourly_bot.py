@@ -44,6 +44,7 @@ from src.trading.hourly_live_trial_align import (
   count_live_entry_slots_used,
   leg_stop_entry_blocked,
   live_trial_align_active,
+  live_trial_exit_align_active,
   merge_whipsaw_align_overrides,
   mirror_trial_live_contract_count,
   pending_resting_enter_blocks_entry,
@@ -125,6 +126,7 @@ from src.trading.hour_momentum import (
 from src.trading.hourly_trial_position_alert import assess_hourly_trial_leg_position_alert
 from src.backtest.mechanics_profiles import (
   apply_entry_profile_overlays,
+  apply_live_production_mechanics,
   cfg_with_profile_for_kind,
   entry_kind_for_bot,
   is_hourly_trial_kind,
@@ -442,6 +444,10 @@ class HourlyBot:
     if cfg is not None:
       cfg = cfg_with_profile_for_kind(cfg, self.kind)
       cfg = apply_entry_profile_overlays(cfg, kind=self.kind)
+      settings_pre = self.store.get_settings()
+      cfg = apply_live_production_mechanics(
+        cfg, kind=self.kind, mode=settings_pre.mode,
+      )
     entry_kind = entry_kind_for_bot(self.kind)
 
     settings, prev_period = self.store.sync_period(str(event_ticker), self.store.get_settings())
@@ -824,7 +830,7 @@ class HourlyBot:
           hours_to_settle=float(hours_left) if hours_left is not None else None,
           cfg=cfg,
         )
-        if live_trial_align_active(cfg, kind=self.kind, mode=settings.mode):
+        if live_trial_exit_align_active(cfg, kind=self.kind, mode=settings.mode):
           standard_alert = str(alert.get("alert") or "")
       cost_usd = float(pos.get("cost_usd") or 0)
       peaks = self.store.update_position_peaks(
@@ -1010,7 +1016,7 @@ class HourlyBot:
       if (
         settings.mode == "live"
         and exit_reason == "LEG STOP"
-        and live_trial_align_active(cfg, kind=self.kind, mode=settings.mode)
+        and live_trial_exit_align_active(cfg, kind=self.kind, mode=settings.mode)
       ):
         align_exits = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
         if align_exits.leg_stop_event_cooldown_seconds > 0:
@@ -1190,7 +1196,10 @@ class HourlyBot:
       return results
 
     wcfg = merge_whipsaw_align_overrides(
-      WhipsawGuardConfig.from_cfg(cfg, kind="hourly"), cfg, kind="hourly",
+      WhipsawGuardConfig.from_cfg(cfg, kind="hourly"),
+      cfg,
+      kind="hourly",
+      mode=settings.mode,
     )
     align_cfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
     quick_exit_cuts = self.store.count_quick_exit_cuts(event_ticker) if wcfg.enabled else 0

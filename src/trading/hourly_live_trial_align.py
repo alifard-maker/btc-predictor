@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
-from src.backtest.mechanics_profiles import is_hourly_trial_kind
+from src.backtest.mechanics_profiles import is_hourly_trial_kind, live_mechanics_profile_for_cfg
 from src.trading.live_entry_price import LiveEntryPricingConfig
 
 
@@ -98,11 +98,29 @@ class HourlyLiveTrialAlignConfig:
     return replace(cls(), **kw)
 
 
-def live_trial_align_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
+def _live_hourly_align_enabled(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
   if is_hourly_trial_kind(kind) or kind != "hourly":
     return False
-  acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
-  return acfg.enabled and str(mode).lower() == "live"
+  if str(mode).lower() != "live":
+    return False
+  return HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind).enabled
+
+
+def live_trial_align_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
+  """Entry/stake/inventory mirror to standard trial — off when live_mechanics_profile is set."""
+  if not _live_hourly_align_enabled(cfg, kind=kind, mode=mode):
+    return False
+  return live_mechanics_profile_for_cfg(cfg) is None
+
+
+def live_trial_exit_align_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
+  """Trial leg exits + leg-stop cooldowns — stays on for live_mechanics_profile."""
+  return _live_hourly_align_enabled(cfg, kind=kind, mode=mode)
+
+
+def live_resting_entry_guards_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
+  """Live-only resting-limit guards (independent of trial entry mirror)."""
+  return _live_hourly_align_enabled(cfg, kind=kind, mode=mode)
 
 
 def skip_soft_rally_entry_overlay(cfg: dict[str, Any] | None, *, kind: str) -> bool:
@@ -126,7 +144,7 @@ def should_use_trial_leg_exits(
 ) -> bool:
   if is_hourly_trial_kind(kind):
     return True
-  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+  if not live_trial_exit_align_active(cfg, kind=kind, mode=mode):
     return False
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
   exit_mode = acfg.live_exit_mode
@@ -150,10 +168,11 @@ def merge_quick_exit_align_overrides(
   cfg: dict[str, Any] | None,
   *,
   kind: str = "hourly",
+  mode: str = "live",
 ) -> Any:
-  acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
-  if not acfg.enabled:
+  if not live_trial_align_active(cfg, kind=kind, mode=mode):
     return qcfg
+  acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
   kw: dict[str, Any] = {}
   if acfg.quick_exit_min_hold_seconds is not None:
     kw["min_hold_seconds"] = acfg.quick_exit_min_hold_seconds
@@ -169,9 +188,12 @@ def merge_whipsaw_align_overrides(
   cfg: dict[str, Any] | None,
   *,
   kind: str = "hourly",
+  mode: str = "live",
 ) -> Any:
+  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+    return wcfg
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
-  if not acfg.enabled or acfg.whipsaw_max_quick_exit_cuts_per_hour is None:
+  if acfg.whipsaw_max_quick_exit_cuts_per_hour is None:
     return wcfg
   return replace(
     wcfg,
@@ -225,7 +247,7 @@ def pending_resting_enter_blocks_entry(
   mode: str = "live",
 ) -> str | None:
   """Return skip reason when an unfilled resting buy is still working this ticker."""
-  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+  if not live_resting_entry_guards_active(cfg, kind=kind, mode=mode):
     return None
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
   if not acfg.block_reentry_while_resting:
@@ -260,7 +282,7 @@ def count_live_entry_slots_used(
   open_tickers = {str(p.get("market_ticker") or "") for p in open_positions}
   open_tickers.discard("")
   slots = len(open_positions)
-  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+  if not live_resting_entry_guards_active(cfg, kind=kind, mode=mode):
     return slots
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
   if not acfg.block_reentry_while_resting:
@@ -379,7 +401,7 @@ def leg_stop_entry_blocked(
   kind: str = "hourly",
   mode: str = "live",
 ) -> str | None:
-  if not live_trial_align_active(cfg, kind=kind, mode=mode):
+  if not live_trial_exit_align_active(cfg, kind=kind, mode=mode):
     return None
   fn = getattr(store, "is_in_leg_stop_event_cooldown", None)
   if not callable(fn):
