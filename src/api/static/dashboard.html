@@ -340,8 +340,10 @@
           <dd>Resets paper cash to max cap without deleting trade history (rare; prefer fresh start).</dd>
           <dt><strong>Override daily cap</strong></dt>
           <dd>One-click lift of the $50/day loss stop for this bot (resets at midnight NY).</dd>
+          <dt><strong>Interval record (live/paper)</strong></dt>
+          <dd>Win/loss/breakeven <strong>per hour or slot</strong> from closed P&amp;L. Counts only trades since last <strong>Fresh start</strong> or <strong>Clear history</strong>. Breakeven = net P&amp;L within ±0.5¢ for that hour. Live: Kalshi sync no longer backfills hours before fresh start.</dd>
           <dt><strong>Sync fills</strong> <span class="muted" style="font-size:.72rem">(live)</span></dt>
-          <dd>Pull recent Kalshi fills into the log; fixes reconcile drift.</dd>
+          <dd>Pull recent Kalshi fills into the log; fixes reconcile drift. Respects fresh-start cutoff — won’t re-import old hours as breakevens.</dd>
         </dl>
 
         <h3>The tabs</h3>
@@ -3105,9 +3107,12 @@
         else if (cur.outcome === 'pending') curLabel = 'open position(s)';
         currentPart = ` · Current ${unitSingular}: ${curLabel}`;
       }
+      const epochNote = ip.stats_epoch_at
+        ? `<span class="muted" style="font-size:.62rem;display:block;margin-top:.1rem">Since fresh start / clear history (${time(ip.stats_epoch_at)}).</span>`
+        : '';
       return `
         <div class="bot-row" style="padding:.25rem .15rem .35rem;border-top:1px solid rgba(148,163,184,.12);margin-top:.15rem">
-          <div class="bot-stat"><span class="muted" title="Completed ${unit} with net closed P&amp;L for ${modeLabel} trades only">Interval record (${modeLabel.toLowerCase()})</span><strong><span class="up">${profits} profit</span> / <span class="down">${losses} loss</span>${bePart}</strong><span class="muted" style="font-size:.64rem">${currentPart}</span></div>
+          <div class="bot-stat"><span class="muted" title="Completed ${unit} with net closed P&amp;L for ${modeLabel} trades only (since last fresh start on live)">Interval record (${modeLabel.toLowerCase()})</span><strong><span class="up">${profits} profit</span> / <span class="down">${losses} loss</span>${bePart}</strong><span class="muted" style="font-size:.64rem">${currentPart}</span>${epochNote}</div>
           ${scored > 0 ? `<div class="bot-stat"><span class="muted">Net across scored ${unit}</span><strong class="${netCls}">${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(2)}</strong></div>` : ''}
           ${scored > 0 ? `<div class="bot-stat"><span class="muted">Win rate</span><strong>${winRate}</strong></div>` : ''}
         </div>`;

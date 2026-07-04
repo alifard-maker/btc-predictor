@@ -260,6 +260,25 @@ def _should_run_fill_backfill(store: Any, *, force: bool = False) -> bool:
   return True
 
 
+def _sync_cutoff(store: Any, hours: float) -> datetime:
+  """Earliest fill timestamp to import — respects fresh-start stats epoch."""
+  cutoff = datetime.now(timezone.utc) - timedelta(hours=float(hours))
+  try:
+    with store._connect() as conn:
+      from src.trading.bot_runtime import stats_epoch_at
+
+      raw = stats_epoch_at(conn)
+      if raw:
+        epoch = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if epoch.tzinfo is None:
+          epoch = epoch.replace(tzinfo=timezone.utc)
+        if epoch > cutoff:
+          cutoff = epoch
+  except Exception:
+    pass
+  return cutoff
+
+
 def backfill_kalshi_hourly_fills(
   store: Any,
   kalshi: Any,
@@ -280,7 +299,7 @@ def backfill_kalshi_hourly_fills(
 
   from src.trading.bot_live_exit import cap_adopted_contracts
 
-  cutoff = datetime.now(timezone.utc) - timedelta(hours=float(hours))
+  cutoff = _sync_cutoff(store, hours)
   raw_fills = kalshi.list_fills(limit=500, critical=critical)
   if order_cache is None:
     order_cache = _build_order_direction_cache(kalshi)
@@ -506,7 +525,7 @@ def replay_closed_legs_from_kalshi_fills(
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
 
-  cutoff = datetime.now(timezone.utc) - timedelta(hours=float(hours))
+  cutoff = _sync_cutoff(store, hours)
   raw_fills = kalshi.list_fills(limit=500, critical=critical)
   if order_cache is None:
     order_cache = _build_order_direction_cache(kalshi)

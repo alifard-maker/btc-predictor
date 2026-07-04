@@ -36,7 +36,15 @@ def compute_interval_performance(
   mode_params: list[Any] = []
   if mode:
     mode_clause = " AND mode = ?"
-    mode_params = [mode]
+    mode_params.append(mode)
+
+  from src.trading.bot_runtime import stats_epoch_at
+
+  epoch_clause = ""
+  epoch = stats_epoch_at(conn)
+  if epoch:
+    epoch_clause = " AND created_at >= ?"
+    mode_params.insert(0, epoch)
 
   rows = conn.execute(
     f"""
@@ -47,7 +55,7 @@ def compute_interval_performance(
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
       MIN(created_at) AS first_trade_at
     FROM bot_trades
-    WHERE action NOT IN ('auto_stop', 'paper_refill', 'live_hour_refill'){mode_clause}
+    WHERE action NOT IN ('auto_stop', 'paper_refill', 'live_hour_refill'){epoch_clause}{mode_clause}
     GROUP BY event_ticker
     ORDER BY first_trade_at ASC
     """,
@@ -110,4 +118,5 @@ def compute_interval_performance(
     "interval_profit_usd": round(profit_pnl_usd, 2),
     "interval_loss_usd": round(loss_pnl_usd, 2),
     "current_interval": current_interval,
+    "stats_epoch_at": epoch,
   }

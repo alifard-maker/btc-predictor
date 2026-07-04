@@ -88,6 +88,23 @@ def test_pending_interval_not_scored():
     assert perf["intervals_pending"] == 1
 
 
+def test_stats_epoch_excludes_older_intervals():
+  from src.trading.bot_runtime import set_stats_epoch_now
+
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.log_trade(_exit_trade("HOUR-OLD", 0.0))
+    with store._connect() as conn:
+      set_stats_epoch_now(conn)
+    store.log_trade(_exit_trade("HOUR-NEW", 2.0))
+
+    perf = store.interval_performance("HOUR-NEW", mode="paper")
+    assert perf["breakeven_intervals"] == 0
+    assert perf["profit_intervals"] == 0
+    assert perf["loss_intervals"] == 0
+    assert perf["current_interval"]["outcome"] == "profit"
+
+
 def test_interval_performance_in_status():
   with tempfile.TemporaryDirectory() as tmp:
     store = Slot15BotStore(Path(tmp) / "bot.db")
