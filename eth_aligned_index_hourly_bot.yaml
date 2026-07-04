@@ -26,7 +26,7 @@ late_entry:
   min_hours: 0.08
   min_ask_edge_cents: 15
   max_stake_usd: 2.5
-experiment_start_at: '2026-07-04T14:00:00+00:00'
+experiment_start_at: '2026-07-04T18:30:00+00:00'
 profit_exit_cooldown_seconds: 60
 cheap_leg_max_entry_cents: 20
 cheap_leg_cut_loss_cents: 10

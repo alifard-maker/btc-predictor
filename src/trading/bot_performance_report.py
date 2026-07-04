@@ -50,7 +50,7 @@ def is_trial_bot_kind(kind: str) -> bool:
 
 
 def experiment_start_at(cfg: dict[str, Any] | None) -> datetime | None:
-  """UTC instant when the current live-vs-trial experiment window begins."""
+  """UTC instant when the live-vs-trial experiment window begins (from scoped hourly.bot cfg)."""
   raw = (((cfg or {}).get("hourly") or {}).get("bot") or {}).get("experiment_start_at")
   if not raw:
     return None
@@ -58,6 +58,42 @@ def experiment_start_at(cfg: dict[str, Any] | None) -> datetime | None:
     return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
   except ValueError:
     return None
+
+
+def experiment_kinds_for_asset(asset: str) -> tuple[str, ...]:
+  """Bot kinds included in the live-vs-trial experiment table for an asset."""
+  if str(asset).lower() == "btc":
+    return (
+      "hourly",
+      "hourly_trial",
+      "hourly_trial_rally",
+      "hourly_trial_soft",
+      "hourly_trial_mech",
+    )
+  return ("hourly", "hourly_trial")
+
+
+def build_experiments_by_asset(
+  reports: list[dict[str, Any]],
+  *,
+  asset_starts: dict[str, datetime | None],
+) -> dict[str, dict[str, Any]]:
+  """Per-asset experiment summaries since each asset's experiment_start_at."""
+  out: dict[str, dict[str, Any]] = {}
+  for asset, start in asset_starts.items():
+    if start is None:
+      continue
+    kinds = experiment_kinds_for_asset(asset)
+    bots: list[dict[str, Any]] = []
+    for r in reports:
+      if r.get("asset") != asset or r.get("kind") not in kinds:
+        continue
+      exp = r.get("experiment")
+      if exp:
+        bots.append(exp)
+    if bots:
+      out[asset] = {"start_at": start.isoformat(), "bots": bots}
+  return out
 
 
 def _filter_trades_since_dt(
@@ -719,23 +755,24 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
   main_reports = [r for r in reports if not is_trial_bot_kind(str(r.get("kind") or ""))]
   trial_reports = [r for r in reports if is_trial_bot_kind(str(r.get("kind") or ""))]
 
-  experiment_start = experiment_start_at(loop.cfg)
-  experiment_comparison: list[dict[str, Any]] = []
-  if experiment_start:
-    for r in reports:
-      if r.get("asset") != "btc":
-        continue
-      if r.get("kind") not in (
-        "hourly",
-        "hourly_trial",
-        "hourly_trial_rally",
-        "hourly_trial_soft",
-        "hourly_trial_mech",
-      ):
-        continue
-      exp = r.get("experiment")
-      if exp:
-        experiment_comparison.append(exp)
+  from src.assets import asset_cfg
+
+  asset_starts: dict[str, datetime | None] = {
+    "btc": experiment_start_at(loop.cfg),
+  }
+  for asset in ("eth", "spx", "ndx"):
+    try:
+      acfg = asset_cfg(loop.cfg, asset)
+    except ValueError:
+      asset_starts[asset] = None
+      continue
+    asset_starts[asset] = experiment_start_at(acfg)
+
+  experiments_by_asset = build_experiments_by_asset(reports, asset_starts=asset_starts)
+  experiment_start = asset_starts.get("btc")
+  experiment_comparison: list[dict[str, Any]] = list(
+    (experiments_by_asset.get("btc") or {}).get("bots") or []
+  )
 
   def _combined_rolling_legacy(key: str) -> dict[str, Any]:
     return _combined_rolling_summary(main_reports, "last_1h" if key == "last_60_min" else key)
@@ -769,4 +806,5 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
     "combined_prior_4h": _combined_prior_shifted_4h(main_reports),
     "experiment_start_at": experiment_start.isoformat() if experiment_start else None,
     "experiment_bots": experiment_comparison,
+    "experiments_by_asset": experiments_by_asset,
   }

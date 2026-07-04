@@ -2193,33 +2193,12 @@ def admin_snapshot_stats(
 
 @app.post("/api/admin/fresh-start-all-paper-bots")
 def admin_fresh_start_all_paper_bots(_: None = Depends(_session_user)):
-  """Clear trade logs and reset bankroll for every paper bot (BTC/ETH hourly + 15m)."""
+  """Clear trade logs for every bot; paper bots also reset bankroll (live bots: log wipe only)."""
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  results: dict[str, Any] = {}
-  for asset in ("btc", "eth"):
-    h_store = _loop.hourly_bot_store(asset)
-    h_settings = h_store.get_settings()
-    if h_settings.mode == "paper":
-      results[f"hourly_{asset}"] = h_store.fresh_start_paper(h_settings.max_spend_per_hour_usd)
-    ht_store = _loop.hourly_trial_bot_store(asset)
-    ht_settings = ht_store.get_settings()
-    if ht_settings.mode == "paper":
-      results[f"hourly_trial_{asset}"] = ht_store.fresh_start_paper(ht_settings.max_spend_per_hour_usd)
-    if asset == "btc":
-      for trial_kind, store_fn in (
-        ("hourly_trial_rally", _loop.hourly_trial_rally_bot_store),
-        ("hourly_trial_soft", _loop.hourly_trial_soft_bot_store),
-        ("hourly_trial_mech", _loop.hourly_trial_mech_bot_store),
-      ):
-        t_store = store_fn(asset)
-        t_settings = t_store.get_settings()
-        if t_settings.mode == "paper":
-          results[f"{trial_kind}_{asset}"] = t_store.fresh_start_paper(t_settings.max_spend_per_hour_usd)
-    s_store = _loop.slot15_bot_store(asset)
-    s_settings = s_store.get_settings()
-    if s_settings.mode == "paper":
-      results[f"slot15_{asset}"] = s_store.fresh_start_paper(s_settings.max_spend_per_slot_usd)
+  from src.trading.bot_fresh_start_all import fresh_start_all_bot_stores
+
+  results = fresh_start_all_bot_stores(_loop, _cfg)
   return {"status": "ok", "reset": results}
 
 

@@ -888,6 +888,7 @@
     let hourlyCompareLastAt = 0;
     let hourlyCompareInFlight = false;
     let perfReportLastAt = 0;
+    let lastPerfReport = null;
     let perfReportInFlight = false;
     const SLOT15_TRIAL_KIND = 'slot15_trial';
     function isSlot15TrialKind(kind) { return kind === SLOT15_TRIAL_KIND; }
@@ -1570,7 +1571,7 @@
         <strong class="${statusCls}">${statusLabel}</strong>
         · Last bot cycle: <strong>${formatCycleAge(cycleAt)}</strong>
         · ${autoHint}
-        <div class="muted" style="margin-top:.25rem;font-size:.65rem">Bots poll every ~5s on the server when Auto-bet is ON. Paper bankroll and trade logs survive redeploys only with a Railway volume mounted at <code>/data</code>.${dataHint} <button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .45rem;margin-left:.35rem" onclick="freshStartAllPaperBots()">Fresh start all paper bots</button></div>
+        <div class="muted" style="margin-top:.25rem;font-size:.65rem">Bots poll every ~5s on the server when Auto-bet is ON. Paper bankroll and trade logs survive redeploys only with a Railway volume mounted at <code>/data</code>.${dataHint} <button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .45rem;margin-left:.35rem" onclick="freshStartAllPaperBots()">Fresh start all bots</button></div>
       </div>`;
     }
 
@@ -1970,6 +1971,7 @@
 
     function switchTab(name) {
       activeTab = name;
+      if (lastPerfReport?.ok) renderBotPerformanceReport(lastPerfReport);
       $('panel-15m').style.display = name === '15m' ? '' : 'none';
       $('panel-eth-15m').style.display = name === 'eth-15m' ? '' : 'none';
       $('panel-daily').style.display = name === 'daily' ? '' : 'none';
@@ -3169,7 +3171,7 @@
     }
 
     async function freshStartAllPaperBots() {
-      if (!confirm('Fresh start ALL paper bots (BTC + ETH hourly and 15m)?\n\nClears every trade log and resets each paper bankroll. Live-mode bots are skipped.')) return;
+      if (!confirm('Fresh start ALL bots (BTC + ETH hourly/15m, trials, v2, SPX/NDX)?\n\nClears every trade log and resets each paper bankroll. Live bots: log wipe only (Kalshi positions unchanged).')) return;
       try {
         const res = await fetch('/api/admin/fresh-start-all-paper-bots', { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
@@ -3839,7 +3841,117 @@
       }
     }
 
+    function perfScopeForTab(tab) {
+      if (tab === 'eth-hourly') return { asset: 'eth', label: 'ETH Hourly', hourlyOnly: true };
+      if (tab === 'daily') return { asset: 'btc', label: 'BTC Hourly', hourlyOnly: true };
+      if (tab === 'eth-15m') return { asset: 'eth', label: 'ETH 15m', kinds: ['slot15'] };
+      if (tab === '15m') return { asset: 'btc', label: 'BTC 15m', kinds: ['slot15'] };
+      if (tab === 'spx-hourly') return { asset: 'spx', label: 'SPX Hourly', hourlyOnly: true };
+      if (tab === 'ndx-hourly') return { asset: 'ndx', label: 'NDX Hourly', hourlyOnly: true };
+      if (tab === 'trials') return { trialsOnly: true, label: 'All trial bots' };
+      return null;
+    }
+
+    function perfBotMatchesScope(bot, scope) {
+      if (!scope) return true;
+      if (scope.trialsOnly) return isHourlyTrialKind(bot.kind);
+      if (bot.asset !== scope.asset) return false;
+      if (scope.kinds) return scope.kinds.includes(bot.kind);
+      if (scope.hourlyOnly) return bot.kind === 'hourly' || isHourlyTrialKind(bot.kind);
+      return true;
+    }
+
+    function perfCombineSummaries(reports) {
+      let closed = 0;
+      let pnl = 0;
+      let wins = 0;
+      for (const r of reports) {
+        const sm = r.summary || {};
+        closed += sm.closed_trades || 0;
+        pnl += sm.total_pnl_usd || 0;
+        wins += sm.wins || 0;
+      }
+      return {
+        closed_trades: closed,
+        total_pnl_usd: Math.round(pnl * 100) / 100,
+        win_rate: closed ? Math.round((wins / closed) * 1000) / 1000 : null,
+      };
+    }
+
+    function perfCombineRolling(reports, windowKey) {
+      let closed = 0;
+      let pnl = 0;
+      let wins = 0;
+      let losses = 0;
+      let lossPnl = 0;
+      for (const r of reports) {
+        const block = (r.rolling_windows || {})[windowKey]
+          || (windowKey === 'last_1h' ? r.last_60_min : null)
+          || {};
+        const sm = block.summary || {};
+        closed += sm.closed_trades || 0;
+        pnl += sm.total_pnl_usd || 0;
+        wins += sm.wins || 0;
+        losses += sm.loss_count != null ? sm.loss_count : (sm.losses || 0);
+        lossPnl += sm.loss_pnl_usd || 0;
+      }
+      const out = {
+        closed_trades: closed,
+        total_pnl_usd: Math.round(pnl * 100) / 100,
+        loss_count: losses,
+        loss_pnl_usd: Math.round(lossPnl * 100) / 100,
+      };
+      if (closed) out.win_rate = Math.round((wins / closed) * 1000) / 1000;
+      return out;
+    }
+
+    function perfCombineWindowDays(reports) {
+      let closed = 0;
+      let pnl = 0;
+      let wins = 0;
+      for (const r of reports) {
+        const sm = (r.last_60_days || {}).summary || {};
+        closed += sm.closed_trades || 0;
+        pnl += sm.total_pnl_usd || 0;
+        wins += sm.wins || 0;
+      }
+      const out = { closed_trades: closed, total_pnl_usd: Math.round(pnl * 100) / 100, window_days: 60 };
+      if (closed) out.win_rate = Math.round((wins / closed) * 1000) / 1000;
+      return out;
+    }
+
+    function filterPerformanceReportForTab(report, tab) {
+      const scope = perfScopeForTab(tab);
+      if (!report || !report.ok || !scope) return report;
+      const bots = (report.bots || []).filter((b) => perfBotMatchesScope(b, scope));
+      const main = bots.filter((b) => !isHourlyTrialKind(b.kind));
+      const trial = bots.filter((b) => isHourlyTrialKind(b.kind));
+      const rollingKeys = ['last_1h', 'last_2h', 'last_4h', 'last_12h', 'last_24h', 'last_48h'];
+      const combinedRolling = {};
+      for (const key of rollingKeys) combinedRolling[key] = perfCombineRolling(main, key);
+      const combinedTrialRolling = {};
+      for (const key of rollingKeys) combinedTrialRolling[key] = perfCombineRolling(trial, key);
+      const expBlock = (report.experiments_by_asset || {})[scope.asset] || null;
+      return {
+        ...report,
+        _perf_scope: scope,
+        bots,
+        main_bots: main,
+        trial_bots: trial,
+        combined: perfCombineSummaries(main),
+        combined_trial: perfCombineSummaries(trial),
+        combined_60_days: perfCombineWindowDays(main),
+        combined_trial_60_days: perfCombineWindowDays(trial),
+        combined_rolling_windows: combinedRolling,
+        combined_trial_rolling_windows: combinedTrialRolling,
+        combined_last_60_min: combinedRolling.last_1h,
+        experiment_bots: expBlock?.bots || [],
+        experiment_start_at: expBlock?.start_at || null,
+      };
+    }
+
     function renderBotPerformanceReport(report) {
+      report = filterPerformanceReportForTab(report, activeTab);
       const el = $('bot-performance-report');
       if (!el) return;
       if (!report || !report.ok) {
@@ -3890,7 +4002,11 @@
         experimentHtml = `<p class="muted" style="font-size:.68rem;margin:0 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Live vs trials — since ${startLabel} EDT</p>
           <table style="width:100%;font-size:.72rem;margin-bottom:.65rem"><thead><tr><th>Bot</th><th>Closed</th><th>Win%</th><th>P&amp;L</th></tr></thead><tbody>${rows}</tbody></table>`;
       }
-      let html = `${experimentHtml}<div class="perf-grid">
+      const scope = report._perf_scope;
+      const scopeNote = scope
+        ? `<p class="muted" style="font-size:.68rem;margin:0 0 .5rem">Showing <strong>${scope.label}</strong> only (matches active tab). Rolling windows use the <strong>full trade log</strong> — use the experiment table or Fresh start on the bot card to focus on the current code era.</p>`
+        : `<p class="muted" style="font-size:.68rem;margin:0 0 .5rem">All paper bots. Switch to a product tab (BTC Hourly, ETH Hourly, 15m) to filter this report.</p>`;
+      let html = `${scopeNote}${experimentHtml}<div class="perf-grid">
         <div class="perf-stat muted">Main bots closed trades<strong>${combined.closed_trades ?? 0}</strong></div>
         <div class="perf-stat muted">Main win rate<strong>${combWr}</strong></div>
         <div class="perf-stat muted">Main realized P&amp;L<strong>${combPnl}</strong></div>
@@ -3995,6 +4111,7 @@
       try {
         const report = await getWithTimeout('/api/bots/performance-report', 20000);
         perfReportLastAt = Date.now();
+        lastPerfReport = report;
         renderBotPerformanceReport(report);
       } catch (e) {
         perfReportLastAt = Date.now();
