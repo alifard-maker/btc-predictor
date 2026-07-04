@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.trading.entry_strategy import EntryStrategyConfig
 from src.trading.stake_cap_utilization import compute_stake_cap_utilization
+
+_PERF_REPORT_CACHE: tuple[float, dict[str, Any]] | None = None
+_PERF_REPORT_CACHE_SEC = 30.0
+_DASHBOARD_TRADE_LIMIT = 1500
 
 PRICE_BUCKETS = (
   (1, 20, "1–20¢"),
@@ -688,8 +693,26 @@ def _combined_prior_shifted_4h(reports: list[dict[str, Any]]) -> dict[str, Any]:
   return out
 
 
-def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
-  """Collect all four paper bot stores from PredictionLoop."""
+def build_all_bots_performance_report(loop: Any, *, force: bool = False) -> dict[str, Any]:
+  """Collect all paper bot stores from PredictionLoop (cached ~30s for dashboard)."""
+  global _PERF_REPORT_CACHE
+  now_mono = time.monotonic()
+  if (
+    not force
+    and _PERF_REPORT_CACHE is not None
+    and (now_mono - _PERF_REPORT_CACHE[0]) < _PERF_REPORT_CACHE_SEC
+  ):
+    cached = dict(_PERF_REPORT_CACHE[1])
+    cached["cached"] = True
+    return cached
+
+  report = _build_all_bots_performance_report_uncached(loop)
+  _PERF_REPORT_CACHE = (now_mono, report)
+  return report
+
+
+def _build_all_bots_performance_report_uncached(loop: Any) -> dict[str, Any]:
+  """Build full performance report (no cache)."""
   from src.trading.bot_auto_tuning import effective_entry_strategy
 
   reports: list[dict[str, Any]] = []
@@ -722,7 +745,7 @@ def build_all_bots_performance_report(loop: Any) -> dict[str, Any]:
       or getattr(settings, "max_spend_per_slot_usd", 0)
       or 0
     )
-    trades = store.list_trades(limit=5000)
+    trades = store.list_trades(limit=_DASHBOARD_TRADE_LIMIT)
     report = build_bot_performance_report(
       kind=kind,
       asset=asset,

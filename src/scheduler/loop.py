@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -3201,6 +3202,38 @@ class PredictionLoop:
 
   def status(self) -> dict[str, Any]:
     return self._status_for_asset("btc")
+
+  def lite_dashboard_health(self) -> dict[str, Any]:
+    """Fast header poll — no parquet loads, uses cached Kalshi balance only."""
+    logs_path = Path(self.cfg.get("paths", {}).get("logs", "data/logs"))
+    data_dir = str(logs_path.parent)
+    kalshi = self.kalshi
+    k: dict[str, Any] = {
+      "authenticated": bool(kalshi.authenticated),
+    }
+    if kalshi.authenticated:
+      bal = kalshi.portfolio_balance()
+      cents = kalshi.balance_cents_from_payload(bal)
+      k["balance_cents"] = cents
+      k["balance_usd"] = kalshi.balance_usd_from_cents(cents)
+    out: dict[str, Any] = {
+      "scheduler_running": self._scheduler is not None and getattr(self._scheduler, "running", False),
+      "data_dir": data_dir,
+      "kalshi": k,
+    }
+    try:
+      from src.trading.kalshi_circuit import get_circuit_breaker
+
+      brk = get_circuit_breaker()
+      out["bots_paused"] = bool(brk and brk.is_paused())
+    except Exception:
+      pass
+    try:
+      vol_path = Path(data_dir)
+      out["volume_mounted_at_data"] = vol_path.is_dir() and os.access(vol_path, os.W_OK)
+    except Exception:
+      out["volume_mounted_at_data"] = None
+    return out
 
   def eth_status(self) -> dict[str, Any]:
     if not self._slot15m_enabled("eth"):

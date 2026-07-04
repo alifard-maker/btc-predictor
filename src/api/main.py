@@ -323,7 +323,7 @@ def health(lite: bool = Query(default=False)):
   if _loop is None:
     return base
   if lite:
-    st = _loop.status()
+    st = _loop.lite_dashboard_health()
     kalshi = st.get("kalshi") or {}
     return {
       "status": "ok",

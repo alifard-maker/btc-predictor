@@ -284,34 +284,100 @@
     </details>
 
     <details class="card guide-card" id="app-guide">
-      <summary>Guide · tabs, predictions &amp; terminology</summary>
+      <summary>Guide · dashboard, bots, buttons &amp; terminology</summary>
       <div class="guide-body">
-        <p>This dashboard shows <strong>model forecasts</strong> and <strong>Kalshi mispricing</strong> for BTC (and ETH on the hourly tab). It does <strong>not</strong> place trades. All times are <strong>Eastern (ET)</strong> unless noted.</p>
+        <p>This dashboard runs <strong>server-side bots</strong> (paper or live on Kalshi) plus <strong>model forecasts</strong>. All times are <strong>Eastern (ET)</strong>. Expand sections below for each area.</p>
+
+        <h3>Top of page — header &amp; global actions</h3>
+        <dl class="guide-glossary">
+          <dt><strong>Refresh</strong></dt>
+          <dd>Reloads the active tab (predictions, bot status, health). Auto-runs every ~10s.</dd>
+          <dt><strong>Sign out</strong></dt>
+          <dd>Ends your session (shared password gate).</dd>
+          <dt><strong>Reset</strong> (zoom)</dt>
+          <dd>Resets page zoom to 100%, not bot data.</dd>
+          <dt><strong>Kalshi cash</strong></dt>
+          <dd>Your linked account balance (live trading). Bot sizing still uses <strong>max at-risk $/hour</strong> or <strong>$/slot</strong>, not your full wallet.</dd>
+          <dt><strong>Fresh start all bots</strong> <span class="muted" style="font-size:.72rem">(footer of status strip)</span></dt>
+          <dd>Clears <strong>every</strong> bot trade log and resets each <strong>paper</strong> bankroll. <strong>Live</strong> bots: log wipe only — open Kalshi positions are unchanged. Use after a code release for clean stats.</dd>
+        </dl>
+
+        <h3>Paper bot performance · calibration report</h3>
+        <p>Collapsed panel under the header. Shows closed round-trip stats from bot SQLite logs — <strong>not</strong> the same as hourly <em>model</em> calibration further down each tab.</p>
+        <ul>
+          <li><strong>Scoped to your tab</strong> — ETH Hourly shows ETH bots only; BTC Hourly shows BTC; 15m tabs show that asset’s slot bot.</li>
+          <li><strong>Experiment table</strong> — P&amp;L since <code>experiment_start_at</code> in config (current code era). Main hourly + trial bots side by side.</li>
+          <li><strong>Rolling windows (1h–48h)</strong> — Exits in that time window from the trade log. After a fresh start, these stay near zero.</li>
+          <li><strong>60d / per-bot blocks</strong> — Entry-price buckets, spread buckets, auto-tune notes. Trials are labeled and excluded from “main” totals.</li>
+          <li><strong>Ask-edge gate</strong> — Bot only enters when model probability beats Kalshi ask by N cents after fees.</li>
+        </ul>
+
+        <h3>Live hourly vs paper trial · hour-by-hour</h3>
+        <p>On <strong>BTC Hourly</strong> and <strong>ETH Hourly</strong> tabs only. Compares the <strong>same Kalshi hour</strong> (<code>event_ticker</code>) for:</p>
+        <ul>
+          <li><strong>BTC</strong> — live hourly bot vs paper <strong>Trial Mech</strong></li>
+          <li><strong>ETH</strong> — live hourly bot vs paper <strong>standard trial</strong></li>
+        </ul>
+        <p class="muted" style="font-size:.78rem">Use the <strong>BTC / ETH</strong> toggle in the panel. On 15m tabs, slot-level compare is in the ETH 15m bot section instead.</p>
+
+        <h3>Bot card — controls on every auto-bet panel</h3>
+        <dl class="guide-glossary">
+          <dt><strong>Auto-bet</strong></dt>
+          <dd>Master ON/OFF. When ON, the server polls Kalshi every ~5–10s and enters/exits without the browser open.</dd>
+          <dt><strong>Paper / Live</strong></dt>
+          <dd><strong>Paper</strong> = simulated fills and bankroll. <strong>Live</strong> = real Kalshi orders (requires API keys + live password prompt).</dd>
+          <dt><strong>Max at-risk $/hour</strong> (hourly) or <strong>$/slot</strong> (15m)</dt>
+          <dd>Cap on concurrent exposure <em>and</em> (usually) total $ entered per hour/slot. <strong>Auto-refill</strong> (live): winning streak extends effective cap; paper: refills bankroll when empty.</dd>
+          <dt><strong>STRONG / ACTIONABLE</strong></dt>
+          <dd>Filter entries. <strong>Both OFF</strong> = “free mode” (any actionable signal; regime advisory on hourly).</dd>
+          <dt><strong>Use profits</strong></dt>
+          <dd>Live: add realized hour P&amp;L to deployable budget (separate from auto-refill win boost).</dd>
+          <dt><strong>Fresh start</strong> <span class="muted" style="font-size:.72rem">(paper)</span></dt>
+          <dd>Clears trade log, open positions in DB, cooldowns, tuning state; resets paper bankroll to max cap. Settings (mode, caps) kept.</dd>
+          <dt><strong>Clear history</strong> <span class="muted" style="font-size:.72rem">(live)</span></dt>
+          <dd>Same log wipe as fresh start for live — does <strong>not</strong> close Kalshi positions. Use when dashboard log is stale vs exchange.</dd>
+          <dt><strong>Reset bankroll</strong> <span class="muted" style="font-size:.72rem">(paper)</span></dt>
+          <dd>Resets paper cash to max cap without deleting trade history (rare; prefer fresh start).</dd>
+          <dt><strong>Override daily cap</strong></dt>
+          <dd>One-click lift of the $50/day loss stop for this bot (resets at midnight NY).</dd>
+          <dt><strong>Sync fills</strong> <span class="muted" style="font-size:.72rem">(live)</span></dt>
+          <dd>Pull recent Kalshi fills into the log; fixes reconcile drift.</dd>
+        </dl>
 
         <h3>The tabs</h3>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.5rem">Main tabs show live hourly bots and predictions. The <strong>Trials</strong> tab holds parallel paper benchmark bots (different entry mechanics, same leg exits).</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.5rem">Main tabs = production bots + predictions. <strong>Trials</strong> = parallel paper benchmarks. <strong>Hourly V2</strong> = isolated path-memory experiment.</p>
         <div class="guide-tabs">
           <div class="guide-tab-box">
             <h4>BTC 15m</h4>
-            <p><strong>Kalshi KXBTC15M</strong> — will BTC finish <em>above or below</em> its price at each :00, :15, :30, :45 open?</p>
+            <p><strong>KXBTC15M</strong> — will BTC finish <em>above or below</em> its price at each :00, :15, :30, :45 open?</p>
             <p>Signals: <strong>LONG</strong> / <strong>SHORT</strong> / <strong>NO TRADE</strong>, plus mid-slot <strong>LATE</strong>, <strong>2nd Chance</strong>, and <strong>FLIP</strong>. Settlement uses <strong>BRTI</strong> vs slot t=0.</p>
             <p class="muted" style="font-size:.75rem">Not per-contract BUY YES/NO — that vocabulary is on the hourly tabs.</p>
           </div>
           <div class="guide-tab-box">
             <h4>ETH 15m</h4>
-            <p><strong>Kalshi KXETH15M</strong> — same slot structure for ETH. Settlement uses <strong>ERTI</strong> (CF Benchmarks Ethereum RTI) vs slot t=0.</p>
-            <p>Same LONG/SHORT/NO TRADE + LATE / 2nd Chance / FLIP signals as BTC 15m. Live price via ERTI (Kalshi) or Coinbase ETH/USD fallback.</p>
+            <p><strong>KXETH15M</strong> — same slot structure for ETH. Settlement uses <strong>ERTI</strong> (CF Benchmarks Ethereum RTI) vs slot t=0.</p>
+            <p>Includes optional <strong>15m trial</strong> bot and live-vs-trial slot compare when trial is enabled.</p>
           </div>
           <div class="guide-tab-box">
             <h4>BTC Hourly</h4>
-            <p><strong>KXBTCD</strong> thresholds (above/below strikes) + <strong>KXBTC</strong> range bands ($20 “stall” buckets). Settles each hour on <strong>BRTI</strong>.</p>
-            <p>Hour-open snapshot at <strong>:00 ET</strong>; official pick <strong>locks at :05 ET</strong>. <strong>Locked @ :05</strong> is scored; <strong>Hour open @ :00</strong> is a frozen preview; <strong>Live</strong> updates with the market.</p>
-            <p><strong>Strategy 1</strong> = threshold table. <strong>Strategy 2</strong> = range bands near forecast μ.</p>
+            <p><strong>KXBTCD</strong> thresholds + <strong>KXBTC</strong> range bands. Settles each hour on <strong>BRTI</strong>.</p>
+            <p>Hour-open at <strong>:00 ET</strong>; official lock at <strong>:05 ET</strong>. Strategy 1 = thresholds; Strategy 2 = range bands.</p>
           </div>
           <div class="guide-tab-box">
             <h4>ETH Hourly</h4>
-            <p>Same layout as BTC Hourly for <strong>KXETHD</strong> / <strong>KXETH</strong>. Settlement index is <strong>ERTI</strong> (CF Benchmarks Ethereum RTI).</p>
-            <p>Hour-open at <strong>:00 ET</strong>, official lock at <strong>:05 ET</strong>. Same ML + structure blend as BTC hourly (trained on ETH candles nightly). Paper bot thresholds auto-tune after 7+ days of trades.</p>
+            <p><strong>KXETHD</strong> / <strong>KXETH</strong> on <strong>ERTI</strong>. Same layout as BTC hourly; live vs <strong>standard trial</strong> compare in the top panel.</p>
+          </div>
+          <div class="guide-tab-box">
+            <h4>SPX / NDX Hourly</h4>
+            <p>Index hourly ladders during US RTH (9:30–16:00 ET). Mechanics aligned with ETH hourly live. Paper trials for benchmarking.</p>
+          </div>
+          <div class="guide-tab-box">
+            <h4>Trials</h4>
+            <p>BTC: Rally, Soft, Mech trial bots. ETH: standard trial. Same entries as main hourly, different exit profiles (leg TP/stop vs thesis exits).</p>
+          </div>
+          <div class="guide-tab-box">
+            <h4>Hourly V2</h4>
+            <p>Separate predictor (path memory, no v1 LightGBM blend). Own DB, paper bot, calibration — compare accuracy vs main hourly here.</p>
           </div>
         </div>
 
@@ -323,7 +389,7 @@
           <li><strong>Best edge</strong> — Largest |model − Kalshi| gap among nearby contracts.</li>
           <li><strong>Hour open @ :00</strong> — Snapshot at top of hour; frozen preview until :05 official lock.</li>
           <li><strong>Locked @ :05</strong> — Official snapshot for calibration; does not move when the market drifts.</li>
-          <li><strong>Hourly calibration</strong> — After settle, compares locked picks to actual index (Brier, BUY YES/NO hit rate, in-band rate for range bands).</li>
+          <li><strong>Hourly calibration</strong> (per tab) — After settle, compares locked picks to actual index (Brier, BUY hit rate). Different from the top <em>paper bot performance</em> panel.</li>
         </ul>
 
         <h3>Contract signals (BTC &amp; ETH hourly tables)</h3>
@@ -364,6 +430,13 @@
           <li><strong>In-band hit rate</strong> — % of hours settle index landed inside the locked range band.</li>
           <li><strong>All BUY-signal bands @ lock</strong> — Every band with BUY YES or BUY NO frozen in the near-μ slice at :05 (can be multiple per hour).</li>
           <li><strong>Epoch / all-time</strong> — Current scoring window vs archived history (15m tab); hourly uses resolved event rows since last reset.</li>
+        </ul>
+
+        <h3>Performance &amp; errors</h3>
+        <ul>
+          <li><strong>Health: Timeout after …ms</strong> — Server busy (often Kalshi API or SQLite lock). Wait and hit Refresh; panels load independently.</li>
+          <li><strong>Loading…</strong> on a panel — That API is still running or failed silently; check the red error strip or Refresh.</li>
+          <li><strong>429 / circuit breaker</strong> — Kalshi rate limit; bot entries pause briefly; banner may show at top.</li>
         </ul>
 
         <div class="guide-note">Guidance only — not financial advice. Kalshi settlement uses CF Benchmarks indices (BRTI / ERTI). Past calibration does not guarantee future results.</div>
@@ -1659,6 +1732,22 @@
       } else {
         el.textContent = 'Kalshi cash — unavailable';
         el.style.color = 'var(--warn)';
+      }
+    }
+
+    function syncGlobalComparePanel() {
+      const el = $('hourly-live-trial-compare');
+      if (!el) return;
+      if (activeTab === '15m' || activeTab === 'eth-15m') {
+        el.innerHTML = '<p class="muted" style="font-size:.78rem">Hour-by-hour <strong>live vs paper trial</strong> compare is on the <strong>BTC Hourly</strong> and <strong>ETH Hourly</strong> tabs. On <strong>ETH 15m</strong>, use the slot compare panel in that tab’s bot section.</p>';
+        return;
+      }
+      if (activeTab === 'trials' || activeTab === 'hourly-v2') {
+        el.innerHTML = '<p class="muted" style="font-size:.78rem">Open <strong>BTC Hourly</strong> or <strong>ETH Hourly</strong> for the global live-vs-trial table. This tab has its own bot cards below.</p>';
+        return;
+      }
+      if (isHourlyTab(activeTab)) {
+        loadHourlyLiveTrialCompare();
       }
     }
 
@@ -5525,12 +5614,10 @@
       }
 
       const tasks = [
-        getWithTimeout('/health?lite=1', 8000).then(renderStatus).catch(e => showError('Health: ' + e.message)),
+        getWithTimeout('/health?lite=1', 12000).then(renderStatus).catch(e => showError('Health: ' + e.message)),
       ];
-      if (!isHourlyTab(activeTab) && activeTab !== '15m' && activeTab !== 'eth-15m') {
-        loadBotPerformanceReport();
-        loadHourlyLiveTrialCompare();
-      }
+      loadBotPerformanceReport();
+      syncGlobalComparePanel();
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();
         tasks.push(
@@ -5567,8 +5654,6 @@
         }
       } else if (isHourlyTab(activeTab)) {
         loadDaily();
-        loadBotPerformanceReport();
-        loadHourlyLiveTrialCompare();
       } else if (activeTab === 'trials') {
         tasks.push(loadTrials());
       } else if (activeTab === 'hourly-v2') {
