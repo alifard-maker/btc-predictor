@@ -94,6 +94,7 @@ from src.trading.bot_live_exit import (
 )
 from src.trading.bot_scale_in import evaluate_scale_in
 from src.trading.entry_strategy import (
+  CycleEntryBudget,
   cap_live_entry_contracts,
   correlation_block_reason,
   entry_budget_usd,
@@ -1254,8 +1255,7 @@ class HourlyBot:
       return _find_contract_in_live(live, ticker)
 
     last_reason = "no_entry_this_cycle"
-    entries_this_cycle = 0
-    max_entries = estrat.max_entries_per_cycle if estrat.enabled else 1
+    cycle_budget = CycleEntryBudget(estrat)
 
     max_slots = estrat.max_concurrent_positions if estrat.enabled else 99
     slots_used = (
@@ -1273,8 +1273,8 @@ class HourlyBot:
     )
 
     for _composite, _edge, _saf, pick, bet in ranked:
-      if entries_this_cycle >= max_entries:
-        break
+      if not cycle_budget.can_enter(pick):
+        continue
       if slots_used >= max_slots:
         last_reason = "max_concurrent_positions"
         break
@@ -1466,7 +1466,7 @@ class HourlyBot:
         break
 
       bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap, settings)
-      entries_left = max_entries - entries_this_cycle
+      entries_left = cycle_budget.entries_left(pick)
       stake = entry_budget_usd(
         estrat=estrat,
         bankroll_usd=bankroll,
@@ -1644,7 +1644,7 @@ class HourlyBot:
       self._adaptive_after_enter(price_cents, None, cfg)
       self.store.set_last_skip_reason(None)
       results.append(result)
-      entries_this_cycle += 1
+      cycle_budget.record_entry(pick)
       open_pos = self.store.open_positions(event_ticker)
       slots_used = (
         count_live_entry_slots_used(

@@ -28,6 +28,7 @@ from src.trading.bot_live_exit import (
   live_exit_config,
 )
 from src.trading.entry_strategy import (
+  CycleEntryBudget,
   correlation_block_reason,
   entry_budget_usd,
   passes_ask_edge_gate,
@@ -370,10 +371,10 @@ def simulate_hour(
 
     estrat_poll = apply_adaptive_passive_guards(estrat, adaptive, cfg)
     pricing = adaptive_live_entry_pricing(base_pricing, adaptive, cfg)
-    entries = 0
-    for _c, _e, _s, pick, _bet in ranked[:estrat_poll.max_entries_per_cycle]:
-      if entries >= estrat_poll.max_entries_per_cycle:
-        break
+    cycle_budget = CycleEntryBudget(estrat_poll)
+    for _c, _e, _s, pick, _bet in ranked[:cycle_budget.max_cycle_candidates()]:
+      if not cycle_budget.can_enter(pick):
+        continue
       if len(state.legs) >= estrat_poll.max_concurrent_positions:
         break
       if state.cash_at_risk >= max_spend:
@@ -413,7 +414,7 @@ def simulate_hour(
       remaining = max_spend - state.cash_at_risk
       stake = entry_budget_usd(
         estrat=estrat_poll, bankroll_usd=max_spend, remaining_usd=remaining,
-        pick=pick, side=side, entries_left=1,
+        pick=pick, side=side, entries_left=cycle_budget.entries_left(pick),
       )
       count = max(1, int(stake // (price_cents / 100.0))) if price_cents else 0
       cap = 6 if profile == "legacy" else (live_exit.max_adopted_contracts or 2)
@@ -443,7 +444,7 @@ def simulate_hour(
       ))
       state.cash_at_risk += cost
       state.filled_enters += 1
-      entries += 1
+      cycle_budget.record_entry(pick)
 
   for leg in list(state.legs):
     m = next(x for x in markets if x["ticker"] == leg.ticker)

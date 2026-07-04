@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from src.trading.entry_strategy import (
+  CycleEntryBudget,
   EntryStrategyConfig,
   ask_edge_cents_for_pick,
   composite_entry_score,
@@ -13,8 +14,11 @@ from src.trading.entry_strategy import (
   entry_budget_usd,
   is_barbell_pair,
   kelly_stake_usd,
+  max_entries_per_cycle_for_family,
+  max_entries_per_cycle_for_pick,
   passes_ask_edge_gate,
   passes_tail_entry_gate,
+  pick_entry_strategy_family,
   rank_hourly_candidates,
 )
 from src.trading.hourly_bot import HourlyBot
@@ -389,3 +393,154 @@ def test_max_same_side_threshold_legs_blocks_second_yes():
     estrat=estrat,
   )
   assert reason == "max_same_side_threshold_legs"
+
+
+def test_pick_entry_strategy_family_classifies_range():
+  assert pick_entry_strategy_family(_range_pick("KX-B1")) == "range"
+  assert pick_entry_strategy_family(_pick("KX-T1")) == "threshold"
+  assert pick_entry_strategy_family({"ticker": "KXBTC-B12"}) == "range"
+
+
+def test_cycle_entry_budget_independent_family_quotas():
+  estrat = EntryStrategyConfig(max_entries_per_cycle=2)
+  budget = CycleEntryBudget(estrat)
+  th_a = _pick("TH-A", edge=0.20)
+  th_b = _pick("TH-B", edge=0.18, floor=59800.0)
+  th_c = _pick("TH-C", edge=0.16, floor=59900.0)
+  rg_a = _range_pick("RG-A")
+  rg_b = _range_pick("RG-B", floor=58200.0, cap=58300.0)
+
+  assert budget.can_enter(th_a)
+  budget.record_entry(th_a)
+  assert budget.can_enter(th_b)
+  budget.record_entry(th_b)
+  assert not budget.can_enter(th_c)
+  assert budget.can_enter(rg_a)
+  budget.record_entry(rg_a)
+  assert budget.can_enter(rg_b)
+  budget.record_entry(rg_b)
+  assert not budget.can_enter(_range_pick("RG-C", floor=58400.0, cap=58500.0))
+
+
+def test_max_entries_per_cycle_for_pick_uses_family_overrides():
+  estrat = EntryStrategyConfig(
+    max_entries_per_cycle=2,
+    max_threshold_entries_per_cycle=3,
+    max_range_entries_per_cycle=1,
+  )
+  assert max_entries_per_cycle_for_family("threshold", estrat) == 3
+  assert max_entries_per_cycle_for_family("range", estrat) == 1
+  assert max_entries_per_cycle_for_pick(_pick("T"), estrat) == 3
+  assert max_entries_per_cycle_for_pick(_range_pick("R"), estrat) == 1
+
+
+def test_hourly_s1_full_quota_does_not_block_s2():
+  cfg = {
+    "hourly": {
+      "bot": {
+        "entry_strategy": {
+          "enabled": True,
+          "max_entries_per_cycle": 2,
+          "max_concurrent_positions": 6,
+          "kelly_enabled": False,
+          "correlation_guard": False,
+          "min_ask_edge_cents": 0,
+        }
+      }
+    }
+  }
+  th_a = _pick("KX-TH-A", edge=0.20, floor=59700.0)
+  th_b = _pick("KX-TH-B", edge=0.18, floor=59800.0)
+  th_c = _pick("KX-TH-C", edge=0.16, floor=59900.0)
+  rg_a = _range_pick("KX-RG-A", floor=58000.0, cap=58100.0)
+  rg_b = _range_pick("KX-RG-B", floor=58100.0, cap=58200.0)
+  tab = {
+    "ok": True,
+    "event": {"event_ticker": "KXTEST-S1S2"},
+    "live": {
+      "primary_pick": th_a,
+      "current_price": 59800.0,
+      "terminal_mu": 59850.0,
+      "regime": {"allow_trade": True, "reasons": []},
+      "strategy_threshold": {
+        "best_edge": th_a,
+        "most_likely": th_b,
+        "contracts": [th_c],
+      },
+      "strategy_range": {
+        "best_edge": rg_a,
+        "most_likely": rg_b,
+        "contracts": [],
+      },
+    },
+    "locked": {"reference_price": 59750.0, "primary_pick": th_a},
+    "brti_live": 59800.0,
+  }
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=50.0,
+      allow_strong=False,
+      allow_actionable=False,
+      aggressive_entries=True,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    enters = [a for a in actions if a.get("action") == "enter"]
+    tickers = {e["market_ticker"] for e in enters}
+    assert len(enters) == 4
+    assert tickers == {"KX-TH-A", "KX-TH-B", "KX-RG-A", "KX-RG-B"}
+    assert "KX-TH-C" not in tickers
+
+
+def test_hourly_threshold_only_backward_compat():
+  cfg = {
+    "hourly": {
+      "bot": {
+        "entry_strategy": {
+          "enabled": True,
+          "max_entries_per_cycle": 2,
+          "max_concurrent_positions": 3,
+          "kelly_enabled": False,
+          "correlation_guard": False,
+          "min_ask_edge_cents": 0,
+        }
+      }
+    }
+  }
+  pick_a = _pick("KX-A", edge=0.14, floor=59700.0)
+  pick_b = _pick("KX-B", signal="BUY NO", edge=0.11, model_prob=0.30, ask=0.36, floor=59900.0)
+  tab = {
+    "ok": True,
+    "event": {"event_ticker": "KXTEST-TH-ONLY"},
+    "live": {
+      "primary_pick": pick_a,
+      "current_price": 59800.0,
+      "terminal_mu": 59850.0,
+      "regime": {"allow_trade": True, "reasons": []},
+      "strategy_threshold": {
+        "best_edge": pick_a,
+        "most_likely": pick_a,
+        "contracts": [pick_b],
+      },
+      "strategy_range": {"contracts": []},
+    },
+    "locked": {"reference_price": 59750.0, "primary_pick": pick_a},
+    "brti_live": 59800.0,
+  }
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=20.0,
+      allow_strong=False,
+      allow_actionable=False,
+      aggressive_entries=True,
+    ))
+    bot = HourlyBot(store, asset="btc")
+    actions = bot.run_continuous_cycle(tab, cfg=cfg)
+    enters = [a for a in actions if a.get("action") == "enter"]
+    assert len(enters) == 2
+    tickers = {e["market_ticker"] for e in enters}
+    assert tickers == {"KX-A", "KX-B"}

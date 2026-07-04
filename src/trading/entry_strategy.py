@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+EntryStrategyFamily = Literal["threshold", "range"]
 
 from src.trading.contract_signals import is_buy_no, is_buy_yes
 from src.trading.paper_execution import _side_quotes_cents
@@ -19,6 +22,8 @@ class EntryStrategyConfig:
   kelly_fraction: float = 0.25
   min_kelly_stake_usd: float = 1.0
   max_entries_per_cycle: int = 2
+  max_threshold_entries_per_cycle: int | None = None
+  max_range_entries_per_cycle: int | None = None
   max_concurrent_positions: int = 3
   max_budget_fraction_per_entry: float = 0.55
   max_stake_per_entry_usd: float = 10.0
@@ -52,6 +57,12 @@ class EntryStrategyConfig:
       kelly_fraction=float(raw.get("kelly_fraction", 0.25)),
       min_kelly_stake_usd=float(raw.get("min_kelly_stake_usd", 1.0)),
       max_entries_per_cycle=int(raw.get("max_entries_per_cycle", 2)),
+      max_threshold_entries_per_cycle=_optional_family_entry_cap(
+        raw.get("max_threshold_entries_per_cycle")
+      ),
+      max_range_entries_per_cycle=_optional_family_entry_cap(
+        raw.get("max_range_entries_per_cycle")
+      ),
       max_concurrent_positions=int(raw.get("max_concurrent_positions", 3)),
       max_budget_fraction_per_entry=float(raw.get("max_budget_fraction_per_entry", 0.55)),
       max_stake_per_entry_usd=float(raw.get("max_stake_per_entry_usd", 10.0)),
@@ -73,6 +84,75 @@ class EntryStrategyConfig:
       max_same_side_threshold_legs=int(raw.get("max_same_side_threshold_legs", 0)),
       max_same_side_range_legs=int(raw.get("max_same_side_range_legs", 0)),
     )
+
+
+def _optional_family_entry_cap(raw: Any) -> int | None:
+  if raw is None:
+    return None
+  cap = int(raw)
+  return cap if cap > 0 else None
+
+
+def pick_entry_strategy_family(pick: dict[str, Any] | None) -> EntryStrategyFamily:
+  """Classify hourly pick as Strategy 1 (threshold) or Strategy 2 (range)."""
+  if not pick:
+    return "threshold"
+  if str(pick.get("strike_type") or "").lower() == "between":
+    return "range"
+  if str(pick.get("contract_type") or "").lower() == "range":
+    return "range"
+  ticker = str(pick.get("ticker") or "")
+  if re.search(r"-B\d", ticker, re.I):
+    return "range"
+  return "threshold"
+
+
+def max_entries_per_cycle_for_family(
+  family: EntryStrategyFamily,
+  estrat: EntryStrategyConfig,
+) -> int:
+  if not estrat.enabled:
+    return 1
+  if family == "range":
+    cap = estrat.max_range_entries_per_cycle
+  else:
+    cap = estrat.max_threshold_entries_per_cycle
+  if cap is None:
+    cap = estrat.max_entries_per_cycle
+  return max(0, int(cap))
+
+
+def max_entries_per_cycle_for_pick(pick: dict[str, Any], estrat: EntryStrategyConfig) -> int:
+  return max_entries_per_cycle_for_family(pick_entry_strategy_family(pick), estrat)
+
+
+class CycleEntryBudget:
+  """Per-cycle entry quotas for threshold vs range strategy families."""
+
+  def __init__(self, estrat: EntryStrategyConfig) -> None:
+    self.estrat = estrat
+    self._counts: dict[EntryStrategyFamily, int] = {"threshold": 0, "range": 0}
+
+  def can_enter(self, pick: dict[str, Any]) -> bool:
+    family = pick_entry_strategy_family(pick)
+    return self._counts[family] < max_entries_per_cycle_for_family(family, self.estrat)
+
+  def record_entry(self, pick: dict[str, Any]) -> None:
+    family = pick_entry_strategy_family(pick)
+    self._counts[family] += 1
+
+  def entries_left(self, pick: dict[str, Any]) -> int:
+    family = pick_entry_strategy_family(pick)
+    cap = max_entries_per_cycle_for_family(family, self.estrat)
+    return max(0, cap - self._counts[family])
+
+  def max_cycle_candidates(self) -> int:
+    """Upper bound on ranked picks to consider when both families may enter."""
+    if not self.estrat.enabled:
+      return 1
+    th = max_entries_per_cycle_for_family("threshold", self.estrat)
+    rg = max_entries_per_cycle_for_family("range", self.estrat)
+    return th + rg
 
 
 def entry_strategy_from_cfg(cfg: dict[str, Any] | None, *, kind: str = "hourly") -> EntryStrategyConfig:
@@ -511,7 +591,7 @@ def entry_budget_usd(
   entries_left: int = 1,
 ) -> float:
   entries_left = max(1, int(entries_left))
-  if estrat.enabled and estrat.max_entries_per_cycle > 1:
+  if estrat.enabled and entries_left > 1:
     basket_cap = remaining_usd / entries_left
   else:
     basket_cap = remaining_usd
