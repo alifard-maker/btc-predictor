@@ -9,6 +9,35 @@ from src.trading.hourly_bot import HourlyBot
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
 
 
+def test_live_winning_streak_extends_hour_cap_before_refill():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    max_cap = 15.0
+    store.save_settings(HourlyBotSettings(
+      enabled=True,
+      max_spend_per_hour_usd=max_cap,
+      mode="live",
+      live_auto_refill_hour_budget=True,
+      use_accumulated_profit=False,
+    ))
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "mode": "live",
+      "status": "filled",
+      "cost_usd": 15.0,
+    })
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "mode": "live",
+      "status": "filled",
+      "pnl_usd": 5.0,
+    })
+    # Without win extension: remaining would be 0 (entered $15 at $15 cap).
+    assert store.remaining_budget_usd("EV1", max_cap) == 5.0
+
+
 def test_live_hour_budget_refill_when_interval_cap_hit():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
@@ -32,7 +61,7 @@ def test_live_hour_budget_refill_when_interval_cap_hit():
       "action": "exit",
       "mode": "live",
       "status": "filled",
-      "pnl_usd": 0.5,
+      "pnl_usd": 0.0,
     })
     assert store.remaining_budget_usd("EV1", max_cap) == 0.0
 

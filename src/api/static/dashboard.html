@@ -2905,7 +2905,7 @@
 
     function botAutoRefillTooltip(mode) {
       if (mode === 'live') {
-        return 'When ON and this hour\'s entry budget is fully used with no open legs, add another max at-risk $ chunk for the same hour.';
+        return 'When ON, this hour\'s max at-risk grows with realized wins (e.g. +$5 P&L on a $15 cap → $20 deployable). Also adds another cap chunk if budget is still exhausted with no open legs.';
       }
       return 'When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.';
     }
