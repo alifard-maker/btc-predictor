@@ -622,9 +622,19 @@
     <div id="panel-spx-hourly" style="display:none">
       <div class="card" id="spx-hourly-bot-card">
         <h2>SPX hourly auto-bet (KXINXU)</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live S&amp;P 500 hourly threshold ladder. US RTH only (9:30–16:00 ET). Price via ^GSPC.</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live S&amp;P 500 hourly — same entry/exit mechanics as <strong>ETH Hourly Live</strong> (standard trial align). US RTH only (9:30–16:00 ET). Price via ^GSPC.</p>
         <div id="spx-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="spx-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
+        <h2>SPX Hourly Trial (paper)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper benchmark for SPX live — same entries as live, <strong>15m-style leg exits</strong> (+3¢ / −4¢). Enable Auto-bet for A/B comparison below.</p>
+        <div id="spx-hourly-trial-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <details class="card" id="spx-hourly-live-trial-compare-card" open>
+        <summary style="cursor:pointer;font-weight:600">SPX live vs paper trial · hour-by-hour</summary>
+        <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Same Kalshi hour (<code>event_ticker</code>) — live SPX hourly vs paper standard trial.</p>
+        <div id="spx-hourly-live-trial-compare"><p class="muted">Loading…</p></div>
+      </details>
       <div class="card" id="spx-hourly-guide-card">
         <h2>How to read this tab</h2>
         <div id="spx-hourly-guide"><p class="muted">Loading…</p></div>
@@ -663,9 +673,19 @@
     <div id="panel-ndx-hourly" style="display:none">
       <div class="card" id="ndx-hourly-bot-card">
         <h2>NDX hourly auto-bet (KXNASDAQ100U)</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live Nasdaq-100 hourly threshold ladder. US RTH only (9:30–16:00 ET). Price via ^NDX.</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live Nasdaq-100 hourly — same entry/exit mechanics as <strong>ETH Hourly Live</strong> (standard trial align). US RTH only (9:30–16:00 ET). Price via ^NDX.</p>
         <div id="ndx-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="ndx-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
+        <h2>NDX Hourly Trial (paper)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper benchmark for NDX live — same entries as live, <strong>15m-style leg exits</strong> (+3¢ / −4¢). Enable Auto-bet for A/B comparison below.</p>
+        <div id="ndx-hourly-trial-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <details class="card" id="ndx-hourly-live-trial-compare-card" open>
+        <summary style="cursor:pointer;font-weight:600">NDX live vs paper trial · hour-by-hour</summary>
+        <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Same Kalshi hour (<code>event_ticker</code>) — live NDX hourly vs paper standard trial.</p>
+        <div id="ndx-hourly-live-trial-compare"><p class="muted">Loading…</p></div>
+      </details>
       <div class="card" id="ndx-hourly-guide-card">
         <h2>How to read this tab</h2>
         <div id="ndx-hourly-guide"><p class="muted">Loading…</p></div>
@@ -2580,6 +2600,10 @@
     const ETH_HOURLY_TRIAL_API = {
       hourly_trial: '/api/eth/hourly-trial/bot',
     };
+    const INDEX_HOURLY_TRIAL_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot' },
+    };
     const HOURLY_TRIAL_SETTINGS_API = {
       hourly_trial: '/api/hourly-trial/bot/settings',
       hourly_trial_rally: '/api/hourly-trial-rally/bot/settings',
@@ -2588,6 +2612,10 @@
     };
     const ETH_HOURLY_TRIAL_SETTINGS_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/settings',
+    };
+    const INDEX_HOURLY_TRIAL_SETTINGS_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot/settings' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot/settings' },
     };
     const HOURLY_TRIAL_RESET_API = {
       hourly_trial: '/api/hourly-trial/bot/reset-bankroll',
@@ -2598,6 +2626,10 @@
     const ETH_HOURLY_TRIAL_RESET_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/reset-bankroll',
     };
+    const INDEX_HOURLY_TRIAL_RESET_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot/reset-bankroll' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot/reset-bankroll' },
+    };
     const HOURLY_TRIAL_FRESH_API = {
       hourly_trial: '/api/hourly-trial/bot/fresh-start',
       hourly_trial_rally: '/api/hourly-trial-rally/bot/fresh-start',
@@ -2606,6 +2638,10 @@
     };
     const ETH_HOURLY_TRIAL_FRESH_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/fresh-start',
+    };
+    const INDEX_HOURLY_TRIAL_FRESH_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot/fresh-start' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot/fresh-start' },
     };
     const HOURLY_TRIAL_CLEAR_API = {
       hourly_trial: '/api/hourly-trial/bot/clear-history',
@@ -2616,29 +2652,47 @@
     const ETH_HOURLY_TRIAL_CLEAR_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/clear-history',
     };
+    const INDEX_HOURLY_TRIAL_CLEAR_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot/clear-history' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot/clear-history' },
+    };
+
+    function indexHourlyTrialApiMap(asset) {
+      return INDEX_HOURLY_TRIAL_API[asset] || null;
+    }
 
     function hourlyTrialBotStatusUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_API[kind] || ETH_HOURLY_TRIAL_API.hourly_trial;
+      const idx = indexHourlyTrialApiMap(asset);
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_API[kind] || HOURLY_TRIAL_API.hourly_trial;
     }
 
     function hourlyTrialBotSettingsUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_SETTINGS_API[kind] || ETH_HOURLY_TRIAL_SETTINGS_API.hourly_trial;
+      const idx = INDEX_HOURLY_TRIAL_SETTINGS_API[asset];
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_SETTINGS_API[kind] || HOURLY_TRIAL_SETTINGS_API.hourly_trial;
     }
 
     function hourlyTrialBotResetBankrollUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_RESET_API[kind] || ETH_HOURLY_TRIAL_RESET_API.hourly_trial;
+      const idx = INDEX_HOURLY_TRIAL_RESET_API[asset];
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_RESET_API[kind] || HOURLY_TRIAL_RESET_API.hourly_trial;
     }
 
     function hourlyTrialBotFreshStartUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_FRESH_API[kind] || ETH_HOURLY_TRIAL_FRESH_API.hourly_trial;
+      const idx = INDEX_HOURLY_TRIAL_FRESH_API[asset];
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_FRESH_API[kind] || HOURLY_TRIAL_FRESH_API.hourly_trial;
     }
 
     function hourlyTrialBotClearHistoryUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_CLEAR_API[kind] || ETH_HOURLY_TRIAL_CLEAR_API.hourly_trial;
+      const idx = INDEX_HOURLY_TRIAL_CLEAR_API[asset];
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_CLEAR_API[kind] || HOURLY_TRIAL_CLEAR_API.hourly_trial;
     }
 
@@ -2783,7 +2837,12 @@
 
     function shouldRenderHourlyBot(asset, kind = 'hourly') {
       if (isHourlyV2Kind(kind)) return activeTab === 'hourly-v2';
-      if (isHourlyTrialKind(kind)) return activeTab === 'trials';
+      if (isHourlyTrialKind(kind)) {
+        if (activeTab === 'trials') return true;
+        if (asset === 'spx' && activeTab === 'spx-hourly') return true;
+        if (asset === 'ndx' && activeTab === 'ndx-hourly') return true;
+        return false;
+      }
       return activeTab === hourlyTabForAsset(asset);
     }
 
@@ -3342,6 +3401,8 @@
         'hourly_trial_soft:btc': '/api/hourly-trial-soft/bot/override-daily-cap',
         'hourly_trial_mech:btc': '/api/hourly-trial-mech/bot/override-daily-cap',
         'hourly_trial:eth': '/api/eth/hourly-trial/bot/override-daily-cap',
+        'hourly_trial:spx': '/api/spx/hourly-trial/bot/override-daily-cap',
+        'hourly_trial:ndx': '/api/ndx/hourly-trial/bot/override-daily-cap',
         'slot15:btc': '/api/slot15/bot/override-daily-cap',
         'slot15:eth': '/api/eth/15m/bot/override-daily-cap',
       };
@@ -3951,8 +4012,8 @@
       return html;
     }
 
-    function renderHourlyLiveTrialCompare(data) {
-      const el = $('hourly-live-trial-compare');
+    function renderHourlyLiveTrialCompare(data, targetId = 'hourly-live-trial-compare') {
+      const el = $(targetId);
       if (!el) return;
       if (!data || !data.ok) {
         el.innerHTML = `<p class="muted">Comparison unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
@@ -4003,6 +4064,28 @@
       } catch (e) {
         renderHourlyLiveTrialCompare({ ok: false, error: e.message });
       }
+    }
+
+    async function loadIndexHourlyLiveTrialCompare(asset) {
+      const targetId = `${asset}-hourly-live-trial-compare`;
+      try {
+        const data = await get(`/api/bots/hourly-live-trial-compare?asset=${encodeURIComponent(asset)}&limit_hours=24`);
+        renderHourlyLiveTrialCompare(data, targetId);
+      } catch (e) {
+        renderHourlyLiveTrialCompare({ ok: false, error: e.message }, targetId);
+      }
+    }
+
+    function refreshIndexTrialBot(asset, tabAtStart, gen) {
+      getWithTimeout(hourlyTrialBotStatusUrl(asset, 'hourly_trial'), 15000).then((trialBot) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        if (trialBot) trialBot = mergeHourlyTrialBotStatus(asset, trialBot, 'hourly_trial');
+        if (trialBot) renderHourlyBot(trialBot, asset, 'hourly_trial');
+      }).catch(() => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        const cached = getTrialBotCache('hourly_trial', asset);
+        if (cached) renderHourlyBot(cached, asset, 'hourly_trial');
+      });
     }
 
     function renderOpenPositionsPanel(openPos, opts) {
@@ -4866,6 +4949,11 @@
       const cached = lastBotStatus[asset];
       if (cached) renderHourlyBot(cached, asset);
       else renderHourlyBot({ ok: false, error: 'Loading bot status…' }, asset);
+      if (asset === 'spx' || asset === 'ndx') {
+        const trialCached = getTrialBotCache('hourly_trial', asset);
+        if (trialCached) renderHourlyBot(trialCached, asset, 'hourly_trial');
+        else renderHourlyBot({ ok: false, error: 'Loading trial bot…' }, asset, 'hourly_trial');
+      }
       get(api.calibration).catch(() => ({ summary: {} })).then((cal) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderHourlyCalibration(cal);
@@ -4879,6 +4967,10 @@
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderDaily(d);
         refreshHourlyBotDirect(asset, tabAtStart, gen, null);
+        if (asset === 'spx' || asset === 'ndx') {
+          refreshIndexTrialBot(asset, tabAtStart, gen);
+          loadIndexHourlyLiveTrialCompare(asset);
+        }
       } catch (e) {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderDaily({ ok: false, error: e.message, bot: cached || undefined });

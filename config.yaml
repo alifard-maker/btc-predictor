@@ -979,28 +979,8 @@ spx:
       min_edge_for_highlight: 0.08
       min_edge_override_regime: 0.10
     bot:
-      mirror_btc_settings: true
-      enabled: true
-      mode: live
-      max_spend_per_hour_usd: 15
-      continuous_enabled: true
-      poll_seconds: 12
-      experiment_start_at: "2026-07-03T14:30:00+00:00"
-      entry_strategy:
-        enabled: true
-        max_entries_per_cycle: 3
-        max_concurrent_positions: 8
-        max_stake_per_entry_usd: 3.00
-      live_inventory:
-        enabled: true
-        max_concurrent_positions: 4
-        max_entries_per_cycle: 3
-      live_adaptive:
-        enabled: true
-      quick_exit:
-        enabled: true
-      soft_rally:
-        enabled: true
+      # Live + paper trial execution merged from eth_aligned_index_hourly_bot.yaml (ETH hourly live parity)
+      experiment_start_at: "2026-07-04T14:00:00+00:00"
     sigma_calibration: true
   live_settlement_index:
     enabled: true
@@ -1066,28 +1046,8 @@ ndx:
       min_edge_for_highlight: 0.08
       min_edge_override_regime: 0.10
     bot:
-      mirror_btc_settings: true
-      enabled: true
-      mode: live
-      max_spend_per_hour_usd: 15
-      continuous_enabled: true
-      poll_seconds: 12
-      experiment_start_at: "2026-07-03T14:30:00+00:00"
-      entry_strategy:
-        enabled: true
-        max_entries_per_cycle: 3
-        max_concurrent_positions: 8
-        max_stake_per_entry_usd: 3.00
-      live_inventory:
-        enabled: true
-        max_concurrent_positions: 4
-        max_entries_per_cycle: 3
-      live_adaptive:
-        enabled: true
-      quick_exit:
-        enabled: true
-      soft_rally:
-        enabled: true
+      # Live + paper trial execution merged from eth_aligned_index_hourly_bot.yaml (ETH hourly live parity)
+      experiment_start_at: "2026-07-04T14:00:00+00:00"
     sigma_calibration: true
   live_settlement_index:
     enabled: true

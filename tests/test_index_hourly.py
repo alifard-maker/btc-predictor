@@ -164,5 +164,7 @@ def test_schedule_index_hourly_continuous_jobs(base_cfg):
   job_ids = {job.id for job in scheduler.get_jobs()}
   assert "spx_hourly_bot_continuous" in job_ids
   assert "ndx_hourly_bot_continuous" in job_ids
+  assert "spx_hourly_trial_bot_continuous" in job_ids
+  assert "ndx_hourly_trial_bot_continuous" in job_ids
   assert "spx_hourly_predict" in job_ids
   assert "ndx_hourly_predict" in job_ids

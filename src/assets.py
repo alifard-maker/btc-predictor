@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import copy
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 SUPPORTED_ASSETS = ("btc", "eth", "spx", "ndx")
 DEFAULT_ASSET = "btc"
@@ -13,6 +16,18 @@ INDEX_ASSETS = ("spx", "ndx")
 
 def is_index_asset(asset: str) -> bool:
   return str(asset).lower() in INDEX_ASSETS
+
+
+@lru_cache(maxsize=1)
+def _eth_aligned_index_hourly_bot_overlay() -> dict[str, Any]:
+  """ETH hourly live execution profile for SPX/NDX (see eth_aligned_index_hourly_bot.yaml)."""
+  path = Path(__file__).resolve().parents[1] / "eth_aligned_index_hourly_bot.yaml"
+  if not path.is_file():
+    return {}
+  raw = yaml.safe_load(path.read_text()) or {}
+  if not isinstance(raw, dict):
+    return {}
+  return raw
 
 
 def _deep_merge_dict(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -73,6 +88,10 @@ def asset_cfg(base_cfg: dict[str, Any], asset: str) -> dict[str, Any]:
       base_hourly.get("bot") or {},
       block_hourly.get("bot") or {},
     )
+  if is_index_asset(asset):
+    aligned = _eth_aligned_index_hourly_bot_overlay()
+    if aligned:
+      merged_hourly["bot"] = _deep_merge_dict(merged_hourly.get("bot") or {}, aligned)
   cfg["hourly"] = merged_hourly
   cfg["paths"]["db"] = str(Path(cfg["paths"]["logs"]) / "predictions.db")
   cfg["_asset"] = asset

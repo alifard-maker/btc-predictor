@@ -368,6 +368,7 @@ class PredictionLoop:
     for asset in ("spx", "ndx"):
       if asset_enabled(self.cfg, asset):
         stores.append(self.hourly_bot_store(asset))
+        stores.append(self.hourly_trial_bot_store(asset))
     if asset_v2_enabled(self.cfg, "btc"):
       stores.append(self.hourly_bot_store("btc", kind="hourly_v2"))
     if asset_v2_enabled(self.cfg, "eth"):

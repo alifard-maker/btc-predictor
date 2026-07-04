@@ -1067,7 +1067,7 @@ def bots_risk_status(_: None = Depends(_session_user)):
 
 @app.get("/api/bots/hourly-live-trial-compare")
 def bots_hourly_live_trial_compare(
-  asset: str = Query(default="btc", pattern="^(btc|eth)$"),
+  asset: str = Query(default="btc", pattern="^(btc|eth|spx|ndx)$"),
   limit_hours: int = Query(default=24, ge=1, le=72),
   _: None = Depends(_session_user),
 ):
@@ -1083,9 +1083,8 @@ def bots_hourly_live_trial_compare(
     trial_store = _loop.hourly_bot_store(asset, kind=trial_kind)
   else:
     trial_kind = "hourly_trial"
-    trial_store = _loop.hourly_bot_store(asset, kind=trial_kind)
-  acfg = asset
-  cfg = asset_cfg(_cfg, acfg)
+    trial_store = _loop.hourly_trial_bot_store(asset)
+  cfg = asset_cfg(_cfg, asset)
   align = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
   return build_hourly_live_trial_compare(
     live_store,

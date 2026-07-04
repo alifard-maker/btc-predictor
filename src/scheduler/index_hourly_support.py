@@ -162,6 +162,18 @@ def run_index_hourly_late_call(loop: Any, asset: str, *, force: bool = False):
   return loop._run_hourly_late_call_for_asset(asset, force=force)
 
 
+def run_index_hourly_trial_bot_continuous(loop: Any, asset: str) -> None:
+  asset = asset.lower()
+  if not asset_enabled(loop.cfg, asset):
+    return
+  acfg = acfg_for(loop, asset)
+  if not index_trading_allowed(acfg):
+    store = loop.hourly_trial_bot_store(asset)
+    store.set_last_skip_reason("outside_market_hours")
+    return
+  loop._run_hourly_bot_continuous(asset, kind="hourly_trial")
+
+
 def schedule_index_hourly_jobs(loop: Any, scheduler) -> None:
   for asset in INDEX_ASSETS:
     if not asset_enabled(loop.cfg, asset):
@@ -201,5 +213,15 @@ def schedule_index_hourly_jobs(loop: Any, scheduler) -> None:
         "interval",
         seconds=poll_sec,
         id=f"{prefix}_hourly_bot_continuous",
+        max_instances=1,
+      )
+    trial_cfg = bot_cfg.get("trial") or {}
+    if trial_cfg.get("continuous_enabled", False):
+      poll_sec = int(trial_cfg.get("poll_seconds", bot_cfg.get("poll_seconds", 10)))
+      scheduler.add_job(
+        lambda a=asset: run_index_hourly_trial_bot_continuous(loop, a),
+        "interval",
+        seconds=poll_sec,
+        id=f"{prefix}_hourly_trial_bot_continuous",
         max_instances=1,
       )

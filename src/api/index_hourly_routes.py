@@ -108,3 +108,83 @@ def register_index_hourly_routes(app, loop_getter, cfg_getter, session_dep, appl
     app.get(f"{prefix}/bot/trades")(_trades)
     app.post(f"{prefix}/bot/fresh-start")(_fresh_start)
     app.post(f"{prefix}/bot/clear-history")(_clear_history)
+
+    trial_prefix = f"/api/{asset}/hourly-trial"
+
+    def _trial_bot_status(_user=Depends(session_dep), *, _asset=asset):
+      loop = _loop()
+      tab = loop.index_hourly_prediction(_asset, include_bot=False)
+      return loop.hourly_trial_bot_status(
+        _asset,
+        tab if tab and tab.get("ok") else None,
+      )
+
+    async def _trial_settings(request: Request, _user=Depends(session_dep), *, _asset=asset):
+      loop = _loop()
+      body = await request.json()
+      store = loop.hourly_trial_bot_store(_asset)
+      acfg = loop._index_cfgs.get(_asset) or asset_cfg(_cfg(), _asset)
+      apply_settings_fn(store, body, cfg=acfg)
+      tab = loop.index_hourly_prediction(_asset, include_bot=False)
+      return loop.hourly_trial_bot_status(_asset, tab if tab and tab.get("ok") else None)
+
+    def _trial_reset_bankroll(_user=Depends(session_dep), *, _asset=asset):
+      loop = _loop()
+      store = loop.hourly_trial_bot_store(_asset)
+      settings = store.get_settings()
+      if settings.mode != "paper":
+        raise HTTPException(400, "Reset bankroll is only available in paper mode")
+      store.reset_paper_bankroll(settings.max_spend_per_hour_usd)
+      tab = loop.index_hourly_prediction(_asset, include_bot=False)
+      return loop.hourly_trial_bot_status(_asset, tab if tab and tab.get("ok") else None)
+
+    def _trial_fresh_start(_user=Depends(session_dep), *, _asset=asset):
+      from src.api.main import _hourly_bot_fresh_start
+
+      loop = _loop()
+      return _hourly_bot_fresh_start(
+        loop.hourly_trial_bot_store(_asset),
+        lambda: loop.index_hourly_prediction(_asset),
+        _asset,
+        kind="hourly_trial",
+      )
+
+    def _trial_clear_history(_user=Depends(session_dep), *, _asset=asset):
+      from src.api.main import _hourly_bot_clear_history
+
+      loop = _loop()
+      return _hourly_bot_clear_history(
+        loop.hourly_trial_bot_store(_asset),
+        lambda: loop.index_hourly_prediction(_asset),
+        _asset,
+        kind="hourly_trial",
+      )
+
+    def _trial_override_daily_cap(_user=Depends(session_dep), *, _asset=asset):
+      from src.api.main import _override_daily_cap_hourly
+
+      loop = _loop()
+      return _override_daily_cap_hourly(_asset, kind="hourly_trial")
+
+    def _trial_trades(
+      limit: int = Query(default=100, le=200),
+      event_ticker: str | None = Query(default=None),
+      _user=Depends(session_dep),
+      *,
+      _asset=asset,
+    ):
+      loop = _loop()
+      store = loop.hourly_trial_bot_store(_asset)
+      trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+      out: dict[str, Any] = {"trades": trades}
+      if event_ticker:
+        out["hour_summary"] = store.hour_interval_summary(event_ticker)
+      return out
+
+    app.get(f"{trial_prefix}/bot")(_trial_bot_status)
+    app.post(f"{trial_prefix}/bot/settings")(_trial_settings)
+    app.post(f"{trial_prefix}/bot/reset-bankroll")(_trial_reset_bankroll)
+    app.post(f"{trial_prefix}/bot/fresh-start")(_trial_fresh_start)
+    app.post(f"{trial_prefix}/bot/clear-history")(_trial_clear_history)
+    app.post(f"{trial_prefix}/bot/override-daily-cap")(_trial_override_daily_cap)
+    app.get(f"{trial_prefix}/bot/trades")(_trial_trades)
