@@ -326,10 +326,14 @@ class HourlyBotStore:
     return settings
 
   def open_positions(self, event_ticker: str) -> list[dict[str, Any]]:
+    from src.trading.hourly_event_time import hourly_event_ticker_sql_variants
+
+    variants = hourly_event_ticker_sql_variants(event_ticker)
+    placeholders = ",".join("?" * len(variants))
     with self._connect() as conn:
       rows = conn.execute(
-        "SELECT * FROM bot_positions WHERE event_ticker = ? AND status = 'open' ORDER BY opened_at",
-        (event_ticker,),
+        f"SELECT * FROM bot_positions WHERE event_ticker IN ({placeholders}) AND status = 'open' ORDER BY opened_at",
+        variants,
       ).fetchall()
     return [dict(r) for r in rows]
 
@@ -655,19 +659,25 @@ class HourlyBotStore:
       )
 
   def has_open_position(self, event_ticker: str, market_ticker: str) -> bool:
+    from src.trading.hourly_event_time import hourly_event_ticker_sql_variants
+
+    variants = hourly_event_ticker_sql_variants(event_ticker)
+    placeholders = ",".join("?" * len(variants))
     with self._connect() as conn:
       row = conn.execute(
-        "SELECT 1 FROM bot_positions WHERE event_ticker = ? AND market_ticker = ? AND status = 'open'",
-        (event_ticker, market_ticker),
+        f"SELECT 1 FROM bot_positions WHERE event_ticker IN ({placeholders}) AND market_ticker = ? AND status = 'open'",
+        (*variants, market_ticker),
       ).fetchone()
     return row is not None
 
   def open_position(self, pos: dict[str, Any]) -> dict[str, Any]:
+    from src.trading.hourly_event_time import canonical_hourly_event_ticker
+
     pid = pos.get("id") or str(uuid.uuid4())
     now = pos.get("opened_at") or datetime.now(timezone.utc).isoformat()
     row = {
       "id": pid,
-      "event_ticker": pos["event_ticker"],
+      "event_ticker": canonical_hourly_event_ticker(str(pos["event_ticker"])),
       "market_ticker": pos["market_ticker"],
       "side": pos["side"],
       "contracts": int(pos["contracts"]),
@@ -808,18 +818,22 @@ class HourlyBotStore:
     )
 
   def _realized_pnl_usd(self, event_ticker: str, mode: str | None = None) -> float:
+    from src.trading.hourly_event_time import hourly_event_ticker_sql_variants
+
     clause, params = "", []
     if mode:
       clause = " AND mode = ?"
       params = [mode]
+    variants = hourly_event_ticker_sql_variants(event_ticker)
+    placeholders = ",".join("?" * len(variants))
     with self._connect() as conn:
       exits = conn.execute(
         f"""
         SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
         FROM bot_trades
-        WHERE event_ticker = ? AND action = 'exit' AND status IN ('filled', 'reconciled'){clause}
+        WHERE event_ticker IN ({placeholders}) AND action = 'exit' AND status IN ('filled', 'reconciled'){clause}
         """,
-        [event_ticker, *params],
+        [*variants, *params],
       ).fetchall()
     total = 0.0
     for r in exits:
@@ -837,18 +851,22 @@ class HourlyBotStore:
     mode: str | None = None,
   ) -> dict[str, int]:
     """Win/loss counts for realized exits in the current hour."""
+    from src.trading.hourly_event_time import hourly_event_ticker_sql_variants
+
     clause, params = "", []
     if mode:
       clause = " AND mode = ?"
       params = [mode]
+    variants = hourly_event_ticker_sql_variants(event_ticker)
+    placeholders = ",".join("?" * len(variants))
     with self._connect() as conn:
       rows = conn.execute(
         f"""
         SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
         FROM bot_trades
-        WHERE event_ticker = ? AND action = 'exit' AND status IN ('filled', 'reconciled'){clause}
+        WHERE event_ticker IN ({placeholders}) AND action = 'exit' AND status IN ('filled', 'reconciled'){clause}
         """,
-        [event_ticker, *params],
+        [*variants, *params],
       ).fetchall()
     wins = losses = 0
     for r in rows:
@@ -950,6 +968,8 @@ class HourlyBotStore:
       return mode_performance_summary(conn, mode)
 
   def log_trade(self, trade: dict[str, Any]) -> dict[str, Any]:
+    from src.trading.hourly_event_time import canonical_hourly_event_ticker
+
     tid = trade.get("id") or str(uuid.uuid4())
     now = trade.get("created_at") or datetime.now(timezone.utc).isoformat()
     action = trade.get("action", "enter")
@@ -965,7 +985,7 @@ class HourlyBotStore:
         price_cents = exit_cents
     row = {
       "id": tid,
-      "event_ticker": trade["event_ticker"],
+      "event_ticker": canonical_hourly_event_ticker(str(trade["event_ticker"])),
       "trigger": trade.get("trigger", "continuous"),
       "action": action,
       "mode": trade.get("mode", "paper"),
@@ -1187,11 +1207,15 @@ class HourlyBotStore:
       return is_in_leg_stop_event_cooldown(conn, event_ticker)
 
   def list_trades(self, *, limit: int = 30, event_ticker: str | None = None) -> list[dict[str, Any]]:
+    from src.trading.hourly_event_time import hourly_event_ticker_sql_variants
+
     with self._connect() as conn:
       if event_ticker:
+        variants = hourly_event_ticker_sql_variants(event_ticker)
+        placeholders = ",".join("?" * len(variants))
         rows = conn.execute(
-          "SELECT * FROM bot_trades WHERE event_ticker = ? ORDER BY created_at DESC LIMIT ?",
-          (event_ticker, limit),
+          f"SELECT * FROM bot_trades WHERE event_ticker IN ({placeholders}) ORDER BY created_at DESC LIMIT ?",
+          (*variants, limit),
         ).fetchall()
       else:
         rows = conn.execute(

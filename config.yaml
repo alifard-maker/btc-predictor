@@ -351,12 +351,12 @@ hourly:
       rally_max_same_side_range_legs: 0
       rally_max_entries_per_cycle: 2
       rally_min_ask_edge_cents: 8.0
-      rally_block_range_bands: true
+      rally_block_range_bands: false
       defense_max_same_side_threshold_legs: 1
       defense_max_same_side_range_legs: 0
       defense_max_entries_per_cycle: 1
       defense_min_ask_edge_cents: 12.0
-      defense_block_range_bands: true
+      defense_block_range_bands: false
       defense_skip_all_entries: false
       defense_threshold_only: false
     hold_overlays:
@@ -442,7 +442,7 @@ hourly:
       enabled: false
       defense_skip_all_entries: true
       profit_lock_usd: 1.25
-      rally_block_range_bands: true
+      rally_block_range_bands: false
       defense_block_range_bands: true
     soft_rally:
       enabled: true
@@ -452,7 +452,7 @@ hourly:
       defense_yes_mid_min_cents: 40
       defense_yes_mid_max_cents: 80
       profit_lock_usd: 1.25
-      rally_block_range_bands: true
+      rally_block_range_bands: false
       defense_block_range_bands: true
     trial:
       continuous_enabled: true
@@ -534,8 +534,8 @@ hourly_v2:
     live_adaptive:
       enabled: true
       profit_lock_usd: 1.25
-      defense_block_range_bands: true
-      rally_block_range_bands: true
+      defense_block_range_bands: false
+      rally_block_range_bands: false
 
 # Flip-to-opposite
 flip:
@@ -792,12 +792,12 @@ eth:
         rally_max_same_side_range_legs: 0
         rally_max_entries_per_cycle: 2
         rally_min_ask_edge_cents: 8.0
-        rally_block_range_bands: true
+        rally_block_range_bands: false
         defense_max_same_side_threshold_legs: 1
         defense_max_same_side_range_legs: 0
         defense_max_entries_per_cycle: 1
         defense_min_ask_edge_cents: 12.0
-        defense_block_range_bands: true
+        defense_block_range_bands: false
         defense_skip_all_entries: false
         defense_threshold_only: false
       hold_overlays:
@@ -819,7 +819,7 @@ eth:
         enabled: false
         defense_skip_all_entries: true
         profit_lock_usd: 1.25
-        rally_block_range_bands: true
+        rally_block_range_bands: false
         defense_block_range_bands: true
       soft_rally:
         enabled: true
@@ -829,7 +829,7 @@ eth:
         defense_yes_mid_min_cents: 40
         defense_yes_mid_max_cents: 80
         profit_lock_usd: 1.25
-        rally_block_range_bands: true
+        rally_block_range_bands: false
         defense_block_range_bands: true
       whipsaw_guard:
         enabled: true

@@ -6,11 +6,25 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from src.trading.hourly_event_time import (
+  canonical_hourly_event_ticker,
   hourly_event_has_settled,
   hourly_event_settle_utc,
+  hourly_event_ticker_sql_variants,
   should_rollover_close_hourly_leg,
   ticker_belongs_to_hourly_event,
 )
+
+
+def test_canonical_hourly_event_ticker_range_sibling():
+  assert canonical_hourly_event_ticker("KXETH-26JUL0405") == "KXETHD-26JUL0405"
+  assert canonical_hourly_event_ticker("KXETHD-26JUL0405") == "KXETHD-26JUL0405"
+  assert canonical_hourly_event_ticker("KXBTC-26JUN3005") == "KXBTCD-26JUN3005"
+
+
+def test_hourly_event_ticker_sql_variants_includes_siblings():
+  variants = hourly_event_ticker_sql_variants("KXETHD-26JUL0405")
+  assert "KXETHD-26JUL0405" in variants
+  assert "KXETH-26JUL0405" in variants
 
 
 def test_ticker_belongs_to_hourly_event_siblings():

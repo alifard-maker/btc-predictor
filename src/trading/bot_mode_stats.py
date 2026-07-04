@@ -21,7 +21,11 @@ def interval_summary_row(
   *,
   mode: str | None = None,
 ) -> dict[str, Any]:
+  from src.trading.hourly_event_time import hourly_event_ticker_sql_variants
+
   clause, params = _mode_clause(mode)
+  variants = hourly_event_ticker_sql_variants(event_ticker)
+  placeholders = ",".join("?" * len(variants))
   row = conn.execute(
     f"""
     SELECT
@@ -32,17 +36,17 @@ def interval_summary_row(
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'resting' THEN 1 ELSE 0 END), 0) AS resting_enter_attempt_count,
       COALESCE(SUM(CASE WHEN action = 'exit' AND status = 'resting' THEN 1 ELSE 0 END), 0) AS resting_exit_count
     FROM bot_trades
-    WHERE event_ticker = ?{clause}
+    WHERE event_ticker IN ({placeholders}){clause}
     """,
-    [event_ticker, *params],
+    [*variants, *params],
   ).fetchone()
   resting_row = conn.execute(
     f"""
     SELECT COUNT(DISTINCT market_ticker) AS resting_enter_count
     FROM bot_trades
-    WHERE event_ticker = ? AND action = 'enter' AND status = 'resting'{clause}
+    WHERE event_ticker IN ({placeholders}) AND action = 'enter' AND status = 'resting'{clause}
     """,
-    [event_ticker, *params],
+    [*variants, *params],
   ).fetchone()
   if not row:
     return {

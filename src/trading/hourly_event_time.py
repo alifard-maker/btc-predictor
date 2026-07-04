@@ -66,13 +66,45 @@ def _sibling_prefixes(event_ticker: str) -> tuple[str, ...]:
   e = str(event_ticker)
   if e.startswith("KXBTCD-"):
     return ("KXBTC-",)
+  if e.startswith("KXBTC-"):
+    return ("KXBTCD-",)
   if e.startswith("KXETHD-"):
     return ("KXETH-",)
+  if e.startswith("KXETH-"):
+    return ("KXETHD-",)
   if e.startswith("KXINXU-"):
     return ("KXINX-",)
   if e.startswith("KXNASDAQ100U-"):
     return ("KXNASDAQ100-",)
   return ()
+
+
+def canonical_hourly_event_ticker(event_ticker: str) -> str:
+  """Normalize range sibling events to threshold parent (KXETH- → KXETHD-)."""
+  e = str(event_ticker)
+  suffix = hourly_event_time_suffix(e)
+  if not suffix:
+    return e
+  if e.startswith("KXETH-"):
+    return f"KXETHD-{suffix}"
+  if e.startswith("KXBTC-"):
+    return f"KXBTCD-{suffix}"
+  return e
+
+
+def hourly_event_ticker_sql_variants(event_ticker: str) -> tuple[str, ...]:
+  """All event_ticker keys for one hourly window (threshold + range siblings)."""
+  canonical = canonical_hourly_event_ticker(event_ticker)
+  suffix = hourly_event_time_suffix(canonical)
+  if not suffix:
+    return (canonical,)
+  out: set[str] = {canonical, str(event_ticker)}
+  for prefix in _sibling_prefixes(canonical):
+    out.add(f"{prefix}{suffix}")
+  for prefix in _sibling_prefixes(str(event_ticker)):
+    out.add(f"{prefix}{suffix}")
+  out.add(canonical)
+  return tuple(sorted(out))
 
 
 def ticker_belongs_to_hourly_event(ticker: str, event_ticker: str) -> bool:

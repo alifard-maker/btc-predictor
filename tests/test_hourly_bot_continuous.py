@@ -253,6 +253,7 @@ def test_hour_interval_summary_counts_resting_orders():
       "action": "enter",
       "status": "resting",
       "mode": "live",
+      "market_ticker": "M1",
     })
     store.log_trade({
       "event_ticker": "EV1",
