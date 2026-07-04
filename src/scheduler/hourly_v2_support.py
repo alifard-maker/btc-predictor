@@ -71,6 +71,11 @@ def init_hourly_v2(loop: PredictionLoop) -> None:
 
 
 def _seed_v2_bot_settings(loop: PredictionLoop, asset: str) -> None:
+  """Apply config.yaml bot defaults only on a fresh hourly_v2 store (first boot).
+
+  Dashboard toggles are the source of truth once the store leaves factory defaults
+  or has any trade history — never re-apply config.enabled on deploy/restart.
+  """
   from src.trading.hourly_bot_store import HourlyBotSettings
 
   acfg = v2_cfg_for_asset(loop, asset)
@@ -79,6 +84,10 @@ def _seed_v2_bot_settings(loop: PredictionLoop, asset: str) -> None:
   bot_cfg = acfg.get("hourly_v2", {}).get("bot") or {}
   store = loop.hourly_bot_store(asset, kind="hourly_v2")
   cur = store.get_settings()
+  if store.list_trades(limit=1):
+    return
+  if cur.to_dict() != HourlyBotSettings().to_dict():
+    return
   store.save_settings(
     HourlyBotSettings(
       **{

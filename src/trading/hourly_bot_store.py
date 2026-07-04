@@ -540,8 +540,13 @@ class HourlyBotStore:
       interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
     )
 
-  def _interval_total_entered_usd(self, event_ticker: str) -> float:
-    return self.hour_interval_summary(event_ticker)["total_entered_usd"]
+  def _interval_total_entered_usd(
+    self,
+    event_ticker: str,
+    settings: HourlyBotSettings | None = None,
+  ) -> float:
+    settings = settings or self.get_settings()
+    return self.hour_interval_summary(event_ticker, mode=settings.mode)["total_entered_usd"]
 
   def remaining_budget_usd(
     self,
@@ -563,7 +568,7 @@ class HourlyBotStore:
       paper_bankroll_usd=paper,
       interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
       open_exposure_usd=self.open_exposure_usd(event_ticker, mode=settings.mode),
-      interval_total_entered_usd=self._interval_total_entered_usd(event_ticker),
+      interval_total_entered_usd=self._interval_total_entered_usd(event_ticker, settings),
       live_interval_extra_budget_usd=extra,
     )
 
@@ -844,6 +849,7 @@ class HourlyBotStore:
     )
 
   def _realized_pnl_usd(self, event_ticker: str, mode: str | None = None) -> float:
+    from src.trading.bot_exit_pnl import effective_exit_pnl_usd
     from src.trading.hourly_event_time import hourly_event_ticker_sql_variants
 
     clause, params = "", []
@@ -855,7 +861,8 @@ class HourlyBotStore:
     with self._connect() as conn:
       exits = conn.execute(
         f"""
-        SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
+        SELECT pnl_usd, entry_price_cents, exit_price_cents, price_cents,
+               contracts, side, action
         FROM bot_trades
         WHERE event_ticker IN ({placeholders}) AND action = 'exit' AND status IN ('filled', 'reconciled'){clause}
         """,
@@ -863,11 +870,7 @@ class HourlyBotStore:
       ).fetchall()
     total = 0.0
     for r in exits:
-      row = dict(r)
-      pnl = row.get("pnl_usd")
-      if pnl is None:
-        pnl = self._exit_pnl_from_prices(row)
-      total += float(pnl or 0)
+      total += effective_exit_pnl_usd(dict(r))
     return round(total, 2)
 
   def hour_closed_exit_stats(
@@ -895,12 +898,10 @@ class HourlyBotStore:
         [*variants, *params],
       ).fetchall()
     wins = losses = 0
+    from src.trading.bot_exit_pnl import effective_exit_pnl_usd
+
     for r in rows:
-      row = dict(r)
-      pnl = row.get("pnl_usd")
-      if pnl is None:
-        pnl = self._exit_pnl_from_prices(row)
-      pnl_f = float(pnl or 0)
+      pnl_f = effective_exit_pnl_usd(dict(r))
       if pnl_f > 0:
         wins += 1
       elif pnl_f < 0:

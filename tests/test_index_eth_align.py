@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from src.assets import INDEX_ASSETS, asset_cfg
+from src.backtest.mechanics_profiles import live_mechanics_profile_for_cfg
 from src.config import load_config
 
 
@@ -15,6 +16,13 @@ def base_cfg():
 
 def _eth_hourly_bot(base_cfg):
   return asset_cfg(base_cfg, "eth")["hourly"]["bot"]
+
+
+def test_eth_hourly_clears_btc_mechanical_profile(base_cfg):
+  """ETH must not inherit BTC live_mechanics_profile via asset_cfg merge."""
+  eth_cfg = asset_cfg(base_cfg, "eth")
+  assert live_mechanics_profile_for_cfg(eth_cfg) is None
+  assert eth_cfg["hourly"]["bot"].get("live_mechanics_profile") in ("", None)
 
 
 @pytest.mark.parametrize("asset", INDEX_ASSETS)

@@ -98,7 +98,7 @@ def test_mirror_stake_contract_count():
     kind="hourly",
     mode="live",
   )
-  assert count >= 4
+  assert 1 <= count <= 2  # mirror preview then cap_live_entry_contracts (stake + max_contracts)
 
 
 def test_mirror_scale_in_estrat():

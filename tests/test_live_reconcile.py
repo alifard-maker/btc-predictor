@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from src.trading.live_reconcile import build_live_reconcile_report
+from src.trading.live_reconcile import (
+  build_live_reconcile_report,
+  merge_kalshi_hourly_open_positions,
+)
 
 
 def test_reconcile_ok_when_bot_matches_kalshi():
@@ -111,7 +114,33 @@ def test_reconcile_filters_kalshi_positions_to_market_tickers():
   assert report["kalshi_legs"] == 1
 
 
-def test_reconcile_matches_kxbtc_range_under_kxbtcd_hourly_event():
+def test_merge_open_positions_includes_eth_kxethd_sibling_range():
+  from unittest.mock import patch
+
+  bot_positions = []
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.list_market_positions.return_value = [
+    {"ticker": "KXETH-26JUL0416-B1750", "position_fp": "-2.00", "market_exposure_dollars": "1.10"},
+    {"ticker": "KXETHD-26JUL0416-T1800", "position_fp": "1.00", "market_exposure_dollars": "0.86"},
+  ]
+
+  def _leg(_k, ticker, side):
+    return {"contracts": 2.0, "entry_price_cents": 55, "cost_usd": 1.10}
+
+  with patch("src.trading.live_position_sync.kalshi_position_leg", side_effect=_leg):
+    merged = merge_kalshi_hourly_open_positions(
+      bot_positions,
+      kalshi,
+      "KXETHD-26JUL0416",
+      asset="eth",
+    )
+
+  assert len(merged) == 2
+  assert {p["leg_strategy"] for p in merged} == {"s1_threshold", "s2_range"}
+
+
+def test_reconcile_matches_kxeth_range_under_kxethd_hourly_event():
   bot_positions = [
     {
       "id": "p1",
@@ -171,3 +200,48 @@ def test_reconcile_flags_orphan_resting_sell_when_bot_flat():
   )
   assert report["ok"] is False
   assert len(report["orphan_resting_sells"]) == 1
+
+
+def test_merge_open_positions_includes_kalshi_only_s2_range():
+  from unittest.mock import patch
+
+  bot_positions = [
+    {
+      "id": "p1",
+      "mode": "live",
+      "market_ticker": "KXBTCD-26JUL0416-T63200",
+      "side": "yes",
+      "contracts": 1,
+      "cost_usd": 0.86,
+      "label": "$63,200 or above",
+      "event_ticker": "KXBTCD-26JUL0416",
+    }
+  ]
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.list_market_positions.return_value = [
+    {"ticker": "KXBTCD-26JUL0416-T63200", "position_fp": "1.00"},
+    {"ticker": "KXBTC-26JUL0416-B63200", "position_fp": "-3.00", "market_exposure_dollars": "1.67"},
+    {"ticker": "KXBTC-26JUL0416-B63300", "position_fp": "3.00", "market_exposure_dollars": "1.19"},
+  ]
+
+  def _leg(_k, ticker, side):
+    return {
+      "contracts": 3.0,
+      "entry_price_cents": 55 if "B63200" in ticker else 40,
+      "cost_usd": 1.67 if "B63200" in ticker else 1.19,
+    }
+
+  with patch("src.trading.live_position_sync.kalshi_position_leg", side_effect=_leg):
+    merged = merge_kalshi_hourly_open_positions(
+      bot_positions,
+      kalshi,
+      "KXBTCD-26JUL0416",
+      asset="btc",
+    )
+
+  assert len(merged) == 3
+  s2 = [p for p in merged if p.get("leg_strategy") == "s2_range"]
+  assert len(s2) == 2
+  kalshi_only = [p for p in merged if p.get("kalshi_only")]
+  assert len(kalshi_only) == 2

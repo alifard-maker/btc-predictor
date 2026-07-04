@@ -1,0 +1,44 @@
+---
+description: When user says "live monitor" — full manager watch protocol
+alwaysApply: true
+---
+
+# Live monitor (user command)
+
+When the user says **"live monitor"**, run the full manager protocol — not a passive poll.
+
+## Scope (minimum 2h unless user specifies otherwise)
+
+- **BTC + ETH Hourly S1** (threshold `-T*`) and **S2** (range `-B*`) live bots
+- **Trial paper** bots (standard, mech/rally/soft on BTC; standard on ETH)
+- **All dashboard tabs** still work after recent deploys (BTC/ETH 15m, hourly, SPX/NDX, Trials, Hourly V2)
+
+## What to watch (abnormal behavior)
+
+- Abnormal bets: oversized entries, late-hour entries, cross-spread size spikes, wrong-side range/threshold
+- Hold quality: too short / too long vs min-hold; open legs near settlement
+- Profit-taking: missed TP, leg-stop churn, exit spam on stuck legs
+- **P&L intent**: flag adding risk while hour is red; goal is **make money, not lose money**
+- Logs + **live vs trial compare** panel drift
+- **Kalshi live/history vs dashboard** stats alignment; auto `sync-kalshi-fills` on reconcile signals
+
+## 30s window rule (not lazy sampling)
+
+Default interval **30s**. Each cycle MUST analyze **what changed since the last cycle** (new enters/exits, exposure delta, skip-reason changes, new HIGH issues) — not only cumulative 2h lookback.
+
+Use `scripts/run_2h_manager_watchdog.py` (restarts on crash) + `scripts/monitor_hourly_s1_s2_manager.py`.
+
+## Post-deploy validation (last 24h code changes)
+
+On live monitor start, verify production after recent changes (git/deploys in the last 24h):
+
+- `/health` version matches expected deploy
+- BTC/ETH hourly bot API: settings save, deployable budget, skip reasons sane
+- Hourly V2 + trial bot endpoints respond
+- Dashboard toggles persist (auto-bet, cap, auto-refill) on hourly + Hourly V2 tabs
+- All dashboard tabs load (BTC/ETH 15m, hourly, SPX/NDX, Trials, Hourly V2)
+- Fix regressions found; report completion when watch ends
+
+## Manager role
+
+Find issues **and resolve them** during the watch. Tell the user when the watch starts (deadline) and when it completes with a summary.

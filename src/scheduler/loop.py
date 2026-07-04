@@ -627,6 +627,8 @@ class PredictionLoop:
       event_ticker = (tab.get("event") or {}).get("event_ticker")
     store = self.hourly_bot_store(asset, kind=kind)
     status = store.status(event_ticker)
+    if not event_ticker:
+      event_ticker = status.get("event_ticker")
     status["ok"] = True
     status["asset"] = asset
     status["bot_kind"] = kind
@@ -652,8 +654,19 @@ class PredictionLoop:
       else []
     )
     open_pos = list(status.get("open_positions") or [])
+    kalshi = self._kalshi_for(asset)
     if settings.mode == "live" and kind == "hourly":
       open_pos = store.all_open_live_positions()
+      if event_ticker and kalshi and kalshi.authenticated:
+        from src.trading.live_reconcile import merge_kalshi_hourly_open_positions
+
+        open_pos = merge_kalshi_hourly_open_positions(
+          open_pos,
+          kalshi,
+          event_ticker,
+          tab=tab if tab and tab.get("ok") else None,
+          asset=asset,
+        )
     if tab and tab.get("ok"):
       from src.trading.hourly_bot import enrich_open_positions_live
 
@@ -664,6 +677,7 @@ class PredictionLoop:
         acfg,
         settings=settings,
         bot_kind=kind,
+        kalshi=kalshi if settings.mode == "live" else None,
       )
       status["open_positions"] = open_pos
       status["open_position_count"] = len(open_pos)
@@ -679,7 +693,6 @@ class PredictionLoop:
       hs["total_pnl_usd"] = round(realized + unrealized, 2)
       status["hourly_summary"] = hs
       status["hour_summary"] = hs
-    kalshi = self._kalshi_for(asset)
     status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)
     if tab and tab.get("ok"):
       live = tab.get("live") or tab
@@ -720,6 +733,15 @@ class PredictionLoop:
       status["hourly_summary"] = hs
       status["hour_summary"] = hs
     self._attach_settlement_index_status(status, tab, asset=asset)
+    if kind == "hourly" and str(settings.mode).lower() == "live":
+      from src.trading.live_entry_guard_summary import build_live_entry_guard_summary
+
+      status["live_entry_guards"] = build_live_entry_guard_summary(
+        acfg,
+        mode=settings.mode,
+        kind=kind,
+        asset=asset,
+      )
     self._attach_bot_daily_loss(status, kind=kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
     if (
@@ -2490,8 +2512,44 @@ class PredictionLoop:
 
     return {"ok": True, "bots": results, "tuned_at": datetime.now(timezone.utc).isoformat()}
 
+  def _adaptive_calibration_specs(self) -> list[tuple[str, str, Any, dict[str, Any]]]:
+    """All bot stores that use adaptive bucket calibration."""
+    from src.assets import asset_cfg, asset_v2_enabled, asset_v2_runtime_cfg
+    from src.backtest.mechanics_profiles import HOURLY_TRIAL_KINDS
+
+    specs: list[tuple[str, str, Any, dict[str, Any]]] = []
+
+    def add(kind: str, asset: str, cfg: dict[str, Any]) -> None:
+      specs.append((kind, asset, self.hourly_bot_store(asset, kind=kind), cfg))
+
+    add("hourly", "btc", self.cfg)
+    if asset_enabled(self.cfg, "eth"):
+      add("hourly", "eth", self._eth_cfg or asset_cfg(self.cfg, "eth"))
+
+    for tk in HOURLY_TRIAL_KINDS:
+      add(tk, "btc", self.cfg)
+    if asset_enabled(self.cfg, "eth"):
+      add("hourly_trial", "eth", self._eth_cfg or asset_cfg(self.cfg, "eth"))
+
+    for asset in ("spx", "ndx"):
+      if not asset_enabled(self.cfg, asset):
+        continue
+      acfg = self._acfg(asset)
+      add("hourly", asset, acfg)
+      add("hourly_trial", asset, acfg)
+
+    if asset_v2_enabled(self.cfg, "btc"):
+      add("hourly_v2", "btc", asset_v2_runtime_cfg(self._btc_v2_cfg or self.cfg))
+    if asset_v2_enabled(self.cfg, "eth"):
+      add("hourly_v2", "eth", asset_v2_runtime_cfg(self._eth_v2_cfg or self.cfg))
+
+    specs.append(("slot15", "btc", self.slot15_bot_store("btc"), self._acfg_15m("btc")))
+    if self._slot15m_enabled("eth"):
+      specs.append(("slot15", "eth", self.slot15_bot_store("eth"), self._acfg_15m("eth")))
+    return specs
+
   def run_adaptive_calibration(self) -> dict[str, Any]:
-    """Refresh per-bucket pause/tighten/probe state from recent closed trades."""
+    """Refresh per-bucket throttle state from recent closed trades."""
     from src.trading.bot_adaptive_calibration import (
       adaptive_calibration_cfg,
       run_adaptive_calibration_for_store,
@@ -2502,25 +2560,7 @@ class PredictionLoop:
       return {"ok": False, "reason": "adaptive_calibration_disabled"}
 
     results: list[dict[str, Any]] = []
-    specs = (
-      ("hourly", "btc", self.hourly_bot_store("btc"), self.cfg),
-      ("hourly", "eth", self.hourly_bot_store("eth"), self._eth_cfg or self.cfg),
-      ("hourly_v2", "btc", self.hourly_bot_store("btc", kind="hourly_v2"), self._btc_v2_cfg or self.cfg),
-      ("hourly_v2", "eth", self.hourly_bot_store("eth", kind="hourly_v2"), self._eth_v2_cfg or self.cfg),
-      ("slot15", "btc", self.slot15_bot_store("btc"), self._acfg_15m("btc")),
-      ("slot15", "eth", self.slot15_bot_store("eth"), self._acfg_15m("eth")),
-    )
-    for kind, asset, store, bot_cfg in specs:
-      if bot_cfg is None:
-        continue
-      if asset == "eth" and kind == "slot15" and not self._slot15m_enabled("eth"):
-        continue
-      if kind == "hourly_v2" and not asset_v2_enabled(self.cfg, asset):
-        continue
-      if kind == "hourly_v2":
-        from src.assets import asset_v2_runtime_cfg
-
-        bot_cfg = asset_v2_runtime_cfg(bot_cfg)
+    for kind, asset, store, bot_cfg in self._adaptive_calibration_specs():
       try:
         out = run_adaptive_calibration_for_store(store, cfg=bot_cfg, kind=kind)
         out["kind"] = kind
@@ -2528,12 +2568,13 @@ class PredictionLoop:
         results.append(out)
         if out.get("ok"):
           log.info(
-            "%s %s adaptive calibration: paused=%s probing=%s tightened=%s",
+            "%s %s adaptive calibration: throttled=%s (L1=%s L2=%s L3=%s)",
             asset.upper(),
             kind,
-            out.get("paused_buckets"),
-            out.get("probing_buckets"),
-            out.get("tightened_buckets"),
+            out.get("throttled_buckets"),
+            out.get("throttle_level_1"),
+            out.get("throttle_level_2"),
+            out.get("throttle_level_3"),
           )
       except Exception as e:
         log.warning("%s %s adaptive calibration failed: %s", asset.upper(), kind, e)

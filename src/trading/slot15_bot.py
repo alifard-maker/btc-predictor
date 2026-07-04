@@ -971,7 +971,7 @@ class Slot15Bot:
       from src.trading.entry_strategy import ask_cents_for_side
 
       est_adaptive = ask_cents_for_side(pick, side)
-      ok_adapt, adapt_reason, edge_boost = adaptive_entry_allowed(
+      adapt = adaptive_entry_allowed(
         self.store.get_adaptive_calibration(),
         entry_price_cents=est_adaptive,
         entry_spread_cents=None,
@@ -979,18 +979,15 @@ class Slot15Bot:
         kind="slot15",
         aggressive=settings.aggressive_entries,
       )
-      if not ok_adapt:
-        last_reason = adapt_reason or "adaptive_bucket_blocked"
-        continue
-      estrat_entry = (
-        replace(
+      estrat_entry = estrat
+      if adapt.edge_boost_cents > 0 or adapt.stake_mult < 1.0:
+        estrat_entry = replace(
           estrat,
-          min_ask_edge_cents=estrat.min_ask_edge_cents + edge_boost,
-          tail_entry_min_ask_edge_cents=estrat.tail_entry_min_ask_edge_cents + edge_boost,
+          min_ask_edge_cents=estrat.min_ask_edge_cents + adapt.edge_boost_cents,
+          tail_entry_min_ask_edge_cents=estrat.tail_entry_min_ask_edge_cents + adapt.edge_boost_cents,
+          max_stake_per_entry_usd=round(estrat.max_stake_per_entry_usd * adapt.stake_mult, 2),
+          min_kelly_stake_usd=round(estrat.min_kelly_stake_usd * adapt.stake_mult, 2),
         )
-        if edge_boost > 0
-        else estrat
-      )
 
       remaining = self.store.remaining_budget_usd(slot_key, settings.max_spend_per_slot_usd, settings)
       if remaining <= 0:

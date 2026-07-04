@@ -154,10 +154,13 @@ def skip_soft_rally_entry_overlay(cfg: dict[str, Any] | None, *, kind: str) -> b
 
 
 def skip_live_inventory_guards(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
-  """Skip live_inventory caps only for BTC Mech live (paper trial never applies them)."""
+  """Skip live_inventory caps only for Mech live (not pnl_first — inventory enforced there)."""
   if kind != "hourly" or str(mode).lower() != "live":
     return False
-  return live_mechanics_profile_for_cfg(cfg) is not None
+  profile = live_mechanics_profile_for_cfg(cfg)
+  if profile == "pnl_first":
+    return False
+  return profile is not None
 
 
 def should_use_trial_leg_exits(
@@ -408,9 +411,15 @@ def mirror_trial_live_contract_count(
     pick=pick,
     side=side,
     remaining_budget_usd=stake_usd,
+    max_contracts=int(estrat.max_contracts_per_entry or 0) or 500,
   )
   if preview.get("ok"):
-    return int(preview.get("contracts") or 0)
+    return cap_live_entry_contracts(
+      count=int(preview.get("contracts") or 0),
+      price_cents=price_cents,
+      max_spend_per_hour_usd=max_spend_per_hour_usd,
+      estrat=estrat,
+    )
   count = max(0, int(stake_usd // (price_cents / 100.0))) if price_cents > 0 else 0
   return cap_live_entry_contracts(
     count=count,

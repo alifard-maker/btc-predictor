@@ -160,7 +160,7 @@ def entry_pick_settle_skip_reason(
 ) -> str | None:
   """Per-pick settle gate — applies late-entry exception when configured."""
   if hours_to_settle is None:
-    return None
+    return "too_late_for_new_entries"
   h = float(hours_to_settle)
   min_h = min_hours_to_settle_for_entry(cfg)
   le = le_override or late_entry_config(cfg)

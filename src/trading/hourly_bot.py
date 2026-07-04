@@ -6,7 +6,6 @@ import logging
 import uuid
 from typing import Any
 
-from src.trading.bot_budget import sync_max_spend_from_config
 from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip_reason, sync_auto_stop_for_risk
 from src.trading.bot_period_rollover import force_close_period_positions
 from src.trading.hourly_event_time import (
@@ -116,6 +115,12 @@ from src.trading.hourly_regime import (
   entry_too_close_to_settle_skip_reason,
   entry_too_far_from_settle_skip_reason,
   is_late_entry_path,
+)
+from src.trading.pnl_first_gates import (
+  filter_pnl_first_candidates,
+  pnl_first_active,
+  pnl_first_entry_block_reason,
+  pnl_first_regime_block_reason,
 )
 from src.trading.hour_momentum import (
   HourMomentumContext,
@@ -343,6 +348,39 @@ def _unrealized_pnl_usd(pos: dict[str, Any], mark_cents: int | None) -> float | 
   )
 
 
+def _pick_from_kalshi_market(kalshi: Any, market_ticker: str) -> dict[str, Any] | None:
+  """Build a minimal pick dict from Kalshi /markets for marks on untracked legs."""
+  if not kalshi:
+    return None
+  row = kalshi.get_market_ticker(market_ticker)
+  if not row:
+    return None
+  try:
+    yes_bid = float(row["yes_bid_dollars"]) if row.get("yes_bid_dollars") not in (None, "") else None
+    yes_ask = float(row["yes_ask_dollars"]) if row.get("yes_ask_dollars") not in (None, "") else None
+  except (TypeError, ValueError):
+    yes_bid = yes_ask = None
+  if yes_bid is not None:
+    yes_bid *= 100.0
+  if yes_ask is not None:
+    yes_ask *= 100.0
+  label = str(row.get("title") or "").strip()
+  floor = row.get("floor_strike")
+  cap = row.get("cap_strike")
+  if not label and floor is not None and cap is not None:
+    label = f"${float(floor):,.0f} to ${float(cap):,.2f}"
+  elif not label and floor is not None:
+    label = f"${float(floor):,.0f} or above"
+  return {
+    "ticker": market_ticker,
+    "label": label or market_ticker.rsplit("-", 1)[-1],
+    "yes_bid": yes_bid,
+    "yes_ask": yes_ask,
+    "strike_type": row.get("strike_type"),
+    "contract_type": row.get("contract_type"),
+  }
+
+
 def enrich_open_positions_live(
   positions: list[dict[str, Any]],
   tab: dict[str, Any],
@@ -350,10 +388,11 @@ def enrich_open_positions_live(
   *,
   settings: HourlyBotSettings | None = None,
   bot_kind: str = "hourly",
+  kalshi: Any | None = None,
 ) -> list[dict[str, Any]]:
   """Attach live mark, unrealized P&L, and position alert to open bot legs."""
   live = tab.get("live") or tab
-  price = tab.get("brti_live") or live.get("current_price")
+  price = tab.get("brti_live") or tab.get("erti_live") or live.get("current_price")
   hours_left = live.get("hours_to_settle")
   seconds_remaining = float(hours_left) * 3600.0 if hours_left is not None else None
   is_trial = is_hourly_trial_kind(bot_kind)
@@ -362,6 +401,10 @@ def enrich_open_positions_live(
   for pos in positions:
     row = dict(pos)
     pick = _find_contract_in_live(live, pos["market_ticker"])
+    if not pick and kalshi:
+      pick = _pick_from_kalshi_market(kalshi, str(pos["market_ticker"]))
+      if pick and pick.get("label") and (not row.get("label") or row.get("kalshi_only")):
+        row["label"] = pick["label"]
     mark = None
     if pick:
       exit_fill = paper_exit_fill(pick=pick, side=str(pos["side"]))
@@ -452,7 +495,6 @@ class HourlyBot:
     entry_kind = entry_kind_for_bot(self.kind)
 
     settings, prev_period = self.store.sync_period(str(event_ticker), self.store.get_settings())
-    sync_max_spend_from_config(self.store, cfg=cfg)
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
     settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
     if (
@@ -640,13 +682,16 @@ class HourlyBot:
     settings: HourlyBotSettings,
     max_cap: float,
   ) -> bool:
-    """Add another hour entry budget chunk when live interval cap is hit (no open legs)."""
+    """Add another hour entry budget chunk when live deploy is exhausted (no open legs)."""
     if settings.mode != "live" or not settings.live_auto_refill_hour_budget:
       return False
     if settings.use_accumulated_profit:
       return False
     exposure = self.store.open_exposure_usd(event_ticker, mode="live")
     if exposure > 0:
+      return False
+    remaining = self.store.remaining_budget_usd(event_ticker, max_cap, settings)
+    if remaining > 0.009:
       return False
     total_entered = self.store.hour_interval_summary(event_ticker)["total_entered_usd"]
     extra = float(self.store.get_live_hour_budget_dict(event_ticker).get("extra_budget_usd") or 0)
@@ -1210,22 +1255,43 @@ class HourlyBot:
       return results
 
     max_cap = settings.max_spend_per_hour_usd
-    bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap, settings)
     remaining = self.store.remaining_budget_usd(event_ticker, max_cap, settings)
-    if bankroll <= 0:
-      self.store.set_last_skip_reason("hour_budget_exhausted")
-      return results
     if remaining <= 0:
       refilled = self._maybe_live_refill_hour_budget(event_ticker, settings, max_cap)
       if refilled:
         remaining = self.store.remaining_budget_usd(event_ticker, max_cap, settings)
-      if remaining <= 0:
+    bankroll = self.store.hour_bankroll_usd(event_ticker, max_cap, settings)
+    if remaining <= 0:
+      if bankroll <= 0:
+        self.store.set_last_skip_reason("hour_budget_exhausted")
+      else:
         self.store.set_last_skip_reason("fully_deployed")
-        return results
+      return results
 
     candidates = _entry_candidates(tab, cfg)
+
+    regime_block = pnl_first_regime_block_reason(
+      tab, cfg, kind=self.kind, mode=settings.mode,
+    )
+    if regime_block:
+      self.store.set_last_skip_reason(regime_block)
+      return results
+
+    candidates = filter_pnl_first_candidates(
+      candidates, cfg, kind=self.kind, mode=settings.mode,
+    )
     if not candidates:
-      self.store.set_last_skip_reason("no_buy_yes_no_candidates")
+      if pnl_first_active(cfg, kind=self.kind, mode=settings.mode):
+        self.store.set_last_skip_reason("pnl_first_no_s1_candidates")
+      else:
+        live_tab = tab.get("live") or tab
+        regime = live_tab.get("regime") or tab.get("regime") or {}
+        if regime.get("blocked") is True or regime.get("allow_trade") is False:
+          reasons = list(regime.get("reasons") or regime.get("block_reasons") or [])
+          hint = str(reasons[0])[:96] if reasons else "regime"
+          self.store.set_last_skip_reason(f"regime_blocked:{hint}")
+        else:
+          self.store.set_last_skip_reason("no_buy_yes_no_candidates")
       return results
 
     if adaptive.mode == "locked":
@@ -1342,6 +1408,28 @@ class HourlyBot:
         last_reason = settle_skip
         continue
 
+      pf_block = pnl_first_entry_block_reason(
+        pick, side, cfg, kind=self.kind, mode=settings.mode,
+      )
+      if pf_block:
+        last_reason = pf_block
+        continue
+
+      from src.trading.live_range_guards import range_band_spot_entry_block_reason
+
+      spot_block = range_band_spot_entry_block_reason(
+        pick=pick,
+        side=side,
+        spot_price=ref_f,
+        terminal_sigma=live.get("terminal_sigma"),
+        cfg=cfg,
+        kind=self.kind,
+        asset=self.asset,
+      )
+      if spot_block:
+        last_reason = spot_block
+        continue
+
       range_block = adaptive_range_band_block_reason(pick, adaptive, cfg)
       if range_block:
         last_reason = range_block
@@ -1353,21 +1441,23 @@ class HourlyBot:
         continue
 
       if settings.mode == "live":
+        from src.trading.hourly_live_trial_align import skip_live_inventory_guards
         from src.trading.live_range_guards import range_band_hour_cap_block_reason
 
-        rb_cap = range_band_hour_cap_block_reason(
-          store=self.store,
-          event_ticker=event_ticker,
-          market_ticker=market_ticker,
-          side=side,
-          open_positions=open_pos,
-          cfg=cfg,
-          kind=self.kind,
-          pick=pick,
-        )
-        if rb_cap:
-          last_reason = rb_cap
-          continue
+        if not skip_live_inventory_guards(cfg, kind=self.kind, mode=settings.mode):
+          rb_cap = range_band_hour_cap_block_reason(
+            store=self.store,
+            event_ticker=event_ticker,
+            market_ticker=market_ticker,
+            side=side,
+            open_positions=open_pos,
+            cfg=cfg,
+            kind=self.kind,
+            pick=pick,
+          )
+          if rb_cap:
+            last_reason = rb_cap
+            continue
 
       existing_on_ticker = [p for p in open_pos if p["market_ticker"] == market_ticker]
       pending_block = pending_resting_enter_blocks_entry(
@@ -1455,7 +1545,7 @@ class HourlyBot:
       from src.trading.entry_strategy import ask_cents_for_side
 
       est_adaptive = ask_cents_for_side(pick, side)
-      ok_adapt, adapt_reason, edge_boost = adaptive_entry_allowed(
+      adapt = adaptive_entry_allowed(
         self.store.get_adaptive_calibration(),
         entry_price_cents=est_adaptive,
         entry_spread_cents=None,
@@ -1463,18 +1553,15 @@ class HourlyBot:
         kind=self.kind,
         aggressive=settings.aggressive_entries,
       )
-      if not ok_adapt:
-        last_reason = adapt_reason or "adaptive_bucket_blocked"
-        continue
-      estrat_entry = (
-        replace(
+      estrat_entry = estrat
+      if adapt.edge_boost_cents > 0 or adapt.stake_mult < 1.0:
+        estrat_entry = replace(
           estrat,
-          min_ask_edge_cents=estrat.min_ask_edge_cents + edge_boost,
-          tail_entry_min_ask_edge_cents=estrat.tail_entry_min_ask_edge_cents + edge_boost,
+          min_ask_edge_cents=estrat.min_ask_edge_cents + adapt.edge_boost_cents,
+          tail_entry_min_ask_edge_cents=estrat.tail_entry_min_ask_edge_cents + adapt.edge_boost_cents,
+          max_stake_per_entry_usd=round(estrat.max_stake_per_entry_usd * adapt.stake_mult, 2),
+          min_kelly_stake_usd=round(estrat.min_kelly_stake_usd * adapt.stake_mult, 2),
         )
-        if edge_boost > 0
-        else estrat
-      )
 
       est_price = None
       if settings.mode == "paper":
@@ -1545,6 +1632,17 @@ class HourlyBot:
         live_resolved = resolve_live_entry_price(
           pick, side, pricing=pricing, estrat=estrat_entry
         )
+        pf_exec_block = pnl_first_entry_block_reason(
+          pick,
+          side,
+          cfg,
+          kind=self.kind,
+          mode=settings.mode,
+          resolved_execution=live_resolved,
+        )
+        if pf_exec_block:
+          last_reason = pf_exec_block
+          continue
         mirror_exec = should_mirror_trial_entry_execution(
           cfg, kind=self.kind, mode=settings.mode,
         )

@@ -1,0 +1,27 @@
+---
+description: Hourly V3 pressing backtest research — artifacts, findings, and live deployment guardrails
+alwaysApply: true
+---
+
+# V3 pressing backtest (research only)
+
+User may want to run **Hourly V3 pressing** live later. Until they explicitly ask to deploy it, treat this as **research**, not production config.
+
+## Artifacts
+
+- Engine: `src/backtest/hourly_v3_pressing.py`
+- CLI: `scripts/backtest_hourly_v3_pressing.py`
+- Tests: `tests/test_hourly_v3_pressing.py`
+- Results: `data/logs/backtest_v3_pressing.json`
+
+## Holdout finding (summary)
+
+- **Baseline A** (no pressing / no late-entry path in that experiment) beat **V3** on holdout: about **+$718 vs +$592** — both positive.
+- Pressing adds **volume** at a **lower per-fill edge** than baseline.
+- This does **not** by itself justify disabling live hour momentum (pressing mode); live governor data collection may still be desired.
+
+## Guardrails for agents
+
+- Do **not** deploy V3 to production or flip live bot config to V3 unless the user explicitly requests it.
+- Do **not** revert live pressing mode / hour momentum solely because of V3 backtest results.
+- When the user asks about V3, point to the files above and summarize the holdout comparison; offer to re-run backtest or plan a controlled live trial only if they ask.

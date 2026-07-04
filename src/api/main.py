@@ -922,6 +922,48 @@ def hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
     raise HTTPException(500, f"Kalshi sync failed: {e}") from e
 
 
+def _hourly_kalshi_fill_summary_response(asset: str, since: str | None) -> dict[str, Any]:
+  from datetime import datetime, timezone
+
+  from src.trading.bot_runtime import stats_epoch_at
+  from src.trading.kalshi_fill_sync import summarize_kalshi_experiment_fills
+
+  kalshi = _loop._kalshi_for(asset)
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    raise HTTPException(503, "Kalshi not authenticated")
+  store = _loop.hourly_bot_store(asset, kind="hourly")
+  since_dt: datetime | None = None
+  if since:
+    try:
+      since_norm = str(since).replace("Z", "+00:00").replace(" ", "+")
+      since_dt = datetime.fromisoformat(since_norm)
+      if since_dt.tzinfo is None:
+        since_dt = since_dt.replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+      raise HTTPException(400, f"Invalid since: {since}") from exc
+  else:
+    with store._connect() as conn:
+      raw = stats_epoch_at(conn)
+    if raw:
+      since_dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+      if since_dt.tzinfo is None:
+        since_dt = since_dt.replace(tzinfo=timezone.utc)
+  if since_dt is None:
+    raise HTTPException(400, "Provide since= or set stats_epoch_at on the bot store")
+  return summarize_kalshi_experiment_fills(kalshi, since=since_dt, critical=True, asset=asset)
+
+
+@app.get("/api/hourly/bot/kalshi-fill-summary")
+def hourly_bot_kalshi_fill_summary(
+  since: str | None = Query(default=None, description="ISO-8601 UTC lower bound (defaults to stats_epoch_at)"),
+  _: None = Depends(_session_user),
+):
+  """Realized P&L from Kalshi hourly fill history (exchange source of truth)."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_kalshi_fill_summary_response("btc", since)
+
+
 @app.get("/api/hourly/bot")
 def hourly_bot_status(
   lightweight: bool = Query(default=True),
@@ -1207,6 +1249,23 @@ def eth_hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
   tab = _loop._hourly_tab_for_bot_status("eth")
   status = _loop.hourly_bot_status("eth", tab if tab and tab.get("ok") else None)
   return {"sync": result, "bot": status}
+
+
+@app.get("/api/eth/hourly/bot/live-reconcile")
+def eth_hourly_bot_live_reconcile(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.hourly_live_reconcile("eth")
+
+
+@app.get("/api/eth/hourly/bot/kalshi-fill-summary")
+def eth_hourly_bot_kalshi_fill_summary(
+  since: str | None = Query(default=None, description="ISO-8601 UTC lower bound (defaults to stats_epoch_at)"),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_kalshi_fill_summary_response("eth", since)
 
 
 @app.post("/api/eth/hourly/bot/settings")

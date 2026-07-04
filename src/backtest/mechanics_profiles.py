@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from src.trading.live_entry_price import LiveEntryPricingConfig
 
-MechanicsProfile = Literal["legacy", "mechanical_fixes", "current", "rally_only", "soft_rally"]
+MechanicsProfile = Literal["legacy", "mechanical_fixes", "current", "rally_only", "soft_rally", "pnl_first"]
 
 HOURLY_TRIAL_KINDS = frozenset({
   "hourly_trial",
@@ -32,6 +32,7 @@ PROFILE_LABELS: dict[str, str] = {
   "current": "Current deploy (084d7d1 + adaptive passive v1)",
   "rally_only": "Rally-only (adaptive: entries only in rally mode; defense sits out)",
   "soft_rally": "Soft rally (rally mode full; defense: 1 YES threshold 40-80¢, edge≥15¢)",
+  "pnl_first": "P&L-first Phase 0–1 (BTC S1 only, taker 15¢+, max 2 legs, no S2/tail)",
 }
 
 
@@ -140,6 +141,31 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     live_adaptive["defense_block_range_bands"] = True
     live_adaptive["rally_block_range_bands"] = True
     live_entry["cross_spread_enabled"] = True
+    return c
+
+  if profile == "pnl_first":
+    live_inventory["enabled"] = True
+    live_adaptive["enabled"] = False
+    live_entry["cross_spread_enabled"] = True
+    live_entry["cross_spread_min_edge_cents"] = 15.0
+    live_entry["taker_only"] = True
+    live_exit["block_tail_entries"] = True
+    live_exit["tail_block_max_cents"] = 20
+    live_exit.setdefault("max_resting_enters_per_hour", 6)
+    es = bot.setdefault("entry_strategy", {})
+    es["min_ask_edge_cents"] = 15
+    es["tail_entry_block"] = True
+    es["max_entries_per_cycle"] = 1
+    es["max_concurrent_positions"] = 2
+    es["allow_scale_in"] = False
+    es["kelly_fraction"] = 0.12
+    live_inventory["max_concurrent_positions"] = 2
+    live_inventory["max_entries_per_cycle"] = 1
+    live_inventory["max_same_side_threshold_legs"] = 1
+    live_inventory["max_same_side_range_legs"] = 0
+    live_inventory["allow_scale_in"] = False
+    live_adaptive["defense_block_range_bands"] = True
+    live_adaptive["rally_block_range_bands"] = True
     return c
 
   live_inventory["enabled"] = True

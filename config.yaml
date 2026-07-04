@@ -297,11 +297,11 @@ hourly:
     max_hours_to_settle_for_entry: 1.25  # block entries on far-future hourly events (hour-edge guard)
     late_entry:
       enabled: true
-      min_hours: 0.08          # don't enter in last ~5 min
+      min_hours: 0.12          # don't enter in last ~7 min (was 5 — too much last-minute churn)
       min_ask_edge_cents: 15
       max_stake_usd: 2.50
     experiment_start_at: "2026-07-04T16:59:00+00:00"  # Jul 4 2026 12:59 PM EDT — stats & experiment baseline
-    live_mechanics_profile: mechanical_fixes  # BTC live mirrors Hourly Trial — Mech (adaptive off, inventory caps)
+    live_mechanics_profile: pnl_first  # Phase 0–1: BTC S1-only live (see docs/PnL_First_Ownership.md)
     profit_exit_cooldown_seconds: 60
     cheap_leg_max_entry_cents: 20
     cheap_leg_cut_loss_cents: 10
@@ -345,6 +345,16 @@ hourly:
       max_concurrent_positions: 4
       max_entries_per_cycle: 4
       allow_scale_in: false
+      max_contracts_per_range_band_per_hour: 8
+      range_band_spot_entry_guard:
+        enabled: true
+        min_buffer_usd: 75
+        sigma_buffer_fraction: 0.20
+        min_spot_pct_buffer: 0.12   # ~$75 at $63k BTC
+        by_asset:
+          eth: { min_buffer_usd: 12, sigma_buffer_fraction: 0.22, min_spot_pct_buffer: 0.18 }
+          spx: { min_buffer_usd: 25, sigma_buffer_fraction: 0.18, min_spot_pct_buffer: 0.10 }
+          ndx: { min_buffer_usd: 90, sigma_buffer_fraction: 0.18, min_spot_pct_buffer: 0.10 }
     live_exit:
       cut_loss_min_usd: 0.20
       cut_loss_min_hold_seconds: 90
@@ -601,6 +611,12 @@ bot_risk:
   daily_loss_cap_usd: 50.0   # per bot (BTC hourly, ETH hourly, BTC 15m, ETH 15m each get own $50/day)
   daily_loss_timezone: America/New_York
 
+# P&L-first Phase 0–1 (live_mechanics_profile: pnl_first on BTC hourly)
+pnl_first:
+  milestone_positive_hours: 20
+  live_ev_min_usd_per_contract: 0.02
+  phase_started_at: "2026-07-04T23:30:00+00:00"
+
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
 live_resting_exits:
   enabled: false
@@ -620,7 +636,7 @@ bot_auto_tune:
   ask_edge_step: 1
   kelly_step: 0.02
 
-# Closed-loop bucket calibration: pause losing entry-price buckets, probe later (hourly bots)
+# Closed-loop bucket calibration: stats-driven soft throttle by entry-price bucket (all hourly bots)
 bot_adaptive_calibration:
   enabled: true
   refresh_interval_minutes: 30
@@ -632,11 +648,16 @@ bot_adaptive_calibration:
   long_min_trades: 8
   long_max_win_rate: 0.35
   long_min_loss_usd: 5.0
-  pause_hours_short: 6
-  pause_hours_long: 24
-  probe_max_entries: 2
-  probe_pause_hours_on_fail: 6
-  tightened_edge_boost_cents: 4
+  # Soft throttle tiers (level 0 = normal). No timer blocks — stats re-eval every refresh.
+  throttle_levels:
+    - edge_boost_cents: 0
+      stake_mult: 1.0
+    - edge_boost_cents: 4
+      stake_mult: 0.75
+    - edge_boost_cents: 8
+      stake_mult: 0.5
+    - edge_boost_cents: 12
+      stake_mult: 0.25
   apply_in_aggressive_mode: true
   price_buckets: true
   spread_buckets: false
@@ -724,6 +745,7 @@ eth:
       min_edge_override_regime: 0.10
     bot:
       mirror_btc_settings: true  # on deploy: copy BTC hourly dashboard settings (mode, cap, auto-bet)
+      live_mechanics_profile: ''  # standard trial (do not inherit BTC mechanical_fixes from base hourly.bot)
       enabled: false
       mode: paper
       max_spend_per_hour_usd: 15
@@ -798,6 +820,11 @@ eth:
         max_contracts_per_range_band_per_hour: 8
         allow_scale_in_range: false
         scale_in_max_legs_per_ticker_range: 1
+        range_band_spot_entry_guard:
+          enabled: true
+          min_buffer_usd: 12
+          sigma_buffer_fraction: 0.22
+          min_spot_pct_buffer: 0.18   # ~$6 at $3.5k ETH; bands are ~$25 wide
       live_exit:
         cut_loss_min_usd: 0.20
         cut_loss_min_hold_seconds: 90
@@ -1015,6 +1042,11 @@ spx:
     bot:
       # Live + paper trial execution merged from eth_aligned_index_hourly_bot.yaml (ETH hourly live parity)
       experiment_start_at: "2026-07-04T16:59:00+00:00"
+      live_inventory:
+        range_band_spot_entry_guard:
+          min_buffer_usd: 25
+          sigma_buffer_fraction: 0.18
+          min_spot_pct_buffer: 0.10   # ~$6 at $6k SPX
     sigma_calibration: true
   live_settlement_index:
     enabled: true
@@ -1082,6 +1114,11 @@ ndx:
     bot:
       # Live + paper trial execution merged from eth_aligned_index_hourly_bot.yaml (ETH hourly live parity)
       experiment_start_at: "2026-07-04T16:59:00+00:00"
+      live_inventory:
+        range_band_spot_entry_guard:
+          min_buffer_usd: 90
+          sigma_buffer_fraction: 0.18
+          min_spot_pct_buffer: 0.10   # ~$22 at $22k NDX
     sigma_calibration: true
   live_settlement_index:
     enabled: true

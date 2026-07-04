@@ -1,0 +1,29 @@
+---
+description: Hour momentum governor ("pressing mode") — terminology, revert steps, and live ops preference
+alwaysApply: true
+---
+
+# Pressing mode (hour momentum)
+
+When the user says **"pressing mode"**, they mean the **hour momentum governor** shipped in **Beta 4.0.24** (commit `7e051b2`).
+
+## What it is
+
+- Config: `hourly.bot.hour_momentum` in `config.yaml`
+- Code: `src/trading/hour_momentum.py`, wired in `src/trading/hourly_bot.py`
+- Behavior: adapts per-hour entries/cycle, stake sizing, and late-entry ask edge from in-hour PnL + rally/defense state
+- The **pressing** state is one of four momentum states: conservative → normal → **pressing** → locked
+
+## Live ops (user preference)
+
+- **Keep pressing mode live** (`hour_momentum.enabled: true`) unless the user explicitly asks to disable or revert — including overnight runs to collect production data.
+- Do **not** disable pressing mode or revert the governor as part of unrelated fixes (e.g. dashboard-only deploys).
+
+## Revert ("no pressing mode")
+
+When the user asks to **revert pressing mode**, **disable pressing mode**, or go back to **no pressing mode**:
+
+1. Set `hourly.bot.hour_momentum.enabled: false` in `config.yaml` (fastest; keeps code, restores pre-governor behavior)
+2. Or revert/remove the hour momentum commit if they want the feature fully removed from the codebase
+
+Do not confuse with unrelated knobs: `live_adaptive` rally/defense, Tier B `late_entry`, or `max_entries_per_cycle` alone — those are separate from the hour momentum governor unless the user explicitly wants those reverted too.

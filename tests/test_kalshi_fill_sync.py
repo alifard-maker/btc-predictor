@@ -50,7 +50,7 @@ def test_backfill_closed_round_trip_from_kalshi_fills():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     kalshi = _kalshi_with_fills(fills)
-    out = replay_closed_legs_from_kalshi_fills(store, kalshi)
+    out = replay_closed_legs_from_kalshi_fills(store, kalshi, hours=9999)
     assert out["ok"] is True
     assert len(out["changes"]) == 1
     trades = store.list_trades(limit=50)
@@ -107,12 +107,80 @@ def test_backfill_v2_dollar_price_fills():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     kalshi = _kalshi_with_fills(fills)
-    out = replay_closed_legs_from_kalshi_fills(store, kalshi)
+    out = replay_closed_legs_from_kalshi_fills(store, kalshi, hours=9999)
     assert out["ok"] is True
     assert len(out["changes"]) == 1
     trades = store.list_trades(limit=50)
     assert len([t for t in trades if t.get("action") == "enter" and t.get("status") == "filled"]) == 1
     assert len([t for t in trades if t.get("action") == "exit" and t.get("status") == "filled"]) == 1
+
+
+def test_replay_repairs_scratch_exit_when_enter_already_imported():
+  ticker = "KXBTCD-26JUL0413-T62599.99"
+  event = "KXBTCD-26JUL0413"
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    pid = "pos-1"
+    store.log_trade({
+      "event_ticker": event,
+      "action": "enter",
+      "mode": "live",
+      "market_ticker": ticker,
+      "side": "yes",
+      "contracts": 2,
+      "price_cents": 44,
+      "entry_price_cents": 44,
+      "status": "filled",
+      "kalshi_order_id": "buy-known",
+      "position_id": pid,
+      "detail": "backfilled enter",
+    })
+    store.log_trade({
+      "event_ticker": event,
+      "action": "exit",
+      "mode": "live",
+      "market_ticker": ticker,
+      "side": "yes",
+      "contracts": 2,
+      "price_cents": 44,
+      "entry_price_cents": 44,
+      "exit_price_cents": 44,
+      "pnl_usd": 0.0,
+      "status": "reconciled",
+      "position_id": pid,
+      "detail": "Live EXIT reconciled (no Kalshi inventory)",
+    })
+    fills = [
+      {
+        "order_id": "buy-known",
+        "ticker": ticker,
+        "action": "buy",
+        "side": "yes",
+        "yes_price": 44,
+        "count": 2,
+        "created_time": "2026-07-04T17:05:00+00:00",
+      },
+      {
+        "order_id": "sell-known",
+        "ticker": ticker,
+        "action": "sell",
+        "side": "yes",
+        "yes_price": 53,
+        "count": 2,
+        "created_time": "2026-07-04T17:40:00+00:00",
+      },
+    ]
+    kalshi = _kalshi_with_fills(fills)
+    out = replay_closed_legs_from_kalshi_fills(store, kalshi, hours=9999)
+    assert any(c.get("action") == "repaired_scratch_exit" for c in out["changes"])
+    exits = [
+      t for t in store.list_trades(limit=20, event_ticker=event)
+      if t.get("action") == "exit"
+    ]
+    repaired = [t for t in exits if t.get("kalshi_order_id") == "sell-known"]
+    assert len(repaired) == 1
+    assert float(repaired[0]["pnl_usd"]) == 0.18
+    assert repaired[0]["status"] == "filled"
 
 
 def test_backfill_skips_already_imported_enter():
@@ -141,7 +209,7 @@ def test_backfill_skips_already_imported_enter():
       "created_time": "2026-07-02T16:44:00+00:00",
     }]
     kalshi = _kalshi_with_fills(fills)
-    out = backfill_kalshi_hourly_fills(store, kalshi, force=True)
+    out = backfill_kalshi_hourly_fills(store, kalshi, force=True, hours=9999)
     assert out["changes"] == []
 
 
@@ -171,7 +239,7 @@ def test_backfill_promotes_resting_enter_on_fill():
       "created_time": "2026-07-02T04:44:00+00:00",
     }]
     kalshi = _kalshi_with_fills(fills)
-    out = backfill_kalshi_hourly_fills(store, kalshi, force=True)
+    out = backfill_kalshi_hourly_fills(store, kalshi, force=True, hours=9999)
     assert any(c.get("action") == "promoted_resting_from_fills" for c in out["changes"])
     trades = store.list_trades(limit=20, event_ticker="KXBTCD-26JUL0201")
     filled = [t for t in trades if t.get("status") == "filled" and t.get("action") == "enter"]
@@ -239,3 +307,192 @@ def test_summarize_kalshi_experiment_fills_pairs_round_trips():
   assert sm["closed_trades"] == 1
   assert sm["total_pnl_usd"] == 0.18
   assert sm["wins"] == 1
+
+
+def test_summarize_v2_fills_without_order_cache():
+  """Production Kalshi V2 fills omit legacy action/side — must pair via book_side."""
+  ticker = "KXBTCD-26JUL0413-T62599.99"
+  fills = [
+    {
+      "order_id": "buy-v2",
+      "market_ticker": ticker,
+      "outcome_side": "yes",
+      "book_side": "bid",
+      "yes_price_dollars": "0.4400",
+      "count_fp": "2.00",
+      "created_time": "2026-07-04T17:05:00+00:00",
+    },
+    {
+      "order_id": "sell-v2",
+      "market_ticker": ticker,
+      "outcome_side": "yes",
+      "book_side": "ask",
+      "yes_price_dollars": "0.5300",
+      "count_fp": "2.00",
+      "created_time": "2026-07-04T17:40:00+00:00",
+    },
+  ]
+  kalshi = _kalshi_with_fills(fills)
+  since = datetime(2026, 7, 4, 16, 59, tzinfo=timezone.utc)
+  sm = summarize_kalshi_experiment_fills(kalshi, since=since, asset="btc")
+  assert sm["ok"] is True
+  assert sm["fills_scanned"] == 2
+  assert sm["closed_trades"] == 1
+  assert sm["total_pnl_usd"] == 0.18
+
+
+def test_summarize_skips_unpaired_buy_and_pairs_later_buy():
+  """An earlier buy with no later sell must not block pairing for later round-trips."""
+  ticker = "KXBTCD-26JUL0415-T63099.99"
+  fills = [
+    {
+      "order_id": "open-buy",
+      "ticker": ticker,
+      "action": "buy",
+      "side": "yes",
+      "yes_price": 40,
+      "count": 1,
+      "created_time": "2026-07-04T18:05:00+00:00",
+    },
+    {
+      "order_id": "closed-buy",
+      "ticker": ticker,
+      "action": "buy",
+      "side": "yes",
+      "yes_price": 44,
+      "count": 2,
+      "created_time": "2026-07-04T18:20:00+00:00",
+    },
+    {
+      "order_id": "closed-sell",
+      "ticker": ticker,
+      "action": "sell",
+      "side": "yes",
+      "yes_price": 53,
+      "count": 2,
+      "created_time": "2026-07-04T18:40:00+00:00",
+    },
+  ]
+  kalshi = _kalshi_with_fills(fills)
+  since = datetime(2026, 7, 4, 16, 59, tzinfo=timezone.utc)
+  sm = summarize_kalshi_experiment_fills(kalshi, since=since, asset="btc")
+  # FIFO: sell closes the first open lot (open-buy), not the later closed-buy.
+  assert sm["closed_trades"] == 1
+  assert sm["total_pnl_usd"] == 0.13
+
+
+def test_summarize_continue_after_buy_without_sell():
+  ticker = "KXBTCD-26JUL0416-T62599.99"
+  fills = [
+    {
+      "order_id": "early-sell",
+      "ticker": ticker,
+      "action": "sell",
+      "side": "yes",
+      "yes_price": 50,
+      "count": 1,
+      "created_time": "2026-07-04T19:10:00+00:00",
+    },
+    {
+      "order_id": "blocked-buy",
+      "ticker": ticker,
+      "action": "buy",
+      "side": "yes",
+      "yes_price": 40,
+      "count": 1,
+      "created_time": "2026-07-04T19:30:00+00:00",
+    },
+    {
+      "order_id": "closed-buy",
+      "ticker": ticker,
+      "action": "buy",
+      "side": "yes",
+      "yes_price": 44,
+      "count": 2,
+      "created_time": "2026-07-04T19:40:00+00:00",
+    },
+    {
+      "order_id": "closed-sell",
+      "ticker": ticker,
+      "action": "sell",
+      "side": "yes",
+      "yes_price": 53,
+      "count": 2,
+      "created_time": "2026-07-04T19:50:00+00:00",
+    },
+  ]
+  kalshi = _kalshi_with_fills(fills)
+  since = datetime(2026, 7, 4, 16, 59, tzinfo=timezone.utc)
+  sm = summarize_kalshi_experiment_fills(kalshi, since=since, asset="btc")
+  assert sm["closed_trades"] == 1
+  # blocked-buy steals the only post-epoch sell via FIFO when it exists after both buys.
+  assert sm["total_pnl_usd"] == 0.13
+
+
+def test_summarize_epoch_aware_pairing_skips_pre_epoch_buys():
+  """Pre-epoch buys must consume post-epoch sells without mis-pairing new entries."""
+  ticker = "KXBTCD-26JUL0413-T62599.99"
+  fills = [
+    {
+      "order_id": "pre-buy",
+      "ticker": ticker,
+      "action": "buy",
+      "side": "yes",
+      "yes_price": 42,
+      "count": 2,
+      "created_time": "2026-07-04T16:30:00+00:00",
+    },
+    {
+      "order_id": "post-sell-pre",
+      "ticker": ticker,
+      "action": "sell",
+      "side": "yes",
+      "yes_price": 48,
+      "count": 2,
+      "created_time": "2026-07-04T17:10:00+00:00",
+    },
+    {
+      "order_id": "post-buy",
+      "ticker": ticker,
+      "action": "buy",
+      "side": "yes",
+      "yes_price": 44,
+      "count": 2,
+      "created_time": "2026-07-04T17:15:00+00:00",
+    },
+    {
+      "order_id": "post-sell",
+      "ticker": ticker,
+      "action": "sell",
+      "side": "yes",
+      "yes_price": 53,
+      "count": 2,
+      "created_time": "2026-07-04T17:40:00+00:00",
+    },
+  ]
+  kalshi = _kalshi_with_fills(fills)
+  since = datetime(2026, 7, 4, 16, 59, tzinfo=timezone.utc)
+  sm = summarize_kalshi_experiment_fills(kalshi, since=since, asset="btc")
+  assert sm["ok"] is True
+  assert sm["fills_scanned"] == 3
+  assert sm["closed_trades"] == 1
+  assert sm["total_pnl_usd"] == 0.18
+
+
+def test_aggregate_v2_fills_without_order_cache():
+  fills = [
+    {
+      "order_id": "buy-v2",
+      "market_ticker": "KXBTCD-26JUL0212-T60700",
+      "outcome_side": "yes",
+      "book_side": "bid",
+      "yes_price_dollars": "0.4400",
+      "count_fp": "2.00",
+      "created_time": "2026-07-02T16:44:00+00:00",
+    },
+  ]
+  orders = _aggregate_fills_to_orders(fills, order_cache={})
+  assert len(orders) == 1
+  assert orders[0]["action"] == "buy"
+  assert orders[0]["side"] == "yes"
+  assert orders[0]["price_cents"] == 44

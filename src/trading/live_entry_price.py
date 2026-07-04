@@ -20,6 +20,7 @@ class LiveEntryPricingConfig:
   cross_spread_enabled: bool = True
   cross_spread_min_edge_cents: float = 12.0
   passive_limit_at: PassiveLimitAt = "mid"
+  taker_only: bool = False
 
   @classmethod
   def from_bot_cfg(cls, bot_cfg: dict[str, Any] | None) -> LiveEntryPricingConfig:
@@ -31,6 +32,7 @@ class LiveEntryPricingConfig:
       cross_spread_enabled=bool(raw.get("cross_spread_enabled", True)),
       cross_spread_min_edge_cents=float(raw.get("cross_spread_min_edge_cents", 12.0)),
       passive_limit_at=passive,  # type: ignore[arg-type]
+      taker_only=bool(raw.get("taker_only", False)),
     )
 
 
@@ -132,6 +134,17 @@ def resolve_live_entry_price(
     return {
       "price_cents": int(ask),
       "execution_mode": "cross_spread",
+      "bid_cents": bid,
+      "ask_cents": ask,
+      "spread_cents": spread,
+      "ask_edge_cents": ask_edge,
+      "cross_spread_min_edge_cents": cross_threshold,
+    }
+
+  if pricing.taker_only:
+    return {
+      "price_cents": None,
+      "execution_mode": "blocked_taker_only",
       "bid_cents": bid,
       "ask_cents": ask,
       "spread_cents": spread,

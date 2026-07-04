@@ -19,6 +19,7 @@ def test_live_winning_streak_extends_hour_cap_before_refill():
       mode="live",
       live_auto_refill_hour_budget=True,
       use_accumulated_profit=False,
+      auto_stop_on_budget_exhausted=False,
     ))
     store.log_trade({
       "event_ticker": "EV1",
@@ -34,11 +35,11 @@ def test_live_winning_streak_extends_hour_cap_before_refill():
       "status": "filled",
       "pnl_usd": 5.0,
     })
-    # Without win extension: remaining would be 0 (entered $15 at $15 cap).
-    assert store.remaining_budget_usd("EV1", max_cap) == 5.0
+    # Win boost extends deployable: $15 cap + $5 realized → $20 deployable.
+    assert store.remaining_budget_usd("EV1", max_cap) == 20.0
 
 
-def test_live_hour_budget_refill_when_interval_cap_hit():
+def test_live_hour_budget_refill_when_deploy_exhausted_after_churn():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "bot.db")
     max_cap = 15.0
@@ -48,6 +49,7 @@ def test_live_hour_budget_refill_when_interval_cap_hit():
       mode="live",
       live_auto_refill_hour_budget=True,
       use_accumulated_profit=False,
+      auto_stop_on_budget_exhausted=False,
     ))
     store.log_trade({
       "event_ticker": "EV1",
@@ -62,6 +64,23 @@ def test_live_hour_budget_refill_when_interval_cap_hit():
       "mode": "live",
       "status": "filled",
       "pnl_usd": 0.0,
+    })
+    # Concurrent cap frees budget after exit — no interval cap block.
+    assert store.remaining_budget_usd("EV1", max_cap) == 15.0
+
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "enter",
+      "mode": "live",
+      "status": "filled",
+      "cost_usd": 15.0,
+    })
+    store.log_trade({
+      "event_ticker": "EV1",
+      "action": "exit",
+      "mode": "live",
+      "status": "filled",
+      "pnl_usd": -15.0,
     })
     assert store.remaining_budget_usd("EV1", max_cap) == 0.0
 
@@ -88,12 +107,15 @@ def test_live_hour_refill_disabled_keeps_fully_deployed():
       mode="live",
       live_auto_refill_hour_budget=False,
     ))
-    store.log_trade({
+    store.open_position({
+      "id": "p1",
       "event_ticker": "EV1",
-      "action": "enter",
-      "mode": "live",
-      "status": "filled",
+      "market_ticker": "T1",
+      "side": "yes",
+      "contracts": 30,
+      "entry_price_cents": 50,
       "cost_usd": 15.0,
+      "mode": "live",
     })
     bot = HourlyBot(store, asset="eth")
     from tests.test_hourly_bot_continuous import _live_tab

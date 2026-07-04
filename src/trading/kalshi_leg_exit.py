@@ -103,22 +103,28 @@ def avg_sell_fill_cents(
   """Volume-weighted average sell fill price on the held leg."""
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return None
+  from src.trading.kalshi_fill_sync import (
+    _build_order_direction_cache,
+    _fill_action_side,
+    _fill_count,
+    _fill_market_ticker,
+  )
+
   side_l = str(side or "").lower()
-  fills = kalshi.list_fills(ticker=str(market_ticker), limit=200)
+  ticker = str(market_ticker)
+  fills = kalshi.list_fills(ticker=ticker, limit=200)
+  cache = _build_order_direction_cache(kalshi)
   total_ct = 0.0
   total_px_ct = 0.0
   for fill in fills:
-    if str(fill.get("action") or "").lower() != "sell":
-      continue
-    if str(fill.get("side") or "").lower() != side_l:
+    row = fill if _fill_market_ticker(fill) else {**fill, "ticker": ticker}
+    leg = _fill_action_side(row, cache)
+    if not leg or leg[1] != "sell" or leg[2] != side_l:
       continue
     px = leg_price_cents_from_fill(fill, held_side=side_l)
     if px is None:
       continue
-    try:
-      ct = float(fill.get("count") or fill.get("fill_count") or 0)
-    except (TypeError, ValueError):
-      continue
+    ct = _fill_count(fill)
     if ct <= 0:
       continue
     if max_contracts is not None:

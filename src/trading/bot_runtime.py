@@ -60,6 +60,52 @@ def stats_epoch_at(conn: sqlite3.Connection) -> str | None:
   return str(raw) if raw else None
 
 
+def parse_stats_epoch_at(epoch_iso: str | None) -> datetime | None:
+  if not epoch_iso:
+    return None
+  try:
+    dt = datetime.fromisoformat(str(epoch_iso).replace("Z", "+00:00"))
+  except ValueError:
+    return None
+  if dt.tzinfo is None:
+    dt = dt.replace(tzinfo=timezone.utc)
+  return dt
+
+
+def event_in_stats_epoch(
+  event_ticker: str,
+  epoch_iso: str | None,
+  *,
+  first_trade_at: str | None = None,
+) -> bool:
+  """
+  Whether an interval (hour/slot) belongs in post-epoch stats.
+
+  Prefer Kalshi hourly settle time so late rollover exits on pre-epoch hours
+  do not pollute the fresh-start window. Fall back to first_trade_at for
+  synthetic or non-hourly event keys.
+  """
+  epoch = parse_stats_epoch_at(epoch_iso)
+  if epoch is None:
+    return True
+
+  from src.trading.hourly_event_time import hourly_event_settle_utc
+
+  settle = hourly_event_settle_utc(event_ticker)
+  if settle is not None:
+    return settle > epoch
+
+  if first_trade_at:
+    try:
+      first = datetime.fromisoformat(str(first_trade_at).replace("Z", "+00:00"))
+      if first.tzinfo is None:
+        first = first.replace(tzinfo=timezone.utc)
+      return first >= epoch
+    except ValueError:
+      pass
+  return True
+
+
 def record_bot_cycle(conn: sqlite3.Connection, *, active: bool) -> None:
   now = datetime.now(timezone.utc).isoformat()
   row = conn.execute("SELECT cycles_total FROM bot_runtime WHERE id = 1").fetchone()

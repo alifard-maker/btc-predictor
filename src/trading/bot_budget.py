@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class BudgetSettings(Protocol):
@@ -112,23 +112,22 @@ def remaining_budget_usd(
   if settings.mode == "paper":
     return max(0.0, min(deploy, float(max_cap)) - open_exposure_usd)
 
+  # Live max at-risk is concurrent open exposure (dashboard copy). Cumulative enter
+  # totals can exceed cap when positions rotate; interval_total_entered_usd only gates
+  # live auto-refill chunks (_maybe_live_refill_hour_budget), not deployable display.
+  deploy_for_entries = deploy
   if _live_auto_refill_enabled(settings):
+    deploy_for_entries += max(0.0, float(live_interval_extra_budget_usd))
     effective_max = live_effective_hour_cap(
       max_cap,
       settings,
       interval_realized_pnl_usd,
       live_interval_extra_budget_usd=live_interval_extra_budget_usd,
     )
-    concurrent_room = max(0.0, min(deploy, effective_max) - open_exposure_usd)
-    interval_room = max(0.0, effective_max - float(interval_total_entered_usd))
-    return min(concurrent_room, interval_room)
-
-  concurrent_room = max(0.0, min(deploy, float(max_cap)) - open_exposure_usd)
-  if settings.use_accumulated_profit:
-    return concurrent_room
-  effective_cap = float(max_cap) + max(0.0, float(live_interval_extra_budget_usd))
-  interval_room = max(0.0, effective_cap - float(interval_total_entered_usd))
-  return min(concurrent_room, interval_room)
+    ceiling = min(deploy_for_entries, effective_max)
+  else:
+    ceiling = min(deploy, float(max_cap))
+  return max(0.0, ceiling - open_exposure_usd)
 
 
 def config_max_spend_per_hour(cfg: dict | None) -> float | None:

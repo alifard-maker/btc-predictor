@@ -500,8 +500,13 @@ class Slot15BotStore:
       interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
     )
 
-  def _interval_total_entered_usd(self, event_ticker: str) -> float:
-    return self.slot_interval_summary(event_ticker)["total_entered_usd"]
+  def _interval_total_entered_usd(
+    self,
+    event_ticker: str,
+    settings: Slot15BotSettings | None = None,
+  ) -> float:
+    settings = settings or self.get_settings()
+    return self.slot_interval_summary(event_ticker, mode=settings.mode)["total_entered_usd"]
 
   def remaining_budget_usd(
     self,
@@ -519,7 +524,7 @@ class Slot15BotStore:
       paper_bankroll_usd=paper,
       interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
       open_exposure_usd=self.open_exposure_usd(event_ticker, mode=settings.mode),
-      interval_total_entered_usd=self._interval_total_entered_usd(event_ticker),
+      interval_total_entered_usd=self._interval_total_entered_usd(event_ticker, settings),
     )
 
   def record_exit_cooldown(

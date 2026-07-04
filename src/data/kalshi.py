@@ -38,6 +38,19 @@ def v2_book_side(*, side: str, action: str) -> str:
   return "ask" if s == "yes" else "bid"
 
 
+def v2_action_side_from_book(*, book_side: str, outcome_side: str) -> tuple[str, str] | None:
+  """Inverse of v2_book_side: V2 fill book + outcome → (buy|sell, yes|no)."""
+  book = str(book_side or "").lower()
+  side = str(outcome_side or "").lower()
+  if side not in ("yes", "no"):
+    return None
+  if book == "bid":
+    return ("buy", "yes") if side == "yes" else ("sell", "no")
+  if book == "ask":
+    return ("sell", "yes") if side == "yes" else ("buy", "no")
+  return None
+
+
 def v2_yes_price_cents(*, side: str, leg_price_cents: int) -> int:
   """V2 order prices are always YES-denominated; invert NO leg prices."""
   p = max(1, min(99, int(leg_price_cents)))

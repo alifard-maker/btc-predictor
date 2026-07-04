@@ -8,6 +8,7 @@ from typing import Any
 
 from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.slot15_bot_store import Slot15BotStore
+from src.trading.hourly_event_time import canonical_hourly_event_ticker
 
 BotStore = HourlyBotStore | Slot15BotStore
 
@@ -119,11 +120,14 @@ def _recent_event_tickers(
   *,
   mode: str,
   limit: int,
+  stats_epoch_at: str | None = None,
 ) -> list[tuple[str, datetime]]:
+  from src.trading.bot_runtime import event_in_stats_epoch
+
   with store._connect() as conn:
     rows = conn.execute(
       f"""
-      SELECT event_ticker, MAX(created_at) AS last_at
+      SELECT event_ticker, MAX(created_at) AS last_at, MIN(created_at) AS first_at
       FROM bot_trades
       WHERE event_ticker IS NOT NULL AND TRIM(event_ticker) != ''
         AND mode = ?
@@ -131,15 +135,32 @@ def _recent_event_tickers(
       ORDER BY last_at DESC
       LIMIT ?
       """,
-      (mode, limit),
+      (mode, limit * 4),
     ).fetchall()
   out: list[tuple[str, datetime]] = []
   for row in rows:
     evt = str(row["event_ticker"])
+    if not event_in_stats_epoch(evt, stats_epoch_at, first_trade_at=row["first_at"]):
+      continue
     ts = _parse_ts(row["last_at"])
     if ts is not None:
       out.append((evt, ts))
+    if len(out) >= limit:
+      break
   return out
+
+
+def _canonicalize_event_list(
+  events: list[tuple[str, datetime]],
+) -> list[tuple[str, datetime]]:
+  """Merge threshold/range sibling tickers (KXBTCD vs KXBTC) into one hour row."""
+  merged: dict[str, datetime] = {}
+  for evt, ts in events:
+    canon = canonical_hourly_event_ticker(evt)
+    prev = merged.get(canon)
+    if prev is None or ts > prev:
+      merged[canon] = ts
+  return sorted(merged.items(), key=lambda item: item[1], reverse=True)
 
 
 def _filter_trades_by_mode(trades: list[dict[str, Any]], mode: str) -> list[dict[str, Any]]:
@@ -163,6 +184,9 @@ def _entry_row(trade: dict[str, Any]) -> dict[str, Any]:
 
 
 def _exit_row(trade: dict[str, Any]) -> dict[str, Any]:
+  from src.trading.bot_exit_pnl import effective_exit_pnl_usd
+
+  pnl = effective_exit_pnl_usd(trade)
   return {
     "id": trade.get("id"),
     "created_at": trade.get("created_at"),
@@ -171,7 +195,7 @@ def _exit_row(trade: dict[str, Any]) -> dict[str, Any]:
     "label": trade.get("label"),
     "contracts": trade.get("contracts"),
     "exit_price_cents": trade.get("exit_price_cents") or trade.get("price_cents"),
-    "pnl_usd": trade.get("realized_pnl_usd") if trade.get("realized_pnl_usd") is not None else trade.get("pnl_usd"),
+    "pnl_usd": pnl,
     "exit_reason": _exit_reason(trade),
     "status": trade.get("status"),
     "detail": trade.get("detail"),
@@ -237,13 +261,30 @@ def build_hourly_live_trial_compare(
   trial_kind: str = "hourly_trial",
   live_kind: str = "hourly",
   pair_window_seconds: int = 180,
+  stats_epoch_at: str | None = None,
 ) -> dict[str, Any]:
   """Compare live bot vs paper trial for matched event_tickers (hourly or 15m slot)."""
   if trial_mode is None:
     trial_mode = trial_store.get_settings().mode or "paper"
 
-  live_events = _recent_event_tickers(live_store, mode=live_mode, limit=limit_hours * 2)
-  trial_events = _recent_event_tickers(trial_store, mode=trial_mode, limit=limit_hours * 2)
+  if stats_epoch_at is None:
+    from src.trading.bot_runtime import stats_epoch_at as read_stats_epoch_at
+
+    with live_store._connect() as conn:
+      stats_epoch_at = read_stats_epoch_at(conn)
+
+  live_events = _canonicalize_event_list(_recent_event_tickers(
+    live_store,
+    mode=live_mode,
+    limit=limit_hours * 2,
+    stats_epoch_at=stats_epoch_at,
+  ))
+  trial_events = _canonicalize_event_list(_recent_event_tickers(
+    trial_store,
+    mode=trial_mode,
+    limit=limit_hours * 2,
+    stats_epoch_at=stats_epoch_at,
+  ))
 
   last_by_event: dict[str, datetime] = {}
   for evt, ts in live_events + trial_events:
@@ -255,14 +296,28 @@ def build_hourly_live_trial_compare(
   live_set = {evt for evt, _ in live_events}
   trial_set = {evt for evt, _ in trial_events}
   matched = [evt for evt in last_by_event if evt in live_set and evt in trial_set]
+
+  from src.trading.bot_runtime import event_in_stats_epoch
+
+  if stats_epoch_at:
+    matched = [evt for evt in matched if event_in_stats_epoch(evt, stats_epoch_at)]
+    last_by_event = {
+      evt: ts
+      for evt, ts in last_by_event.items()
+      if event_in_stats_epoch(evt, stats_epoch_at)
+    }
+
   matched.sort(key=lambda e: last_by_event[e], reverse=True)
 
-  event_tickers = matched[:limit_hours]
+  event_tickers = [
+    evt for evt in matched[:limit_hours]
+    if event_in_stats_epoch(evt, stats_epoch_at)
+  ]
   if len(event_tickers) < limit_hours:
     extras = [
       evt
       for evt in sorted(last_by_event, key=lambda e: last_by_event[e], reverse=True)
-      if evt not in event_tickers
+      if evt not in event_tickers and event_in_stats_epoch(evt, stats_epoch_at)
     ]
     event_tickers.extend(extras[: max(0, limit_hours - len(event_tickers))])
 
@@ -296,6 +351,7 @@ def build_hourly_live_trial_compare(
     "trial_mode": trial_mode,
     "limit_hours": limit_hours,
     "pair_window_seconds": pair_window_seconds,
+    "stats_epoch_at": stats_epoch_at,
     "matched_event_count": len(matched),
     "hours": hours,
     "generated_at": datetime.now(timezone.utc).isoformat(),
