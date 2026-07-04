@@ -29,9 +29,8 @@ def migrate_bot_runtime(conn: sqlite3.Connection) -> None:
   _ensure_stats_epoch_column(conn)
 
 
-def set_stats_epoch_now(conn: sqlite3.Connection) -> str:
-  """Mark interval/P&L stats as starting now (fresh start / clear history)."""
-  now = datetime.now(timezone.utc).isoformat()
+def set_stats_epoch_at(conn: sqlite3.Connection, at_iso: str) -> str:
+  """Set interval/P&L stats window start (ISO-8601 UTC). Does not delete trades."""
   migrate_bot_runtime(conn)
   row = conn.execute("SELECT id FROM bot_runtime WHERE id = 1").fetchone()
   if row is None:
@@ -40,11 +39,16 @@ def set_stats_epoch_now(conn: sqlite3.Connection) -> str:
       INSERT INTO bot_runtime (id, last_cycle_at, last_cycle_active, cycles_total, stats_epoch_at)
       VALUES (1, NULL, 0, 0, ?)
       """,
-      (now,),
+      (at_iso,),
     )
   else:
-    conn.execute("UPDATE bot_runtime SET stats_epoch_at = ? WHERE id = 1", (now,))
-  return now
+    conn.execute("UPDATE bot_runtime SET stats_epoch_at = ? WHERE id = 1", (at_iso,))
+  return at_iso
+
+
+def set_stats_epoch_now(conn: sqlite3.Connection) -> str:
+  """Mark interval/P&L stats as starting now (fresh start / clear history)."""
+  return set_stats_epoch_at(conn, datetime.now(timezone.utc).isoformat())
 
 
 def stats_epoch_at(conn: sqlite3.Connection) -> str | None:

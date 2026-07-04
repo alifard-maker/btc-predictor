@@ -126,3 +126,40 @@ def fresh_start_all_bot_stores(loop: Any, cfg: dict[str, Any]) -> dict[str, Any]
     )
 
   return results
+
+
+def set_stats_epoch_all_stores(loop: Any, at_iso: str) -> dict[str, Any]:
+  """Set stats_epoch_at on every bot DB without clearing trades."""
+  from src.trading.bot_runtime import set_stats_epoch_at
+
+  results: dict[str, Any] = {}
+
+  def _set(store: Any, key: str) -> None:
+    with store._connect() as conn:
+      set_stats_epoch_at(conn, at_iso)
+    results[key] = {"stats_epoch_at": at_iso}
+
+  for asset in ("btc", "eth"):
+    _set(loop.hourly_bot_store(asset), f"hourly_{asset}")
+    _set(loop.hourly_trial_bot_store(asset), f"hourly_trial_{asset}")
+    if asset == "btc":
+      for kind, store_fn in (
+        ("hourly_trial_rally", loop.hourly_trial_rally_bot_store),
+        ("hourly_trial_soft", loop.hourly_trial_soft_bot_store),
+        ("hourly_trial_mech", loop.hourly_trial_mech_bot_store),
+      ):
+        _set(store_fn(asset), f"{kind}_{asset}")
+    if asset == "btc" or loop._slot15m_enabled("eth"):
+      _set(loop.slot15_bot_store(asset), f"slot15_{asset}")
+    if asset == "eth" and loop._slot15m_enabled("eth"):
+      _set(loop.slot15_trial_bot_store("eth"), "slot15_trial_eth")
+    if asset_v2_enabled(loop.cfg, asset):
+      _set(loop.hourly_bot_store(asset, kind="hourly_v2"), f"hourly_v2_{asset}")
+
+  for asset in ("spx", "ndx"):
+    if not asset_enabled(loop.cfg, asset):
+      continue
+    _set(loop.hourly_bot_store(asset), f"hourly_{asset}")
+    _set(loop.hourly_trial_bot_store(asset), f"hourly_trial_{asset}")
+
+  return results

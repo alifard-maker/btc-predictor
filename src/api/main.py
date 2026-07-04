@@ -6,6 +6,7 @@ import os
 import sqlite3
 import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -2200,6 +2201,28 @@ def admin_fresh_start_all_paper_bots(_: None = Depends(_session_user)):
 
   results = fresh_start_all_bot_stores(_loop, _cfg)
   return {"status": "ok", "reset": results}
+
+
+@app.post("/api/admin/set-stats-epoch")
+def admin_set_stats_epoch(
+  at: str = Query(
+    default="2026-07-04T16:59:00+00:00",
+    description="ISO-8601 instant; stats count from here forward (default Jul 4 2026 12:59 PM EDT)",
+  ),
+  _: None = Depends(_session_user),
+):
+  """Backdate stats window on all bot DBs without clearing trades."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.bot_fresh_start_all import set_stats_epoch_all_stores
+
+  try:
+    parsed = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+  except ValueError as exc:
+    raise HTTPException(400, f"Invalid at timestamp: {at}") from exc
+  at_iso = parsed.astimezone(timezone.utc).isoformat()
+  results = set_stats_epoch_all_stores(_loop, at_iso)
+  return {"status": "ok", "stats_epoch_at": at_iso, "stores": results}
 
 
 @app.post("/api/admin/reset-stats")
