@@ -33,6 +33,8 @@ class LiveExitConfig:
   adopted_leg_cut_loss_min_usd: float = 0.50
   # Orphan / kalshi-only adoption cap (resting-fill adoption uses full Kalshi size).
   max_orphan_adopted_contracts: int = 12
+  max_orphan_adopted_range_contracts: int | None = None
+  max_resting_adopted_range_contracts: int | None = None
   resting_fill_adopt_full_size: bool = True
   # Deprecated alias for max_orphan_adopted_contracts (backtests / legacy config).
   max_adopted_contracts: int = 6
@@ -254,28 +256,49 @@ def _orphan_adoption_cap(cfg: dict[str, Any] | None, *, kind: str) -> int:
   return int(live_exit_config(cfg, kind=kind).max_orphan_adopted_contracts)
 
 
+def _range_adoption_cap(
+  live_exit: LiveExitConfig,
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str,
+  adoption_source: AdoptionSource,
+  is_range: bool,
+) -> int:
+  if not is_range:
+    if adoption_source == "resting_fill":
+      if not live_exit.resting_fill_adopt_full_size:
+        return _orphan_adoption_cap(cfg, kind=kind)
+      return _max_contracts_per_entry(cfg, kind=kind)
+    if adoption_source == "failed_exit_restore":
+      return _max_contracts_per_entry(cfg, kind=kind)
+    return _orphan_adoption_cap(cfg, kind=kind)
+  if adoption_source == "resting_fill":
+    if live_exit.max_resting_adopted_range_contracts is not None:
+      return int(live_exit.max_resting_adopted_range_contracts)
+    if not live_exit.resting_fill_adopt_full_size:
+      return _orphan_adoption_cap(cfg, kind=kind)
+    return _max_contracts_per_entry(cfg, kind=kind)
+  if live_exit.max_orphan_adopted_range_contracts is not None:
+    return int(live_exit.max_orphan_adopted_range_contracts)
+  return _orphan_adoption_cap(cfg, kind=kind)
+
+
 def cap_adopted_contracts(
   contracts_fp: float,
   cfg: dict[str, Any] | None,
   *,
   kind: str,
   adoption_source: AdoptionSource = "orphan",
+  is_range: bool = False,
 ) -> tuple[int, float]:
   """Clamp adopted inventory by source-specific rules (0 cap = no limit)."""
   import logging
 
   rounded = max(1, int(round(contracts_fp)))
   live_exit = live_exit_config(cfg, kind=kind)
-
-  if adoption_source == "resting_fill":
-    if not live_exit.resting_fill_adopt_full_size:
-      cap = _orphan_adoption_cap(cfg, kind=kind)
-    else:
-      cap = _max_contracts_per_entry(cfg, kind=kind)
-  elif adoption_source == "failed_exit_restore":
-    cap = _max_contracts_per_entry(cfg, kind=kind)
-  else:
-    cap = _orphan_adoption_cap(cfg, kind=kind)
+  cap = _range_adoption_cap(
+    live_exit, cfg, kind=kind, adoption_source=adoption_source, is_range=is_range,
+  )
 
   if cap <= 0:
     return rounded, float(contracts_fp)

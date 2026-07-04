@@ -7,9 +7,11 @@ from src.backtest.mechanics_profiles import (
   live_mechanics_profile_for_cfg,
 )
 from src.trading.hourly_live_trial_align import (
+  live_entry_execution_mirror_active,
   live_resting_entry_guards_active,
   live_trial_align_active,
   live_trial_exit_align_active,
+  should_mirror_trial_entry_execution,
   should_use_trial_leg_exits,
 )
 
@@ -44,6 +46,8 @@ def test_live_mech_profile_not_applied_to_eth_without_key():
 def test_entry_align_off_exit_align_on_with_mech_profile():
   cfg = _cfg()
   assert not live_trial_align_active(cfg, kind="hourly", mode="live")
+  assert live_entry_execution_mirror_active(cfg, kind="hourly", mode="live")
+  assert should_mirror_trial_entry_execution(cfg, kind="hourly", mode="live")
   assert live_trial_exit_align_active(cfg, kind="hourly", mode="live")
   assert live_resting_entry_guards_active(cfg, kind="hourly", mode="live")
   assert should_use_trial_leg_exits(
