@@ -10,6 +10,7 @@ const BOT_SETTING_FIELDS = [
   'allow_actionable',
   'use_accumulated_profit',
   'paper_auto_refill',
+  'live_auto_refill_hour_budget',
 ];
 
 const PATCH_CONFIRM_MS = 120000;
@@ -28,6 +29,7 @@ function normalizeBotSettings(raw, maxKey) {
     allow_actionable: !!raw.allow_actionable,
     use_accumulated_profit: !!raw.use_accumulated_profit,
     paper_auto_refill: raw.paper_auto_refill !== false,
+    live_auto_refill_hour_budget: !!raw.live_auto_refill_hour_budget,
   };
 }
 

@@ -634,6 +634,43 @@ class HourlyBot:
     log.warning("%s hourly bot auto-stopped: %s", self.asset.upper(), detail)
     return row
 
+  def _maybe_live_refill_hour_budget(
+    self,
+    event_ticker: str,
+    settings: HourlyBotSettings,
+    max_cap: float,
+  ) -> bool:
+    """Add another hour entry budget chunk when live interval cap is hit (no open legs)."""
+    if settings.mode != "live" or not settings.live_auto_refill_hour_budget:
+      return False
+    if settings.use_accumulated_profit:
+      return False
+    exposure = self.store.open_exposure_usd(event_ticker, mode="live")
+    if exposure > 0:
+      return False
+    total_entered = self.store.hour_interval_summary(event_ticker)["total_entered_usd"]
+    extra = float(self.store.get_live_hour_budget_dict(event_ticker).get("extra_budget_usd") or 0)
+    effective_cap = float(max_cap) + extra
+    if float(total_entered) < effective_cap - 0.009:
+      return False
+    state = self.store.refill_live_hour_budget(event_ticker, max_cap)
+    detail = (
+      f"Live hour budget refilled +${state['chunk_usd']:.2f} "
+      f"(refill #{state['refill_count']}, "
+      f"hour allowance ${effective_cap + float(max_cap):.2f}, "
+      f"entered ${float(total_entered):.2f})"
+    )
+    self.store.log_trade({
+      "event_ticker": event_ticker,
+      "trigger": "continuous",
+      "action": "live_hour_refill",
+      "mode": settings.mode,
+      "status": "filled",
+      "detail": detail,
+    })
+    log.info("%s hourly bot live hour refill: %s", self.asset.upper(), detail)
+    return True
+
   def _resolve_exit(
     self,
     pos: dict[str, Any],
@@ -1179,8 +1216,12 @@ class HourlyBot:
       self.store.set_last_skip_reason("hour_budget_exhausted")
       return results
     if remaining <= 0:
-      self.store.set_last_skip_reason("fully_deployed")
-      return results
+      refilled = self._maybe_live_refill_hour_budget(event_ticker, settings, max_cap)
+      if refilled:
+        remaining = self.store.remaining_budget_usd(event_ticker, max_cap, settings)
+      if remaining <= 0:
+        self.store.set_last_skip_reason("fully_deployed")
+        return results
 
     candidates = _entry_candidates(tab, cfg)
     if not candidates:

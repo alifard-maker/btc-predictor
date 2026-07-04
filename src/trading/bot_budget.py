@@ -65,6 +65,7 @@ def remaining_budget_usd(
   interval_realized_pnl_usd: float,
   open_exposure_usd: float,
   interval_total_entered_usd: float,
+  live_interval_extra_budget_usd: float = 0.0,
 ) -> float:
   """Budget left for new entries after open exposure and optional interval cap."""
   deploy = deploy_bankroll_usd(
@@ -80,7 +81,8 @@ def remaining_budget_usd(
     return concurrent_room
   if settings.use_accumulated_profit:
     return concurrent_room
-  interval_room = max(0.0, float(max_cap) - float(interval_total_entered_usd))
+  effective_cap = float(max_cap) + max(0.0, float(live_interval_extra_budget_usd))
+  interval_room = max(0.0, effective_cap - float(interval_total_entered_usd))
   return min(concurrent_room, interval_room)
 
 

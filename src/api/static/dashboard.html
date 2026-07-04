@@ -796,7 +796,7 @@
   <script>
     /* Inlined from bot_settings_ui.js — must load before dashboard init (external script 404 broke all UI). */
     (function () {
-      const BOT_SETTING_FIELDS = ['enabled', 'mode', 'allow_strong', 'allow_actionable', 'use_accumulated_profit', 'profit_use_pct', 'paper_auto_refill', 'aggressive_entries'];
+      const BOT_SETTING_FIELDS = ['enabled', 'mode', 'allow_strong', 'allow_actionable', 'use_accumulated_profit', 'profit_use_pct', 'paper_auto_refill', 'live_auto_refill_hour_budget', 'aggressive_entries'];
       const PATCH_CONFIRM_MS = 120000;
       function botUiKey(kind, asset) { return `${kind}-${asset}`; }
       function normalizeBotSettings(raw, maxKey) {
@@ -810,6 +810,7 @@
           use_accumulated_profit: !!raw.use_accumulated_profit,
           profit_use_pct: Number(raw.profit_use_pct ?? 100),
           paper_auto_refill: raw.paper_auto_refill !== false,
+          live_auto_refill_hour_budget: !!raw.live_auto_refill_hour_budget,
           aggressive_entries: !!raw.aggressive_entries,
         };
       }
@@ -2896,19 +2897,37 @@
       return activeTab === hourlyTabForAsset(asset);
     }
 
+    function botAutoRefillChecked(s) {
+      return (s.mode || 'paper') === 'live'
+        ? !!s.live_auto_refill_hour_budget
+        : s.paper_auto_refill !== false;
+    }
+
+    function botAutoRefillTooltip(mode) {
+      if (mode === 'live') {
+        return 'When ON and this hour\'s entry budget is fully used with no open legs, add another max at-risk $ chunk for the same hour.';
+      }
+      return 'When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.';
+    }
+
     function readBotSettingsFromDom(asset, kind = 'hourly') {
       const p = botDomPrefix(kind, asset);
       const enabledEl = $(`bot-enabled-${p}`);
       if (!enabledEl) return null;
+      const mode = $(`bot-live-${p}`)?.checked ? 'live' : 'paper';
+      const refillOn = !!$(`bot-auto-refill-${p}`)?.checked;
+      const key = botUiKey(kind, asset);
+      const prev = lastKnownBotSettings[key] || {};
       return {
         enabled: !!enabledEl.checked,
-        mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
+        mode,
         max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '10'),
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
         profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
-        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        paper_auto_refill: mode === 'paper' ? refillOn : prev.paper_auto_refill !== false,
+        live_auto_refill_hour_budget: mode === 'live' ? refillOn : !!prev.live_auto_refill_hour_budget,
         aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
     }
@@ -2958,8 +2977,8 @@
           <label class="bot-label" title="% of interval profit deployable when Use profits is ON (0–100).">Profit use %
             <input type="number" id="bot-profit-use-pct-${p}" min="0" max="100" step="5" value="${s.profit_use_pct ?? 100}" style="width:3.5rem;margin-left:.35rem" ${s.use_accumulated_profit ? '' : 'disabled'} onchange="${saveFn}">
           </label>
-          <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
-            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
+          <label class="bot-label" title="${botAutoRefillTooltip(s.mode || 'paper')}">Auto-refill
+            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${botAutoRefillChecked(s) ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
           </label>
           ${botAggressiveToggleHtml(p, s, saveFn)}
         </div>`;
@@ -3706,7 +3725,7 @@
       set(`bot-strong-${p}`, s.allow_strong);
       set(`bot-actionable-${p}`, s.allow_actionable);
       set(`bot-use-profits-${p}`, s.use_accumulated_profit);
-      set(`bot-auto-refill-${p}`, s.paper_auto_refill);
+      set(`bot-auto-refill-${p}`, botAutoRefillChecked(s));
       set(`bot-aggressive-${p}`, s.aggressive_entries);
       const pctEl = $(`bot-profit-use-pct-${p}`);
       if (pctEl) {
@@ -4984,17 +5003,10 @@
       const maxKey = 'max_spend_per_hour_usd';
       const key = botUiKey(kind, asset);
       const p = botDomPrefix(kind, asset);
-      const enabledEl = $(`bot-enabled-${p}`);
-      if (!enabledEl) return false;
+      const domSettings = readBotSettingsFromDom(asset, kind);
+      if (!domSettings) return false;
       const body = {
-        enabled: !!enabledEl.checked,
-        mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
-        max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '10'),
-        allow_strong: !!$(`bot-strong-${p}`)?.checked,
-        allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
-        use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
-        profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
-        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        ...domSettings,
         aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
       if (livePassword) body.live_password = livePassword;

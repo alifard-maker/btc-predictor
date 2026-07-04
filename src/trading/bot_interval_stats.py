@@ -47,7 +47,7 @@ def compute_interval_performance(
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
       MIN(created_at) AS first_trade_at
     FROM bot_trades
-    WHERE action NOT IN ('auto_stop', 'paper_refill'){mode_clause}
+    WHERE action NOT IN ('auto_stop', 'paper_refill', 'live_hour_refill'){mode_clause}
     GROUP BY event_ticker
     ORDER BY first_trade_at ASC
     """,

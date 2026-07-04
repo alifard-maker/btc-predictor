@@ -805,6 +805,9 @@ def _apply_hourly_bot_settings(
     "use_accumulated_profit": bool(body.get("use_accumulated_profit", current.use_accumulated_profit)),
     "profit_use_pct": float(body.get("profit_use_pct", current.profit_use_pct)),
     "paper_auto_refill": bool(body.get("paper_auto_refill", current.paper_auto_refill)),
+    "live_auto_refill_hour_budget": bool(
+      body.get("live_auto_refill_hour_budget", current.live_auto_refill_hour_budget)
+    ),
     "aggressive_entries": bool(body.get("aggressive_entries", current.aggressive_entries)),
     "auto_stopped": auto_stopped,
   })
