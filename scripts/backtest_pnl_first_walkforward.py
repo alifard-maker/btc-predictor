@@ -62,8 +62,7 @@ def main() -> int:
 
   if not args.skip_walk_forward:
     print("running V1 walk-forward ML (rolling retrain)...", flush=True)
-    ctx = {"df_1h": df, "df_15m": None}
-    out["v1_walk_forward_ml"] = run_v1_walk_forward(cfg, df, ctx, model_type="random_forest")
+    out["v1_walk_forward_ml"] = run_v1_walk_forward(cfg, df, None, model_type="random_forest")
   else:
     out["v1_walk_forward_ml"] = {"skipped": True}
 
