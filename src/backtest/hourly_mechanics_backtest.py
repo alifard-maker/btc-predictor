@@ -72,6 +72,10 @@ class MechanicsSimOptions:
   disable_cut_loss: bool = False
   structure_memory: bool = False
   structure_lookback_bars: int = 12
+  structure_mu_pull_strength: float | None = None
+  structure_upper_box_fraction: float | None = None
+  structure_resistance_penalty: float | None = None
+  structure_block_yes_above: bool | None = None
 
 
 @dataclass
@@ -322,12 +326,35 @@ def simulate_hour(
         structure_blocks_yes_above,
       )
 
+      _sm_defaults = StructureMemoryConfig()
       terminal_mu, poll_sigma, structure_detail = adjust_mu_sigma_from_structure(
         terminal_mu,
         poll_sigma,
         brti,
         df_history,
-        cfg=StructureMemoryConfig(lookback_bars=sim_options.structure_lookback_bars),
+        cfg=StructureMemoryConfig(
+          lookback_bars=sim_options.structure_lookback_bars,
+          mu_pull_strength=float(
+            sim_options.structure_mu_pull_strength
+            if sim_options.structure_mu_pull_strength is not None
+            else _sm_defaults.mu_pull_strength
+          ),
+          upper_box_fraction=float(
+            sim_options.structure_upper_box_fraction
+            if sim_options.structure_upper_box_fraction is not None
+            else _sm_defaults.upper_box_fraction
+          ),
+          resistance_mu_penalty=float(
+            sim_options.structure_resistance_penalty
+            if sim_options.structure_resistance_penalty is not None
+            else _sm_defaults.resistance_mu_penalty
+          ),
+          block_yes_above_in_upper_box=(
+            sim_options.structure_block_yes_above
+            if sim_options.structure_block_yes_above is not None
+            else _sm_defaults.block_yes_above_in_upper_box
+          ),
+        ),
       )
     model_base = 0.5 + 0.5 * math.tanh((terminal_mu - hour_open) / poll_sigma)
     candidates: list[tuple[float, dict, dict]] = []

@@ -1174,6 +1174,8 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
     run_preflight,
   )
 
+  from src.trading.pnl_first_backtest_runner import backtest_status, run_live_pnl_audit
+
   mgr = PnlFirstManagerConfig.from_cfg(_cfg)
   snap = manager_status_snapshot(_loop)
   return {
@@ -1189,6 +1191,8 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
     "runtime": snap,
     "preflight_now": run_preflight(_loop, _cfg),
     "milestone_now": compute_live_milestone(_loop, _cfg),
+    "backtest_queue": backtest_status(_cfg),
+    "live_audit": run_live_pnl_audit(_loop, _cfg),
   }
 
 
