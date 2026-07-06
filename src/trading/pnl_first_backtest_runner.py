@@ -20,10 +20,16 @@ _ACTIVE_JOB: dict[str, Any] | None = None
 
 DEFAULT_JOBS: list[dict[str, str]] = [
   {
-    "id": "phase_a_structure_sweep_v2",
-    "script": "scripts/backtest_structure_memory_sweep_v2.py",
-    "output": "data/logs/backtest_structure_memory_sweep_v2.json",
-    "milestone": "phase_a_fair_baseline_and_structure_tune",
+    "id": "phase_a_1h_backfill",
+    "script": "scripts/backfill_1h_candles_railway.py",
+    "output": "data/logs/backfill_1h_manifest.json",
+    "milestone": "phase_a_1h_history_backfill",
+  },
+  {
+    "id": "phase_a_structure_sweep_v3",
+    "script": "scripts/backtest_structure_memory_sweep_v3.py",
+    "output": "data/logs/backtest_structure_memory_sweep_v3.json",
+    "milestone": "phase_a_fair_baseline_and_structure_tune_v3",
   },
   {
     "id": "phase_b_walkforward_ml",
@@ -51,16 +57,32 @@ def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
 
   state = load_manager_state(cfg)
   jobs = state.get("backtest_jobs")
-  if isinstance(jobs, list) and jobs:
+  now = datetime.now(timezone.utc).isoformat()
+
+  if not isinstance(jobs, list) or not jobs:
+    queued = [{**j, "status": "pending", "queued_at": now} for j in DEFAULT_JOBS]
+    state["backtest_jobs"] = queued
+    state["backtest_queue_initialized_at"] = now
+    save_manager_state(state, cfg)
+    log.info("pnl_first backtest queue initialized (%d jobs)", len(queued))
+    return queued
+
+  existing_ids = {str(j.get("id")) for j in jobs if j.get("id")}
+  new_jobs = [
+    {**j, "status": "pending", "queued_at": now}
+    for j in DEFAULT_JOBS
+    if j["id"] not in existing_ids
+  ]
+  if not new_jobs:
     return jobs
-  queued = []
-  for j in DEFAULT_JOBS:
-    queued.append({**j, "status": "pending", "queued_at": datetime.now(timezone.utc).isoformat()})
-  state["backtest_jobs"] = queued
-  state["backtest_queue_initialized_at"] = datetime.now(timezone.utc).isoformat()
+
+  first_pending = next((i for i, j in enumerate(jobs) if j.get("status") == "pending"), len(jobs))
+  jobs = jobs[:first_pending] + new_jobs + jobs[first_pending:]
+  state["backtest_jobs"] = jobs
+  state["backtest_queue_updated_at"] = now
   save_manager_state(state, cfg)
-  log.info("pnl_first backtest queue initialized (%d jobs)", len(queued))
-  return queued
+  log.info("pnl_first backtest queue merged %d new job(s): %s", len(new_jobs), [j["id"] for j in new_jobs])
+  return jobs
 
 
 def _persist_jobs(cfg: dict[str, Any] | None, jobs: list[dict[str, Any]]) -> None:

@@ -75,6 +75,7 @@ class MechanicsSimOptions:
   structure_mu_pull_strength: float | None = None
   structure_upper_box_fraction: float | None = None
   structure_resistance_penalty: float | None = None
+  structure_sigma_inflate_tight: float | None = None
   structure_block_yes_above: bool | None = None
 
 
@@ -348,6 +349,11 @@ def simulate_hour(
             sim_options.structure_resistance_penalty
             if sim_options.structure_resistance_penalty is not None
             else _sm_defaults.resistance_mu_penalty
+          ),
+          sigma_inflate_tight=float(
+            sim_options.structure_sigma_inflate_tight
+            if sim_options.structure_sigma_inflate_tight is not None
+            else _sm_defaults.sigma_inflate_tight
           ),
           block_yes_above_in_upper_box=(
             sim_options.structure_block_yes_above
