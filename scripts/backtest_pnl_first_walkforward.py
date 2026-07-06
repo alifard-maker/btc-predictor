@@ -62,7 +62,18 @@ def main() -> int:
 
   if not args.skip_walk_forward:
     print("running V1 walk-forward ML (rolling retrain)...", flush=True)
-    out["v1_walk_forward_ml"] = run_v1_walk_forward(cfg, df, None, model_type="random_forest")
+    try:
+      out["v1_walk_forward_ml"] = run_v1_walk_forward(cfg, df, None, model_type="random_forest")
+    except ValueError as exc:
+      out["v1_walk_forward_ml"] = {
+        "skipped": True,
+        "reason": str(exc),
+        "note": (
+          "Interim job: mechanics baseline only. Walk-forward needs more 1h history "
+          "than Railway currently holds (or smaller train_window). Unified WF mechanics engine TBD."
+        ),
+      }
+      print(f"walk-forward skipped: {exc}", flush=True)
   else:
     out["v1_walk_forward_ml"] = {"skipped": True}
 
