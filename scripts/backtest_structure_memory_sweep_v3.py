@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,7 +20,7 @@ from src.backtest.hourly_mechanics_backtest import MechanicsSimOptions, run_mech
 from src.config import load_config
 from src.data.storage import CandleStorage
 
-DEFAULT_OUT = ROOT / "data" / "logs" / "backtest_structure_memory_sweep_v3.json"
+DEFAULT_OUT = Path(os.getenv("DATA_DIR", str(ROOT / "data"))) / "logs" / "backtest_structure_memory_sweep_v3.json"
 
 GATES = MechanicsSimOptions(rank_by_ask_edge=True, use_live_regime=True)
 

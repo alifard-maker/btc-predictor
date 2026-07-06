@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,7 +16,7 @@ if str(ROOT) not in sys.path:
 from src.config import ensure_dirs, load_config
 from src.data.storage import CandleStorage, HistoricalCollector
 
-DEFAULT_MANIFEST = ROOT / "data" / "logs" / "backfill_1h_manifest.json"
+DEFAULT_MANIFEST = Path(os.getenv("DATA_DIR", str(ROOT / "data"))) / "logs" / "backfill_1h_manifest.json"
 
 
 def main() -> int:

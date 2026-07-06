@@ -52,6 +52,17 @@ def _project_root() -> Path:
   return Path(__file__).resolve().parents[2]
 
 
+def _data_root() -> Path:
+  return Path(os.getenv("DATA_DIR", str(_project_root() / "data")))
+
+
+def _resolve_job_output(rel_path: str) -> Path:
+  p = Path(rel_path)
+  if p.parts[:1] == ("data",):
+    return _data_root().joinpath(*p.parts[1:])
+  return _project_root() / p
+
+
 def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
   from src.trading.pnl_first_railway_manager import load_manager_state, save_manager_state
 
@@ -74,7 +85,7 @@ def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
     if j["id"] not in existing_ids
   ]
   if not new_jobs:
-    return jobs
+    return _requeue_stale_running(cfg, jobs)
 
   first_pending = next((i for i, j in enumerate(jobs) if j.get("status") == "pending"), len(jobs))
   jobs = jobs[:first_pending] + new_jobs + jobs[first_pending:]
@@ -82,6 +93,27 @@ def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
   state["backtest_queue_updated_at"] = now
   save_manager_state(state, cfg)
   log.info("pnl_first backtest queue merged %d new job(s): %s", len(new_jobs), [j["id"] for j in new_jobs])
+  return _requeue_stale_running(cfg, jobs)
+
+
+def _requeue_stale_running(cfg: dict[str, Any] | None, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  """After deploy, no in-process runner — reset orphaned running jobs."""
+  from src.trading.pnl_first_railway_manager import load_manager_state, save_manager_state
+
+  with _RUN_LOCK:
+    if _ACTIVE_PROC is not None:
+      return jobs
+  stale = [j for j in jobs if j.get("status") == "running"]
+  if not stale:
+    return jobs
+  now = datetime.now(timezone.utc).isoformat()
+  for j in stale:
+    j["status"] = "pending"
+    j["requeued_at"] = now
+  state = load_manager_state(cfg)
+  state["backtest_jobs"] = jobs
+  save_manager_state(state, cfg)
+  log.warning("pnl_first backtest requeued stale running job(s): %s", [j.get("id") for j in stale])
   return jobs
 
 
@@ -115,7 +147,7 @@ def tick_backtest_runner(cfg: dict[str, Any] | None) -> dict[str, Any] | None:
           j["exit_code"] = rc
           j["finished_at"] = finished
           j["log_path"] = str(log_path)
-          out = _project_root() / str(j.get("output", ""))
+          out = _resolve_job_output(str(j.get("output", "")))
           if out.exists():
             j["output_path"] = str(out)
             try:
