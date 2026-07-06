@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.kalshi_fill_sync import (
   _aggregate_fills_to_orders,
+  _aggregate_settlements_to_exits,
   _build_order_direction_cache,
   backfill_kalshi_hourly_fills,
   replay_closed_legs_from_kalshi_fills,
@@ -18,10 +19,12 @@ from src.trading.kalshi_fill_sync import (
 )
 
 
-def _kalshi_with_fills(fills):
+def _kalshi_with_fills(fills, settlements=None):
   kalshi = MagicMock()
   kalshi.authenticated = True
   kalshi.list_fills.return_value = fills
+  kalshi.list_settlements.return_value = settlements if settlements is not None else []
+  kalshi.get.return_value = {"orders": []}
   return kalshi
 
 
@@ -496,3 +499,122 @@ def test_aggregate_v2_fills_without_order_cache():
   assert orders[0]["action"] == "buy"
   assert orders[0]["side"] == "yes"
   assert orders[0]["price_cents"] == 44
+
+
+def test_aggregate_settlements_to_exits_yes_loss():
+  ticker = "KXBTCD-26JUL0413-T62599.99"
+  settlements = [{
+    "ticker": ticker,
+    "event_ticker": "KXBTCD-26JUL0413",
+    "market_result": "no",
+    "yes_count_fp": "2.00",
+    "no_count_fp": "0.00",
+    "value": 0,
+    "settled_time": "2026-07-04T18:00:00+00:00",
+  }]
+  exits = _aggregate_settlements_to_exits(settlements, asset="btc")
+  assert len(exits) == 1
+  assert exits[0]["ticker"] == ticker
+  assert exits[0]["side"] == "yes"
+  assert exits[0]["action"] == "sell"
+  assert exits[0]["price_cents"] == 0
+  assert exits[0]["contracts"] == 2.0
+
+
+def test_summarize_pairs_buy_with_settlement_exit():
+  """Hourly legs held to expiry exit via /portfolio/settlements, not sell fills."""
+  ticker = "KXBTCD-26JUL0413-T62599.99"
+  fills = [{
+    "order_id": "buy-settle",
+    "ticker": ticker,
+    "action": "buy",
+    "side": "yes",
+    "yes_price": 44,
+    "count": 2,
+    "created_time": "2026-07-04T17:05:00+00:00",
+  }]
+  settlements = [{
+    "ticker": ticker,
+    "event_ticker": "KXBTCD-26JUL0413",
+    "market_result": "no",
+    "yes_count_fp": "2.00",
+    "no_count_fp": "0.00",
+    "value": 0,
+    "settled_time": "2026-07-04T18:00:00+00:00",
+  }]
+  kalshi = _kalshi_with_fills(fills, settlements=settlements)
+  since = datetime(2026, 7, 4, 16, 59, tzinfo=timezone.utc)
+  sm = summarize_kalshi_experiment_fills(kalshi, since=since, asset="btc")
+  assert sm["ok"] is True
+  assert sm["closed_trades"] == 1
+  assert sm["post_epoch_settlements"] == 1
+  assert sm["post_epoch_sells"] == 0
+  assert sm["total_pnl_usd"] == -0.88
+  assert sm["losses"] == 1
+
+
+def test_summarize_settlement_winning_no_leg():
+  ticker = "KXBTCD-26JUL0415-T63099.99"
+  fills = [{
+    "order_id": "buy-no",
+    "ticker": ticker,
+    "action": "buy",
+    "side": "no",
+    "no_price": 56,
+    "count": 2,
+    "created_time": "2026-07-04T18:05:00+00:00",
+  }]
+  settlements = [{
+    "ticker": ticker,
+    "event_ticker": "KXBTCD-26JUL0415",
+    "market_result": "no",
+    "yes_count_fp": "0.00",
+    "no_count_fp": "2.00",
+    "value": 0,
+    "settled_time": "2026-07-04T19:00:00+00:00",
+  }]
+  kalshi = _kalshi_with_fills(fills, settlements=settlements)
+  since = datetime(2026, 7, 4, 16, 59, tzinfo=timezone.utc)
+  sm = summarize_kalshi_experiment_fills(kalshi, since=since, asset="btc")
+  assert sm["closed_trades"] == 1
+  assert sm["total_pnl_usd"] == 0.88
+  assert sm["wins"] == 1
+
+
+def test_summarize_prefers_sell_fill_over_settlement():
+  """When both sell fill and settlement exist, FIFO uses the earlier exit."""
+  ticker = "KXBTCD-26JUL0416-T62599.99"
+  fills = [
+    {
+      "order_id": "buy-a",
+      "ticker": ticker,
+      "action": "buy",
+      "side": "yes",
+      "yes_price": 40,
+      "count": 2,
+      "created_time": "2026-07-04T19:30:00+00:00",
+    },
+    {
+      "order_id": "sell-a",
+      "ticker": ticker,
+      "action": "sell",
+      "side": "yes",
+      "yes_price": 53,
+      "count": 2,
+      "created_time": "2026-07-04T19:45:00+00:00",
+    },
+  ]
+  settlements = [{
+    "ticker": ticker,
+    "event_ticker": "KXBTCD-26JUL0416",
+    "market_result": "no",
+    "yes_count_fp": "2.00",
+    "no_count_fp": "0.00",
+    "value": 0,
+    "settled_time": "2026-07-04T20:00:00+00:00",
+  }]
+  kalshi = _kalshi_with_fills(fills, settlements=settlements)
+  since = datetime(2026, 7, 4, 16, 59, tzinfo=timezone.utc)
+  sm = summarize_kalshi_experiment_fills(kalshi, since=since, asset="btc")
+  assert sm["closed_trades"] == 1
+  assert sm["total_pnl_usd"] == 0.26

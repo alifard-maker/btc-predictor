@@ -922,7 +922,12 @@ def hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
     raise HTTPException(500, f"Kalshi sync failed: {e}") from e
 
 
-def _hourly_kalshi_fill_summary_response(asset: str, since: str | None) -> dict[str, Any]:
+def _hourly_kalshi_fill_summary_response(
+  asset: str,
+  since: str | None,
+  *,
+  event_ticker: str | None = None,
+) -> dict[str, Any]:
   from datetime import datetime, timezone
 
   from src.trading.bot_runtime import stats_epoch_at
@@ -950,18 +955,25 @@ def _hourly_kalshi_fill_summary_response(asset: str, since: str | None) -> dict[
         since_dt = since_dt.replace(tzinfo=timezone.utc)
   if since_dt is None:
     raise HTTPException(400, "Provide since= or set stats_epoch_at on the bot store")
-  return summarize_kalshi_experiment_fills(kalshi, since=since_dt, critical=True, asset=asset)
+  return summarize_kalshi_experiment_fills(
+    kalshi,
+    since=since_dt,
+    critical=True,
+    asset=asset,
+    event_ticker=event_ticker,
+  )
 
 
 @app.get("/api/hourly/bot/kalshi-fill-summary")
 def hourly_bot_kalshi_fill_summary(
   since: str | None = Query(default=None, description="ISO-8601 UTC lower bound (defaults to stats_epoch_at)"),
+  event_ticker: str | None = Query(default=None, description="Limit to one hourly event (Kalshi ground truth)"),
   _: None = Depends(_session_user),
 ):
   """Realized P&L from Kalshi hourly fill history (exchange source of truth)."""
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  return _hourly_kalshi_fill_summary_response("btc", since)
+  return _hourly_kalshi_fill_summary_response("btc", since, event_ticker=event_ticker)
 
 
 @app.get("/api/hourly/bot")
@@ -1149,6 +1161,35 @@ def bots_risk_status(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return _loop.bot_risk_status()
+
+
+@app.get("/api/pnl-first/manager")
+def pnl_first_manager_status(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.pnl_first_railway_manager import (
+    PnlFirstManagerConfig,
+    compute_live_milestone,
+    manager_status_snapshot,
+    run_preflight,
+  )
+
+  mgr = PnlFirstManagerConfig.from_cfg(_cfg)
+  snap = manager_status_snapshot(_loop)
+  return {
+    "config": {
+      "enabled": mgr.enabled,
+      "phase": mgr.phase,
+      "enforce_sleep": mgr.enforce_sleep,
+      "trading_armed": mgr.trading_armed,
+      "auto_wake_when_ready": mgr.auto_wake_when_ready,
+      "live_cap_usd": mgr.live_cap_usd,
+      "interval_seconds": mgr.interval_seconds,
+    },
+    "runtime": snap,
+    "preflight_now": run_preflight(_loop, _cfg),
+    "milestone_now": compute_live_milestone(_loop, _cfg),
+  }
 
 
 @app.get("/api/bots/hourly-live-trial-compare")

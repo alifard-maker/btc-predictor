@@ -800,6 +800,96 @@ def replay_closed_legs_from_kalshi_fills(
   return {"ok": True, "changes": changes}
 
 
+def _settlement_created_at(row: dict[str, Any]) -> datetime | None:
+  raw = row.get("settled_time") or row.get("created_time") or row.get("ts")
+  if not raw:
+    return None
+  try:
+    if isinstance(raw, (int, float)):
+      return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+    return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+  except (TypeError, ValueError, OSError):
+    return None
+
+
+def _settlement_contract_count(row: dict[str, Any], side: str) -> float:
+  side_l = str(side or "").lower()
+  if side_l not in ("yes", "no"):
+    return 0.0
+  for key in (f"{side_l}_count_fp", f"{side_l}_count"):
+    raw = row.get(key)
+    if raw is None or raw == "":
+      continue
+    try:
+      val = float(raw)
+    except (TypeError, ValueError):
+      continue
+    if val > 0:
+      return val
+  return 0.0
+
+
+def _exit_cents_from_settlement(row: dict[str, Any], *, side: str) -> int | None:
+  """Binary payout on the held leg from a Kalshi /portfolio/settlements row."""
+  result = str(row.get("market_result") or "").lower()
+  if result in ("void", "scalar", ""):
+    return None
+  yes_cents: int | None = None
+  raw_value = row.get("value")
+  if raw_value not in (None, ""):
+    try:
+      yes_cents = max(0, min(100, int(raw_value)))
+    except (TypeError, ValueError):
+      yes_cents = None
+  if yes_cents is None:
+    if result == "yes":
+      yes_cents = 100
+    elif result == "no":
+      yes_cents = 0
+    else:
+      return None
+  if str(side).lower() == "yes":
+    return yes_cents
+  return 100 - yes_cents
+
+
+def _aggregate_settlements_to_exits(
+  settlements: list[dict[str, Any]],
+  *,
+  asset: str | None = None,
+) -> list[dict[str, Any]]:
+  """Synthetic sell orders from Kalshi settlement payouts (held-to-expiry exits)."""
+  out: list[dict[str, Any]] = []
+  for row in settlements:
+    ticker = str(row.get("ticker") or row.get("market_ticker") or "").strip()
+    leg_event = market_ticker_event_ticker(ticker)
+    if not leg_event or not is_kalshi_hourly_event(leg_event):
+      continue
+    if asset and not hourly_fill_belongs_to_asset(ticker, asset):
+      continue
+    ts = _settlement_created_at(row)
+    for side in ("yes", "no"):
+      contracts = _settlement_contract_count(row, side)
+      if contracts < 0.05:
+        continue
+      exit_c = _exit_cents_from_settlement(row, side=side)
+      if exit_c is None:
+        continue
+      settle_key = ts.isoformat() if isinstance(ts, datetime) else "unknown"
+      out.append({
+        "order_id": f"settle:{ticker}:{side}:{settle_key}",
+        "ticker": ticker,
+        "action": "sell",
+        "side": side,
+        "contracts": contracts,
+        "price_cents": exit_c,
+        "created_at": ts,
+        "exit_source": "settlement",
+      })
+  out.sort(key=lambda r: r.get("created_at") or datetime.min.replace(tzinfo=timezone.utc))
+  return out
+
+
 def sync_kalshi_fills_to_store(
   store: Any,
   kalshi: Any,
@@ -837,15 +927,24 @@ def summarize_kalshi_experiment_fills(
   critical: bool = True,
   max_fills: int = 1000,
   asset: str | None = None,
+  event_ticker: str | None = None,
 ) -> dict[str, Any]:
   """
   Realized P&L from Kalshi hourly fill history since an instant (exchange source of truth).
-  Pairs buy+sell on the same ticker/side; open legs are excluded from closed P&L.
+  Pairs buy fills with sell fills or settlement payouts on the same ticker/side; open legs
+  are excluded from closed P&L.
   """
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": False, "error": "Kalshi not authenticated"}
 
+  from src.trading.hourly_event_time import canonical_hourly_event_ticker
+
+  event_filter: str | None = None
+  if event_ticker:
+    event_filter = canonical_hourly_event_ticker(str(event_ticker))
+
   raw_fills = kalshi.list_fills(limit=min(max_fills, 1000), critical=critical)
+  raw_settlements = kalshi.list_settlements(limit=min(max_fills, 1000), critical=critical)
   order_cache = _build_order_direction_cache(kalshi)
   hourly_all: list[dict[str, Any]] = []
   fills_since: list[dict[str, Any]] = []
@@ -854,12 +953,19 @@ def summarize_kalshi_experiment_fills(
     leg_event = market_ticker_event_ticker(ticker)
     if not leg_event or not is_kalshi_hourly_event(leg_event):
       continue
+    if event_filter and canonical_hourly_event_ticker(leg_event) != event_filter:
+      continue
     if asset and not hourly_fill_belongs_to_asset(ticker, asset):
       continue
     hourly_all.append(fill)
     ts = _fill_created_at(fill)
     if ts is None or ts >= since:
       fills_since.append(fill)
+  settlement_exits = _aggregate_settlements_to_exits(raw_settlements, asset=asset)
+  settlements_since = [
+    s for s in settlement_exits
+    if s.get("created_at") is None or s["created_at"] >= since
+  ]
   # Pair on all hourly fills so pre-epoch buys consume post-epoch sells; only count
   # round-trips opened on/after stats_epoch_at in closed_trades / P&L.
   orders = _aggregate_fills_to_orders(hourly_all, order_cache=order_cache)
@@ -867,16 +973,25 @@ def summarize_kalshi_experiment_fills(
   for order in orders:
     legs[(str(order["ticker"]), str(order["side"]))].append(order)
 
+  settlement_by_leg: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+  for exit_row in settlement_exits:
+    settlement_by_leg[(str(exit_row["ticker"]), str(exit_row["side"]))].append(exit_row)
+
   closed_pnls: list[float] = []
   wins = 0
   losses = 0
-  for leg_orders in legs.values():
+  for (ticker, side), leg_orders in legs.items():
     buys = sorted(
       [o for o in leg_orders if o["action"] == "buy"],
       key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
     )
     sells = sorted(
       [o for o in leg_orders if o["action"] == "sell"],
+      key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    leg_settlements = settlement_by_leg.get((ticker, side), [])
+    exits = sorted(
+      sells + leg_settlements,
       key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
     )
     sell_i = 0
@@ -887,17 +1002,17 @@ def summarize_kalshi_experiment_fills(
       ],
       key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
     )
-    epoch_sells = sorted(
+    epoch_exits = sorted(
       [
-        s for s in sells
+        s for s in exits
         if (s.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= since
       ],
       key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
     )
     for buy in epoch_buys:
       buy_time = buy.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
-      while sell_i < len(epoch_sells):
-        sell = epoch_sells[sell_i]
+      while sell_i < len(epoch_exits):
+        sell = epoch_exits[sell_i]
         sell_time = sell.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
         if sell_time < buy_time:
           sell_i += 1
@@ -932,8 +1047,9 @@ def summarize_kalshi_experiment_fills(
   sell_orders = sum(1 for leg in legs.values() for o in leg if o["action"] == "sell")
   post_epoch_buys = 0
   post_epoch_sells = 0
+  post_epoch_settlements = len(settlements_since)
   pairable_legs = 0
-  for leg in legs.values():
+  for (ticker, side), leg in legs.items():
     epoch_leg_buys = [
       b for b in leg
       if b["action"] == "buy"
@@ -944,19 +1060,25 @@ def summarize_kalshi_experiment_fills(
       if s["action"] == "sell"
       and (s.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= since
     ]
+    epoch_leg_settlements = [
+      s for s in settlement_by_leg.get((ticker, side), [])
+      if (s.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= since
+    ]
     post_epoch_buys += len(epoch_leg_buys)
     post_epoch_sells += len(epoch_leg_sells)
     for buy in epoch_leg_buys:
       buy_time = buy.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
+      epoch_exits = epoch_leg_sells + epoch_leg_settlements
       if any(
         (s.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= buy_time
-        for s in epoch_leg_sells
+        for s in epoch_exits
       ):
         pairable_legs += 1
         break
   out: dict[str, Any] = {
     "ok": True,
     "source": "kalshi_fills",
+    "event_ticker": event_filter,
     "closed_trades": n,
     "total_pnl_usd": total,
     "wins": wins,
@@ -965,8 +1087,10 @@ def summarize_kalshi_experiment_fills(
     "fills_total": len(hourly_all),
     "buy_orders": buy_orders,
     "sell_orders": sell_orders,
+    "settlement_exits": len(settlement_exits),
     "post_epoch_buys": post_epoch_buys,
     "post_epoch_sells": post_epoch_sells,
+    "post_epoch_settlements": post_epoch_settlements,
     "pairable_legs": pairable_legs,
   }
   if n:

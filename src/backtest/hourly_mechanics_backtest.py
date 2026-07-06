@@ -29,12 +29,15 @@ from src.trading.bot_live_exit import (
 )
 from src.trading.entry_strategy import (
   CycleEntryBudget,
+  ask_edge_cents_for_pick,
   correlation_block_reason,
   entry_budget_usd,
   passes_ask_edge_gate,
   passes_tail_entry_gate,
   rank_hourly_candidates,
+  side_from_pick_signal,
 )
+from src.trading.hourly_regime import HourlyRegimeFilter
 from src.trading.live_entry_price import resolve_live_entry_price
 from src.trading.live_inventory_guards import apply_live_inventory_guards
 from src.trading.live_regime_adaptive import (
@@ -57,6 +60,18 @@ class SimLeg:
   cost_usd: float
   opened_at: datetime
   label: str
+
+
+@dataclass
+class MechanicsSimOptions:
+  """Optional overrides for focused profile comparisons (backtest only)."""
+
+  use_live_regime: bool = False
+  rank_by_ask_edge: bool = False
+  cut_loss_min_usd: float | None = None
+  disable_cut_loss: bool = False
+  structure_memory: bool = False
+  structure_lookback_bars: int = 12
 
 
 @dataclass
@@ -257,7 +272,10 @@ def simulate_hour(
   fills: FillSimulator,
   hour_ts: datetime,
   mu_mode: MuMode = "momentum",
+  sim_options: MechanicsSimOptions | None = None,
+  df_history: pd.DataFrame | None = None,
 ) -> HourSimState:
+  sim_options = sim_options or MechanicsSimOptions()
   cfg = apply_mechanics_profile(cfg, profile)
   state = HourSimState()
   sigma = max(30.0, (high - low) * 0.6 + open_px * 0.001)
@@ -268,10 +286,16 @@ def simulate_hour(
   estrat = apply_live_inventory_guards(estrat, cfg, mode="live", kind="hourly")
   estrat = apply_live_exit_entry_guards(estrat, cfg, mode="live", kind="hourly")
   live_exit = live_exit_config(cfg, kind="hourly")
+  if sim_options.cut_loss_min_usd is not None:
+    from dataclasses import replace as dc_replace
+
+    live_exit = dc_replace(live_exit, cut_loss_min_usd=float(sim_options.cut_loss_min_usd))
+  regime_filter = HourlyRegimeFilter(cfg) if sim_options.use_live_regime else None
   base_pricing = replay_entry_pricing(cfg, profile=profile, aggressive=False, kind="hourly")
 
   polls = _brti_poll_prices(open_px, high, low, close)
   picks_cache: dict[str, dict[str, Any]] = {}
+  structure_detail: dict[str, Any] = {}
 
   for i, brti in enumerate(polls):
     hours_left = max(0.08, 1.0 - i * 0.22)
@@ -290,22 +314,49 @@ def simulate_hour(
       sigma=sigma,
       cfg=cfg,
     )
-    model_base = 0.5 + 0.5 * math.tanh((terminal_mu - hour_open) / sigma)
+    poll_sigma = sigma
+    if sim_options.structure_memory and df_history is not None:
+      from src.backtest.structure_memory import (
+        StructureMemoryConfig,
+        adjust_mu_sigma_from_structure,
+        structure_blocks_yes_above,
+      )
+
+      terminal_mu, poll_sigma, structure_detail = adjust_mu_sigma_from_structure(
+        terminal_mu,
+        poll_sigma,
+        brti,
+        df_history,
+        cfg=StructureMemoryConfig(lookback_bars=sim_options.structure_lookback_bars),
+      )
+    model_base = 0.5 + 0.5 * math.tanh((terminal_mu - hour_open) / poll_sigma)
     candidates: list[tuple[float, dict, dict]] = []
     for m in markets:
       st = str(m.get("strike_type") or "")
       floor = m.get("floor_strike")
       if st == "greater" and floor is not None:
-        dist = (float(floor) - terminal_mu) / sigma
+        dist = (float(floor) - terminal_mu) / poll_sigma
         mp = max(0.03, min(0.97, 0.5 - 0.45 * math.tanh(dist)))
       else:
         mp = model_base
-      pick = _pick_from_market(m, brti, sigma=sigma, model_prob=mp)
+      pick = _pick_from_market(m, brti, sigma=poll_sigma, model_prob=mp)
       picks_cache[pick["ticker"]] = pick
       if pick["signal"] in ("BUY YES", "BUY NO"):
-        candidates.append((abs(float(pick["edge"])), pick, {}))
+        if sim_options.rank_by_ask_edge:
+          side = side_from_pick_signal(pick.get("signal")) or "yes"
+          ask_edge = ask_edge_cents_for_pick(pick, side) or 0.0
+          candidates.append((ask_edge / 100.0, pick, {}))
+        else:
+          candidates.append((abs(float(pick["edge"])), pick, {}))
 
     ranked = rank_hourly_candidates([(e, p, {}) for e, p, _ in candidates], estrat=estrat)
+    if sim_options.rank_by_ask_edge:
+
+      def _ask_rank(row: tuple) -> float:
+        side = side_from_pick_signal(row[3].get("signal")) or "yes"
+        return ask_edge_cents_for_pick(row[3], side) or 0.0
+
+      ranked = sorted(ranked, key=lambda row: (-_ask_rank(row), -row[2], -row[1]))
 
     for leg in list(state.legs):
       pick = picks_cache.get(leg.ticker) or {}
@@ -322,13 +373,17 @@ def simulate_hour(
       exit_reason = None
       if unreal >= tp_usd and hold_s >= 60:
         exit_reason = "TAKE PROFIT"
-      elif unreal <= -live_exit.cut_loss_min_usd and allow_live_cut_loss(
-        exit_reason="CUT LOSSES",
-        unrealized_usd=unreal,
-        pos=pos,
-        settings_min_hold=120,
-        cfg=cfg,
-        kind="hourly",
+      elif (
+        not sim_options.disable_cut_loss
+        and unreal <= -live_exit.cut_loss_min_usd
+        and allow_live_cut_loss(
+          exit_reason="CUT LOSSES",
+          unrealized_usd=unreal,
+          pos=pos,
+          settings_min_hold=120,
+          cfg=cfg,
+          kind="hourly",
+        )
       ):
         exit_reason = "CUT LOSSES"
 
@@ -346,14 +401,27 @@ def simulate_hour(
         state.legs.remove(leg)
 
     expected_move = (terminal_mu - brti) / brti * 100.0 if brti else 0.0
-    regime_allow = abs(momentum_4h_pct) >= 0.12 or abs(expected_move) >= 0.12
+    sigma_pct = (sigma / brti * 100.0) if brti else 0.0
+    primary_edge = abs(float(ranked[0][3].get("edge") or 0)) if ranked else None
+    if regime_filter is not None:
+      regime_decision = regime_filter.evaluate(
+        expected_move_pct=expected_move,
+        hours_to_settle=hours_left,
+        sigma_pct=sigma_pct,
+        edge=primary_edge,
+      )
+      regime_allow = regime_decision.allow_trade
+      regime_reasons = regime_decision.reasons
+    else:
+      regime_allow = abs(momentum_4h_pct) >= 0.12 or abs(expected_move) >= 0.12
+      regime_reasons = []
     tab = {
       "live": {
         "current_price": brti,
         "expected_move_pct": expected_move,
         "terminal_mu": terminal_mu,
         "blended_mu": terminal_mu,
-        "regime": {"allow_trade": regime_allow, "reasons": []},
+        "regime": {"allow_trade": regime_allow, "reasons": regime_reasons},
         "primary_pick": ranked[0][3] if ranked else None,
       },
       "locked": {"reference_price": hour_open},
@@ -368,6 +436,8 @@ def simulate_hour(
     )
     if adaptive.mode == "locked" or defense_entries_blocked(adaptive, cfg):
       continue
+    if sim_options.use_live_regime and not regime_allow:
+      continue
 
     estrat_poll = apply_adaptive_passive_guards(estrat, adaptive, cfg)
     pricing = adaptive_live_entry_pricing(base_pricing, adaptive, cfg)
@@ -380,6 +450,13 @@ def simulate_hour(
       if state.cash_at_risk >= max_spend:
         break
       side = "yes" if pick["signal"] == "BUY YES" else "no"
+      if (
+        sim_options.structure_memory
+        and side == "yes"
+        and str(pick.get("strike_type") or "") == "greater"
+        and structure_blocks_yes_above(structure_detail)
+      ):
+        continue
       if adaptive_range_band_block_reason(pick, adaptive, cfg):
         continue
       if adaptive_defense_entry_block_reason(pick, side, adaptive, cfg):
@@ -481,6 +558,7 @@ def run_mechanics_backtest(
   max_spend: float = 15.0,
   warmup_bars: int = 24,
   mu_mode: MuMode = "momentum",
+  sim_options: MechanicsSimOptions | None = None,
 ) -> dict[str, Any]:
   df = df_1h.sort_values("timestamp").reset_index(drop=True)
   fills = FillSimulator(app_cfg=cfg, fee_model=FeeModel(cfg=cfg))
@@ -516,6 +594,8 @@ def run_mechanics_backtest(
       fills=fills,
       hour_ts=hour_ts,
       mu_mode=mu_mode,
+      sim_options=sim_options,
+      df_history=df.iloc[: i + 1],
     )
     total_pnl += st.realized_pnl
     filled += st.filled_enters
