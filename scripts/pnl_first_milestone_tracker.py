@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Track P&L-first Phase 0–1 milestone: N consecutive live hours with net P&L >= 0."""
+"""Track P&L-first Phase 0–1 pipeline milestone (gate-stack proof, not PnL fills)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -39,73 +38,32 @@ def _login(session: requests.Session, base: str) -> None:
     raise RuntimeError(f"login failed: {r.status_code}")
 
 
-def _hourly_intervals(session: requests.Session, base: str, *, asset: str, limit: int = 50) -> list[dict]:
-  prefix = "/api/eth" if asset == "eth" else "/api"
-  r = session.get(f"{base}{prefix}/hourly/bot/interval-history", params={"limit": limit}, timeout=60)
+def evaluate(session: requests.Session, base: str) -> dict:
+  r = session.get(f"{base}/api/pnl-first/manager", timeout=60)
   body = r.json()
-  return list(body.get("intervals") or body.get("history") or [])
-
-
-def evaluate(
-  session: requests.Session,
-  base: str,
-  *,
-  asset: str,
-  target_hours: int,
-) -> dict:
-  intervals = _hourly_intervals(session, base, asset=asset, limit=max(target_hours + 5, 30))
-  live_rows = [
-    row for row in intervals
-    if str(row.get("mode") or "").lower() == "live"
-  ]
-  streak = 0
-  streak_details: list[dict] = []
-  for row in live_rows:
-    try:
-      pnl = float(row.get("net_pnl_usd") if row.get("net_pnl_usd") is not None else row.get("realized_pnl_usd") or 0)
-    except (TypeError, ValueError):
-      break
-    if pnl >= 0:
-      streak += 1
-      streak_details.append({
-        "event": row.get("event_ticker") or row.get("hour_label"),
-        "net_pnl_usd": pnl,
-      })
-    else:
-      break
-    if streak >= target_hours:
-      break
-
-  achieved = streak >= target_hours
-  return {
-    "ts": datetime.now(timezone.utc).isoformat(),
-    "asset": asset,
-    "target_positive_hours": target_hours,
-    "consecutive_positive_hours": streak,
-    "milestone_achieved": achieved,
-    "streak": streak_details[:target_hours],
-  }
+  return dict(body.get("milestone_now") or {})
 
 
 def main() -> int:
-  parser = argparse.ArgumentParser(description="P&L-first milestone tracker")
+  parser = argparse.ArgumentParser(description="P&L-first pipeline milestone tracker")
   parser.add_argument("--base", default=DEFAULT_BASE)
-  parser.add_argument("--asset", default="btc")
-  parser.add_argument("--target-hours", type=int, default=20)
   args = parser.parse_args()
 
   session = requests.Session()
   _login(session, args.base)
-  report = evaluate(session, args.base, asset=args.asset, target_hours=args.target_hours)
+  report = evaluate(session, args.base)
   OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
   OUT_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-  status = "ACHIEVED" if report["milestone_achieved"] else "in progress"
+  target = report.get("target_pipeline_hours") or report.get("target_positive_hours") or 20
+  streak = report.get("consecutive_pipeline_hours") or report.get("consecutive_positive_hours") or 0
+  missing = report.get("missing_session_gates") or []
+  status = "ACHIEVED" if report.get("milestone_achieved") else "in progress"
   print(
-    f"P&L-first milestone ({args.asset.upper()} live): "
-    f"{report['consecutive_positive_hours']}/{args.target_hours} positive hours — {status}"
+    f"P&L-first pipeline milestone: {streak}/{target} live hours — {status}"
+    + (f" (missing gates: {', '.join(missing)})" if missing else "")
   )
-  return 0 if report["milestone_achieved"] else 1
+  return 0 if report.get("milestone_achieved") else 1
 
 
 if __name__ == "__main__":

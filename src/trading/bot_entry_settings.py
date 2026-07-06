@@ -47,12 +47,19 @@ def hourly_entry_settings_snapshot(
   *,
   adaptive: dict[str, Any] | None = None,
   hour_momentum: dict[str, Any] | None = None,
+  hours_to_settle: float | None = None,
 ) -> dict[str, Any]:
   snap = _core_snapshot(settings, max_spend=settings.max_spend_per_hour_usd)
   if adaptive:
     snap["adaptive"] = adaptive
   if hour_momentum:
     snap["hour_momentum"] = hour_momentum
+  if hours_to_settle is not None:
+    try:
+      snap["hours_to_settle"] = round(float(hours_to_settle), 4)
+      snap["minutes_to_settle"] = round(float(hours_to_settle) * 60.0, 1)
+    except (TypeError, ValueError):
+      pass
   return snap
 
 

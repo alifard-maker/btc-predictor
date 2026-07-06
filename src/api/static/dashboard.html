@@ -3779,6 +3779,9 @@
       }
       if (raw.startsWith('already_open:')) return 'already holding this contract (no add-to)';
       if (raw.startsWith('ask_edge_too_low:')) return `ask-edge thin (${raw.slice('ask_edge_too_low:'.length)})`;
+      if (raw.startsWith('pnl_first_regime_blocked:')) {
+        return `regime blocked (${raw.slice('pnl_first_regime_blocked:'.length)})`;
+      }
       if (raw.startsWith('reentry_cooldown:')) return 're-entry cooldown';
       if (raw.startsWith('cheap_leg_cut_cooldown:')) return 'cheap leg cut cooldown';
       if (raw.startsWith('scale_in_not_winner:')) return 'already open — leg not winning enough to add';
@@ -3820,6 +3823,41 @@
       return blocked
         ? 'Signal filter: STRONG/ACTIONABLE required. Other guards still apply.'
         : 'Signal filter: STRONG/ACTIONABLE applies.';
+    }
+
+    function botRegimeGateHtml(bot, periodLabel) {
+      if (periodLabel !== 'hour') return '';
+      const w = bot?.entry_watch;
+      if (!w) return '';
+      const reasons = w.regime_reasons || [];
+      const minFlags = w.regime_min_flags_to_block ?? 2;
+      const blocked = w.regime_blocked === true || w.regime_allow_trade === false;
+      if (!blocked && !reasons.length) return '';
+      const flagCount = reasons.length;
+      const pnlFirst = bot?.live_entry_guards?.mechanics_profile === 'pnl_first';
+      const freeMode = !(bot?.settings?.allow_strong || bot?.settings?.allow_actionable);
+      const boxBase = 'font-size:.68rem;margin:.25rem 0 .35rem;padding:.45rem .55rem;border-radius:6px';
+      let status;
+      let style;
+      if (blocked) {
+        status = 'BLOCKED — no new entries';
+        style = `${boxBase};background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3)`;
+      } else {
+        status = `Advisory — ${flagCount}/${minFlags} flag${flagCount === 1 ? '' : 's'}`;
+        style = `${boxBase};background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25)`;
+      }
+      let modeNote = '';
+      if (pnlFirst && (bot?.settings?.mode === 'live')) {
+        modeNote = 'P&amp;L-first live: regime enforced even when STRONG/ACTIONABLE are off.';
+      } else if (freeMode && !blocked) {
+        modeNote = `FREE mode: entries allowed until ${minFlags}+ flags (need ${Math.max(0, minFlags - flagCount)} more to block).`;
+      } else if (blocked) {
+        modeNote = `${flagCount} flag${flagCount === 1 ? '' : 's'} met the ${minFlags}-flag block threshold.`;
+      }
+      const list = reasons.length
+        ? `<ul style="margin:.3rem 0 0 1rem;padding:0;font-size:.62rem">${reasons.map((r) => `<li>${r}</li>`).join('')}</ul>`
+        : '<p style="margin:.3rem 0 0;font-size:.62rem;opacity:.88">No reason text on tab — check hourly prediction cards.</p>';
+      return `<div class="muted" style="${style}"><strong>Regime gate · ${status}</strong>${modeNote ? `<p style="margin:.25rem 0 0;font-size:.62rem;opacity:.88">${modeNote}</p>` : ''}${list}</div>`;
     }
 
     function botEntryWatchHtml(bot, periodLabel, freeMode, deployHint = '') {
@@ -3940,6 +3978,10 @@
       if (raw.startsWith('regime_blocked:')) {
         const detail = raw.slice('regime_blocked:'.length);
         return `Regime blocked new entries — ${detail}`;
+      }
+      if (raw.startsWith('pnl_first_regime_blocked:')) {
+        const detail = raw.slice('pnl_first_regime_blocked:'.length);
+        return `P&amp;L-first regime block — ${detail}. See Regime gate panel for all flags.`;
       }
       return labels[raw] || raw;
     }
@@ -5281,6 +5323,7 @@
       const autoStopHtml = botAutoStopBanner(bot, 'hour', kind, asset);
       const settlementIndexHtml = settlementIndexWarningHtml(bot);
       const entryGuardHtml = botLiveEntryGuardHtml(bot);
+      const regimeGateHtml = botRegimeGateHtml(bot, 'hour');
       const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode, deployHint);
       const serverBanner = botServerBanner(bot, s);
       const reconcileHtml = botLiveReconcileHtml(bot);
@@ -5300,6 +5343,7 @@
         ${serverBanner}
         ${settlementIndexHtml}
         ${entryGuardHtml}
+        ${regimeGateHtml}
         ${autoStopHtml}
         ${watchHtml}
         ${reconcileHtml}

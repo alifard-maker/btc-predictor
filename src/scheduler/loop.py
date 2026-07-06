@@ -391,6 +391,28 @@ class PredictionLoop:
       "kalshi_circuit": kalshi,
       "bots_paused": bool(daily.get("any_cap_active")) or bool(kalshi.get("entries_blocked")),
       "live_hourly": self._live_hourly_pulse(),
+      "pnl_first_manager": self._pnl_first_manager_pulse(),
+    }
+
+  def _pnl_first_manager_pulse(self) -> dict[str, Any]:
+    from src.trading.pnl_first_railway_manager import manager_status_snapshot
+
+    mgr_cfg = self.cfg.get("pnl_first_manager") or {}
+    if not mgr_cfg.get("enabled", True):
+      return {"enabled": False}
+    snap = manager_status_snapshot(self)
+    last = snap.get("last_status_file") or snap.get("last_report") or {}
+    pre = last.get("preflight") or {}
+    mile = last.get("milestone") or {}
+    return {
+      "enabled": True,
+      "phase": mgr_cfg.get("phase", "prep"),
+      "trading_armed": bool(mgr_cfg.get("trading_armed", False)),
+      "cycle": last.get("cycle"),
+      "preflight_ok": pre.get("ok"),
+      "preflight_issues": pre.get("issues"),
+      "milestone_streak": mile.get("consecutive_pipeline_hours") or mile.get("consecutive_positive_hours"),
+      "milestone_target": mile.get("target_pipeline_hours") or mile.get("target_positive_hours"),
     }
 
   def _live_hourly_pulse(self) -> dict[str, Any]:
@@ -698,12 +720,19 @@ class PredictionLoop:
       live = tab.get("live") or tab
       primary = live.get("primary_pick") or {}
       regime = live.get("regime") or {}
+      hrcfg = dict((acfg.get("hourly") or {}).get("regime") or {})
+      regime_reasons = list(regime.get("reasons") or regime.get("block_reasons") or [])
+      allow_trade = regime.get("allow_trade")
+      if allow_trade is None:
+        allow_trade = regime.get("blocked") is not True
       status["entry_watch"] = {
         "signal": primary.get("signal"),
         "label": primary.get("label"),
         "edge": primary.get("edge"),
-        "regime_allow_trade": regime.get("allow_trade"),
-        "regime_reasons": list(regime.get("reasons") or [])[:3],
+        "regime_allow_trade": allow_trade,
+        "regime_blocked": allow_trade is False,
+        "regime_reasons": regime_reasons[:5],
+        "regime_min_flags_to_block": int(hrcfg.get("min_reasons_to_block", 2)),
       }
     from src.trading.bot_auto_tuning import effective_entry_strategy
 
@@ -3340,6 +3369,15 @@ class PredictionLoop:
       pass
     return out
 
+  def run_pnl_first_manager(self) -> dict[str, Any]:
+    from src.trading.pnl_first_railway_manager import run_manager_tick
+
+    try:
+      return run_manager_tick(self)
+    except Exception as e:
+      log.exception("pnl_first_manager tick failed: %s", e)
+      return {"ok": False, "error": str(e)}
+
   def run_log_backup(self, *, reason: str = "scheduled") -> dict[str, Any]:
     from src.backup.logs_backup import run_full_backup
 
@@ -3522,6 +3560,23 @@ class PredictionLoop:
         id="log_backup_now",
       )
       log.info("Log backup scheduled every %s min → %s/backups", interval_min, backup_cfg.get("backup_dir") or "{DATA_DIR}/backups")
+    mgr_cfg = self.cfg.get("pnl_first_manager") or {}
+    if mgr_cfg.get("enabled", True):
+      interval_s = float(mgr_cfg.get("interval_seconds", 30))
+      scheduler.add_job(
+        self.run_pnl_first_manager,
+        "interval",
+        seconds=interval_s,
+        id="pnl_first_manager",
+        max_instances=1,
+      )
+      scheduler.add_job(
+        self.run_pnl_first_manager,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=20),
+        id="pnl_first_manager_now",
+      )
+      log.info("P&L-first Railway manager scheduled every %ss", interval_s)
     poll_sec = float(self.cfg.get("kalshi", {}).get("brti_poll_sec", 1))
     scheduler.add_job(self.poll_brti, "interval", seconds=poll_sec, id="brti_poll", max_instances=1)
     scheduler.add_job(self.poll_brti, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=1), id="brti_now")

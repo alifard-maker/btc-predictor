@@ -28,6 +28,20 @@ def test_btc_pnl_first_guard_summary():
   assert summary["soft_rally_overlay"] is False
   assert summary["btc_comparison_hint"]
   assert any("P&L-first" in n for n in summary["notes"])
+  assert any("5 min to settle" in n for n in summary["notes"])
+
+
+def test_pnl_first_late_hour_floor():
+  from src.backtest.mechanics_profiles import apply_live_production_mechanics
+
+  cfg = {
+    "hourly": {"bot": {"live_mechanics_profile": "pnl_first"}, "regime": {"min_hours_to_settle": 0.25}},
+    "pnl_first": {"min_hours_to_settle_for_entry": 0.083, "max_hours_to_settle_for_entry": 1.35},
+  }
+  out = apply_live_production_mechanics(cfg, kind="hourly", mode="live")
+  assert out["hourly"]["regime"]["min_hours_to_settle"] == 0.083
+  assert out["hourly"]["bot"]["min_hours_to_settle_for_entry"] == 0.083
+  assert out["hourly"]["bot"]["max_hours_to_settle_for_entry"] == 1.35
 
 
 def test_paper_mode_returns_minimal():

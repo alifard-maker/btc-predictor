@@ -26,7 +26,7 @@ When the user says **"live monitor"**, run the full manager protocol — not a p
 
 Default interval **30s**. Each cycle MUST analyze **what changed since the last cycle** (new enters/exits, exposure delta, skip-reason changes, new HIGH issues) — not only cumulative 2h lookback.
 
-Use `scripts/run_2h_manager_watchdog.py` (restarts on crash) + `scripts/monitor_hourly_s1_s2_manager.py`.
+Use `scripts/run_2h_manager_watchdog.py` (local Mac only, optional) + **`pnl_first_manager` on Railway** (primary, 24/7).
 
 ## Post-deploy validation (last 24h code changes)
 

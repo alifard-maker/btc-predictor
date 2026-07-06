@@ -556,21 +556,35 @@ class KalshiClient:
     self,
     *,
     ticker: str | None = None,
-    limit: int = 100,
+    limit: int = 200,
+    critical: bool = False,
   ) -> list[dict[str, Any]]:
-    """Settlement payouts for expired markets."""
+    """Settlement payouts for expired markets (newest pages first)."""
     if not self.authenticated:
       return []
     params: dict[str, Any] = {"limit": min(int(limit), 200)}
     if ticker:
       params["ticker"] = str(ticker)
-    try:
-      data = self.get("/portfolio/settlements", params=params, auth=True)
-    except Exception as e:
-      log.warning("Kalshi list settlements failed: %s", e)
-      return []
-    rows = data.get("settlements") if isinstance(data, dict) else None
-    return list(rows) if isinstance(rows, list) else []
+    out: list[dict[str, Any]] = []
+    cursor: str | None = None
+    pages = 0
+    while pages < 5:
+      if cursor:
+        params["cursor"] = cursor
+      try:
+        data = self.get("/portfolio/settlements", params=params, auth=True, critical=critical)
+      except Exception as e:
+        log.warning("Kalshi list settlements failed: %s", e)
+        break
+      rows = data.get("settlements") if isinstance(data, dict) else None
+      if not isinstance(rows, list) or not rows:
+        break
+      out.extend(r for r in rows if isinstance(r, dict))
+      cursor = data.get("cursor") if isinstance(data, dict) else None
+      pages += 1
+      if not cursor or len(out) >= limit:
+        break
+    return out[:limit]
 
   def get_market_ticker(self, ticker: str) -> dict[str, Any] | None:
     """Single market row (status, expiration_value, strikes)."""

@@ -594,6 +594,9 @@ def build_bot_performance_report(
   }
   if stake_cap is not None:
     out["stake_cap_utilization"] = stake_cap
+  from src.trading.trade_timing_analytics import build_trade_timing_report
+
+  out["trade_timing"] = build_trade_timing_report(trades, mode="live")
   return out
 
 

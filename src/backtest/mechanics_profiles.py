@@ -166,6 +166,13 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     live_inventory["allow_scale_in"] = False
     live_adaptive["defense_block_range_bands"] = True
     live_adaptive["rally_block_range_bands"] = True
+    pf = dict(c.get("pnl_first") or {})
+    late_h = float(pf.get("min_hours_to_settle_for_entry", 5 / 60))
+    hourly = c.setdefault("hourly", {})
+    hourly.setdefault("regime", {})["min_hours_to_settle"] = late_h
+    bot["min_hours_to_settle_for_entry"] = late_h
+    if "max_hours_to_settle_for_entry" in pf:
+      bot["max_hours_to_settle_for_entry"] = float(pf["max_hours_to_settle_for_entry"])
     return c
 
   live_inventory["enabled"] = True

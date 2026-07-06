@@ -56,8 +56,9 @@ def live_entry_pricing_from_cfg(
       pricing = LiveEntryPricingConfig.from_bot_cfg(cfg.get("bot"))
   if aggressive:
     pricing = replace(pricing, cross_spread_min_edge_cents=10.0)
-  else:
+  elif not pricing.taker_only:
     # Passive preset: never cross the spread in live (backtest + live both worse).
+    # pnl_first sets taker_only=True — cross-spread must stay on or every entry is blocked.
     pricing = replace(pricing, cross_spread_enabled=False)
   return pricing
 

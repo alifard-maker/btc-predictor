@@ -7,6 +7,7 @@ from typing import Any
 
 from src.assets import asset_cfg
 from src.trading.hourly_bot_store import HourlyBotSettings
+from src.trading.pnl_first_railway_manager import PnlFirstManagerConfig
 
 log = logging.getLogger(__name__)
 
@@ -17,6 +18,10 @@ def align_eth_hourly_settings_from_btc(loop: Any) -> dict[str, Any]:
   bot_cfg = (eth_cfg.get("hourly") or {}).get("bot") or {}
   if not bot_cfg.get("mirror_btc_settings"):
     return {"skipped": True, "reason": "mirror_btc_settings_disabled"}
+
+  mgr = PnlFirstManagerConfig.from_cfg(loop.cfg)
+  if mgr.lock_eth_live:
+    return {"skipped": True, "reason": "lock_eth_live"}
 
   btc_store = loop.hourly_bot_store("btc")
   eth_store = loop.hourly_bot_store("eth")

@@ -162,6 +162,19 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
   return actions
 
 
+def compute_btc_live_trade_timing(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
+  """Live BTC hourly PnL by minutes-to-settle at entry (experiment window)."""
+  from src.trading.bot_performance_report import experiment_start_at
+  from src.trading.trade_timing_analytics import build_trade_timing_report
+
+  store = loop.hourly_bot_store("btc", kind="hourly")
+  trades = store.list_trades(limit=2000)
+  since = experiment_start_at(cfg)
+  report = build_trade_timing_report(trades, mode="live", since=since)
+  report["experiment_start_at"] = since.isoformat() if since else None
+  return report
+
+
 def run_preflight(loop: Any, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
   issues: list[str] = []
   detail: dict[str, Any] = {}
@@ -401,6 +414,10 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
     milestone = compute_live_milestone(loop, cfg)
     _STATE["last_milestone_at"] = now.isoformat()
 
+  trade_timing: dict[str, Any] | None = None
+  if due_milestone or cycle == 1:
+    trade_timing = compute_btc_live_trade_timing(loop, cfg)
+
   report = {
     "ts": now.isoformat(),
     "cycle": cycle,
@@ -411,6 +428,7 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
     "preflight": preflight,
     "milestone": milestone,
     "live_audit": live_audit,
+    "trade_timing": trade_timing,
     "backtest": backtest_status(cfg),
     "actions": actions,
   }

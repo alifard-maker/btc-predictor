@@ -53,6 +53,10 @@ def build_live_entry_guard_summary(
     notes.append("Adaptive/soft-rally entry filters OFF — typically more fills than standard trial.")
   elif profile == "pnl_first":
     notes.append("P&L-first Phase 0–1: S1 threshold only, no S2/tail, taker ≥15¢ edge, max 2 legs.")
+    pf = dict((cfg or {}).get("pnl_first") or {})
+    late_min = float(pf.get("min_hours_to_settle_for_entry", 5 / 60))
+    notes.append(f"Late-hour entry floor: {int(round(late_min * 60))} min to settle (not 15m global).")
+    notes.append("Entries use live prediction from :00 — :05 lock is calibration/scoring only, not an entry wait.")
   elif not skip_soft_rally_entry_overlay(runtime_cfg, kind=kind):
     notes.append("Soft-rally defense filters ON in defense mode (stricter threshold entries).")
   if live_exit.block_tail_entries:

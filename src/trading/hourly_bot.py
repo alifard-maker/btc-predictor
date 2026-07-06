@@ -495,6 +495,12 @@ class HourlyBot:
     entry_kind = entry_kind_for_bot(self.kind)
 
     settings, prev_period = self.store.sync_period(str(event_ticker), self.store.get_settings())
+    if prev_period and cfg is not None and self.asset == "btc" and self.kind == "hourly":
+      settings_pre = self.store.get_settings()
+      if settings_pre.mode == "live":
+        from src.trading.pnl_first_pipeline_milestone import finalize_pipeline_hour
+
+        finalize_pipeline_hour(cfg, prev_period, live=True)
     sync_auto_stop_for_risk(self.store, bot_key=self._bot_risk_key, cfg=cfg)
     settings = apply_bot_runtime_settings(self.store.get_settings(), bot_kind=self.kind)
     if (
@@ -608,6 +614,23 @@ class HourlyBot:
     if not entry_actions and not any(a.get("action") == "enter" for a in actions):
       if self.store.last_skip_reason() is None and not settings.auto_stopped:
         self.store.set_last_skip_reason("no_entry_this_cycle")
+    if cfg is not None:
+      entry_filled = any(
+        str(a.get("action") or "") == "enter"
+        and str(a.get("mode") or settings.mode).lower() == "live"
+        for a in entry_actions
+      )
+      from src.trading.pnl_first_pipeline_milestone import record_pipeline_cycle
+
+      record_pipeline_cycle(
+        cfg,
+        event_ticker=str(event_ticker),
+        skip_reason=self.store.last_skip_reason(),
+        mode=settings.mode,
+        kind=self.kind,
+        asset=self.asset,
+        entry_filled=entry_filled,
+      )
     return actions
 
   def _maybe_auto_stop_on_budget_exhausted(
@@ -1646,10 +1669,13 @@ class HourlyBot:
         mirror_exec = should_mirror_trial_entry_execution(
           cfg, kind=self.kind, mode=settings.mode,
         )
+        pnl_first_live = pnl_first_active(cfg, kind=self.kind, mode=settings.mode)
         if (
           live_resolved.get("execution_mode") == "cross_spread"
           and not mirror_exec
           and not cross_spread_allowed_for_adaptive(adaptive, cfg)
+          and not pnl_first_live
+          and not pricing.taker_only
         ):
           from dataclasses import replace as dc_replace
 
@@ -1728,6 +1754,9 @@ class HourlyBot:
           entry_execution_detail=live_entry_detail,
           adaptive=adaptive,
           hour_momentum=momentum_snap,
+          hours_to_settle=float(live.get("hours_to_settle"))
+          if live.get("hours_to_settle") is not None
+          else None,
         )
       else:
         self.store.open_position({
@@ -1775,6 +1804,9 @@ class HourlyBot:
             settings,
             adaptive=_adaptive_settings_payload(adaptive),
             hour_momentum=momentum_snap,
+            hours_to_settle=float(live.get("hours_to_settle"))
+            if live.get("hours_to_settle") is not None
+            else None,
           ),
           **entry_quote_log_fields(entry_fill),
         })
@@ -1821,12 +1853,14 @@ class HourlyBot:
     entry_execution_detail: str | None = None,
     adaptive: AdaptiveDecision | None = None,
     hour_momentum: dict[str, Any] | None = None,
+    hours_to_settle: float | None = None,
   ) -> dict[str, Any]:
     exec_note = f" · {entry_execution_detail}" if entry_execution_detail else ""
     entry_settings = hourly_entry_settings_snapshot(
       settings,
       adaptive=_adaptive_settings_payload(adaptive),
       hour_momentum=hour_momentum,
+      hours_to_settle=hours_to_settle,
     )
     if not self.kalshi or not getattr(self.kalshi, "authenticated", False):
       return self.store.log_trade({

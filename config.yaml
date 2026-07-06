@@ -613,9 +613,28 @@ bot_risk:
 
 # P&L-first Phase 0–1 (live_mechanics_profile: pnl_first on BTC hourly)
 pnl_first:
-  milestone_positive_hours: 20
+  milestone_pipeline_hours: 20   # pipeline gate-stack proof (not PnL-gated fills)
+  milestone_positive_hours: 20   # legacy alias
   live_ev_min_usd_per_contract: 0.02
+  min_hours_to_settle_for_entry: 0.083  # 5 min — late-hour floor for live (regime + bot); global default 15m
+  max_hours_to_settle_for_entry: 1.35   # hour-edge: allow current-hour entries (log_minute :05 is calibration-only, not entry)
   phase_started_at: "2026-07-04T23:30:00+00:00"
+
+# 24/7 manager on Railway (sleep lock, preflight, milestone) — replaces local watchdog
+pnl_first_manager:
+  enabled: true
+  interval_seconds: 30
+  phase: prep
+  enforce_sleep: true
+  trading_armed: false
+  auto_wake_when_ready: false
+  owner_poa_live: true          # owner granted POA Jul 5 2026: may arm/wake if ping unanswered
+  owner_poa_debug_cap_usd: 15.0 # max hourly cap when exercising POA for debug/live proof
+  live_cap_usd: 30.0
+  milestone_interval_minutes: 60
+  auto_sync_on_reconcile: true
+  lock_eth_live: true
+  lock_slot15: true          # BTC/ETH 15m + trial bots — sleep during Phase 0–1
 
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
 live_resting_exits:
@@ -744,7 +763,7 @@ eth:
       min_edge_for_highlight: 0.08
       min_edge_override_regime: 0.10
     bot:
-      mirror_btc_settings: true  # on deploy: copy BTC hourly dashboard settings (mode, cap, auto-bet)
+      mirror_btc_settings: false  # Phase 0-1: do not mirror BTC live state to ETH
       live_mechanics_profile: ''  # standard trial (do not inherit BTC mechanical_fixes from base hourly.bot)
       enabled: false
       mode: paper

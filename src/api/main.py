@@ -1169,6 +1169,7 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
     raise HTTPException(503, "Service starting")
   from src.trading.pnl_first_railway_manager import (
     PnlFirstManagerConfig,
+    compute_btc_live_trade_timing,
     compute_live_milestone,
     manager_status_snapshot,
     run_preflight,
@@ -1178,6 +1179,7 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
 
   mgr = PnlFirstManagerConfig.from_cfg(_cfg)
   snap = manager_status_snapshot(_loop)
+  trade_timing = compute_btc_live_trade_timing(_loop, _cfg)
   return {
     "config": {
       "enabled": mgr.enabled,
@@ -1193,6 +1195,7 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
     "milestone_now": compute_live_milestone(_loop, _cfg),
     "backtest_queue": backtest_status(_cfg),
     "live_audit": run_live_pnl_audit(_loop, _cfg),
+    "trade_timing": trade_timing,
   }
 
 

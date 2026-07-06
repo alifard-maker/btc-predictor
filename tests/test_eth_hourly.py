@@ -44,7 +44,7 @@ def test_asset_cfg_eth_inherits_hour_momentum_from_btc(base_cfg):
   eth = asset_cfg(base_cfg, "eth")
   hm = ((eth.get("hourly") or {}).get("bot") or {}).get("hour_momentum") or {}
   assert hm.get("enabled") is True
-  assert eth["hourly"]["bot"].get("mirror_btc_settings") is True
+  assert eth["hourly"]["bot"].get("mirror_btc_settings") is False
   assert eth["hourly"]["bot"].get("experiment_start_at")
 
 
