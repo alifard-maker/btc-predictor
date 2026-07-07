@@ -18,32 +18,40 @@ _RUN_LOCK = threading.Lock()
 _ACTIVE_PROC: subprocess.Popen[str] | None = None
 _ACTIVE_JOB: dict[str, Any] | None = None
 
-DEFAULT_JOBS: list[dict[str, str]] = [
+DEFAULT_JOBS: list[dict[str, Any]] = [
   {
     "id": "phase_a_1h_backfill",
     "script": "scripts/backfill_1h_candles_railway.py",
     "output": "data/logs/backfill_1h_btc_manifest.json",
     "milestone": "phase_a_1h_history_backfill",
-  },
-  {
-    "id": "phase2_eth_1h_backfill",
-    "script": "scripts/backfill_1h_candles_railway.py --asset eth",
-    "output": "data/logs/backfill_1h_eth_manifest.json",
-    "milestone": "phase2_eth_1h_history_backfill",
+    "depends_on": [],
   },
   {
     "id": "phase_a_structure_sweep_v3",
     "script": "scripts/backtest_structure_memory_sweep_v3.py",
     "output": "data/logs/backtest_structure_memory_sweep_v3.json",
     "milestone": "phase_a_fair_baseline_and_structure_tune_v3",
+    "depends_on": ["phase_a_1h_backfill"],
   },
   {
     "id": "phase_b_walkforward_ml",
     "script": "scripts/backtest_pnl_first_walkforward.py",
     "output": "data/logs/backtest_pnl_first_walkforward.json",
     "milestone": "phase_b_walkforward_ml_baseline",
+    "depends_on": ["phase_a_1h_backfill"],
+  },
+  {
+    "id": "phase2_eth_1h_backfill",
+    "script": "scripts/backfill_1h_candles_railway.py --asset eth",
+    "output": "data/logs/backfill_1h_eth_manifest.json",
+    "milestone": "phase2_eth_1h_history_backfill",
+    "depends_on": [],
   },
 ]
+
+_STALE_LOG_SECONDS = 45 * 60
+_MIN_BACKFILL_BARS = 5000
+_MIN_V3_SPAN_DAYS = 300.0
 
 
 def backtest_log_dir(cfg: dict[str, Any] | None = None) -> Path:
@@ -69,6 +77,92 @@ def _resolve_job_output(rel_path: str) -> Path:
   return _project_root() / p
 
 
+def _job_by_id(jobs: list[dict[str, Any]], job_id: str) -> dict[str, Any] | None:
+  return next((j for j in jobs if j.get("id") == job_id), None)
+
+
+def job_dependencies_met(job: dict[str, Any], jobs: list[dict[str, Any]]) -> bool:
+  """True when all depends_on jobs completed with valid deliverables."""
+  for dep_id in job.get("depends_on") or []:
+    dep = _job_by_id(jobs, str(dep_id))
+    if not dep or dep.get("status") != "completed":
+      return False
+    ok, _ = validate_job_deliverable(str(dep_id), dep.get("result_preview"), dep.get("output"))
+    if not ok:
+      return False
+  return True
+
+
+def validate_job_deliverable(
+  job_id: str,
+  preview: dict[str, Any] | None,
+  output_rel: str | None = None,
+) -> tuple[bool, str]:
+  """Return (ok, reason). Jobs must meet deliverable contracts — no silent skips."""
+  preview = preview or {}
+  if job_id == "phase_a_1h_backfill":
+    out = _resolve_job_output(str(output_rel or "data/logs/backfill_1h_btc_manifest.json"))
+    if not out.exists():
+      return False, "backfill_manifest_missing"
+    try:
+      manifest = json.loads(out.read_text(encoding="utf-8"))
+    except Exception as exc:
+      return False, f"backfill_manifest_invalid:{exc}"
+    bars = int(manifest.get("bars_after") or 0)
+    span = float(manifest.get("span_days") or 0)
+    if bars < _MIN_BACKFILL_BARS and span < _MIN_V3_SPAN_DAYS:
+      return False, f"backfill_insufficient:bars={bars},span_days={span}"
+    return True, ""
+
+  if job_id == "phase2_eth_1h_backfill":
+    out = _resolve_job_output(str(output_rel or "data/logs/backfill_1h_eth_manifest.json"))
+    if not out.exists():
+      return False, "eth_backfill_manifest_missing"
+    return True, ""
+
+  if job_id == "phase_b_walkforward_ml":
+    wf = preview.get("v1_walk_forward_ml") or {}
+    if wf.get("skipped"):
+      return False, str(wf.get("reason") or "walk_forward_skipped")
+    if not wf.get("metrics") and not wf.get("n_folds"):
+      return False, "walk_forward_missing_metrics"
+    return True, ""
+
+  if job_id in ("phase_a_structure_sweep_v2", "phase_a_structure_sweep_v3"):
+    span = float(preview.get("span_days") or 0)
+    bars = int(preview.get("bars") or 0)
+    if job_id == "phase_a_structure_sweep_v3" and span < _MIN_V3_SPAN_DAYS and bars < _MIN_BACKFILL_BARS:
+      return False, f"structure_sweep_short_history:span_days={span},bars={bars}"
+    if preview.get("fair_baseline_pnl_usd") is None and not preview.get("fair_baseline_gates"):
+      return False, "structure_sweep_missing_fair_baseline"
+    if not preview.get("best_structure"):
+      return False, "structure_sweep_missing_best_structure"
+    return True, ""
+
+  return True, ""
+
+
+def repair_false_completions(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  """Re-queue jobs marked completed but missing required deliverables."""
+  now = datetime.now(timezone.utc).isoformat()
+  for job in jobs:
+    if job.get("status") != "completed":
+      continue
+    ok, reason = validate_job_deliverable(
+      str(job.get("id") or ""),
+      job.get("result_preview"),
+      job.get("output"),
+    )
+    if ok:
+      continue
+    job["status"] = "pending"
+    job["requeued_at"] = now
+    job["requeued_reason"] = reason
+    job.pop("finished_at", None)
+    log.warning("backtest job %s requeued (false completion): %s", job.get("id"), reason)
+  return jobs
+
+
 def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
   from src.trading.pnl_first_railway_manager import load_manager_state, save_manager_state
 
@@ -82,44 +176,65 @@ def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
     state["backtest_queue_initialized_at"] = now
     save_manager_state(state, cfg)
     log.info("pnl_first backtest queue initialized (%d jobs)", len(queued))
-    return queued
+    return repair_false_completions(_requeue_stale_running(cfg, queued))
 
   existing_ids = {str(j.get("id")) for j in jobs if j.get("id")}
-  new_jobs = [
-    {**j, "status": "pending", "queued_at": now}
-    for j in DEFAULT_JOBS
-    if j["id"] not in existing_ids
-  ]
-  if not new_jobs:
-    return _requeue_stale_running(cfg, jobs)
+  for spec in DEFAULT_JOBS:
+    if spec["id"] not in existing_ids:
+      jobs.append({**spec, "status": "pending", "queued_at": now})
+    else:
+      for job in jobs:
+        if job.get("id") == spec["id"]:
+          for key in ("depends_on", "output", "script", "milestone"):
+            if key in spec and key not in job:
+              job[key] = spec[key]
 
-  first_pending = next((i for i, j in enumerate(jobs) if j.get("status") == "pending"), len(jobs))
-  jobs = jobs[:first_pending] + new_jobs + jobs[first_pending:]
+  jobs = repair_false_completions(jobs)
   state["backtest_jobs"] = jobs
   state["backtest_queue_updated_at"] = now
   save_manager_state(state, cfg)
-  log.info("pnl_first backtest queue merged %d new job(s): %s", len(new_jobs), [j["id"] for j in new_jobs])
   return _requeue_stale_running(cfg, jobs)
 
 
 def _requeue_stale_running(cfg: dict[str, Any] | None, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-  """After deploy, no in-process runner — reset orphaned running jobs."""
+  """Reset orphaned running jobs (deploy kill or log heartbeat timeout)."""
   from src.trading.pnl_first_railway_manager import load_manager_state, save_manager_state
 
   with _RUN_LOCK:
     if _ACTIVE_PROC is not None:
       return jobs
-  stale = [j for j in jobs if j.get("status") == "running"]
+
+  now = datetime.now(timezone.utc)
+  now_iso = now.isoformat()
+  stale: list[dict[str, Any]] = []
+
+  for j in jobs:
+    if j.get("status") != "running":
+      continue
+    job_id = str(j.get("id") or "")
+    log_path = _job_log_path(job_id)
+    reason = "orphaned_after_deploy"
+    if log_path.exists():
+      age = now.timestamp() - log_path.stat().st_mtime
+      if age < _STALE_LOG_SECONDS:
+        continue
+      reason = f"log_stale_{int(age)}s"
+    stale.append(j)
+    j["status"] = "pending"
+    j["requeued_at"] = now_iso
+    j["requeued_reason"] = reason
+    j.pop("started_at", None)
+
   if not stale:
     return jobs
-  now = datetime.now(timezone.utc).isoformat()
-  for j in stale:
-    j["status"] = "pending"
-    j["requeued_at"] = now
+
   state = load_manager_state(cfg)
   state["backtest_jobs"] = jobs
   save_manager_state(state, cfg)
-  log.warning("pnl_first backtest requeued stale running job(s): %s", [j.get("id") for j in stale])
+  log.warning(
+    "pnl_first backtest requeued stale running job(s): %s",
+    [(s.get("id"), s.get("requeued_reason")) for s in stale],
+  )
   return jobs
 
 
@@ -149,17 +264,39 @@ def tick_backtest_runner(cfg: dict[str, Any] | None) -> dict[str, Any] | None:
       finished = datetime.now(timezone.utc).isoformat()
       for j in jobs:
         if j.get("id") == _ACTIVE_JOB.get("id"):
-          j["status"] = "completed" if rc == 0 else "failed"
-          j["exit_code"] = rc
-          j["finished_at"] = finished
-          j["log_path"] = str(log_path)
+          preview: dict[str, Any] | None = None
           out = _resolve_job_output(str(j.get("output", "")))
           if out.exists():
             j["output_path"] = str(out)
             try:
-              j["result_preview"] = json.loads(out.read_text(encoding="utf-8"))
+              preview = json.loads(out.read_text(encoding="utf-8"))
+              j["result_preview"] = preview
             except Exception:
-              pass
+              preview = None
+          deliverable_ok, deliverable_reason = validate_job_deliverable(
+            str(j.get("id") or ""),
+            preview,
+            j.get("output"),
+          )
+          if rc != 0:
+            j["status"] = "failed"
+            j["error"] = f"exit_code_{rc}"
+            j["finished_at"] = finished
+          elif not deliverable_ok:
+            j["status"] = "pending"
+            j["requeued_at"] = finished
+            j["requeued_reason"] = deliverable_reason
+            j.pop("finished_at", None)
+            log.warning(
+              "backtest job %s invalid deliverable — requeued: %s",
+              j.get("id"),
+              deliverable_reason,
+            )
+          else:
+            j["status"] = "completed"
+            j["finished_at"] = finished
+          j["exit_code"] = rc
+          j["log_path"] = str(log_path)
       _persist_jobs(cfg, jobs)
       _ACTIVE_PROC = None
       job_id = _ACTIVE_JOB.get("id")
@@ -167,7 +304,10 @@ def tick_backtest_runner(cfg: dict[str, Any] | None) -> dict[str, Any] | None:
       log.info("pnl_first backtest job %s finished rc=%s", job_id, rc)
       return {"action": "backtest_finished", "job_id": job_id, "exit_code": rc}
 
-    next_job = next((j for j in jobs if j.get("status") == "pending"), None)
+    next_job = next(
+      (j for j in jobs if j.get("status") == "pending" and job_dependencies_met(j, jobs)),
+      None,
+    )
     if not next_job:
       return {"action": "backtest_queue_idle", "completed": sum(1 for j in jobs if j.get("status") == "completed")}
 

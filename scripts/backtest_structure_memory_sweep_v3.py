@@ -134,7 +134,12 @@ def main() -> int:
   parser.add_argument("--years", type=float, default=3.0)
   parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
   parser.add_argument("--quick", action="store_true", help="Tiny grid for smoke test")
+  parser.add_argument("--resume", action="store_true", default=True, help="Resume from checkpoint if present")
+  parser.add_argument("--no-resume", action="store_false", dest="resume")
   args = parser.parse_args()
+
+  progress_path = args.output.with_suffix(".progress.json")
+  checkpoint_every = 10
 
   cfg = load_config()
   df = CandleStorage(cfg).load("1h").sort_values("timestamp").reset_index(drop=True)
@@ -153,19 +158,51 @@ def main() -> int:
   results: dict[str, dict] = {}
   summary_rows: list[dict] = []
   grid_meta: list[dict] = []
+  done_names: set[str] = set()
 
-  print("baseline pnl_first (frozen)...", flush=True)
-  results["baseline_frozen"] = run_mechanics_backtest(df, cfg, profile="pnl_first", max_spend=15.0)
-  summary_rows.append(_row("baseline_frozen", results["baseline_frozen"]))
+  if args.resume and progress_path.exists():
+    try:
+      ckpt = json.loads(progress_path.read_text(encoding="utf-8"))
+      results = dict(ckpt.get("results") or {})
+      summary_rows = list(ckpt.get("summary") or [])
+      grid_meta = list(ckpt.get("grid") or [])
+      done_names = set(results.keys())
+      print(f"resuming from checkpoint: {len(done_names)} variants already done", flush=True)
+    except Exception as exc:
+      print(f"checkpoint load failed ({exc}), starting fresh", flush=True)
 
-  print("fair baseline ask_edge + live_regime...", flush=True)
-  results["fair_baseline_gates"] = run_mechanics_backtest(
-    df, cfg, profile="pnl_first", max_spend=15.0, sim_options=GATES,
-  )
-  summary_rows.append(_row("fair_baseline_gates", results["fair_baseline_gates"]))
+  def _save_checkpoint() -> None:
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text(
+      json.dumps({
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "results": results,
+        "summary": summary_rows,
+        "grid": grid_meta,
+        "bars": len(df),
+        "span_days": round(span_days, 2),
+      }, indent=2),
+      encoding="utf-8",
+    )
 
-  for i, (name, params, stage) in enumerate(grid, 1):
-    print(f"[{i}/{len(grid)}] running {name}...", flush=True)
+  if "baseline_frozen" not in results:
+    print("baseline pnl_first (frozen)...", flush=True)
+    results["baseline_frozen"] = run_mechanics_backtest(df, cfg, profile="pnl_first", max_spend=15.0)
+    summary_rows.append(_row("baseline_frozen", results["baseline_frozen"]))
+    _save_checkpoint()
+
+  if "fair_baseline_gates" not in results:
+    print("fair baseline ask_edge + live_regime...", flush=True)
+    results["fair_baseline_gates"] = run_mechanics_backtest(
+      df, cfg, profile="pnl_first", max_spend=15.0, sim_options=GATES,
+    )
+    summary_rows.append(_row("fair_baseline_gates", results["fair_baseline_gates"]))
+    _save_checkpoint()
+
+  pending = [(name, params, stage) for name, params, stage in grid if name not in done_names]
+  for i, (name, params, stage) in enumerate(pending, 1):
+    idx = len(done_names) + i
+    print(f"[{idx}/{len(grid)}] running {name}...", flush=True)
     results[name] = run_mechanics_backtest(
       df, cfg, profile="pnl_first", max_spend=15.0, sim_options=_sim_options(params),
     )
@@ -180,6 +217,8 @@ def main() -> int:
       "sigma_inflate_tight": params.sigma_inflate,
       "block_yes_above": params.block_yes,
     })
+    if i % checkpoint_every == 0 or i == len(pending):
+      _save_checkpoint()
 
   fair_pnl = float(results["fair_baseline_gates"]["total_pnl_usd"])
   struct_items = [(k, v) for k, v in results.items() if k.startswith("struct_")]
@@ -214,6 +253,8 @@ def main() -> int:
   }
   args.output.parent.mkdir(parents=True, exist_ok=True)
   args.output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+  if progress_path.exists():
+    progress_path.unlink()
   print(f"wrote {args.output}", flush=True)
   print(
     f"fair=${fair_pnl:,.2f} best={best[0]} ${best[1]['total_pnl_usd']:,.2f} "
