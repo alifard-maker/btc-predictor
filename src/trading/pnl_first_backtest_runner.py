@@ -163,6 +163,33 @@ def repair_false_completions(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]
   return jobs
 
 
+def _sync_completed_from_artifacts(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  """Mark jobs completed when output artifacts already exist (post-repair / deploy)."""
+  now = datetime.now(timezone.utc).isoformat()
+  for job in jobs:
+    if job.get("status") not in ("pending", "running"):
+      continue
+    job_id = str(job.get("id") or "")
+    preview = None
+    if job_id == "phase_a_1h_backfill":
+      out = _resolve_job_output(str(job.get("output") or "data/logs/backfill_1h_btc_manifest.json"))
+    else:
+      out = _resolve_job_output(str(job.get("output") or ""))
+    if out.exists():
+      try:
+        preview = json.loads(out.read_text(encoding="utf-8"))
+      except Exception:
+        preview = None
+    ok, _ = validate_job_deliverable(job_id, preview, job.get("output"))
+    if ok:
+      job["status"] = "completed"
+      job["finished_at"] = job.get("finished_at") or now
+      if preview:
+        job["result_preview"] = preview
+      log.info("backtest job %s marked completed from existing artifact", job_id)
+  return jobs
+
+
 def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
   from src.trading.pnl_first_railway_manager import load_manager_state, save_manager_state
 
@@ -190,6 +217,7 @@ def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
               job[key] = spec[key]
 
   jobs = repair_false_completions(jobs)
+  jobs = _sync_completed_from_artifacts(jobs)
   state["backtest_jobs"] = jobs
   state["backtest_queue_updated_at"] = now
   save_manager_state(state, cfg)
