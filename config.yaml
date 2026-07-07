@@ -621,6 +621,12 @@ pnl_first:
   phase_started_at: "2026-07-04T23:30:00+00:00"
   defer_profit_target_minutes_to_settle: 30
   defer_profit_target_modes: [paper]
+  # Paper experiment: faster profit-target (30s), keep trail at 90s — ETH hourly paper harness
+  paper_profit_exit_hold:
+    enabled: true
+    modes: [paper]
+    profit_target_min_hold_seconds: 30
+    trail_min_hold_seconds: 90
 
 # 24/7 manager on Railway (sleep lock, preflight, milestone) — replaces local watchdog
 pnl_first_manager:
