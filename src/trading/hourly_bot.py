@@ -965,6 +965,7 @@ class HourlyBot:
       if not exit_reason:
         continue
 
+      decision_mark_cents = int(exit_price)
       entry_c = int(pos["entry_price_cents"])
       contracts = int(pos["contracts"])
       pnl = float(
@@ -982,24 +983,24 @@ class HourlyBot:
       pos_mode = normalize_position_mode(pos.get("mode"))
       mode_label = "Live" if pos_mode == "live" else "Paper"
       live_exit_oid = None
+      index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
+      exit_context = build_hourly_exit_context(
+        pos=pos,
+        pick=pick,
+        tab=tab,
+        live_price=float(price) if price is not None else None,
+        unrealized_pnl_usd=unrealized,
+        exit_reason=exit_reason,
+        position_alert=alert,
+        standard_hourly_alert=standard_alert,
+        bot_kind=self.kind,
+        hours_to_settle=float(hours_left) if hours_left is not None else None,
+        cfg=cfg,
+        adaptive_mode=adaptive.mode,
+        hour_momentum_state=hour_momentum_state,
+      )
+      vet_line = format_hourly_exit_context_detail(exit_context)
       if pos_mode == "live":
-        index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
-        exit_context = build_hourly_exit_context(
-          pos=pos,
-          pick=pick,
-          tab=tab,
-          live_price=float(price) if price is not None else None,
-          unrealized_pnl_usd=unrealized,
-          exit_reason=exit_reason,
-          position_alert=alert,
-          standard_hourly_alert=standard_alert,
-          bot_kind=self.kind,
-          hours_to_settle=float(hours_left) if hours_left is not None else None,
-          cfg=cfg,
-          adaptive_mode=adaptive.mode,
-          hour_momentum_state=hour_momentum_state,
-        )
-        vet_line = format_hourly_exit_context_detail(exit_context)
         live_out = try_live_position_exit(
           kalshi=self.kalshi,
           store=self.store,
@@ -1037,6 +1038,19 @@ class HourlyBot:
           2,
         )
 
+      from src.trading.exit_mark_fill_audit import enrich_exit_mark_fill_fields
+
+      fill_exit_cents = int(exit_price)
+      exit_context = enrich_exit_mark_fill_fields(
+        exit_context,
+        peaks=peaks,
+        decision_mark_cents=decision_mark_cents,
+        unrealized_at_decision_usd=unrealized,
+        fill_exit_cents=fill_exit_cents,
+        min_hold_seconds=int(settings.min_hold_seconds),
+      )
+      vet_line = format_hourly_exit_context_detail(exit_context)
+
       if pos_mode == "live":
         remaining_ct = int(pos["contracts"]) - int(contracts)
         if remaining_ct > 0:
@@ -1050,24 +1064,6 @@ class HourlyBot:
           self.store.close_position(pos["id"])
       else:
         self.store.close_position(pos["id"])
-      if pos_mode != "live":
-        index_id = str(live.get("index_id") or live.get("settlement_reference") or "BRTI")
-        exit_context = build_hourly_exit_context(
-          pos=pos,
-          pick=pick,
-          tab=tab,
-          live_price=float(price) if price is not None else None,
-          unrealized_pnl_usd=unrealized,
-          exit_reason=exit_reason,
-          position_alert=alert,
-          standard_hourly_alert=standard_alert,
-          bot_kind=self.kind,
-          hours_to_settle=float(hours_left) if hours_left is not None else None,
-          cfg=cfg,
-          adaptive_mode=adaptive.mode,
-          hour_momentum_state=hour_momentum_state,
-        )
-        vet_line = format_hourly_exit_context_detail(exit_context)
       detail = (
         f"{mode_label} EXIT ({exit_reason}): {pos['side'].upper()} ×{contracts} "
         f"@ {exit_price}¢ (entry {entry_c}¢) — {detail_suffix} · {vet_line}"

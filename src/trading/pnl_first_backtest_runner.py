@@ -252,6 +252,16 @@ def run_live_pnl_audit(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
 
   audit_path = log_dir / "live_audit_latest.json"
   audit_path.write_text(json.dumps(audit, indent=2, default=str), encoding="utf-8")
+
+  try:
+    from src.trading.exit_mark_fill_audit import run_exit_mark_fill_audit
+
+    audit["exit_mark_fill"] = run_exit_mark_fill_audit(loop, cfg)
+  except Exception as exc:
+    log.warning("exit_mark_fill audit failed: %s", exc)
+    audit["exit_mark_fill"] = {"error": str(exc)}
+
+  audit_path.write_text(json.dumps(audit, indent=2, default=str), encoding="utf-8")
   return audit
 
 
