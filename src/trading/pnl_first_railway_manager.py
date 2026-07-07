@@ -30,6 +30,7 @@ class PnlFirstManagerConfig:
   auto_sync_on_reconcile: bool = True
   lock_eth_live: bool = True
   lock_slot15: bool = True
+  allow_eth_paper: bool = False
 
   @classmethod
   def from_cfg(cls, cfg: dict[str, Any] | None) -> PnlFirstManagerConfig:
@@ -48,6 +49,7 @@ class PnlFirstManagerConfig:
       auto_sync_on_reconcile=bool(raw.get("auto_sync_on_reconcile", True)),
       lock_eth_live=bool(raw.get("lock_eth_live", True)),
       lock_slot15=bool(raw.get("lock_slot15", True)),
+      allow_eth_paper=bool(raw.get("allow_eth_paper", False)),
     )
 
 
@@ -134,7 +136,17 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
     settings = store.get_settings()
     changed = False
     updates = dict(settings.to_dict())
-    if settings.enabled:
+    eth_paper_exempt = False
+    if asset == "eth" and kind == "hourly" and mgr.allow_eth_paper:
+      eth_bot_cfg = dict(
+        (((cfg or {}).get("eth") or {}).get("hourly") or {}).get("bot") or {}
+      )
+      if (
+        bool(eth_bot_cfg.get("enabled"))
+        and str(eth_bot_cfg.get("mode") or "").lower() == "paper"
+      ):
+        eth_paper_exempt = True
+    if settings.enabled and not eth_paper_exempt:
       updates["enabled"] = False
       changed = True
     if mgr.lock_eth_live and asset == "eth" and settings.mode == "live":

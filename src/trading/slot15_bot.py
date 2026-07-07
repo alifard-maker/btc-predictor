@@ -560,6 +560,7 @@ class Slot15Bot:
         include_monitor_fallback=False,
         cut_loss_min_usd=CUT_LOSS_EXIT_MIN_LOSS_USD,
         bot_kind="slot15",
+        trading_mode=settings.mode,
       )
     profit_settings = (
       overlay_live_profit_settings(
@@ -584,6 +585,7 @@ class Slot15Bot:
         if settings.mode == "live"
         else CUT_LOSS_EXIT_MIN_LOSS_USD
       ),
+      trading_mode=settings.mode,
     )
     if (
       reason

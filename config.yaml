@@ -619,6 +619,8 @@ pnl_first:
   min_hours_to_settle_for_entry: 0.083  # 5 min — late-hour floor for live (regime + bot); global default 15m
   max_hours_to_settle_for_entry: 1.35   # hour-edge: allow current-hour entries (log_minute :05 is calibration-only, not entry)
   phase_started_at: "2026-07-04T23:30:00+00:00"
+  defer_profit_target_minutes_to_settle: 30
+  defer_profit_target_modes: [paper]
 
 # 24/7 manager on Railway (sleep lock, preflight, milestone) — replaces local watchdog
 pnl_first_manager:
@@ -635,6 +637,7 @@ pnl_first_manager:
   auto_sync_on_reconcile: true
   lock_eth_live: true
   lock_slot15: true          # BTC/ETH 15m + trial bots — sleep during Phase 0–1
+  allow_eth_paper: true      # Phase 2 prep: ETH hourly paper runs under sleep lock
 
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
 live_resting_exits:
@@ -764,8 +767,8 @@ eth:
       min_edge_override_regime: 0.10
     bot:
       mirror_btc_settings: false  # Phase 0-1: do not mirror BTC live state to ETH
-      live_mechanics_profile: ''  # standard trial (do not inherit BTC mechanical_fixes from base hourly.bot)
-      enabled: false
+      live_mechanics_profile: pnl_first
+      enabled: true
       mode: paper
       max_spend_per_hour_usd: 15
       allow_strong: false

@@ -217,6 +217,24 @@ def trail_exit_detail(
   return f"peak +${peak_usd:.2f} now +${unrealized_usd:.2f} — giveback {giveback:.0f}%"
 
 
+def should_defer_profit_target(
+  cfg: dict[str, Any] | None,
+  ctx: AdaptiveExitContext,
+  trading_mode: str | None,
+) -> bool:
+  """Skip fixed/adaptive profit target when enough time remains before settle (paper-only by default)."""
+  pnl_cfg = dict((cfg or {}).get("pnl_first") or {})
+  defer_minutes = float(pnl_cfg.get("defer_profit_target_minutes_to_settle", 0) or 0)
+  if defer_minutes <= 0:
+    return False
+  modes = [str(m).lower() for m in (pnl_cfg.get("defer_profit_target_modes") or [])]
+  if not modes or str(trading_mode or "").lower() not in modes:
+    return False
+  if ctx.seconds_remaining is None:
+    return False
+  return float(ctx.seconds_remaining) > defer_minutes * 60.0
+
+
 def evaluate_adaptive_profit_exit(
   *,
   settings: ProfitExitSettings,
@@ -225,6 +243,8 @@ def evaluate_adaptive_profit_exit(
   peaks: dict[str, float],
   hold_seconds: float | None,
   ctx: AdaptiveExitContext,
+  cfg: dict[str, Any] | None = None,
+  trading_mode: str | None = None,
 ) -> tuple[str | None, str]:
   """Evaluate trailing and dynamic/fixed profit exits. Returns (reason, detail)."""
   if not settings.take_profit_enabled or unrealized_usd is None:
@@ -242,7 +262,8 @@ def evaluate_adaptive_profit_exit(
     return "PROFIT TRAIL", trail_exit_detail(peaks, unrealized_usd)
 
   mode = str(settings.take_profit_mode or "hybrid").lower()
-  if mode in ("fixed", "adaptive", "hybrid"):
+  defer_target = should_defer_profit_target(cfg, ctx, trading_mode)
+  if mode in ("fixed", "adaptive", "hybrid") and not defer_target:
     tp_pct = (
       effective_take_profit_pct(settings, ctx)
       if mode in ("adaptive", "hybrid")
@@ -808,6 +829,7 @@ def evaluate_slot15_contract_exits(
   pick: dict[str, Any] | None = None,
   live_price: float | None = None,
   standard_hourly_alert: str | None = None,
+  trading_mode: str | None = None,
 ) -> tuple[str | None, str]:
   """Contract-first exit chain for 15m / hourly-trial bots; optional slot-monitor fallback last."""
   from src.backtest.mechanics_profiles import is_hourly_trial_kind
@@ -894,6 +916,8 @@ def evaluate_slot15_contract_exits(
       peaks=peaks,
       hold_seconds=hold_seconds,
       ctx=exit_ctx,
+      cfg=cfg,
+      trading_mode=trading_mode,
     )
     if reason:
       return reason, detail

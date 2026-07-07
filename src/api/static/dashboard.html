@@ -272,6 +272,17 @@
       <div id="bot-performance-report"><p class="muted">Loading…</p></div>
     </details>
 
+    <details class="card" id="epoch-reconcile-card" open>
+      <summary style="cursor:pointer;font-weight:600">Epoch reconcile · bot vs Kalshi P&amp;L</summary>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Per-hour realized P&amp;L since <code>phase_started_at</code> / stats epoch. Compares bot trade log exits to Kalshi fill pairing. Drift highlights reconciliation gaps.</p>
+      <div class="compare-toolbar">
+        <span class="muted" style="font-size:.72rem">Asset:</span>
+        <button type="button" class="btn-secondary epoch-reconcile-asset-btn active" data-asset="btc" onclick="setEpochReconcileAsset('btc')">BTC</button>
+        <button type="button" class="btn-secondary epoch-reconcile-asset-btn" data-asset="eth" onclick="setEpochReconcileAsset('eth')">ETH</button>
+      </div>
+      <div id="epoch-reconcile-report"><p class="muted">Loading…</p></div>
+    </details>
+
     <details class="card" id="hourly-live-trial-compare-card" open>
       <summary style="cursor:pointer;font-weight:600">Live hourly vs paper trial · hour-by-hour</summary>
       <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Side-by-side for the <strong>same Kalshi hour</strong> (<code>event_ticker</code>). <strong>BTC</strong> live hourly vs paper <strong>Trial Mech</strong>. <strong>ETH</strong> live hourly vs paper <strong>standard trial</strong>. Entries, exit reasons, and realized net P&amp;L per hour.</p>
@@ -4436,6 +4447,75 @@
       loadHourlyLiveTrialCompare();
     }
 
+    let epochReconcileAsset = 'btc';
+    let epochReconcileInFlight = false;
+    let epochReconcileLastAt = 0;
+    const EPOCH_RECONCILE_INTERVAL_MS = 60000;
+
+    function setEpochReconcileAsset(asset) {
+      epochReconcileAsset = asset;
+      document.querySelectorAll('.epoch-reconcile-asset-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.asset === asset);
+      });
+      loadEpochReconcile(true);
+    }
+
+    function renderEpochReconcileReport(data) {
+      const el = $('epoch-reconcile-report');
+      if (!el) return;
+      if (!data || !data.ok) {
+        el.innerHTML = `<p class="muted">Epoch reconcile unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
+        return;
+      }
+      const totals = data.totals || {};
+      const startLabel = data.epoch_start_at
+        ? new Date(data.epoch_start_at).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+        : 'epoch';
+      const rows = (data.rows || []).map((r) => {
+        const driftCls = (r.drift || 0) > 0.01 ? 'pos' : ((r.drift || 0) < -0.01 ? 'neg' : 'muted');
+        return `<tr>
+          <td><code style="font-size:.68rem">${r.event_ticker}</code></td>
+          <td>${botPnlUsd(r.bot_pnl)}</td>
+          <td>${botPnlUsd(r.kalshi_pnl)}</td>
+          <td class="${driftCls}">${botPnlUsd(r.drift)}</td>
+          <td class="muted">${r.bot_trades ?? 0}</td>
+          <td class="muted">${r.kalshi_closed ?? 0}</td>
+        </tr>`;
+      }).join('');
+      el.innerHTML = `<p class="muted" style="font-size:.68rem;margin:0 0 .45rem">Since ${startLabel} EDT · ${String(data.asset || '').toUpperCase()}</p>
+        <div class="perf-grid" style="margin-bottom:.55rem">
+          <div class="perf-stat muted">Bot total<strong>${botPnlUsd(totals.bot_pnl)}</strong></div>
+          <div class="perf-stat muted">Kalshi total<strong>${botPnlUsd(totals.kalshi_pnl)}</strong></div>
+          <div class="perf-stat muted">Drift<strong>${botPnlUsd(totals.drift)}</strong></div>
+        </div>
+        <table class="compare-mini-table" style="width:100%">
+          <thead><tr>
+            <th>Event</th><th>Bot P&amp;L</th><th>Kalshi P&amp;L</th><th>Drift</th><th>Bot exits</th><th>Kalshi closed</th>
+          </tr></thead>
+          <tbody>${rows || '<tr><td colspan="6" class="muted">No closed trades since epoch.</td></tr>'}</tbody>
+        </table>`;
+    }
+
+    async function loadEpochReconcile(force = false) {
+      if (!force && epochReconcileInFlight) return;
+      const now = Date.now();
+      if (!force && now - epochReconcileLastAt < EPOCH_RECONCILE_INTERVAL_MS) return;
+      epochReconcileInFlight = true;
+      try {
+        const data = await getWithTimeout(
+          `/api/pnl-first/epoch-reconcile?asset=${encodeURIComponent(epochReconcileAsset)}`,
+          20000,
+        );
+        epochReconcileLastAt = Date.now();
+        renderEpochReconcileReport(data);
+      } catch (e) {
+        epochReconcileLastAt = Date.now();
+        renderEpochReconcileReport({ ok: false, error: e.message });
+      } finally {
+        epochReconcileInFlight = false;
+      }
+    }
+
     function compareSideSummary(side) {
       const sm = side?.summary || {};
       const pending = (side?.pending_resting || []).length;
@@ -5844,6 +5924,7 @@
         getWithTimeout('/health?lite=1', 12000).then(renderStatus).catch(e => showError('Health: ' + e.message)),
       ];
       loadBotPerformanceReport();
+      loadEpochReconcile();
       syncGlobalComparePanel();
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();

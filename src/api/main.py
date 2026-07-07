@@ -1199,6 +1199,18 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
   }
 
 
+@app.get("/api/pnl-first/epoch-reconcile")
+def pnl_first_epoch_reconcile(
+  asset: str = Query(default="btc", pattern="^(btc|eth)$"),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.epoch_reconcile import build_epoch_reconcile_report
+
+  return build_epoch_reconcile_report(_loop, _cfg, asset=asset)
+
+
 @app.get("/api/bots/hourly-live-trial-compare")
 def bots_hourly_live_trial_compare(
   asset: str = Query(default="btc", pattern="^(btc|eth|spx|ndx)$"),

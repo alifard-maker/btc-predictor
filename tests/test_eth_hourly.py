@@ -46,6 +46,9 @@ def test_asset_cfg_eth_inherits_hour_momentum_from_btc(base_cfg):
   assert hm.get("enabled") is True
   assert eth["hourly"]["bot"].get("mirror_btc_settings") is False
   assert eth["hourly"]["bot"].get("experiment_start_at")
+  assert eth["hourly"]["bot"].get("enabled") is True
+  assert eth["hourly"]["bot"].get("mode") == "paper"
+  assert eth["hourly"]["bot"].get("live_mechanics_profile") == "pnl_first"
 
 
 def test_asset_cfg_eth_inherits_quick_exit_and_hold_overlays(base_cfg):

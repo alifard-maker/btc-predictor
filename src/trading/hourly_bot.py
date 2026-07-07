@@ -783,6 +783,7 @@ class HourlyBot:
         pick=pick,
         live_price=live_price,
         standard_hourly_alert=standard_hourly_alert,
+        trading_mode=settings.mode,
       )
 
     kind = alert.get("alert")
@@ -862,6 +863,8 @@ class HourlyBot:
       peaks=peaks,
       hold_seconds=position_hold_seconds(pos),
       ctx=exit_ctx,
+      cfg=cfg,
+      trading_mode=settings.mode,
     )
     if reason:
       return reason, detail

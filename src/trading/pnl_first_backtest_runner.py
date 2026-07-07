@@ -22,8 +22,14 @@ DEFAULT_JOBS: list[dict[str, str]] = [
   {
     "id": "phase_a_1h_backfill",
     "script": "scripts/backfill_1h_candles_railway.py",
-    "output": "data/logs/backfill_1h_manifest.json",
+    "output": "data/logs/backfill_1h_btc_manifest.json",
     "milestone": "phase_a_1h_history_backfill",
+  },
+  {
+    "id": "phase2_eth_1h_backfill",
+    "script": "scripts/backfill_1h_candles_railway.py --asset eth",
+    "output": "data/logs/backfill_1h_eth_manifest.json",
+    "milestone": "phase2_eth_1h_history_backfill",
   },
   {
     "id": "phase_a_structure_sweep_v3",
@@ -166,7 +172,9 @@ def tick_backtest_runner(cfg: dict[str, Any] | None) -> dict[str, Any] | None:
       return {"action": "backtest_queue_idle", "completed": sum(1 for j in jobs if j.get("status") == "completed")}
 
     root = _project_root()
-    script = root / str(next_job["script"])
+    script_tokens = str(next_job["script"]).split()
+    script = root / script_tokens[0]
+    script_args = script_tokens[1:]
     if not script.exists():
       next_job["status"] = "failed"
       next_job["error"] = f"missing script {script}"
@@ -180,7 +188,7 @@ def tick_backtest_runner(cfg: dict[str, Any] | None) -> dict[str, Any] | None:
 
     out_f = log_path.open("w", encoding="utf-8")
     _ACTIVE_PROC = subprocess.Popen(
-      [sys.executable, "-u", str(script)],
+      [sys.executable, "-u", str(script), *script_args],
       cwd=root,
       stdout=out_f,
       stderr=subprocess.STDOUT,
