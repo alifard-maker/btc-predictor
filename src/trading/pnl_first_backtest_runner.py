@@ -473,12 +473,50 @@ def maybe_sync_kalshi_periodic(loop: Any, cycle: int, *, every: int = 15) -> dic
     return {"ok": False, "error": str(exc)}
 
 
+def _v3_progress_snapshot() -> dict[str, Any] | None:
+  """Partial v3 sweep from checkpoint (available before final JSON)."""
+  progress = _resolve_job_output("data/logs/backtest_structure_memory_sweep_v3.progress.json")
+  if not progress.exists():
+    return None
+  try:
+    ckpt = json.loads(progress.read_text(encoding="utf-8"))
+  except Exception:
+    return None
+  results = ckpt.get("results") or {}
+  summary = list(ckpt.get("summary") or [])
+  struct_done = sum(1 for k in results if str(k).startswith("struct_"))
+  fair = results.get("fair_baseline_gates") or {}
+  fair_pnl = fair.get("total_pnl_usd")
+  struct_rows = [r for r in summary if str(r.get("name", "")).startswith("struct_")]
+  struct_rows.sort(key=lambda r: float(r.get("total_pnl_usd") or 0), reverse=True)
+  best = struct_rows[0] if struct_rows else None
+  delta = None
+  if best is not None and fair_pnl is not None:
+    delta = round(float(best.get("total_pnl_usd") or 0) - float(fair_pnl), 2)
+  return {
+    "updated_at": ckpt.get("updated_at"),
+    "bars": ckpt.get("bars"),
+    "span_days": ckpt.get("span_days"),
+    "struct_variants_done": struct_done,
+    "struct_variants_total": 233,
+    "fair_baseline_pnl_usd": fair_pnl,
+    "best_structure_so_far": best,
+    "delta_vs_fair_usd": delta,
+    "top_structures": struct_rows[:5],
+    "checkpoint_path": str(progress),
+  }
+
+
 def backtest_status(cfg: dict[str, Any] | None) -> dict[str, Any]:
   jobs = ensure_backtest_queue(cfg)
   with _RUN_LOCK:
     running = _ACTIVE_JOB
-  return {
+  out: dict[str, Any] = {
     "jobs": jobs,
     "running": running,
     "log_dir": str(backtest_log_dir(cfg)),
   }
+  v3_progress = _v3_progress_snapshot()
+  if v3_progress:
+    out["v3_progress"] = v3_progress
+  return out
