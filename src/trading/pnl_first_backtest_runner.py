@@ -167,7 +167,7 @@ def _sync_completed_from_artifacts(jobs: list[dict[str, Any]]) -> list[dict[str,
   """Mark jobs completed when output artifacts already exist (post-repair / deploy)."""
   now = datetime.now(timezone.utc).isoformat()
   for job in jobs:
-    if job.get("status") not in ("pending", "running"):
+    if job.get("status") not in ("pending", "running", "failed"):
       continue
     job_id = str(job.get("id") or "")
     preview = None
