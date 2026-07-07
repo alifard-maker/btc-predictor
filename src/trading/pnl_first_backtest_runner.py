@@ -38,7 +38,7 @@ DEFAULT_JOBS: list[dict[str, Any]] = [
     "script": "scripts/backtest_pnl_first_walkforward.py",
     "output": "data/logs/backtest_pnl_first_walkforward.json",
     "milestone": "phase_b_walkforward_ml_baseline",
-    "depends_on": ["phase_a_1h_backfill"],
+    "depends_on": ["phase_a_1h_backfill", "phase_a_structure_sweep_v3"],
   },
   {
     "id": "phase2_eth_1h_backfill",
@@ -79,6 +79,14 @@ def _resolve_job_output(rel_path: str) -> Path:
 
 def _job_by_id(jobs: list[dict[str, Any]], job_id: str) -> dict[str, Any] | None:
   return next((j for j in jobs if j.get("id") == job_id), None)
+
+
+def _job_sort_key(job: dict[str, Any]) -> int:
+  job_id = str(job.get("id") or "")
+  for i, spec in enumerate(DEFAULT_JOBS):
+    if spec["id"] == job_id:
+      return i
+  return len(DEFAULT_JOBS)
 
 
 def job_dependencies_met(job: dict[str, Any], jobs: list[dict[str, Any]]) -> bool:
@@ -228,7 +236,9 @@ def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
         if job.get("id") == spec["id"]:
           for key in ("depends_on", "output", "script", "milestone"):
             if key in spec:
-              if key == "output" and job.get("output") != spec["output"]:
+              if key == "depends_on":
+                job[key] = list(spec["depends_on"])
+              elif key == "output" and job.get("output") != spec["output"]:
                 job[key] = spec[key]
               elif key not in job:
                 job[key] = spec[key]
@@ -258,12 +268,11 @@ def _requeue_stale_running(cfg: dict[str, Any] | None, jobs: list[dict[str, Any]
       continue
     job_id = str(j.get("id") or "")
     log_path = _job_log_path(job_id)
-    reason = "orphaned_after_deploy"
+    reason = "orphaned_no_active_proc"
     if log_path.exists():
       age = now.timestamp() - log_path.stat().st_mtime
-      if age < _STALE_LOG_SECONDS:
-        continue
-      reason = f"log_stale_{int(age)}s"
+      if age >= _STALE_LOG_SECONDS:
+        reason = f"log_stale_{int(age)}s"
     stale.append(j)
     j["status"] = "pending"
     j["requeued_at"] = now_iso
@@ -350,7 +359,11 @@ def tick_backtest_runner(cfg: dict[str, Any] | None) -> dict[str, Any] | None:
       return {"action": "backtest_finished", "job_id": job_id, "exit_code": rc}
 
     next_job = next(
-      (j for j in jobs if j.get("status") == "pending" and job_dependencies_met(j, jobs)),
+      (
+        j
+        for j in sorted(jobs, key=_job_sort_key)
+        if j.get("status") == "pending" and job_dependencies_met(j, jobs)
+      ),
       None,
     )
     if not next_job:
