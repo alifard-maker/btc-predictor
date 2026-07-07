@@ -139,7 +139,7 @@ def main() -> int:
   args = parser.parse_args()
 
   progress_path = args.output.with_suffix(".progress.json")
-  checkpoint_every = 10
+  checkpoint_every = 1
 
   cfg = load_config()
   df = CandleStorage(cfg).load("1h").sort_values("timestamp").reset_index(drop=True)

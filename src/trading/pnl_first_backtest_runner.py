@@ -101,13 +101,9 @@ def validate_job_deliverable(
   """Return (ok, reason). Jobs must meet deliverable contracts — no silent skips."""
   preview = preview or {}
   if job_id == "phase_a_1h_backfill":
-    out = _resolve_job_output(str(output_rel or "data/logs/backfill_1h_btc_manifest.json"))
-    if not out.exists():
+    _, manifest = _resolve_backfill_manifest()
+    if not manifest:
       return False, "backfill_manifest_missing"
-    try:
-      manifest = json.loads(out.read_text(encoding="utf-8"))
-    except Exception as exc:
-      return False, f"backfill_manifest_invalid:{exc}"
     bars = int(manifest.get("bars_after") or 0)
     span = float(manifest.get("span_days") or 0)
     if bars < _MIN_BACKFILL_BARS and span < _MIN_V3_SPAN_DAYS:
@@ -163,6 +159,24 @@ def repair_false_completions(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]
   return jobs
 
 
+_BACKFILL_MANIFESTS = (
+  "data/logs/backfill_1h_btc_manifest.json",
+  "data/logs/backfill_1h_manifest.json",
+)
+
+
+def _resolve_backfill_manifest() -> tuple[Path, dict[str, Any] | None]:
+  for rel in _BACKFILL_MANIFESTS:
+    out = _resolve_job_output(rel)
+    if not out.exists():
+      continue
+    try:
+      return out, json.loads(out.read_text(encoding="utf-8"))
+    except Exception:
+      continue
+  return _resolve_job_output(_BACKFILL_MANIFESTS[0]), None
+
+
 def _sync_completed_from_artifacts(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
   """Mark jobs completed when output artifacts already exist (post-repair / deploy)."""
   now = datetime.now(timezone.utc).isoformat()
@@ -172,14 +186,14 @@ def _sync_completed_from_artifacts(jobs: list[dict[str, Any]]) -> list[dict[str,
     job_id = str(job.get("id") or "")
     preview = None
     if job_id == "phase_a_1h_backfill":
-      out = _resolve_job_output(str(job.get("output") or "data/logs/backfill_1h_btc_manifest.json"))
+      _, preview = _resolve_backfill_manifest()
     else:
       out = _resolve_job_output(str(job.get("output") or ""))
-    if out.exists():
-      try:
-        preview = json.loads(out.read_text(encoding="utf-8"))
-      except Exception:
-        preview = None
+      if out.exists():
+        try:
+          preview = json.loads(out.read_text(encoding="utf-8"))
+        except Exception:
+          preview = None
     ok, _ = validate_job_deliverable(job_id, preview, job.get("output"))
     if ok:
       job["status"] = "completed"
@@ -213,8 +227,11 @@ def ensure_backtest_queue(cfg: dict[str, Any] | None) -> list[dict[str, Any]]:
       for job in jobs:
         if job.get("id") == spec["id"]:
           for key in ("depends_on", "output", "script", "milestone"):
-            if key in spec and key not in job:
-              job[key] = spec[key]
+            if key in spec:
+              if key == "output" and job.get("output") != spec["output"]:
+                job[key] = spec[key]
+              elif key not in job:
+                job[key] = spec[key]
 
   jobs = repair_false_completions(jobs)
   jobs = _sync_completed_from_artifacts(jobs)
