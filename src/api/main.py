@@ -1179,7 +1179,13 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
 
   mgr = PnlFirstManagerConfig.from_cfg(_cfg)
   snap = manager_status_snapshot(_loop)
-  trade_timing = compute_btc_live_trade_timing(_loop, _cfg)
+
+  def _safe(label: str, fn):
+    try:
+      return fn()
+    except Exception as exc:
+      return {"ok": False, "error": f"{label}:{type(exc).__name__}:{exc}"}
+
   return {
     "config": {
       "enabled": mgr.enabled,
@@ -1191,11 +1197,11 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
       "interval_seconds": mgr.interval_seconds,
     },
     "runtime": snap,
-    "preflight_now": run_preflight(_loop, _cfg),
-    "milestone_now": compute_live_milestone(_loop, _cfg),
-    "backtest_queue": backtest_status(_cfg),
-    "live_audit": run_live_pnl_audit(_loop, _cfg),
-    "trade_timing": trade_timing,
+    "preflight_now": _safe("preflight", lambda: run_preflight(_loop, _cfg)),
+    "milestone_now": _safe("milestone", lambda: compute_live_milestone(_loop, _cfg)),
+    "backtest_queue": _safe("backtest_queue", lambda: backtest_status(_cfg)),
+    "live_audit": _safe("live_audit", lambda: run_live_pnl_audit(_loop, _cfg)),
+    "trade_timing": _safe("trade_timing", lambda: compute_btc_live_trade_timing(_loop, _cfg)),
   }
 
 

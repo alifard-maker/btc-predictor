@@ -21,8 +21,18 @@ class CandleStorage:
   def save(self, interval: str, df: pd.DataFrame) -> None:
     path = self.path_for(interval)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-      existing = pd.read_parquet(path)
+    existing = pd.DataFrame()
+    if path.exists() and path.stat().st_size > 0:
+      try:
+        existing = pd.read_parquet(path)
+      except Exception:
+        existing = pd.DataFrame()
+    if df is None or df.empty:
+      # Never clobber good history with an empty write.
+      if not existing.empty:
+        return
+      return
+    if not existing.empty:
       combined = (
         pd.concat([existing, df], ignore_index=True)
         .drop_duplicates(subset=["timestamp"])
@@ -30,13 +40,23 @@ class CandleStorage:
       )
     else:
       combined = df.sort_values("timestamp")
-    combined.to_parquet(path, index=False)
+    if combined.empty:
+      return
+    # Atomic replace — avoid leaving a 0-byte parquet if the process dies mid-write.
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    combined.to_parquet(tmp, index=False)
+    tmp.replace(path)
 
   def load(self, interval: str, start: datetime | None = None, end: datetime | None = None) -> pd.DataFrame:
     path = self.path_for(interval)
-    if not path.exists():
+    if not path.exists() or path.stat().st_size == 0:
       return pd.DataFrame()
-    df = pd.read_parquet(path)
+    try:
+      df = pd.read_parquet(path)
+    except Exception:
+      return pd.DataFrame()
+    if df.empty:
+      return df
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     if start:
       df = df[df["timestamp"] >= pd.Timestamp(start, tz="UTC")]
