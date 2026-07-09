@@ -475,36 +475,58 @@ def maybe_sync_kalshi_periodic(loop: Any, cycle: int, *, every: int = 15) -> dic
 
 def _v3_progress_snapshot() -> dict[str, Any] | None:
   """Partial v3 sweep from checkpoint (available before final JSON)."""
-  progress = _resolve_job_output("data/logs/backtest_structure_memory_sweep_v3.progress.json")
-  if not progress.exists():
-    return None
-  try:
-    ckpt = json.loads(progress.read_text(encoding="utf-8"))
-  except Exception:
-    return None
-  results = ckpt.get("results") or {}
-  summary = list(ckpt.get("summary") or [])
-  struct_done = sum(1 for k in results if str(k).startswith("struct_"))
-  fair = results.get("fair_baseline_gates") or {}
-  fair_pnl = fair.get("total_pnl_usd")
-  struct_rows = [r for r in summary if str(r.get("name", "")).startswith("struct_")]
-  struct_rows.sort(key=lambda r: float(r.get("total_pnl_usd") or 0), reverse=True)
-  best = struct_rows[0] if struct_rows else None
-  delta = None
-  if best is not None and fair_pnl is not None:
-    delta = round(float(best.get("total_pnl_usd") or 0) - float(fair_pnl), 2)
-  return {
-    "updated_at": ckpt.get("updated_at"),
-    "bars": ckpt.get("bars"),
-    "span_days": ckpt.get("span_days"),
-    "struct_variants_done": struct_done,
-    "struct_variants_total": 233,
-    "fair_baseline_pnl_usd": fair_pnl,
-    "best_structure_so_far": best,
-    "delta_vs_fair_usd": delta,
-    "top_structures": struct_rows[:5],
-    "checkpoint_path": str(progress),
-  }
+  from src.trading.structure_sweep_ranking import best_structure_variant, full_horizon_struct_items
+
+  for rel in (
+    "data/logs/backtest_structure_memory_sweep_v3.json",
+    "data/logs/backtest_structure_memory_sweep_v3.progress.json",
+  ):
+    path = _resolve_job_output(rel)
+    if not path.exists():
+      continue
+    try:
+      ckpt = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+      continue
+    results = ckpt.get("results") or {}
+    fair = results.get("fair_baseline_gates") or {}
+    fair_pnl = fair.get("total_pnl_usd")
+    full_items = full_horizon_struct_items(results, fair=fair)
+    best_pair = best_structure_variant(results, fair=fair)
+    top_rows = []
+    for name, row in full_items[:5]:
+      top_rows.append({
+        "name": name,
+        "total_pnl_usd": row.get("total_pnl_usd"),
+        "filled_enters": row.get("filled_enters"),
+        "expectancy_per_fill_usd": row.get("expectancy_per_fill_usd"),
+        "win_rate": row.get("win_rate"),
+        "hours_with_fills": row.get("hours_with_fills"),
+        "hours_simulated": row.get("hours_simulated"),
+      })
+    best_row = None
+    delta = None
+    if best_pair:
+      best_name, best_result = best_pair
+      best_row = {"name": best_name, "total_pnl_usd": best_result.get("total_pnl_usd"), "hours_simulated": best_result.get("hours_simulated")}
+      if fair_pnl is not None:
+        delta = round(float(best_result.get("total_pnl_usd") or 0) - float(fair_pnl), 2)
+    struct_done = sum(1 for k in results if str(k).startswith("struct_"))
+    return {
+      "updated_at": ckpt.get("updated_at") or ckpt.get("generated_at"),
+      "bars": ckpt.get("bars"),
+      "span_days": ckpt.get("span_days"),
+      "struct_variants_done": struct_done,
+      "struct_variants_total": 233,
+      "full_horizon_done": len(full_items),
+      "fair_baseline_pnl_usd": fair_pnl,
+      "best_structure_so_far": best_row,
+      "delta_vs_fair_usd": delta,
+      "top_structures": top_rows,
+      "full_horizon_only": True,
+      "checkpoint_path": str(path),
+    }
+  return None
 
 
 def backtest_status(cfg: dict[str, Any] | None) -> dict[str, Any]:

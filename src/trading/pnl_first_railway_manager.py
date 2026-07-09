@@ -412,6 +412,14 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
   if bt:
     actions.append(bt)
 
+  from src.trading.pnl_first_backtest_runner import backtest_status
+  from src.trading.pnl_first_health_watchdog import run_health_watchdog
+
+  bt_status = backtest_status(cfg)
+  health = run_health_watchdog(loop, cfg, jobs=bt_status.get("jobs"))
+  if not health.get("ok"):
+    actions.append({"action": "health_issues", "issues": health.get("issues")})
+
   milestone: dict[str, Any] | None = None
   last_milestone_at = _STATE.get("last_milestone_at")
   now = datetime.now(timezone.utc)
@@ -429,6 +437,39 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
   trade_timing: dict[str, Any] | None = None
   if due_milestone or cycle == 1:
     trade_timing = compute_btc_live_trade_timing(loop, cfg)
+    try:
+      from src.trading.kalshi_live_report import build_kalshi_live_report
+
+      kalshi_live = build_kalshi_live_report(loop, cfg, asset="btc")
+      if kalshi_live.get("ok"):
+        (manager_log_dir(cfg) / "kalshi_live_report_latest.json").write_text(
+          json.dumps(kalshi_live, indent=2, default=str),
+          encoding="utf-8",
+        )
+    except Exception as exc:
+      log.warning("kalshi live report failed: %s", exc)
+      kalshi_live = {"ok": False, "error": str(exc)}
+    try:
+      import subprocess
+      import sys
+
+      root = Path(__file__).resolve().parents[2]
+      proc = subprocess.run(
+        [sys.executable, str(root / "scripts" / "pnl_first_paper_ab_report.py")],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+      )
+      if proc.returncode == 0:
+        actions.append({"action": "paper_ab_report", "ok": True})
+      else:
+        actions.append({"action": "paper_ab_report", "ok": False, "stderr": proc.stderr[-500:]})
+    except Exception as exc:
+      actions.append({"action": "paper_ab_report", "ok": False, "error": str(exc)})
+  else:
+    kalshi_live = None
 
   report = {
     "ts": now.isoformat(),
@@ -441,7 +482,9 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
     "milestone": milestone,
     "live_audit": live_audit,
     "trade_timing": trade_timing,
-    "backtest": backtest_status(cfg),
+    "health": health,
+    "kalshi_live": kalshi_live,
+    "backtest": bt_status,
     "actions": actions,
   }
 

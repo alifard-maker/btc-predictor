@@ -221,8 +221,13 @@ def main() -> int:
       _save_checkpoint()
 
   fair_pnl = float(results["fair_baseline_gates"]["total_pnl_usd"])
-  struct_items = [(k, v) for k, v in results.items() if k.startswith("struct_")]
-  best = max(struct_items, key=lambda kv: kv[1]["total_pnl_usd"])
+  from src.trading.structure_sweep_ranking import best_structure_variant
+
+  best_pair = best_structure_variant(results, fair=results.get("fair_baseline_gates"))
+  if not best_pair:
+    print("error: no full-horizon structure variants to rank", flush=True)
+    return 1
+  best_name, best_result = best_pair
 
   payload = {
     "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -245,8 +250,9 @@ def main() -> int:
       "block_yes_above": BLOCK_YES,
     },
     "fair_baseline_pnl_usd": fair_pnl,
-    "best_structure": {"name": best[0], **_row(best[0], best[1])},
-    "delta_vs_fair_usd": round(float(best[1]["total_pnl_usd"]) - fair_pnl, 2),
+    "best_structure": {"name": best_name, **_row(best_name, best_result)},
+    "best_structure_full_horizon_only": True,
+    "delta_vs_fair_usd": round(float(best_result["total_pnl_usd"]) - fair_pnl, 2),
     "summary": sorted(summary_rows, key=lambda r: r["total_pnl_usd"], reverse=True),
     "grid": grid_meta,
     "results": results,
@@ -257,7 +263,7 @@ def main() -> int:
     progress_path.unlink()
   print(f"wrote {args.output}", flush=True)
   print(
-    f"fair=${fair_pnl:,.2f} best={best[0]} ${best[1]['total_pnl_usd']:,.2f} "
+    f"fair=${fair_pnl:,.2f} best={best_name} ${best_result['total_pnl_usd']:,.2f} "
     f"delta=${payload['delta_vs_fair_usd']:+,.2f}",
     flush=True,
   )

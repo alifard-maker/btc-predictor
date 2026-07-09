@@ -1205,6 +1205,51 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
   }
 
 
+@app.get("/api/pnl-first/kalshi-live-report")
+def pnl_first_kalshi_live_report(
+  asset: str = Query(default="btc", pattern="^(btc|eth)$"),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.kalshi_live_report import build_kalshi_live_report
+
+  return build_kalshi_live_report(_loop, _cfg, asset=asset)
+
+
+@app.get("/api/pnl-first/regroup-milestones")
+def pnl_first_regroup_milestones(_: None = Depends(_session_user)):
+  from src.trading.pnl_first_health_watchdog import load_regroup_milestones
+
+  return load_regroup_milestones(_cfg)
+
+
+@app.get("/api/pnl-first/paper-ab")
+def pnl_first_paper_ab(_: None = Depends(_session_user)):
+  import json
+  from pathlib import Path
+
+  path = Path(os.getenv("DATA_DIR", "data")) / "logs" / "pnl_first_manager" / "paper_ab_latest.json"
+  if not path.exists():
+    raise HTTPException(404, "paper_ab report not generated yet")
+  return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/pnl-first/health")
+def pnl_first_health(_: None = Depends(_session_user)):
+  import json
+  from pathlib import Path
+
+  path = Path(os.getenv("DATA_DIR", "data")) / "logs" / "pnl_first_manager" / "health_latest.json"
+  if path.exists():
+    return json.loads(path.read_text(encoding="utf-8"))
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.pnl_first_health_watchdog import run_health_watchdog
+
+  return run_health_watchdog(_loop, _cfg)
+
+
 @app.get("/api/pnl-first/epoch-reconcile")
 def pnl_first_epoch_reconcile(
   asset: str = Query(default="btc", pattern="^(btc|eth)$"),

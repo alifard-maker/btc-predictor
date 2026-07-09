@@ -108,13 +108,24 @@ def build_epoch_reconcile_report(
   kalshi_by_event: dict[str, dict[str, Any]] = {}
   kalshi = loop._kalshi_for(asset) if hasattr(loop, "_kalshi_for") else getattr(loop, "kalshi", None)
   if kalshi and getattr(kalshi, "authenticated", False):
+    from src.trading.kalshi_fill_sync import summarize_kalshi_experiment_fills
+
     events = set(bot_by_event) | _kalshi_events_since_epoch(kalshi, since, asset=asset)
     kalshi_by_event = _kalshi_pnl_by_event(kalshi, since, asset=asset, events=events)
 
   rows: list[dict[str, Any]] = []
   all_events = sorted(set(bot_by_event) | set(kalshi_by_event))
   total_bot = 0.0
-  total_kalshi = 0.0
+  total_kalshi_rows = 0.0
+  kalshi_summary: dict[str, Any] | None = None
+  if kalshi and getattr(kalshi, "authenticated", False):
+    kalshi_summary = summarize_kalshi_experiment_fills(
+      kalshi,
+      since=since,
+      asset=asset,
+      critical=True,
+    )
+
   for event in all_events:
     bot_row = bot_by_event.get(event, {})
     kalshi_row = kalshi_by_event.get(event, {})
@@ -122,7 +133,7 @@ def build_epoch_reconcile_report(
     kalshi_pnl = round(float(kalshi_row.get("kalshi_pnl") or 0), 2)
     drift = round(bot_pnl - kalshi_pnl, 2)
     total_bot += bot_pnl
-    total_kalshi += kalshi_pnl
+    total_kalshi_rows += kalshi_pnl
     rows.append({
       "event_ticker": event,
       "bot_pnl": bot_pnl,
@@ -132,14 +143,21 @@ def build_epoch_reconcile_report(
       "kalshi_closed": int(kalshi_row.get("kalshi_closed") or 0),
     })
 
+  kalshi_total = round(float((kalshi_summary or {}).get("total_pnl_usd") or total_kalshi_rows), 2)
+  kalshi_closed = int((kalshi_summary or {}).get("closed_trades") or 0)
+
   return {
     "ok": True,
     "epoch_start_at": since.isoformat(),
     "asset": asset,
     "totals": {
       "bot_pnl": round(total_bot, 2),
-      "kalshi_pnl": round(total_kalshi, 2),
-      "drift": round(total_bot - total_kalshi, 2),
+      "kalshi_pnl": kalshi_total,
+      "kalshi_pnl_per_event_sum": round(total_kalshi_rows, 2),
+      "drift": round(total_bot - kalshi_total, 2),
+      "kalshi_closed_trades": kalshi_closed,
+      "note": "kalshi_pnl uses global fill pairing (ground truth); per-event rows may under-count settlements",
     },
+    "kalshi_summary": kalshi_summary,
     "rows": rows,
   }
