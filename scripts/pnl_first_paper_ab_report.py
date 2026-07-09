@@ -21,14 +21,13 @@ from src.trading.trade_timing_analytics import build_trade_timing_report
 
 def main() -> int:
   cfg = load_config()
+  from src.scheduler.loop import PredictionLoop
+
+  loop = PredictionLoop(cfg)
   since = experiment_epoch_at(loop, cfg, asset="btc")
   base = Path(os.getenv("DATA_DIR", str(ROOT / "data")))
   out = base / "logs" / "pnl_first_manager" / "paper_ab_latest.json"
 
-  # Kalshi live ground truth
-  from src.scheduler.loop import PredictionLoop
-
-  loop = PredictionLoop(cfg)
   kalshi = build_kalshi_live_report(loop, cfg, asset="btc")
 
   # ETH paper experiment arm (pnl_first paper_profit_exit_hold applies in paper mode)
