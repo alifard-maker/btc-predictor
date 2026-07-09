@@ -99,9 +99,9 @@ def build_epoch_reconcile_report(
   asset: str = "btc",
 ) -> dict[str, Any]:
   """Bot vs Kalshi realized P&L per hourly event since stats epoch."""
-  from src.trading.pnl_first_railway_manager import _stats_epoch
+  from src.trading.pnl_first_railway_manager import experiment_epoch_at
 
-  since = _stats_epoch(cfg)
+  since = experiment_epoch_at(loop, cfg, asset=asset)
   store = loop.hourly_bot_store(asset, kind="hourly")
   bot_by_event = _bot_pnl_by_event(store, since)
 

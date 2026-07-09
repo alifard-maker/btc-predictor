@@ -168,9 +168,9 @@ def build_kalshi_live_report(
   *,
   asset: str = "btc",
 ) -> dict[str, Any]:
-  from src.trading.pnl_first_railway_manager import _stats_epoch
+  from src.trading.pnl_first_railway_manager import experiment_epoch_at
 
-  since = _stats_epoch(cfg)
+  since = experiment_epoch_at(loop, cfg, asset=asset)
   kalshi = loop._kalshi_for(asset) if hasattr(loop, "_kalshi_for") else getattr(loop, "kalshi", None)
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": False, "error": "Kalshi not authenticated", "asset": asset}
@@ -187,8 +187,8 @@ def build_kalshi_live_report(
     "asset": asset,
     "epoch_start_at": since.isoformat(),
     "summary": summary,
-    "closed_legs": len(closed),
-    "total_pnl_usd": round(sum(float(r.get("pnl_usd") or 0) for r in closed), 2),
+    "closed_legs": int(summary.get("closed_trades") or len(closed)),
+    "total_pnl_usd": round(float(summary.get("total_pnl_usd") or 0), 2),
     "by_event": _by_event(closed),
     "by_exit_type": [
       {

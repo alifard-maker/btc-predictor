@@ -15,20 +15,20 @@ if str(ROOT) not in sys.path:
 
 from src.config import load_config
 from src.trading.kalshi_live_report import build_kalshi_live_report
-from src.trading.pnl_first_railway_manager import _stats_epoch
+from src.trading.pnl_first_railway_manager import experiment_epoch_at
 from src.trading.trade_timing_analytics import build_trade_timing_report
 
 
 def main() -> int:
   cfg = load_config()
-  since = _stats_epoch(cfg)
+  since = experiment_epoch_at(loop, cfg, asset="btc")
   base = Path(os.getenv("DATA_DIR", str(ROOT / "data")))
   out = base / "logs" / "pnl_first_manager" / "paper_ab_latest.json"
 
   # Kalshi live ground truth
-  from src.scheduler.loop import TradingLoop
+  from src.scheduler.loop import PredictionLoop
 
-  loop = TradingLoop(cfg)
+  loop = PredictionLoop(cfg)
   kalshi = build_kalshi_live_report(loop, cfg, asset="btc")
 
   # ETH paper experiment arm (pnl_first paper_profit_exit_hold applies in paper mode)

@@ -93,6 +93,22 @@ def _stats_epoch(cfg: dict[str, Any] | None) -> datetime:
   return datetime(2026, 7, 4, 16, 59, tzinfo=timezone.utc)
 
 
+def experiment_epoch_at(loop: Any, cfg: dict[str, Any] | None, *, asset: str = "btc") -> datetime:
+  """Single epoch for Kalshi vs bot comparisons — prefers bot store stats_epoch_at."""
+  from src.trading.bot_runtime import parse_stats_epoch_at, stats_epoch_at
+
+  try:
+    store = loop.hourly_bot_store(asset, kind="hourly")
+    with store._connect() as conn:
+      raw = stats_epoch_at(conn)
+    parsed = parse_stats_epoch_at(raw)
+    if parsed is not None:
+      return parsed
+  except Exception:
+    pass
+  return _stats_epoch(cfg)
+
+
 def _poa_live_active(cfg: dict[str, Any] | None) -> bool:
   return bool(load_manager_state(cfg).get("poa_live_active"))
 
