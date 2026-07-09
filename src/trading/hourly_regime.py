@@ -195,9 +195,18 @@ class MidHourEntryConfig:
   max_hours: float = 0.75
 
 
-def mid_hour_entry_config(cfg: dict[str, Any] | None) -> MidHourEntryConfig:
+def mid_hour_entry_config(
+  cfg: dict[str, Any] | None,
+  *,
+  asset: str | None = None,
+) -> MidHourEntryConfig:
   pf = (cfg or {}).get("pnl_first") or {}
   raw = dict(pf.get("mid_hour_entry") or {})
+  if str(asset or "").lower() == "eth":
+    eth_raw = dict(
+      (((cfg or {}).get("eth") or {}).get("hourly") or {}).get("bot") or {}
+    ).get("mid_hour_entry") or {}
+    raw = {**raw, **eth_raw}
   return MidHourEntryConfig(
     enabled=bool(raw.get("enabled", False)),
     min_hours=float(raw.get("min_hours_to_settle", 0.25)),
@@ -205,14 +214,33 @@ def mid_hour_entry_config(cfg: dict[str, Any] | None) -> MidHourEntryConfig:
   )
 
 
+def mid_hour_entry_active(
+  cfg: dict[str, Any] | None,
+  *,
+  asset: str | None = None,
+  mode: str | None = None,
+) -> bool:
+  """True when mid-hour entry gate applies (global or ETH paper experiment)."""
+  mh = mid_hour_entry_config(cfg, asset=asset)
+  if mh.enabled:
+    return True
+  if str(asset or "").lower() == "eth" and str(mode or "").lower() == "paper":
+    pf = (cfg or {}).get("pnl_first") or {}
+    return bool((pf.get("mid_hour_entry") or {}).get("eth_paper_enabled", False))
+  return False
+
+
 def mid_hour_entry_skip_reason(
   hours_to_settle: float | None,
   cfg: dict[str, Any] | None,
+  *,
+  asset: str | None = None,
+  mode: str | None = None,
 ) -> str | None:
-  """Blocks entries outside the mid-hour window when mid_hour_entry.enabled."""
-  mh = mid_hour_entry_config(cfg)
-  if not mh.enabled or hours_to_settle is None:
+  """Blocks entries outside the mid-hour window when mid_hour_entry is active."""
+  if not mid_hour_entry_active(cfg, asset=asset, mode=mode) or hours_to_settle is None:
     return None
+  mh = mid_hour_entry_config(cfg, asset=asset)
   h = float(hours_to_settle)
   if h < mh.min_hours:
     return "mid_hour_too_late_for_entry"

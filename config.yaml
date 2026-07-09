@@ -626,6 +626,7 @@ pnl_first:
   # Kalshi timing research: 15–45m-to-settle window; off for BTC live until sign-off
   mid_hour_entry:
     enabled: false
+    eth_paper_enabled: true   # Phase 2 prep: ETH hourly paper only (BTC live unchanged)
     min_hours_to_settle: 0.25
     max_hours_to_settle: 0.75
   # Paper experiment: faster profit-target (30s), keep trail at 90s — ETH hourly paper harness
@@ -804,11 +805,11 @@ eth:
       min_hours_to_settle_for_entry: 0.25
       max_hours_to_settle_for_entry: 0.75
       late_entry:
-        enabled: true
+        enabled: false   # strict 15–45m window for mid-hour paper experiment
         min_hours: 0.08
         min_ask_edge_cents: 15
         max_stake_usd: 2.50
-      experiment_start_at: "2026-07-04T16:59:00+00:00"  # Jul 4 2026 12:59 PM EDT — stats & experiment baseline
+      experiment_start_at: "2026-07-09T12:00:00+00:00"  # mid-hour + defer-exit paper experiment epoch
       profit_exit_cooldown_seconds: 60
       cheap_leg_max_entry_cents: 20
       cheap_leg_cut_loss_cents: 10

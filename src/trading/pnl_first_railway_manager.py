@@ -162,7 +162,17 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
         and str(eth_bot_cfg.get("mode") or "").lower() == "paper"
       ):
         eth_paper_exempt = True
-    if settings.enabled and not eth_paper_exempt:
+    if eth_paper_exempt:
+      if not settings.enabled:
+        updates["enabled"] = True
+        changed = True
+      if not settings.continuous and bool(eth_bot_cfg.get("continuous_enabled", True)):
+        updates["continuous"] = True
+        changed = True
+      if str(settings.mode or "").lower() != "paper":
+        updates["mode"] = "paper"
+        changed = True
+    elif settings.enabled:
       updates["enabled"] = False
       changed = True
     if mgr.lock_eth_live and asset == "eth" and settings.mode == "live":
@@ -182,7 +192,11 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
           Slot15BotSettings.from_dict(updates),
           source="pnl_first_railway_manager_sleep_lock",
         )
-      actions.append({"action": "sleep_lock", "asset": asset, "kind": kind})
+      actions.append({
+        "action": "eth_paper_arm" if eth_paper_exempt else "sleep_lock",
+        "asset": asset,
+        "kind": kind,
+      })
       log.info(
         "pnl_first_manager: sleep lock %s/%s enabled=%s mode=%s",
         asset, kind, updates.get("enabled"), updates.get("mode"),

@@ -19,12 +19,29 @@ from src.trading.pnl_first_railway_manager import experiment_epoch_at
 from src.trading.trade_timing_analytics import build_trade_timing_report
 
 
+def _asset_experiment_start(cfg: dict, asset: str):
+  if str(asset).lower() == "eth":
+    raw = (
+      (((cfg or {}).get("eth") or {}).get("hourly") or {}).get("bot") or {}
+    ).get("experiment_start_at")
+  else:
+    raw = (((cfg or {}).get("hourly") or {}).get("bot") or {}).get("experiment_start_at")
+  if not raw:
+    return None
+  try:
+    return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+  except ValueError:
+    return None
+
+
 def main() -> int:
   cfg = load_config()
   from src.scheduler.loop import PredictionLoop
 
   loop = PredictionLoop(cfg)
-  since = experiment_epoch_at(loop, cfg, asset="btc")
+  eth_cfg = loop._eth_cfg or cfg
+  kalshi_since = experiment_epoch_at(loop, cfg, asset="btc")
+  eth_since = _asset_experiment_start(eth_cfg, "eth") or experiment_epoch_at(loop, eth_cfg, asset="eth")
   base = Path(os.getenv("DATA_DIR", str(ROOT / "data")))
   out = base / "logs" / "pnl_first_manager" / "paper_ab_latest.json"
 
@@ -33,11 +50,12 @@ def main() -> int:
   # ETH paper experiment arm (pnl_first paper_profit_exit_hold applies in paper mode)
   eth_store = loop.hourly_bot_store("eth", kind="hourly")
   eth_trades = eth_store.list_trades(limit=5000)
-  eth_timing = build_trade_timing_report(eth_trades, mode="paper", since=since)
+  eth_timing = build_trade_timing_report(eth_trades, mode="paper", since=eth_since)
 
   payload = {
     "generated_at": datetime.now(timezone.utc).isoformat(),
-    "epoch_start_at": since.isoformat(),
+    "epoch_start_at": kalshi_since.isoformat(),
+    "eth_epoch_start_at": eth_since.isoformat() if eth_since else None,
     "experiment": {
       "arm": "eth_hourly_paper",
       "hold_split": dict((cfg.get("pnl_first") or {}).get("paper_profit_exit_hold") or {}),

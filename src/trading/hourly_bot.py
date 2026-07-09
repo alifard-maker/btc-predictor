@@ -1282,7 +1282,12 @@ class HourlyBot:
       self.store.set_last_skip_reason(far_gate)
       return results
 
-    mid_gate = mid_hour_entry_skip_reason(live.get("hours_to_settle"), cfg)
+    mid_gate = mid_hour_entry_skip_reason(
+      live.get("hours_to_settle"),
+      cfg,
+      asset=self.asset,
+      mode=settings.mode,
+    )
     if mid_gate:
       self.store.set_last_skip_reason(mid_gate)
       return results

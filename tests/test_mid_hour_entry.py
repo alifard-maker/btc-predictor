@@ -8,6 +8,12 @@ def test_mid_hour_disabled_no_skip():
   assert mid_hour_entry_skip_reason(0.5, cfg) is None
 
 
+def test_eth_paper_enabled_without_global_flag():
+  cfg = {"pnl_first": {"mid_hour_entry": {"enabled": False, "eth_paper_enabled": True}}}
+  assert mid_hour_entry_skip_reason(0.9, cfg, asset="eth", mode="paper") == "mid_hour_too_early_for_entry"
+  assert mid_hour_entry_skip_reason(0.9, cfg, asset="btc", mode="paper") is None
+
+
 def test_mid_hour_blocks_too_early():
   cfg = {"pnl_first": {"mid_hour_entry": {"enabled": True}}}
   assert mid_hour_entry_skip_reason(0.9, cfg) == "mid_hour_too_early_for_entry"
