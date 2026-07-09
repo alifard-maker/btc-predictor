@@ -150,6 +150,15 @@ def validate_job_deliverable(
       return False, "structure_sweep_missing_best_structure"
     return True, ""
 
+  if job_id == "phase_a_midhour_exits":
+    variants = preview.get("variants") or {}
+    if not variants:
+      return False, "midhour_missing_variants"
+    baseline = variants.get("pnl_first_fair_baseline") or {}
+    if baseline.get("total_pnl_usd") is None:
+      return False, "midhour_missing_baseline_pnl"
+    return True, ""
+
   return True, ""
 
 
