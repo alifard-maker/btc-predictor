@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
 
 from src.config import load_config
+from src.trading.eth_paper_experiment import eth_bot_cfg
 from src.trading.kalshi_live_report import build_kalshi_live_report
 from src.trading.pnl_first_railway_manager import experiment_epoch_at
 from src.trading.trade_timing_analytics import build_trade_timing_report
@@ -62,9 +63,14 @@ def main() -> int:
       "defer_profit_target_minutes": (cfg.get("pnl_first") or {}).get("defer_profit_target_minutes_to_settle"),
       "defer_leg_stop_minutes": (cfg.get("pnl_first") or {}).get("defer_leg_stop_minutes_to_settle"),
       "mid_hour_entry": dict((cfg.get("pnl_first") or {}).get("mid_hour_entry") or {}),
-      "eth_max_hours_to_settle": (
-        ((cfg.get("eth") or {}).get("hourly") or {}).get("bot") or {}
-      ).get("max_hours_to_settle_for_entry"),
+      "paper_experiment": dict(eth_bot_cfg(cfg).get("paper_experiment") or {}),
+      "guards_stripped": {
+        "soft_rally": bool((eth_bot_cfg(cfg).get("soft_rally") or {}).get("enabled")),
+        "whipsaw_regime_block": bool(
+          (eth_bot_cfg(cfg).get("whipsaw_guard") or {}).get("block_entries_when_regime_blocked")
+        ),
+      },
+      "eth_max_hours_to_settle": eth_bot_cfg(cfg).get("max_hours_to_settle_for_entry"),
     },
     "control_reference": {
       "arm": "btc_kalshi_live_fills",

@@ -924,24 +924,21 @@ eth:
         rally_block_range_bands: false
         defense_block_range_bands: true
       soft_rally:
-        enabled: true
+        enabled: false
         defense_skip_all_entries: false
-        defense_threshold_only: true
-        defense_min_ask_edge_cents: 15.0
-        defense_yes_mid_min_cents: 40
-        defense_yes_mid_max_cents: 80
-        profit_lock_usd: 1.25
-        rally_block_range_bands: false
-        defense_block_range_bands: true
+        defense_threshold_only: false
       whipsaw_guard:
         enabled: true
         max_quick_exit_cuts_per_hour: 3
         pause_all_entries_after_cut_streak: true
-        block_entries_when_regime_blocked: true
-        block_scale_in_when_regime_blocked: true
+        block_entries_when_regime_blocked: false
+        block_scale_in_when_regime_blocked: false
         require_signal_refresh_after_spot_against_cut: true
         conservative_max_contracts_per_entry: 2
         event_cut_cooldown_seconds: 600
+      paper_experiment:
+        enabled: true
+        sync_settings_on_arm: true
       live_trial_align:
         enabled: true
         live_exit_mode: trial_legs

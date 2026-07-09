@@ -201,6 +201,17 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
         "pnl_first_manager: sleep lock %s/%s enabled=%s mode=%s",
         asset, kind, updates.get("enabled"), updates.get("mode"),
       )
+
+    if eth_paper_exempt and asset == "eth" and kind == "hourly":
+      from src.trading.eth_paper_experiment import seed_eth_paper_settings_from_cfg
+
+      seed_result = seed_eth_paper_settings_from_cfg(
+        store,
+        cfg,
+        source="pnl_first_manager_eth_paper_arm",
+      )
+      if seed_result.get("synced"):
+        actions.append({"action": "eth_paper_settings_sync", **seed_result})
   return actions
 
 

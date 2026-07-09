@@ -118,6 +118,19 @@ def run_health_watchdog(
   if not kalshi_report_ok and kalshi_error:
     issues.append(f"kalshi_report:{kalshi_error}")
 
+  eth_paper: dict[str, Any] = {"ok": True, "skipped": True}
+  try:
+    from src.trading.eth_paper_experiment import check_eth_paper_harness
+
+    eth_paper = check_eth_paper_harness(loop, cfg)
+    if not eth_paper.get("skipped") and not eth_paper.get("ok"):
+      issues.extend(eth_paper.get("issues") or [])
+    eth_out = _data_root() / "logs" / "pnl_first_manager" / "eth_paper_health_latest.json"
+    eth_out.write_text(json.dumps(eth_paper, indent=2, default=str), encoding="utf-8")
+  except Exception as exc:
+    eth_paper = {"ok": False, "issues": [f"eth_paper_health:{type(exc).__name__}:{exc}"]}
+    issues.append(str(eth_paper["issues"][0]))
+
   health = {
     "ok": not issues,
     "ts": datetime.now(timezone.utc).isoformat(),
@@ -125,6 +138,7 @@ def run_health_watchdog(
     "backtest_queue": queue,
     "kalshi_report_ok": kalshi_report_ok,
     "kalshi_report_error": kalshi_error,
+    "eth_paper_harness": eth_paper,
     "regroup_milestones": milestones,
     "issues": issues,
   }
