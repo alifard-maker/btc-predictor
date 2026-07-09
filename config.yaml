@@ -621,6 +621,13 @@ pnl_first:
   phase_started_at: "2026-07-04T23:30:00+00:00"
   defer_profit_target_minutes_to_settle: 30
   defer_profit_target_modes: [paper]
+  defer_leg_stop_minutes_to_settle: 30
+  defer_leg_stop_modes: [paper]
+  # Kalshi timing research: 15–45m-to-settle window; off for BTC live until sign-off
+  mid_hour_entry:
+    enabled: false
+    min_hours_to_settle: 0.25
+    max_hours_to_settle: 0.75
   # Paper experiment: faster profit-target (30s), keep trail at 90s — ETH hourly paper harness
   paper_profit_exit_hold:
     enabled: true
@@ -795,7 +802,7 @@ eth:
       max_take_profit_pct: 0.40
       min_hold_seconds: 90
       min_hours_to_settle_for_entry: 0.25
-      max_hours_to_settle_for_entry: 1.25
+      max_hours_to_settle_for_entry: 0.75
       late_entry:
         enabled: true
         min_hours: 0.08

@@ -184,3 +184,38 @@ def entry_too_far_from_settle_skip_reason(
   if float(hours_to_settle) > max_h:
     return "too_far_for_new_entries"
   return None
+
+
+@dataclass(frozen=True)
+class MidHourEntryConfig:
+  """Optional 15–45m entry window (Kalshi timing research); off until explicitly enabled."""
+
+  enabled: bool = False
+  min_hours: float = 0.25
+  max_hours: float = 0.75
+
+
+def mid_hour_entry_config(cfg: dict[str, Any] | None) -> MidHourEntryConfig:
+  pf = (cfg or {}).get("pnl_first") or {}
+  raw = dict(pf.get("mid_hour_entry") or {})
+  return MidHourEntryConfig(
+    enabled=bool(raw.get("enabled", False)),
+    min_hours=float(raw.get("min_hours_to_settle", 0.25)),
+    max_hours=float(raw.get("max_hours_to_settle", 0.75)),
+  )
+
+
+def mid_hour_entry_skip_reason(
+  hours_to_settle: float | None,
+  cfg: dict[str, Any] | None,
+) -> str | None:
+  """Blocks entries outside the mid-hour window when mid_hour_entry.enabled."""
+  mh = mid_hour_entry_config(cfg)
+  if not mh.enabled or hours_to_settle is None:
+    return None
+  h = float(hours_to_settle)
+  if h < mh.min_hours:
+    return "mid_hour_too_late_for_entry"
+  if h > mh.max_hours:
+    return "mid_hour_too_early_for_entry"
+  return None

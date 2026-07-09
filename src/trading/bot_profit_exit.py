@@ -235,6 +235,24 @@ def should_defer_profit_target(
   return float(ctx.seconds_remaining) > defer_minutes * 60.0
 
 
+def should_defer_leg_stop(
+  cfg: dict[str, Any] | None,
+  ctx: AdaptiveExitContext,
+  trading_mode: str | None,
+) -> bool:
+  """Skip LEG STOP / early cut-loss when enough time remains before settle (paper-only by default)."""
+  pnl_cfg = dict((cfg or {}).get("pnl_first") or {})
+  defer_minutes = float(pnl_cfg.get("defer_leg_stop_minutes_to_settle", 0) or 0)
+  if defer_minutes <= 0:
+    return False
+  modes = [str(m).lower() for m in (pnl_cfg.get("defer_leg_stop_modes") or [])]
+  if not modes or str(trading_mode or "").lower() not in modes:
+    return False
+  if ctx.seconds_remaining is None:
+    return False
+  return float(ctx.seconds_remaining) > defer_minutes * 60.0
+
+
 def profit_exit_min_hold_seconds(
   settings: ProfitExitSettings,
   cfg: dict[str, Any] | None,
@@ -653,11 +671,18 @@ def evaluate_slot15_leg_stop_loss(
   seconds_remaining: float | None = None,
   hours_to_settle: float | None = None,
   bot_cfg: dict[str, Any] | None = None,
+  trading_mode: str | None = None,
 ) -> tuple[str | None, str]:
   delta = mark_vs_entry_cents(pos, mark_cents)
   if delta is None or leg_cfg.leg_stop_loss_cents <= 0:
     return None, ""
   if delta <= -leg_cfg.leg_stop_loss_cents:
+    defer_ctx = AdaptiveExitContext(
+      seconds_remaining=seconds_remaining,
+      period_seconds=3600.0,
+    )
+    if should_defer_leg_stop(bot_cfg, defer_ctx, trading_mode):
+      return None, ""
     if gate_on_hourly_thesis and not hourly_mark_cut_allowed(
       pos,
       pick,
@@ -887,6 +912,7 @@ def evaluate_slot15_contract_exits(
     seconds_remaining=exit_ctx.seconds_remaining,
     hours_to_settle=hours_to_settle,
     bot_cfg=cfg,
+    trading_mode=trading_mode,
   )
   if reason:
     return reason, detail

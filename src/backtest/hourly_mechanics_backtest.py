@@ -27,6 +27,11 @@ from src.trading.bot_live_exit import (
   effective_live_take_profit_usd,
   live_exit_config,
 )
+from src.trading.bot_profit_exit import (
+  AdaptiveExitContext,
+  should_defer_leg_stop,
+  should_defer_profit_target,
+)
 from src.trading.entry_strategy import (
   CycleEntryBudget,
   ask_edge_cents_for_pick,
@@ -77,6 +82,9 @@ class MechanicsSimOptions:
   structure_resistance_penalty: float | None = None
   structure_sigma_inflate_tight: float | None = None
   structure_block_yes_above: bool | None = None
+  entry_min_hours_to_settle: float | None = None
+  entry_max_hours_to_settle: float | None = None
+  defer_exits_paper: bool = False
 
 
 @dataclass
@@ -404,11 +412,21 @@ def simulate_hour(
       }
       tp_usd = effective_live_take_profit_usd(pos, live_exit.take_profit_usd or 0.08, cfg, kind="hourly")
       exit_reason = None
+      exit_ctx = AdaptiveExitContext(seconds_remaining=hours_left * 3600.0, period_seconds=3600.0)
+      defer_mode = "paper" if sim_options.defer_exits_paper else "live"
       if unreal >= tp_usd and hold_s >= 60:
-        exit_reason = "TAKE PROFIT"
+        if not (
+          sim_options.defer_exits_paper
+          and should_defer_profit_target(cfg, exit_ctx, defer_mode)
+        ):
+          exit_reason = "TAKE PROFIT"
       elif (
         not sim_options.disable_cut_loss
         and unreal <= -live_exit.cut_loss_min_usd
+        and not (
+          sim_options.defer_exits_paper
+          and should_defer_leg_stop(cfg, exit_ctx, defer_mode)
+        )
         and allow_live_cut_loss(
           exit_reason="CUT LOSSES",
           unrealized_usd=unreal,
@@ -470,6 +488,13 @@ def simulate_hour(
     if adaptive.mode == "locked" or defense_entries_blocked(adaptive, cfg):
       continue
     if sim_options.use_live_regime and not regime_allow:
+      continue
+
+    entry_min = sim_options.entry_min_hours_to_settle
+    entry_max = sim_options.entry_max_hours_to_settle
+    if entry_min is not None and hours_left < entry_min:
+      continue
+    if entry_max is not None and hours_left > entry_max:
       continue
 
     estrat_poll = apply_adaptive_passive_guards(estrat, adaptive, cfg)

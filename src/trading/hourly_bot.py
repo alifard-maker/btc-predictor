@@ -65,6 +65,7 @@ from src.trading.bot_profit_exit import (
   evaluate_slot15_contract_exits,
   effective_hourly_trial_settings,
   position_hold_seconds,
+  should_defer_leg_stop,
 )
 from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
 from src.trading.bot_entry_presets import (
@@ -115,6 +116,7 @@ from src.trading.hourly_regime import (
   entry_too_close_to_settle_skip_reason,
   entry_too_far_from_settle_skip_reason,
   is_late_entry_path,
+  mid_hour_entry_skip_reason,
 )
 from src.trading.pnl_first_gates import (
   filter_pnl_first_candidates,
@@ -806,6 +808,8 @@ class HourlyBot:
       bot_cfg=cfg,
     )
     if cheap_reason:
+      if should_defer_leg_stop(cfg, exit_ctx, settings.mode):
+        return None, ""
       if settings.mode == "live" and not allow_live_cut_loss(
         exit_reason=cheap_reason,
         unrealized_usd=unrealized,
@@ -834,6 +838,8 @@ class HourlyBot:
       else:
         min_loss = CUT_LOSS_EXIT_MIN_LOSS_USD
       if unrealized >= -min_loss:
+        return None, ""
+      if should_defer_leg_stop(cfg, exit_ctx, settings.mode):
         return None, ""
       if settings.mode == "live" and not allow_live_cut_loss(
         exit_reason="CUT LOSSES",
@@ -1274,6 +1280,11 @@ class HourlyBot:
     )
     if far_gate:
       self.store.set_last_skip_reason(far_gate)
+      return results
+
+    mid_gate = mid_hour_entry_skip_reason(live.get("hours_to_settle"), cfg)
+    if mid_gate:
+      self.store.set_last_skip_reason(mid_gate)
       return results
 
     max_cap = settings.max_spend_per_hour_usd

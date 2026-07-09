@@ -41,6 +41,13 @@ DEFAULT_JOBS: list[dict[str, Any]] = [
     "depends_on": ["phase_a_1h_backfill", "phase_a_structure_sweep_v3"],
   },
   {
+    "id": "phase_a_midhour_exits",
+    "script": "scripts/backtest_pnl_first_midhour_exits.py",
+    "output": "data/logs/backtest_pnl_first_midhour_exits.json",
+    "milestone": "phase_a_midhour_entry_and_defer_exits",
+    "depends_on": ["phase_a_1h_backfill"],
+  },
+  {
     "id": "phase2_eth_1h_backfill",
     "script": "scripts/backfill_1h_candles_railway.py --asset eth",
     "output": "data/logs/backfill_1h_eth_manifest.json",

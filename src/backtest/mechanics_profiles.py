@@ -173,6 +173,13 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     bot["min_hours_to_settle_for_entry"] = late_h
     if "max_hours_to_settle_for_entry" in pf:
       bot["max_hours_to_settle_for_entry"] = float(pf["max_hours_to_settle_for_entry"])
+    mh = dict(pf.get("mid_hour_entry") or {})
+    if mh.get("enabled"):
+      bot["min_hours_to_settle_for_entry"] = float(mh.get("min_hours_to_settle", 0.25))
+      bot["max_hours_to_settle_for_entry"] = float(mh.get("max_hours_to_settle", 0.75))
+      hourly.setdefault("regime", {})["min_hours_to_settle"] = float(
+        mh.get("min_hours_to_settle", 0.25)
+      )
     return c
 
   live_inventory["enabled"] = True

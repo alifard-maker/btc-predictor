@@ -42,6 +42,11 @@ def main() -> int:
       "arm": "eth_hourly_paper",
       "hold_split": dict((cfg.get("pnl_first") or {}).get("paper_profit_exit_hold") or {}),
       "defer_profit_target_minutes": (cfg.get("pnl_first") or {}).get("defer_profit_target_minutes_to_settle"),
+      "defer_leg_stop_minutes": (cfg.get("pnl_first") or {}).get("defer_leg_stop_minutes_to_settle"),
+      "mid_hour_entry": dict((cfg.get("pnl_first") or {}).get("mid_hour_entry") or {}),
+      "eth_max_hours_to_settle": (
+        ((cfg.get("eth") or {}).get("hourly") or {}).get("bot") or {}
+      ).get("max_hours_to_settle_for_entry"),
     },
     "control_reference": {
       "arm": "btc_kalshi_live_fills",
