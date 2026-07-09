@@ -30,6 +30,8 @@ def _bot_pnl_by_event(store: Any, since: datetime) -> dict[str, dict[str, Any]]:
       continue
     if str(trade.get("status") or "") not in ("filled", "reconciled"):
       continue
+    if str(trade.get("mode") or "").lower() != "live":
+      continue
     created = _parse_ts(trade.get("created_at"))
     if created is None or created < since:
       continue
