@@ -8,6 +8,7 @@ from src.trading.pnl_first_gates import (
   pnl_first_entry_block_reason,
   pnl_first_live_ev_block_reason,
   pnl_first_regime_block_reason,
+  pnl_first_s1_only_active,
 )
 
 
@@ -67,3 +68,25 @@ def test_regime_enforced_in_free_mode():
   tab = {"live": {"regime": {"allow_trade": False, "reasons": ["Low expected move"]}}}
   reason = pnl_first_regime_block_reason(tab, _cfg(), kind="hourly", mode="live")
   assert reason and reason.startswith("pnl_first_regime_blocked")
+
+
+def test_eth_paper_experiment_s1_only():
+  cfg = {
+    "_asset": "eth",
+    "hourly": {
+      "bot": {
+        "live_mechanics_profile": "pnl_first",
+        "paper_experiment": {"enabled": True},
+      },
+    },
+  }
+  assert pnl_first_s1_only_active(cfg, kind="hourly", mode="paper", asset="eth")
+  assert not pnl_first_active(cfg, kind="hourly", mode="paper")
+  thresh = (0.2, {"ticker": "KXETH-T1740", "strike_type": "greater", "signal": "BUY YES"}, {})
+  rng = (0.15, {"ticker": "KXETH-B1740", "strike_type": "between", "signal": "BUY YES"}, {})
+  out = filter_pnl_first_candidates([thresh, rng], cfg, kind="hourly", mode="paper", asset="eth")
+  assert len(out) == 1
+  reason = pnl_first_entry_block_reason(
+    rng[1], "yes", cfg, kind="hourly", mode="paper", asset="eth",
+  )
+  assert reason == "pnl_first_s2_blocked"

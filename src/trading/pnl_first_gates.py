@@ -23,6 +23,27 @@ def pnl_first_active(
   return live_mechanics_profile_for_cfg(cfg) == "pnl_first"
 
 
+def pnl_first_s1_only_active(
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str,
+  mode: str,
+  asset: str | None = None,
+) -> bool:
+  """True when S2 range picks must be dropped (BTC live pnl_first or ETH paper experiment)."""
+  if pnl_first_active(cfg, kind=kind, mode=mode):
+    return True
+  if kind != "hourly" or str(mode).lower() != "paper":
+    return False
+  label = str(asset or (cfg or {}).get("_asset") or "").lower()
+  if label != "eth":
+    return False
+  bot = ((cfg or {}).get("hourly") or {}).get("bot") or {}
+  if str(bot.get("live_mechanics_profile") or "") != "pnl_first":
+    return False
+  return bool(dict(bot.get("paper_experiment") or {}).get("enabled"))
+
+
 def _pnl_first_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
   return dict((cfg or {}).get("pnl_first") or {})
 
@@ -74,12 +95,13 @@ def pnl_first_entry_block_reason(
   *,
   kind: str,
   mode: str,
+  asset: str | None = None,
   resolved_execution: dict[str, Any] | None = None,
 ) -> str | None:
+  if pnl_first_s1_only_active(cfg, kind=kind, mode=mode, asset=asset) and is_range_pick(pick):
+    return "pnl_first_s2_blocked"
   if not pnl_first_active(cfg, kind=kind, mode=mode):
     return None
-  if is_range_pick(pick):
-    return "pnl_first_s2_blocked"
   ev_block = pnl_first_live_ev_block_reason(pick, side, cfg)
   if ev_block:
     return ev_block
@@ -117,9 +139,10 @@ def filter_pnl_first_candidates(
   *,
   kind: str,
   mode: str,
+  asset: str | None = None,
 ) -> list[tuple[float, dict[str, Any], dict[str, Any]]]:
   """Drop S2 range picks from the candidate pool."""
-  if not pnl_first_active(cfg, kind=kind, mode=mode):
+  if not pnl_first_s1_only_active(cfg, kind=kind, mode=mode, asset=asset):
     return candidates
   out: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
   for row in candidates:

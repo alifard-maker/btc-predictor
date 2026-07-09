@@ -849,7 +849,7 @@ eth:
         force_correlation_guard: true
         correlation_min_strike_gap_pct: 0.18
         max_same_side_threshold_legs: 1
-        max_same_side_range_legs: 1
+        max_same_side_range_legs: 0
         max_concurrent_positions: 4
         max_entries_per_cycle: 4
         allow_scale_in: false

@@ -148,6 +148,9 @@ def check_eth_paper_harness(loop: Any, cfg: dict[str, Any] | None) -> dict[str, 
         "mid_hour_eth_paper": bool(
           ((cfg or {}).get("pnl_first") or {}).get("mid_hour_entry", {}).get("eth_paper_enabled")
         ),
+        "s1_only": bool(
+          ((eth_bot.get("live_inventory") or {}).get("max_same_side_range_legs", 1) == 0)
+        ),
       },
       "experiment": exp_cfg,
       "checked_at": datetime.now(timezone.utc).isoformat(),

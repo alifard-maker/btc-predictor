@@ -1316,10 +1316,10 @@ class HourlyBot:
       return results
 
     candidates = filter_pnl_first_candidates(
-      candidates, cfg, kind=self.kind, mode=settings.mode,
+      candidates, cfg, kind=self.kind, mode=settings.mode, asset=self.asset,
     )
     if not candidates:
-      if pnl_first_active(cfg, kind=self.kind, mode=settings.mode):
+      if pnl_first_s1_only_active(cfg, kind=self.kind, mode=settings.mode, asset=self.asset):
         self.store.set_last_skip_reason("pnl_first_no_s1_candidates")
       else:
         live_tab = tab.get("live") or tab
@@ -1447,7 +1447,7 @@ class HourlyBot:
         continue
 
       pf_block = pnl_first_entry_block_reason(
-        pick, side, cfg, kind=self.kind, mode=settings.mode,
+        pick, side, cfg, kind=self.kind, mode=settings.mode, asset=self.asset,
       )
       if pf_block:
         last_reason = pf_block
@@ -1676,6 +1676,7 @@ class HourlyBot:
           cfg,
           kind=self.kind,
           mode=settings.mode,
+          asset=self.asset,
           resolved_execution=live_resolved,
         )
         if pf_exec_block:
