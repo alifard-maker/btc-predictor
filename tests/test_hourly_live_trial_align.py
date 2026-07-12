@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+from src.backtest.mechanics_profiles import apply_live_production_mechanics
 from src.trading.bot_live_exit import quick_exit_config
 from src.trading.bot_whipsaw_guard import WhipsawGuardConfig
 from src.trading.hourly_live_trial_align import (
   HourlyLiveTrialAlignConfig,
   apply_align_entry_pricing,
+  apply_mirror_trial_entry_estrat,
+  live_entry_stake_mirror_active,
+  live_pnl_first_stake_mirror_active,
   merge_whipsaw_align_overrides,
   pending_resting_enter_blocks_entry,
   should_mirror_trial_entry_execution,
+  should_mirror_trial_stake_sizing,
   should_use_trial_leg_exits,
   skip_soft_rally_entry_overlay,
 )
+from src.trading.entry_strategy import EntryStrategyConfig
 from src.trading.live_entry_price import LiveEntryPricingConfig
 
 
@@ -62,6 +68,28 @@ def test_trial_exit_mode_full():
   assert should_use_trial_leg_exits(
     cfg, kind="hourly", mode="live", hold_seconds=5000,
     adaptive_mode="rally", hour_momentum_state="normal",
+  )
+
+
+def test_eth_hourly_live_mirror_gets_trial_legs():
+  """ETH live mirror kind must share BTC live trial-leg exits (haircut + defer)."""
+  cfg = _cfg()
+  cfg["hourly"]["bot"]["live_trial_align"]["live_exit_mode"] = "trial_legs"
+  assert should_use_trial_leg_exits(
+    cfg,
+    kind="hourly_live",
+    mode="live",
+    hold_seconds=5000,
+    adaptive_mode="rally",
+    hour_momentum_state="normal",
+  )
+  assert not should_use_trial_leg_exits(
+    cfg,
+    kind="hourly_live",
+    mode="paper",
+    hold_seconds=5000,
+    adaptive_mode="rally",
+    hour_momentum_state="normal",
   )
 
 

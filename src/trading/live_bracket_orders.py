@@ -32,6 +32,23 @@ def aggressive_exit_limit_cents(bid_cents: int, *, haircut: int = 2) -> int:
   return max(1, min(99, int(bid_cents) - max(0, int(haircut))))
 
 
+def live_exit_haircut_cents(cfg: dict[str, Any] | None = None) -> int:
+  """IOC exit haircut (¢ through bid). Must match LEG STOP decision math on live."""
+  default = 4
+  if not isinstance(cfg, dict):
+    return default
+  candidates = (
+    ((cfg.get("hourly") or {}).get("bot") or {}).get("live_exit"),
+    (((cfg.get("eth") or {}).get("hourly") or {}).get("bot") or {}).get("live_exit"),
+    (((cfg.get("eth") or {}).get("hourly_live") or {}).get("bot") or {}).get("live_exit"),
+    ((cfg.get("intra_slot") or {}).get("bot") or {}).get("live_exit"),
+  )
+  for node in candidates:
+    if isinstance(node, dict) and "aggressive_exit_haircut_cents" in node:
+      return max(0, int(node.get("aggressive_exit_haircut_cents") or 0))
+  return default
+
+
 def bracket_take_profit_cents(
   entry_cents: int,
   *,

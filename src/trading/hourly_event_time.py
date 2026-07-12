@@ -13,6 +13,8 @@ _INDEX_SUFFIX_RE = re.compile(r"^(\d{2})([A-Z]{3})(\d{2})H(\d{2})(\d{2})$")
 _SPX_PREFIXES = ("KXINXU-", "KXINX-", "KXINXDUD-")
 _NDX_PREFIXES = ("KXNASDAQ100U-", "KXNASDAQ100-", "KXNASDAQDUD-")
 _CRYPTO_PREFIXES = ("KXBTCD-", "KXBTC-", "KXETHD-", "KXETH-")
+_BTC_PREFIXES = ("KXBTCD-", "KXBTC-", "KXBTC15M-")
+_ETH_PREFIXES = ("KXETHD-", "KXETH-", "KXETH15M-")
 
 
 def hourly_event_time_suffix(event_ticker: str) -> str | None:
@@ -55,11 +57,28 @@ def hourly_asset_for_ticker(ticker: str) -> str | None:
 
 
 def hourly_fill_belongs_to_asset(ticker: str, asset: str) -> bool:
-  """True when a market/event ticker belongs to the bot asset."""
+  """True when a market/event ticker belongs to the bot asset.
+
+  Sports / unrelated Kalshi inventory must never count as BTC/ETH/index.
+  Unknown series return False (do not default-include).
+  """
+  a = str(asset or "").lower()
+  t = str(ticker or "").upper()
+  if not t or not a:
+    return False
   leg_asset = hourly_asset_for_ticker(ticker)
-  if leg_asset is None:
-    return True
-  return leg_asset == str(asset).lower()
+  if leg_asset is not None:
+    return leg_asset == a
+  # 15m / odd prefixes not covered by hourly_asset_for_event
+  if a == "btc":
+    return t.startswith(_BTC_PREFIXES)
+  if a == "eth":
+    return t.startswith(_ETH_PREFIXES)
+  if a == "spx":
+    return t.startswith(_SPX_PREFIXES)
+  if a == "ndx":
+    return t.startswith(_NDX_PREFIXES)
+  return False
 
 
 def _sibling_prefixes(event_ticker: str) -> tuple[str, ...]:

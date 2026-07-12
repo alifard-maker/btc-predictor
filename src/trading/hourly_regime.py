@@ -224,9 +224,12 @@ def mid_hour_entry_active(
   mh = mid_hour_entry_config(cfg, asset=asset)
   if mh.enabled:
     return True
-  if str(asset or "").lower() == "eth" and str(mode or "").lower() == "paper":
+  if str(asset or "").lower() == "eth":
     pf = (cfg or {}).get("pnl_first") or {}
-    return bool((pf.get("mid_hour_entry") or {}).get("eth_paper_enabled", False))
+    mh = pf.get("mid_hour_entry") or {}
+    if mh.get("eth_enabled") or mh.get("eth_paper_enabled"):
+      if str(mode or "").lower() in ("paper", "live"):
+        return True
   return False
 
 
