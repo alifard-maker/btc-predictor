@@ -122,6 +122,9 @@ class PredictionLoop:
     from src.scheduler.index_hourly_support import init_index_assets
 
     init_index_assets(self)
+    from src.scheduler.sports_support import init_sports
+
+    init_sports(self)
 
   def _asset_hourly_calibration(self, asset: str) -> HourlyCalibrationTracker:
     asset = asset.lower()
@@ -451,7 +454,11 @@ class PredictionLoop:
           from src.trading.live_reconcile import build_live_reconcile_report
 
           positions = store.all_open_live_positions() if hasattr(store, "all_open_live_positions") else []
-          recon = build_live_reconcile_report(bot_positions=positions, kalshi=kalshi)
+          recon = build_live_reconcile_report(
+            bot_positions=positions,
+            kalshi=kalshi,
+            asset=asset,
+          )
           kalshi_heavy = [
             m for m in (recon.get("mismatches") or [])
             if float(m.get("kalshi_contracts") or 0) > float(m.get("contracts") or 0) + 0.24
@@ -521,6 +528,8 @@ class PredictionLoop:
       return f"hourly_trial_mech_bot_{asset}.db"
     if kind == "hourly_v2":
       return f"hourly_v2_bot_{asset}.db"
+    if kind == "hourly_live":
+      return f"hourly_live_bot_{asset}.db"
     return f"hourly_bot_{asset}.db"
 
   def _hourly_bot_label(self, kind: str, label_asset: str) -> str:
@@ -530,6 +539,7 @@ class PredictionLoop:
       "hourly_trial_soft": f"{label_asset} Hourly Trial — Soft",
       "hourly_trial_mech": f"{label_asset} Hourly Trial — Mech",
       "hourly_v2": f"{label_asset} Hourly V2 (path)",
+      "hourly_live": f"{label_asset} Hourly Live (mirror)",
     }
     if kind in labels:
       return labels[kind]
@@ -559,6 +569,9 @@ class PredictionLoop:
   def hourly_trial_mech_bot_store(self, asset: str):
     return self.hourly_bot_store(asset, kind="hourly_trial_mech")
 
+  def hourly_live_bot_store(self, asset: str):
+    return self.hourly_bot_store(asset, kind="hourly_live")
+
   def hourly_bot(self, asset: str, *, kind: str = "hourly"):
     asset = asset.lower()
     key = self._hourly_bot_key(kind, asset)
@@ -581,6 +594,9 @@ class PredictionLoop:
 
   def hourly_trial_mech_bot(self, asset: str):
     return self.hourly_bot(asset, kind="hourly_trial_mech")
+
+  def hourly_live_bot(self, asset: str):
+    return self.hourly_bot(asset, kind="hourly_live")
 
   def eth_hourly_bot_store(self):
     return self.hourly_bot_store("eth")
@@ -793,6 +809,7 @@ class PredictionLoop:
         kalshi=kalshi,
         event_ticker=event_ticker,
         market_tickers=market_tickers or None,
+        asset=asset,
       )
     if not lightweight:
       from src.trading.bot_performance_report import build_experiment_summary
@@ -850,6 +867,7 @@ class PredictionLoop:
       kalshi=kalshi,
       event_ticker=event_ticker,
       market_tickers=market_tickers or None,
+      asset=asset,
     )
 
   def sync_hourly_kalshi_fills(
@@ -876,6 +894,15 @@ class PredictionLoop:
     self._last_kalshi_sync[key] = report
     self._kalshi_sync_mono[key] = time.monotonic()
     return report
+
+  def hourly_live_bot_status(
+    self,
+    asset: str,
+    tab: dict[str, Any] | None = None,
+    *,
+    lightweight: bool = False,
+  ) -> dict[str, Any]:
+    return self.hourly_bot_status(asset, tab, kind="hourly_live", lightweight=lightweight)
 
   def hourly_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     return self.hourly_bot_status(asset, tab, kind="hourly_trial")
@@ -1148,6 +1175,11 @@ class PredictionLoop:
     if not asset_enabled(self.cfg, "eth"):
       return
     self._run_hourly_bot_continuous("eth", kind="hourly_trial")
+
+  def run_eth_hourly_live_bot_continuous(self) -> None:
+    if not asset_enabled(self.cfg, "eth"):
+      return
+    self._run_hourly_bot_continuous("eth", kind="hourly_live")
 
   def _run_hourly_bot_intrahour(self, asset: str) -> None:
     self._run_hourly_bot_continuous(asset)
@@ -1442,6 +1474,7 @@ class PredictionLoop:
         bot_positions=list(status.get("open_positions") or []),
         kalshi=kalshi,
         market_tickers=market_tickers or None,
+        asset=asset,
       )
     return status
 
@@ -2739,9 +2772,22 @@ class PredictionLoop:
             id="hourly_trial_bot_continuous_eth",
             max_instances=1,
           )
+        live_mirror = bot_cfg.get("live_mirror") or {}
+        if live_mirror.get("enabled") and live_mirror.get("continuous_enabled", True):
+          poll_sec = int(live_mirror.get("poll_seconds", bot_cfg.get("poll_seconds", 10)))
+          scheduler.add_job(
+            self.run_eth_hourly_live_bot_continuous,
+            "interval",
+            seconds=poll_sec,
+            id="eth_hourly_live_bot_continuous",
+            max_instances=1,
+          )
     from src.scheduler.index_hourly_support import schedule_index_hourly_jobs
 
     schedule_index_hourly_jobs(self, scheduler)
+    from src.scheduler.sports_support import schedule_sports_jobs
+
+    schedule_sports_jobs(self, scheduler)
 
   def _schedule_hourly_v2(self, scheduler) -> None:
     from src.assets import asset_v2_cfg
@@ -3598,6 +3644,14 @@ class PredictionLoop:
         log.info("ETH hourly settings mirrored from BTC: %s", mirror_stats)
     except Exception as e:
       log.warning("ETH hourly settings mirror skipped: %s", e)
+    try:
+      from src.trading.compare_paper_twins import ensure_compare_paper_twins
+
+      twin_stats = ensure_compare_paper_twins(self)
+      if twin_stats.get("active"):
+        log.info("Compare paper twins: %s", twin_stats)
+    except Exception as e:
+      log.warning("Compare paper twins ensure skipped: %s", e)
     log.info("Scheduler started: 15m slots at :00/:15/:30/:45 ET (%s)", self.tz)
     return scheduler
 

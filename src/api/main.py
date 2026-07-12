@@ -1226,13 +1226,22 @@ def pnl_first_regroup_milestones(_: None = Depends(_session_user)):
 
 @app.get("/api/pnl-first/paper-ab")
 def pnl_first_paper_ab(_: None = Depends(_session_user)):
-  import json
-  from pathlib import Path
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.pnl_first_paper_ab import paper_ab_output_path, write_paper_ab_report
 
-  path = Path(os.getenv("DATA_DIR", "data")) / "logs" / "pnl_first_manager" / "paper_ab_latest.json"
-  if not path.exists():
-    raise HTTPException(404, "paper_ab report not generated yet")
-  return json.loads(path.read_text(encoding="utf-8"))
+  try:
+    return write_paper_ab_report(_loop, _cfg)
+  except Exception as exc:
+    path = paper_ab_output_path(_cfg)
+    if path.exists():
+      import json
+
+      stale = json.loads(path.read_text(encoding="utf-8"))
+      stale["stale_fallback"] = True
+      stale["refresh_error"] = f"{type(exc).__name__}:{exc}"
+      return stale
+    raise HTTPException(500, f"paper_ab report failed: {exc}") from exc
 
 
 @app.get("/api/pnl-first/health")
@@ -1272,26 +1281,40 @@ def bots_hourly_live_trial_compare(
     raise HTTPException(503, "Service starting")
   from src.trading.hourly_live_trial_compare import build_hourly_live_trial_compare
   from src.trading.hourly_live_trial_align import HourlyLiveTrialAlignConfig
+  from src.trading.compare_paper_twins import compare_store_kinds, ensure_compare_paper_twins
   from src.assets import asset_cfg
 
-  live_store = _loop.hourly_bot_store(asset, kind="hourly")
-  if asset == "btc":
-    trial_kind = "hourly_trial_mech"
-    trial_store = _loop.hourly_bot_store(asset, kind=trial_kind)
-  else:
-    trial_kind = "hourly_trial"
-    trial_store = _loop.hourly_trial_bot_store(asset)
+  # Keep fair paper twins armed so matched hours can populate.
+  if asset in ("btc", "eth"):
+    try:
+      ensure_compare_paper_twins(_loop, _cfg)
+    except Exception:
+      log.exception("compare_paper_twins ensure failed for %s", asset)
+
+  live_kind, trial_kind = compare_store_kinds(asset)
+  live_store = _loop.hourly_bot_store(asset, kind=live_kind)
+  trial_store = _loop.hourly_bot_store(asset, kind=trial_kind)
   cfg = asset_cfg(_cfg, asset)
   align = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
   try:
-    return build_hourly_live_trial_compare(
+    out = build_hourly_live_trial_compare(
       live_store,
       trial_store,
       asset=asset,
       limit_hours=limit_hours,
+      live_kind=live_kind,
       trial_kind=trial_kind,
       pair_window_seconds=align.compare_pair_window_seconds,
     )
+    trial_settings = trial_store.get_settings()
+    out["paper_twin"] = {
+      "kind": trial_kind,
+      "enabled": bool(trial_settings.enabled),
+      "mode": trial_settings.mode,
+      "continuous": bool(trial_settings.continuous),
+      "max_spend_per_hour_usd": trial_settings.max_spend_per_hour_usd,
+    }
+    return out
   except sqlite3.OperationalError as exc:
     if "locked" in str(exc).lower():
       raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
@@ -1441,6 +1464,57 @@ def eth_hourly_bot_trades(
   if event_ticker:
     out["hour_summary"] = store.hour_interval_summary(event_ticker)
   return out
+
+
+@app.get("/api/eth/hourly-live/bot")
+def eth_hourly_live_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop._hourly_tab_for_bot_status("eth")
+  return _loop.hourly_live_bot_status(
+    "eth",
+    tab if tab and tab.get("ok") else None,
+    lightweight=lightweight,
+  )
+
+
+@app.get("/api/eth/hourly-live/bot/trades")
+def eth_hourly_live_bot_trades(
+  limit: int = Query(default=100, le=200),
+  event_ticker: str | None = Query(default=None),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_live_bot_store("eth")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["hour_summary"] = store.hour_interval_summary(event_ticker)
+  return out
+
+
+@app.get("/api/eth/hourly-live/bot/live-reconcile")
+def eth_hourly_live_bot_live_reconcile(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.hourly_live_reconcile("eth", kind="hourly_live")
+
+
+@app.post("/api/eth/hourly-live/bot/sync-kalshi-fills")
+def eth_hourly_live_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  result = _loop.sync_hourly_kalshi_fills("eth", kind="hourly_live", force=True)
+  tab = _loop._hourly_tab_for_bot_status("eth")
+  status = _loop.hourly_live_bot_status(
+    "eth",
+    tab if tab and tab.get("ok") else None,
+  )
+  return {"sync": result, "bot": status}
 
 
 @app.get("/api/hourly-v2/bot")
@@ -2482,4 +2556,13 @@ register_index_hourly_routes(
   lambda: _cfg,
   _session_user,
   _apply_hourly_bot_settings,
+)
+
+from src.api.sports_routes import register_sports_routes
+
+register_sports_routes(
+  app,
+  lambda: _loop,
+  lambda: _cfg,
+  _session_user,
 )

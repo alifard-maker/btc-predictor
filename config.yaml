@@ -165,6 +165,8 @@ intra_slot:
       max_orphan_adopted_contracts: 12
       resting_fill_adopt_full_size: true
       max_resting_enters_per_hour: 6
+      # Through-bid IOC haircut — LEG STOP threshold adds this on live
+      aggressive_exit_haircut_cents: 4
     probe_no_trade:
       enabled: false
       min_prob: 0.58
@@ -183,9 +185,9 @@ intra_slot:
         mirror_trial_stake_sizing: true
         prefer_passive_below_edge_cents: 12
       stake:
-        max_stake_per_entry_usd: 4.0
+        max_stake_per_entry_usd: 2.50
         max_budget_fraction_per_entry: 0.30
-        max_contracts_per_entry: 8
+        max_contracts_per_entry: 2
       exits:
         leg_stop_reentry_cooldown_seconds: 600
         leg_stop_event_cooldown_seconds: 300
@@ -273,8 +275,8 @@ hourly:
     min_edge_for_highlight: 0.08
     min_edge_override_regime: 0.10
   bot:
-    enabled: false
-    mode: paper
+    enabled: true
+    mode: live
     max_spend_per_hour_usd: 15
     allow_strong: false
     allow_actionable: false
@@ -293,14 +295,20 @@ hourly:
     min_take_profit_pct: 0.10
     max_take_profit_pct: 0.40
     min_hold_seconds: 90
-    min_hours_to_settle_for_entry: 0.25  # block new legs in last 15m of hour (FREE mode too)
-    max_hours_to_settle_for_entry: 1.25  # block entries on far-future hourly events (hour-edge guard)
+    min_hours_to_settle_for_entry: 0.25  # twin mid-hour: last 15m blocked
+    max_hours_to_settle_for_entry: 0.75  # twin mid-hour: first 15m blocked
     late_entry:
-      enabled: true
-      min_hours: 0.12          # don't enter in last ~7 min (was 5 — too much last-minute churn)
+      enabled: false   # strict 15–45m window for twin live (match ETH)
+      min_hours: 0.12
       min_ask_edge_cents: 15
       max_stake_usd: 2.50
-    experiment_start_at: "2026-07-04T16:59:00+00:00"  # Jul 4 2026 12:59 PM EDT — stats & experiment baseline
+    experiment_start_at: "2026-07-04T16:59:00+00:00"  # historical Kalshi reference epoch
+    twin_live:
+      enabled: true
+      continuous_enabled: true
+      poll_seconds: 10
+      max_spend_per_hour_usd: 15
+      experiment_start_at: "2026-07-10T12:10:00+00:00"  # BTC+ETH twin live epoch
     live_mechanics_profile: pnl_first  # Phase 0–1: BTC S1-only live (see docs/PnL_First_Ownership.md)
     profit_exit_cooldown_seconds: 60
     cheap_leg_max_entry_cents: 20
@@ -374,6 +382,8 @@ hourly:
       max_orphan_adopted_contracts: 12
       resting_fill_adopt_full_size: true
       max_resting_enters_per_hour: 24
+      # Through-bid IOC haircut — LEG STOP threshold adds this on live
+      aggressive_exit_haircut_cents: 4
     live_adaptive:
       enabled: true
       profit_lock_usd: 1.25
@@ -459,9 +469,9 @@ hourly:
         leg_stop_reentry_cooldown_seconds: 600
         leg_stop_event_cooldown_seconds: 300
       stake:
-        max_stake_per_entry_usd: 4.0
+        max_stake_per_entry_usd: 2.50
         max_budget_fraction_per_entry: 0.30
-        max_contracts_per_entry: 8
+        max_contracts_per_entry: 2
       execution:
         mirror_trial_entry_execution: true
         block_reentry_while_resting: false
@@ -522,6 +532,12 @@ hourly:
     trial_mech:
       continuous_enabled: true
       poll_seconds: 10
+      compare_twin: true  # paper twin for live↔mech compare card
+      max_spend_per_hour_usd: 15
+      pause_when_live_regime_blocked: true  # Tier 2: no solo trial bleed when live blocked
+      entry_strategy:
+        max_contracts_per_entry: 2
+        max_stake_per_entry_usd: 2.50
 
 # Hourly V2 — path-memory predictor + paper bot (fully isolated from v1 hourly above)
 hourly_v2:
@@ -622,11 +638,20 @@ pnl_first:
   defer_profit_target_minutes_to_settle: 30
   defer_profit_target_modes: [paper]
   defer_leg_stop_minutes_to_settle: 30
-  defer_leg_stop_modes: [paper]
-  # Kalshi timing research: 15–45m-to-settle window; off for BTC live until sign-off
+  # Paper + live: avoid mid-hour panic stops when ≥30m remain (live previously never deferred)
+  defer_leg_stop_modes: [paper, live]
+  # 24h Tier 1+2 probe (stake mirror, 18¢ edge, trial regime sync) — started 2026-07-11
+  probe_24h:
+    enabled: true
+    started_at: "2026-07-11T17:45:00+00:00"
+    min_ask_edge_cents: 18
+    max_contracts_per_entry: 2
+    max_stake_per_entry_usd: 2.50
+  # Kalshi timing research: 15–45m-to-settle window — on for BTC+ETH twin live
   mid_hour_entry:
-    enabled: false
-    eth_paper_enabled: true   # Phase 2 prep: ETH hourly paper only (BTC live unchanged)
+    enabled: true
+    eth_enabled: true          # ETH paper + live mirror
+    eth_paper_enabled: true    # legacy alias for eth_enabled
     min_hours_to_settle: 0.25
     max_hours_to_settle: 0.75
   # Paper experiment: faster profit-target (30s), keep trail at 90s — ETH hourly paper harness
@@ -635,6 +660,10 @@ pnl_first:
     modes: [paper]
     profit_target_min_hold_seconds: 30
     trail_min_hold_seconds: 90
+
+# Paper twins for BTC/ETH live↔trial compare cards (store.enabled + continuous)
+compare_paper_twins:
+  enabled: true
 
 # 24/7 manager on Railway (sleep lock, preflight, milestone) — replaces local watchdog
 pnl_first_manager:
@@ -651,7 +680,9 @@ pnl_first_manager:
   auto_sync_on_reconcile: true
   lock_eth_live: true
   lock_slot15: true          # BTC/ETH 15m + trial bots — sleep during Phase 0–1
-  allow_eth_paper: true      # Phase 2 prep: ETH hourly paper runs under sleep lock
+  allow_eth_paper: true      # ETH hourly paper runs under sleep lock
+  allow_eth_live: true       # ETH hourly_live mirror (parallel live arm)
+  allow_btc_live: true       # BTC hourly twin live (same mid-hour / pnl_first mechanics)
 
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
 live_resting_exits:
@@ -882,6 +913,8 @@ eth:
         max_resting_adopted_range_contracts: 4
         resting_fill_adopt_full_size: true
         max_resting_enters_per_hour: 6
+        # Through-bid IOC haircut — LEG STOP threshold adds this on live
+        aggressive_exit_haircut_cents: 4
       live_adaptive:
         enabled: true
         profit_lock_usd: 1.25
@@ -939,6 +972,12 @@ eth:
       paper_experiment:
         enabled: true
         sync_settings_on_arm: true
+      live_mirror:
+        enabled: true
+        continuous_enabled: true
+        poll_seconds: 10
+        max_spend_per_hour_usd: 15
+        experiment_start_at: "2026-07-10T06:45:00+00:00"  # dual-arm live epoch (paper keeps Jul 9)
       live_trial_align:
         enabled: true
         live_exit_mode: trial_legs
@@ -972,6 +1011,8 @@ eth:
       trial:
         continuous_enabled: true
         poll_seconds: 10
+        compare_twin: true  # paper twin for ETH live↔trial compare card
+        max_spend_per_hour_usd: 15
         take_profit_enabled: true
         take_profit_mode: hybrid
         take_profit_pct: 0.12
@@ -1185,6 +1226,109 @@ paths:
   models: data/models
   logs: data/logs
   db: data/logs/predictions.db
+
+# Sports arb module — Phase 0: Goal 2 Kalshi same-venue Dutch/cover paper scanner
+sports:
+  enabled: true
+  poll_seconds: 10
+  # Empty series_tickers → discover via /series?category=Sports (cached)
+  # Prefer GAME/MATCH moneylines; first-N API order is mostly props/futures.
+  series_tickers: []
+  preferred_series_tickers:
+    - KXMLBGAME
+    - KXEPLGAME
+    - KXNFLGAME
+    - KXFIFAGAME
+    - KXATPMATCH
+    - KXWTAMATCH
+    - KXLIGAMXGAME
+    - KXNBAGAME
+    - KXNHLGAME
+    - KXUAEPLGAME
+  category: Sports
+  max_series: 40                   # pull many Kalshi sports series
+  max_series_discover: 500         # scan pool before GAME/MATCH ranking
+  max_events_per_series: 12        # per-series candidate pool
+  max_total_events: 150            # global cap (soonest-close first across series)
+  max_markets_per_event: 40
+  discovery_cache_sec: 300
+  quote_cache_sec: 90              # full book refresh ~every 90s (scans still every 10s)
+  stale_books_keep_sec: 300        # if refresh returns empty, keep last good books
+  request_pause_ms: 100
+  # Goal 2: same-venue Dutch / complementary cover
+  strategies:
+    dutch_same:
+      enabled: true
+      min_edge_after_fees_usd: 0.01   # min worst-case profit per $1 notional cover
+      max_stake_per_opp_usd: 5.0
+      assumed_fee_rate: 0.07          # Kalshi-style taker fee ≈ rate*p*(1-p)
+      include_binary_yes_no: true
+      include_multi_outcome: true
+      # Multi-outcome only when book looks like a true exclusive winner set
+      multi_max_outcomes: 8
+      multi_min_ask_sum: 0.78         # sum(yes asks) must be nearly complete
+      multi_max_edge_prob: 0.06       # reject absurd edges (fake partitions)
+    surebet_cross:
+      enabled: false                 # Phase 2 — Kalshi ↔ Polymarket
+    value_sharp:
+      enabled: true                  # Goal 3 — vs Odds API sharp fair line
+      min_edge_prob: 0.03            # ≥3¢ edge after fees vs fair
+      max_edge_prob: 0.12            # reject absurd edges (almost always mismatches)
+      max_stake_usd: 5.0
+      assumed_fee_rate: 0.07         # Kalshi taker approx
+      poly_fee_rate: 0.0
+      allow_kalshi_live: true        # Goal 3 Kalshi live FOK (directional; Poly still paper)
+      min_match_score: 0.55
+      fifa_draw_legs: true            # FIFA WC only — reg-time tie vs Pinnacle draw fair
+      # Free Odds API (~500/mo): EU region for Pinnacle sharp lines, 12h cache
+      # regions = Odds API bookmaker geography (not "only bet EU events")
+      odds_cache_sec: 43200
+      regions: eu
+      bookmakers: [pinnacle]
+      tennis_max_atp: 2
+      tennis_max_wta: 2
+      sport_keys:
+        - baseball_mlb
+        - soccer_epl
+        - soccer_fifa_world_cup
+        - americanfootball_nfl
+        - tennis_auto                # expands to active ATP+WTA tournament keys
+  bot:
+    enabled: true
+    mode: paper                     # dashboard can arm live (password) when allow_live true
+    allow_live: true                # Phase 1: tiny Kalshi live covers enabled
+    max_open_usd: 40                # daily live spend budget (0 = unlimited; dashboard overrides)
+    max_live_per_scan: 0            # 0 = unlimited live fills per scan
+    max_live_trades_per_day: 0      # 0 = unlimited live fills per day
+    paper_bankroll_usd: 50
+  # Phase 1 — annotate opportunities (edge tier, coherence, liquidity); no live gates yet
+  bet_assessment:
+    enabled: true
+    min_edge_prob_moderate: 0.03
+    min_edge_prob_strong: 0.06
+    min_match_score_strong: 0.70
+    min_coherence_moderate: 0.50
+    min_coherence_strong: 0.60
+    max_spread_cents: 8
+    min_ask_prob: 0.05
+    partition_gap_scale: 0.15
+    max_edge_prob: 0.12
+  polymarket:
+    enabled: true
+    mode: paper                     # keep paper until you explicitly arm live
+    allow_live: false               # hard gate — flip only when ready to trade Poly
+    gamma_base_url: https://gamma-api.polymarket.com
+    clob_host: https://clob.polymarket.com
+    chain_id: 137                   # Polygon mainnet
+    signature_type: 0               # 0 = EOA; override via POLY_SIGNATURE_TYPE for proxies
+    cache_sec: 180
+    sport_series:
+      baseball_mlb: "3"
+      soccer_epl: "10188"
+      soccer_fifa_world_cup: "11433"
+      americanfootball_nfl: "10187"
+      tennis_atp: "10365"
+      tennis_wta: "10366"
 
 # Automatic backups — paper and live logs kept separate (live = tax records)
 log_backup:
