@@ -209,6 +209,123 @@ def test_allow_eth_paper_arms_disabled_eth_hourly(tmp_path, mgr_cfg):
   assert any(a.get("action") == "eth_paper_arm" for a in actions)
 
 
+def test_allow_eth_live_arms_hourly_live_mirror(tmp_path, mgr_cfg):
+  from src.trading.hourly_bot_store import HourlyBotStore
+
+  btc = HourlyBotStore(tmp_path / "btc.db")
+  eth = HourlyBotStore(tmp_path / "eth.db")
+  eth_live = HourlyBotStore(tmp_path / "eth_live.db")
+  btc.save_settings(HourlyBotSettings.from_dict({"enabled": False, "mode": "paper", "max_spend_per_hour_usd": 15.0}))
+  eth.save_settings(HourlyBotSettings.from_dict({
+    "enabled": True,
+    "mode": "paper",
+    "continuous": True,
+    "max_spend_per_hour_usd": 15.0,
+  }))
+  eth_live.save_settings(HourlyBotSettings.from_dict({
+    "enabled": False,
+    "mode": "paper",
+    "max_spend_per_hour_usd": 15.0,
+  }))
+
+  loop = MagicMock()
+  loop.cfg = {
+    **mgr_cfg,
+    "eth": {
+      "hourly": {
+        "bot": {
+          "enabled": True,
+          "mode": "paper",
+          "continuous_enabled": True,
+          "live_mechanics_profile": "pnl_first",
+          "paper_experiment": {"enabled": True},
+          "live_mirror": {"enabled": True, "continuous_enabled": True},
+        },
+      },
+    },
+    "pnl_first_manager": {
+      **mgr_cfg["pnl_first_manager"],
+      "allow_eth_paper": True,
+      "allow_eth_live": True,
+      "lock_eth_live": True,
+    },
+  }
+
+  def _store(asset, kind="hourly"):
+    if asset == "eth" and kind == "hourly_live":
+      return eth_live
+    if asset == "eth":
+      return eth
+    return btc
+
+  loop.hourly_bot_store.side_effect = _store
+  loop.slot15_bot_store.return_value = MagicMock(
+    get_settings=lambda: __import__(
+      "src.trading.slot15_bot_store", fromlist=["Slot15BotSettings"]
+    ).Slot15BotSettings.from_dict({"enabled": False, "mode": "paper"}),
+    save_settings=lambda *a, **k: None,
+  )
+  loop.slot15_trial_bot_store.return_value = loop.slot15_bot_store.return_value
+
+  mgr = PnlFirstManagerConfig.from_cfg(loop.cfg)
+  actions = enforce_sleep_lock(loop, mgr)
+
+  assert eth.get_settings().enabled is True
+  assert eth.get_settings().mode == "paper"
+  assert eth_live.get_settings().enabled is True
+  assert eth_live.get_settings().mode == "live"
+  assert any(a.get("action") == "eth_live_arm" for a in actions)
+
+
+def test_allow_eth_slot15_paper_arms_slot15(tmp_path, mgr_cfg):
+  from src.trading.hourly_bot_store import HourlyBotStore
+  from src.trading.slot15_bot_store import Slot15BotSettings, Slot15BotStore
+
+  btc = HourlyBotStore(tmp_path / "btc.db")
+  eth = HourlyBotStore(tmp_path / "eth.db")
+  slot15 = Slot15BotStore(tmp_path / "slot15_eth.db")
+  btc.save_settings(HourlyBotSettings.from_dict({"enabled": False, "mode": "paper"}))
+  eth.save_settings(HourlyBotSettings.from_dict({"enabled": False, "mode": "paper"}))
+  slot15.save_settings(Slot15BotSettings.from_dict({"enabled": False, "mode": "paper", "continuous": False}))
+
+  loop = MagicMock()
+  loop.cfg = {
+    **mgr_cfg,
+    "pnl_first_manager": {
+      **mgr_cfg["pnl_first_manager"],
+      "allow_eth_slot15_paper": True,
+      "lock_slot15": True,
+    },
+    "eth": {
+      "intra_slot": {
+        "bot": {
+          "enabled": True,
+          "mode": "paper",
+          "continuous_enabled": True,
+        },
+      },
+    },
+  }
+
+  def _hourly_store(asset, kind="hourly"):
+    return eth if asset == "eth" else btc
+
+  loop.hourly_bot_store.side_effect = _hourly_store
+  loop.slot15_bot_store.return_value = slot15
+  loop.slot15_trial_bot_store.return_value = MagicMock(
+    get_settings=lambda: Slot15BotSettings.from_dict({"enabled": False, "mode": "paper"}),
+    save_settings=lambda *a, **k: None,
+  )
+
+  mgr = PnlFirstManagerConfig.from_cfg(loop.cfg)
+  actions = enforce_sleep_lock(loop, mgr)
+
+  assert slot15.get_settings().enabled is True
+  assert slot15.get_settings().continuous is True
+  assert slot15.get_settings().mode == "paper"
+  assert any(a.get("action") == "eth_slot15_paper_arm" for a in actions)
+
+
 def test_allow_eth_paper_still_forces_eth_live_to_paper(tmp_path, mgr_cfg):
   from src.trading.hourly_bot_store import HourlyBotStore
 
@@ -245,3 +362,66 @@ def test_allow_eth_paper_still_forces_eth_live_to_paper(tmp_path, mgr_cfg):
 
   assert eth.get_settings().mode == "paper"
   assert any(a.get("asset") == "eth" and a.get("kind") == "hourly" for a in actions)
+
+
+def test_allow_btc_live_arms_btc_hourly_twin(tmp_path, mgr_cfg):
+  from src.trading.hourly_bot_store import HourlyBotStore
+
+  btc = HourlyBotStore(tmp_path / "btc.db")
+  eth = HourlyBotStore(tmp_path / "eth.db")
+  btc.save_settings(HourlyBotSettings.from_dict({
+    "enabled": False,
+    "mode": "paper",
+    "continuous": False,
+    "max_spend_per_hour_usd": 15.0,
+  }))
+  eth.save_settings(HourlyBotSettings.from_dict({
+    "enabled": True,
+    "mode": "paper",
+    "continuous": True,
+    "max_spend_per_hour_usd": 15.0,
+  }))
+
+  loop = MagicMock()
+  loop.cfg = {
+    **mgr_cfg,
+    "hourly": {
+      "bot": {
+        "enabled": True,
+        "mode": "live",
+        "continuous_enabled": True,
+        "live_mechanics_profile": "pnl_first",
+        "twin_live": {
+          "enabled": True,
+          "continuous_enabled": True,
+          "max_spend_per_hour_usd": 15,
+          "experiment_start_at": "2026-07-10T12:10:00+00:00",
+        },
+      },
+    },
+    "eth": {"hourly": {"bot": {"enabled": True, "mode": "paper", "continuous_enabled": True}}},
+    "pnl_first_manager": {
+      **mgr_cfg["pnl_first_manager"],
+      "allow_btc_live": True,
+      "allow_eth_paper": True,
+      "lock_eth_live": True,
+    },
+  }
+  loop.hourly_bot_store.side_effect = lambda asset, kind="hourly": btc if asset == "btc" else eth
+  loop.slot15_bot_store.return_value = MagicMock(
+    get_settings=lambda: __import__(
+      "src.trading.slot15_bot_store", fromlist=["Slot15BotSettings"]
+    ).Slot15BotSettings.from_dict({"enabled": False, "mode": "paper"}),
+    save_settings=lambda *a, **k: None,
+  )
+  loop.slot15_trial_bot_store.return_value = loop.slot15_bot_store.return_value
+
+  mgr = PnlFirstManagerConfig.from_cfg(loop.cfg)
+  actions = enforce_sleep_lock(loop, mgr)
+
+  assert btc.get_settings().enabled is True
+  assert btc.get_settings().mode == "live"
+  assert btc.get_settings().continuous is True
+  assert any(a.get("action") == "btc_live_arm" for a in actions)
+  assert eth.get_settings().enabled is True
+  assert eth.get_settings().mode == "paper"

@@ -31,6 +31,9 @@ class PnlFirstManagerConfig:
   lock_eth_live: bool = True
   lock_slot15: bool = True
   allow_eth_paper: bool = False
+  allow_eth_live: bool = False
+  allow_eth_slot15_paper: bool = False
+  allow_btc_live: bool = False
 
   @classmethod
   def from_cfg(cls, cfg: dict[str, Any] | None) -> PnlFirstManagerConfig:
@@ -50,6 +53,9 @@ class PnlFirstManagerConfig:
       lock_eth_live=bool(raw.get("lock_eth_live", True)),
       lock_slot15=bool(raw.get("lock_slot15", True)),
       allow_eth_paper=bool(raw.get("allow_eth_paper", False)),
+      allow_eth_live=bool(raw.get("allow_eth_live", False)),
+      allow_eth_slot15_paper=bool(raw.get("allow_eth_slot15_paper", False)),
+      allow_btc_live=bool(raw.get("allow_btc_live", False)),
     )
 
 
@@ -135,10 +141,14 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
   if mgr.lock_slot15:
     targets.append(("btc", "slot15", "slot15_bot_store"))
     targets.append(("btc", "slot15_trial", "slot15_trial_bot_store"))
-  if mgr.lock_eth_live:
+  if mgr.lock_eth_live or mgr.allow_eth_paper or mgr.allow_eth_live:
     targets.extend([
       ("eth", "hourly", "hourly_bot_store"),
     ])
+    from src.trading.eth_paper_experiment import eth_live_mirror_active
+
+    if mgr.allow_eth_live and eth_live_mirror_active(cfg):
+      targets.append(("eth", "hourly_live", "hourly_bot_store"))
     if mgr.lock_slot15:
       targets.extend([
         ("eth", "slot15", "slot15_bot_store"),
@@ -146,27 +156,94 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
       ])
 
   for asset, kind, store_fn in targets:
-    if asset == "btc" and kind == "hourly" and btc_poa_awake:
-      continue  # POA live session — do not re-disable BTC hourly
-    store = getattr(loop, store_fn)(asset)
+    # POA live session: do not re-disable BTC hourly — unless twin live is managing it
+    if asset == "btc" and kind == "hourly" and btc_poa_awake and not mgr.allow_btc_live:
+      continue
+    store = (
+      loop.hourly_bot_store(asset, kind=kind)
+      if store_fn == "hourly_bot_store"
+      else getattr(loop, store_fn)(asset)
+    )
     settings = store.get_settings()
     changed = False
     updates = dict(settings.to_dict())
     eth_paper_exempt = False
+    eth_live_exempt = False
+    eth_slot15_paper_exempt = False
+    btc_live_exempt = False
+    eth_bot_cfg_yaml = dict(
+      (((cfg or {}).get("eth") or {}).get("hourly") or {}).get("bot") or {}
+    )
+    btc_bot_cfg_yaml = dict((((cfg or {}).get("hourly") or {}).get("bot") or {}))
+    if asset == "btc" and kind == "hourly" and mgr.allow_btc_live:
+      from src.trading.btc_twin_live import btc_twin_live_active
+
+      if btc_twin_live_active(cfg):
+        btc_live_exempt = True
     if asset == "eth" and kind == "hourly" and mgr.allow_eth_paper:
-      eth_bot_cfg = dict(
-        (((cfg or {}).get("eth") or {}).get("hourly") or {}).get("bot") or {}
-      )
       if (
-        bool(eth_bot_cfg.get("enabled"))
-        and str(eth_bot_cfg.get("mode") or "").lower() == "paper"
+        bool(eth_bot_cfg_yaml.get("enabled"))
+        and str(eth_bot_cfg_yaml.get("mode") or "").lower() == "paper"
       ):
         eth_paper_exempt = True
+    if asset == "eth" and kind == "hourly_live" and mgr.allow_eth_live:
+      from src.trading.eth_paper_experiment import eth_live_mirror_active
+
+      if eth_live_mirror_active(cfg):
+        eth_live_exempt = True
+    if asset == "eth" and kind.startswith("slot15") and mgr.allow_eth_slot15_paper:
+      slot15_cfg = dict(
+        ((((cfg or {}).get("eth") or {}).get("intra_slot") or {}).get("bot") or {})
+      )
+      if (
+        bool(slot15_cfg.get("enabled", True))
+        and str(slot15_cfg.get("mode") or "paper").lower() == "paper"
+      ):
+        eth_slot15_paper_exempt = True
     if eth_paper_exempt:
       if not settings.enabled:
         updates["enabled"] = True
         changed = True
-      if not settings.continuous and bool(eth_bot_cfg.get("continuous_enabled", True)):
+      if not settings.continuous and bool(eth_bot_cfg_yaml.get("continuous_enabled", True)):
+        updates["continuous"] = True
+        changed = True
+      if str(settings.mode or "").lower() != "paper":
+        updates["mode"] = "paper"
+        changed = True
+    elif eth_live_exempt:
+      mirror = dict(eth_bot_cfg_yaml.get("live_mirror") or {})
+      if not settings.enabled:
+        updates["enabled"] = True
+        changed = True
+      if not settings.continuous and bool(
+        mirror.get("continuous_enabled", eth_bot_cfg_yaml.get("continuous_enabled", True))
+      ):
+        updates["continuous"] = True
+        changed = True
+      if str(settings.mode or "").lower() != "live":
+        updates["mode"] = "live"
+        changed = True
+    elif btc_live_exempt:
+      twin = dict(btc_bot_cfg_yaml.get("twin_live") or {})
+      if not settings.enabled:
+        updates["enabled"] = True
+        changed = True
+      if not settings.continuous and bool(
+        twin.get("continuous_enabled", btc_bot_cfg_yaml.get("continuous_enabled", True))
+      ):
+        updates["continuous"] = True
+        changed = True
+      if str(settings.mode or "").lower() != "live":
+        updates["mode"] = "live"
+        changed = True
+    elif eth_slot15_paper_exempt:
+      slot15_cfg = dict(
+        ((((cfg or {}).get("eth") or {}).get("intra_slot") or {}).get("bot") or {})
+      )
+      if not settings.enabled:
+        updates["enabled"] = True
+        changed = True
+      if not settings.continuous and bool(slot15_cfg.get("continuous_enabled", True)):
         updates["continuous"] = True
         changed = True
       if str(settings.mode or "").lower() != "paper":
@@ -175,14 +252,20 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
     elif settings.enabled:
       updates["enabled"] = False
       changed = True
-    if mgr.lock_eth_live and asset == "eth" and settings.mode == "live":
+    if (
+      mgr.lock_eth_live
+      and asset == "eth"
+      and kind == "hourly"
+      and settings.mode == "live"
+      and not eth_live_exempt
+    ):
       updates["mode"] = "paper"
       changed = True
-    if mgr.lock_slot15 and asset == "btc" and kind != "hourly" and settings.mode == "live":
+    if mgr.lock_slot15 and kind.startswith("slot15") and settings.mode == "live":
       updates["mode"] = "paper"
       changed = True
     if changed:
-      if kind == "hourly":
+      if kind in ("hourly", "hourly_live"):
         store.save_settings(
           HourlyBotSettings.from_dict(updates),
           source="pnl_first_railway_manager_sleep_lock",
@@ -193,7 +276,17 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
           source="pnl_first_railway_manager_sleep_lock",
         )
       actions.append({
-        "action": "eth_paper_arm" if eth_paper_exempt else "sleep_lock",
+        "action": (
+          "eth_paper_arm"
+          if eth_paper_exempt
+          else "eth_live_arm"
+          if eth_live_exempt
+          else "eth_slot15_paper_arm"
+          if eth_slot15_paper_exempt
+          else "btc_live_arm"
+          if btc_live_exempt
+          else "sleep_lock"
+        ),
         "asset": asset,
         "kind": kind,
       })
@@ -212,6 +305,28 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
       )
       if seed_result.get("synced"):
         actions.append({"action": "eth_paper_settings_sync", **seed_result})
+
+    if eth_live_exempt and asset == "eth" and kind == "hourly_live":
+      from src.trading.eth_paper_experiment import seed_eth_live_mirror_from_cfg
+
+      seed_result = seed_eth_live_mirror_from_cfg(
+        store,
+        cfg,
+        source="pnl_first_manager_eth_live_arm",
+      )
+      if seed_result.get("synced"):
+        actions.append({"action": "eth_live_settings_sync", **seed_result})
+
+    if btc_live_exempt and asset == "btc" and kind == "hourly":
+      from src.trading.btc_twin_live import seed_btc_twin_live_from_cfg
+
+      seed_result = seed_btc_twin_live_from_cfg(
+        store,
+        cfg,
+        source="pnl_first_manager_btc_live_arm",
+      )
+      if seed_result.get("synced"):
+        actions.append({"action": "btc_live_settings_sync", **seed_result})
   return actions
 
 
@@ -423,6 +538,20 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
   actions: list[dict[str, Any]] = []
   actions.extend(enforce_sleep_lock(loop, mgr))
 
+  try:
+    from src.trading.compare_paper_twins import ensure_compare_paper_twins
+
+    twin_result = ensure_compare_paper_twins(loop, cfg)
+    if twin_result.get("active"):
+      changed = [
+        t for t in (twin_result.get("twins") or [])
+        if t.get("changed_fields")
+      ]
+      if changed:
+        actions.append({"action": "compare_paper_twins", "twins": changed})
+  except Exception as exc:
+    log.warning("compare_paper_twins ensure failed: %s", exc)
+
   preflight = run_preflight(loop, cfg)
   from src.trading.pnl_first_pipeline_milestone import note_pipeline_preflight
 
@@ -491,22 +620,10 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
       log.warning("kalshi live report failed: %s", exc)
       kalshi_live = {"ok": False, "error": str(exc)}
     try:
-      import subprocess
-      import sys
+      from src.trading.pnl_first_paper_ab import write_paper_ab_report
 
-      root = Path(__file__).resolve().parents[2]
-      proc = subprocess.run(
-        [sys.executable, str(root / "scripts" / "pnl_first_paper_ab_report.py")],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
-      )
-      if proc.returncode == 0:
-        actions.append({"action": "paper_ab_report", "ok": True})
-      else:
-        actions.append({"action": "paper_ab_report", "ok": False, "stderr": proc.stderr[-500:]})
+      write_paper_ab_report(loop, cfg)
+      actions.append({"action": "paper_ab_report", "ok": True})
     except Exception as exc:
       actions.append({"action": "paper_ab_report", "ok": False, "error": str(exc)})
   else:

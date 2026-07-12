@@ -1205,6 +1205,19 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
   }
 
 
+@app.get("/api/pnl-first/four-k-week-plan")
+def pnl_first_four_k_week_plan(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.four_k_week_plan import build_four_k_week_plan_report, ensure_four_k_week_plan
+
+  try:
+    ensure_four_k_week_plan(_loop, _cfg)
+  except Exception:
+    log.exception("four_k_week_plan ensure failed")
+  return build_four_k_week_plan_report(_loop, _cfg)
+
+
 @app.get("/api/pnl-first/kalshi-live-report")
 def pnl_first_kalshi_live_report(
   asset: str = Query(default="btc", pattern="^(btc|eth)$"),

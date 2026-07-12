@@ -295,6 +295,12 @@
       <div id="hourly-live-trial-compare"><p class="muted">Loading…</p></div>
     </details>
 
+    <details class="card" id="four-k-week-plan-card" open>
+      <summary style="cursor:pointer;font-weight:600">$4k/week plan · Week 1</summary>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Separate P&amp;L lanes: <strong>Track A</strong> ETH hourly probe, <strong>Track B shadow</strong> (terminal 15m on hourly strikes, no orders), <strong>Slot15 ETH</strong> paper (KXETH15M — separate product).</p>
+      <div id="four-k-week-plan"><p class="muted">Loading…</p></div>
+    </details>
+
     <details class="card guide-card" id="app-guide">
       <summary>Guide · dashboard, bots, buttons &amp; terminology</summary>
       <div class="guide-body">
@@ -4849,6 +4855,71 @@
       el.innerHTML = `${meta}${blocks}<p class="muted" style="font-size:.65rem;margin:.35rem 0 0">Generated ${gen}</p>`;
     }
 
+    function renderFourKWeekPlan(data) {
+      const el = $('four-k-week-plan');
+      const card = $('four-k-week-plan-card');
+      if (!el) return;
+      if (card && data?.week) {
+        const sum = card.querySelector('summary');
+        if (sum) sum.textContent = `$4k/week plan · Week ${data.week}`;
+      }
+      if (!data || !data.ok) {
+        el.innerHTML = `<p class="muted">Plan status unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
+        return;
+      }
+      const lanes = data.lanes || {};
+      const ta = lanes.track_a || {};
+      const tb = lanes.track_b_shadow || {};
+      const s15 = lanes.slot15_eth || {};
+      const wc = data.week_config || {};
+      const fmtPnl = (v) => v == null ? '—' : `${Number(v) >= 0 ? '+' : ''}$${Number(v).toFixed(2)}`;
+      const fmtEpoch = (iso) => iso ? time(iso) : '—';
+
+      const laneRow = (label, pnl, detail, cls) => `
+        <div class="bot-stat" style="min-width:9rem">
+          <span class="muted" style="font-size:.62rem">${label}</span>
+          <strong class="${cls || (Number(pnl) >= 0 ? 'up' : 'down')}">${fmtPnl(pnl)}</strong>
+          <div class="muted" style="font-size:.62rem;margin-top:.15rem">${detail}</div>
+        </div>`;
+
+      const promo = tb.promotion_ready
+        ? '<span class="up">promotion gate met (shadow)</span>'
+        : `<span class="muted">shadow collecting · need ${tb.promotion?.min_events ?? 50} events / ${tb.promotion?.min_median_edge_cents_final_10m ?? 8}¢ median</span>`;
+
+      el.innerHTML = `
+        <div class="bot-row" style="flex-wrap:wrap;gap:.5rem;margin-bottom:.45rem">
+          ${laneRow('Track A · ETH live', ta.live?.net_pnl_usd, `epoch ${fmtEpoch(ta.stats_epoch_at)} · matched ${ta.live?.matched_hours ?? 0}h`, '')}
+          ${laneRow('Track A · ETH trial', ta.trial?.net_pnl_usd, `probe ${ta.probe_24h?.min_ask_edge_cents ?? 18}¢ · ≤${ta.probe_24h?.max_filled_enters_per_hour ?? 2}/h`, '')}
+          ${laneRow('Track B · shadow', tb.shadow_would_pnl_usd, `events ${tb.events_logged ?? 0} · median ${tb.median_edge_cents != null ? tb.median_edge_cents + '¢' : '—'} · ${promo}`, Number(tb.shadow_would_pnl_usd) >= 0 ? 'up' : 'down')}
+          ${laneRow('Slot15 · ETH paper', s15.net_pnl_usd, `epoch ${fmtEpoch(s15.stats_epoch_at)} · slots ${s15.periods_with_entries ?? 0} · ${s15.enabled ? 'ON' : 'OFF'}`, '')}
+        </div>
+        <p class="muted" style="font-size:.68rem;margin:.25rem 0 0">
+          Week ${data.week} targets: $${wc.hour_cap_usd ?? 15}/h cap · $${wc.stake_usd ?? 2.5} stake · ${wc.max_enters_per_hour ?? 2} enters/h · ${wc.min_edge_cents ?? 18}¢ edge · capital ${wc.capital_usd || '200–500'} · target ${wc.target_weekly_usd || '25–75'}/wk.
+          Track B logs hourly terminal window only (no orders). Slot15 is KXETH15M — not Track B.
+        </p>`;
+    }
+
+    let fourKPlanInFlight = false;
+    let fourKPlanLastAt = 0;
+    const FOUR_K_PLAN_INTERVAL_MS = 30000;
+
+    async function loadFourKWeekPlan(force = false) {
+      if (!force && fourKPlanInFlight) return;
+      const now = Date.now();
+      if (!force && now - fourKPlanLastAt < FOUR_K_PLAN_INTERVAL_MS) return;
+      fourKPlanInFlight = true;
+      try {
+        const data = await getWithTimeout('/api/pnl-first/four-k-week-plan', 15000);
+        fourKPlanLastAt = Date.now();
+        renderFourKWeekPlan(data);
+      } catch (e) {
+        fourKPlanLastAt = Date.now();
+        renderFourKWeekPlan({ ok: false, error: e.message });
+      } finally {
+        fourKPlanInFlight = false;
+      }
+    }
+
     async function loadHourlyLiveTrialCompare(force = false) {
       if (!force && hourlyCompareInFlight) return;
       const now = Date.now();
@@ -6090,6 +6161,82 @@
       }
     }
 
+    function formatSportsEdgeCents(prob) {
+      if (prob == null || Number.isNaN(Number(prob))) return null;
+      const c = Number(prob) * 100;
+      return `${c >= 0 ? '+' : ''}${c.toFixed(1)}¢`;
+    }
+
+    function shortSportsEdgeDetail(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return '';
+      const cut = s.indexOf(' · ');
+      return cut > 0 ? s.slice(cut + 3) : s;
+    }
+
+    function renderSportsClosestMiss(data) {
+      const meta = ((data || {}).runtime || {}).last_scan_meta || {};
+      const strat = (data || {}).strategies || {};
+      const settings = (data || {}).settings || {};
+      const valueMinC = Number((strat.value_sharp || {}).min_edge_prob ?? 0.03) * 100;
+      const dutchMinC = Number((strat.dutch_same || {}).min_edge_usd ?? 0.01) * 100;
+      const dutchMeta = meta.dutch || {};
+      const valueMeta = meta.value || {};
+      const kalshiMeta = valueMeta.kalshi || {};
+      const polyMeta = valueMeta.poly || {};
+      const rows = [];
+
+      if (dutchMeta.best_binary_edge != null) {
+        const edgeC = Number(dutchMeta.best_binary_edge) * 100;
+        rows.push({
+          label: 'Goal 2 Dutch',
+          edge: formatSportsEdgeCents(dutchMeta.best_binary_edge),
+          need: `+${dutchMinC.toFixed(0)}¢`,
+          gap: edgeC - dutchMinC,
+          detail: shortSportsEdgeDetail(dutchMeta.best_binary_detail),
+        });
+      }
+      const kalshiEdge = kalshiMeta.best_edge_prob ?? valueMeta.best_edge_prob;
+      if (kalshiEdge != null) {
+        const edgeC = Number(kalshiEdge) * 100;
+        rows.push({
+          label: 'Goal 3 Kalshi',
+          edge: formatSportsEdgeCents(kalshiEdge),
+          need: `+${valueMinC.toFixed(0)}¢`,
+          gap: edgeC - valueMinC,
+          detail: shortSportsEdgeDetail(kalshiMeta.best_edge_detail || valueMeta.best_edge_detail),
+        });
+      }
+      if (polyMeta.best_edge_prob != null) {
+        const edgeC = Number(polyMeta.best_edge_prob) * 100;
+        rows.push({
+          label: 'Goal 3 Poly',
+          edge: formatSportsEdgeCents(polyMeta.best_edge_prob),
+          need: `+${valueMinC.toFixed(0)}¢`,
+          gap: edgeC - valueMinC,
+          detail: '',
+        });
+      }
+      if (!rows.length) return '';
+
+      const items = rows.map((r) => {
+        const gapCls = r.gap >= 0 ? 'up' : 'down';
+        const gapTxt = `${r.gap >= 0 ? '+' : ''}${r.gap.toFixed(1)}¢ vs floor`;
+        const detail = r.detail ? ` <span class="muted">(${r.detail})</span>` : '';
+        return `<span style="display:inline-block;margin:.15rem .65rem .15rem 0"><strong>${r.label}</strong> ${r.edge} <span class="muted">need ${r.need}</span> · <span class="${gapCls}">${gapTxt}</span>${detail}</span>`;
+      }).join('');
+
+      let gateNote = '';
+      if (settings.value_strong_bets_only) {
+        gateNote = ' <span class="muted">· Strong Bets ON (Goal 3 live needs STRONG tier when opps appear)</span>';
+      }
+      if (settings.value_live && !(data.polymarket || {}).clob?.allow_live) {
+        gateNote += ' <span class="muted">· Poly paper-only (allow_live=false)</span>';
+      }
+
+      return `<div class="sports-closest-miss" style="font-size:.72rem;margin:.45rem 0 .25rem;padding:.45rem .55rem;border:1px solid rgba(99,102,241,.28);border-radius:8px;background:rgba(99,102,241,.06)"><span class="muted" style="font-size:.62rem;text-transform:uppercase;letter-spacing:.04em">Closest miss · last scan</span><div style="margin-top:.3rem;line-height:1.45">${items}${gateNote}</div></div>`;
+    }
+
     function renderSports(data) {
       const statusEl = $('sports-bot-status');
       const oppEl = $('sports-opportunities');
@@ -6177,9 +6324,9 @@
           : (valueMeta.skipped ? String(valueMeta.skipped) : ''));
       const dutchMeta = meta.dutch || {};
       const dutchNote = dutchMeta.best_binary_edge != null
-        ? `dutch best binary ${Number(dutchMeta.best_binary_edge) >= 0 ? '+' : ''}${(Number(dutchMeta.best_binary_edge)*100).toFixed(1)}¢ · partitions ${dutchMeta.multi_partitions ?? 0}`
+        ? `dutch checked ${dutchMeta.binary_checked ?? 0} · partitions ${dutchMeta.multi_partitions ?? 0}`
         : (dutchMeta.binary_checked != null ? `dutch checked ${dutchMeta.binary_checked}` : '');
-      const bestEdge = valueMeta.best_edge_detail || '';
+      const closestMissHtml = renderSportsClosestMiss(data);
       statusEl.innerHTML = `
         <div class="bot-row">
           <div class="bot-stat"><span class="muted">Scanner</span><strong class="${data.enabled ? 'up' : 'down'}">${data.enabled ? 'ON' : 'OFF'}</strong></div>
@@ -6198,13 +6345,14 @@
           <div class="bot-stat"><span class="muted">Last scan</span><strong>${rt.last_scan_at ? time(rt.last_scan_at) : '—'}</strong></div>
           <div class="bot-stat"><span class="muted">Opps</span><strong>${data.opportunity_count ?? 0}</strong></div>
         </div>
-        <p class="muted" style="font-size:.68rem;margin:.35rem 0 0">${data.note || ''}${assessNote ? ` · ${assessNote}` : ''}${valueNote ? ` · ${valueNote}` : ''}${dutchNote ? ` · ${dutchNote}` : ''}${bestEdge ? ` · closest: ${bestEdge}` : ''}${rt.last_error ? ` · Error: ${rt.last_error}` : ''}${booksStale ? ' · Kalshi books stale (rate-limit fallback)' : ''}</p>`;
+        ${closestMissHtml}
+        <p class="muted" style="font-size:.68rem;margin:.35rem 0 0">${data.note || ''}${assessNote ? ` · ${assessNote}` : ''}${valueNote ? ` · ${valueNote}` : ''}${dutchNote ? ` · ${dutchNote}` : ''}${rt.last_error ? ` · Error: ${rt.last_error}` : ''}${booksStale ? ' · Kalshi books stale (rate-limit fallback)' : ''}</p>`;
 
       const opps = data.opportunities || [];
       if (!opps.length) {
         const why = Number(eventsN) === 0
           ? 'No event books on last scan (Kalshi empty/429 — check Events + stale).'
-          : 'No covers / value edges on last scan (normal — edges are rare after moneyline/multi filters).';
+          : 'No covers / value edges on last scan — see closest miss above for how far books are from the floor.';
         oppEl.innerHTML = `<p class="muted">${why}</p>`;
       } else {
         const rows = opps.map((o) => {
@@ -6387,6 +6535,7 @@
       ];
       loadBotPerformanceReport();
       loadEpochReconcile();
+      loadFourKWeekPlan();
       syncGlobalComparePanel();
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();

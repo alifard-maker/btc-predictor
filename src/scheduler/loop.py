@@ -1729,6 +1729,12 @@ class PredictionLoop:
     elif asset == "eth":
       self.latest_eth_hourly_prediction = out
       self._hourly_prediction_mono["eth"] = time.monotonic()
+      try:
+        from src.trading.terminal_shadow_logger import maybe_log_terminal_shadow
+
+        maybe_log_terminal_shadow(out, self.cfg, asset="eth")
+      except Exception as e:
+        log.warning("Track B shadow log skipped: %s", e)
       if include_bot:
         out["bot"] = self.hourly_bot_status("eth", out)
     else:
@@ -3654,6 +3660,11 @@ class PredictionLoop:
       probe_epoch = ensure_probe_stats_epoch(self, self.cfg)
       if probe_epoch.get("probe_stats_epoch_at"):
         log.info("Probe 24h stats epoch: %s", probe_epoch)
+      from src.trading.four_k_week_plan import ensure_four_k_week_plan
+
+      plan_boot = ensure_four_k_week_plan(self, self.cfg)
+      if plan_boot.get("track_b_shadow_enabled"):
+        log.info("$4k/week plan boot: %s", plan_boot)
     except Exception as e:
       log.warning("Compare paper twins ensure skipped: %s", e)
     log.info("Scheduler started: 15m slots at :00/:15/:30/:45 ET (%s)", self.tz)

@@ -651,6 +651,23 @@ pnl_first:
     max_contracts_per_entry: 2
     max_stake_per_entry_usd: 2.50
     max_filled_enters_per_hour: 2
+  # $4k/week plan — Track B shadow (hourly terminal 15m, no orders)
+  track_b_shadow:
+    enabled: true
+    started_at: "2026-07-12T15:30:00+00:00"
+    stats_epoch_at: "2026-07-12T15:30:00+00:00"
+    assets: [eth]
+    cadence_seconds: 10
+    max_hours_to_settle: 0.25
+    min_hours_to_settle: 0.0
+    taker_fee_rate: 0.07
+    promotion_min_events: 50
+    promotion_min_median_edge_cents: 8.0
+    promotion_min_would_pnl_events: 100
+  four_k_week_plan:
+    enabled: true
+    week: 1
+    started_at: "2026-07-12T15:30:00+00:00"
   # Kalshi timing research: 15–45m-to-settle window — on for BTC+ETH twin live
   mid_hour_entry:
     enabled: true
@@ -686,6 +703,7 @@ pnl_first_manager:
   lock_slot15: true          # BTC/ETH 15m + trial bots — sleep during Phase 0–1
   allow_eth_paper: true      # ETH hourly paper runs under sleep lock
   allow_eth_live: true       # ETH hourly_live mirror (parallel live arm)
+  allow_eth_slot15_paper: true  # $4k/week plan — ETH KXETH15M paper lane (separate epoch)
   allow_btc_live: true       # BTC hourly twin live (same mid-hour / pnl_first mechanics)
 
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
@@ -759,14 +777,24 @@ eth:
     cache_sec: 25
   intra_slot:
     bot:
-      max_spend_per_slot_usd: 25
+      enabled: true
+      mode: paper
+      max_spend_per_slot_usd: 5
       poll_seconds: 15
       tab_cache_seconds: 12
+      continuous_enabled: true
+      experiment_start_at: "2026-07-12T15:30:00+00:00"
       cheap_leg_cut_cooldown_seconds: 180
       leg_stop_loss_cents: 4
       leg_stop_gate_min_remaining_seconds: 60
       bot_adaptive_calibration:
         enabled: false
+      entry_strategy:
+        min_ask_edge_cents: 10
+        max_entries_per_cycle: 1
+        max_concurrent_positions: 1
+        max_stake_per_entry_usd: 5.0
+        max_contracts_per_entry: 2
       trial:
         continuous_enabled: false
         poll_seconds: 15
