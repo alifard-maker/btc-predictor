@@ -6388,6 +6388,12 @@
       const scanCap = (Number(s.max_live_per_scan ?? 0) > 0) ? s.max_live_per_scan : '∞';
       const eventsN = meta.events_scanned ?? '—';
       const dutchN = meta.dutch_opportunities ?? '—';
+      const lastActs = meta.last_actions || [];
+      const dutchSkips = lastActs.filter((a) => a.strategy === 'dutch_same' && String(a.action || '').includes('skip'));
+      const dutchFilled = lastActs.filter((a) => a.strategy === 'dutch_same' && a.action === 'live_filled');
+      const dutchActNote = dutchSkips.length
+        ? `last scan: ${dutchSkips.slice(0, 2).map((a) => `${a.reason}${a.cost != null ? ` $${Number(a.cost).toFixed(2)}` : ''}`).join(' · ')}`
+        : (dutchFilled.length ? 'last scan: live filled' : (s.dutch_live && dutchN === 0 ? 'last scan: 0 dutch opps (books tight)' : ''));
       const valueN = meta.value_opportunities ?? '—';
       const assess = meta.bet_assessment || {};
       const assessNote = (assess.STRONG || assess.MODERATE || assess.WEAK)
@@ -6424,7 +6430,7 @@
           <div class="bot-stat"><span class="muted">Opps</span><strong>${data.opportunity_count ?? 0}</strong></div>
         </div>
         ${closestMissHtml}
-        <p class="muted" style="font-size:.68rem;margin:.35rem 0 0">${data.note || ''}${assessNote ? ` · ${assessNote}` : ''}${valueNote ? ` · ${valueNote}` : ''}${dutchNote ? ` · ${dutchNote}` : ''}${rt.last_error ? ` · Error: ${rt.last_error}` : ''}${booksStale ? ' · Kalshi books stale (rate-limit fallback)' : ''}</p>`;
+        <p class="muted" style="font-size:.68rem;margin:.35rem 0 0">${data.note || ''}${assessNote ? ` · ${assessNote}` : ''}${valueNote ? ` · ${valueNote}` : ''}${dutchNote ? ` · ${dutchNote}` : ''}${dutchActNote ? ` · ${dutchActNote}` : ''}${rt.last_error ? ` · Error: ${rt.last_error}` : ''}${booksStale ? ' · Kalshi books stale (rate-limit fallback)' : ''}</p>`;
 
       const opps = data.opportunities || [];
       if (!opps.length) {

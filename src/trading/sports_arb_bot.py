@@ -170,9 +170,11 @@ class SportsArbBot:
         "dutch": dutch_meta,
         "value": value_meta,
       }
-      self.store.record_scan(payloads, ok=True, meta=scan_meta)
 
       actions = self._act_on_opportunities(payloads, settings, value_params)
+      if actions:
+        scan_meta["last_actions"] = actions[:24]
+      self.store.record_scan(payloads, ok=True, meta=scan_meta)
 
       return {
         "ok": True,
@@ -359,9 +361,24 @@ class SportsArbBot:
         })
         continue
       if stake_cap > 0 and cost > stake_cap + 1e-6:
+        actions.append({
+          "action": "live_skip",
+          "reason": "stake_cap",
+          "strategy": strat,
+          "event_ticker": opp.get("event_ticker"),
+          "cost": cost,
+          "stake_cap": stake_cap,
+        })
         continue
       fp = _fingerprint(opp)
       if _already_seen(fp, seen):
+        actions.append({
+          "action": "live_skip",
+          "reason": "already_seen",
+          "strategy": strat,
+          "event_ticker": opp.get("event_ticker"),
+          "fingerprint": fp,
+        })
         continue
       if strat == "dutch_same":
         ok, reason = validate_dutch_cover_opportunity(
