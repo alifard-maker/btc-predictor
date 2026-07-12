@@ -52,6 +52,32 @@ def _already_seen(fp: str, seen: set[str]) -> bool:
   return False
 
 
+def _live_seen_statuses() -> tuple[str, ...]:
+  """Statuses that suppress repeat live attempts for the same fingerprint."""
+  return (
+    "live_filled",
+    "live_partial",
+    "live_submitted",
+    "live_failed",
+  )
+
+
+def _kalshi_leg_already_positioned(kalshi: Any, *, ticker: str, side: str, contracts: int) -> bool:
+  """True when wallet already holds enough contracts on this leg."""
+  if kalshi is None or not getattr(kalshi, "authenticated", False):
+    return False
+  try:
+    net = kalshi.get_market_position(ticker, critical=True)
+  except Exception:
+    return False
+  if net is None:
+    return False
+  side_l = str(side).lower()
+  if side_l == "yes":
+    return float(net) >= float(contracts)
+  return float(net) <= -float(contracts)
+
+
 class SportsArbBot:
   def __init__(self, cfg: dict[str, Any], store: SportsArbStore, *, kalshi=None):
     self.cfg = cfg
@@ -265,7 +291,7 @@ class SportsArbBot:
     if any_live:
       seen = self.store.recent_trade_fingerprints(
         hours=12.0,
-        statuses=("live_filled", "live_partial", "live_submitted"),
+        statuses=_live_seen_statuses(),
       )
     else:
       seen = self.store.recent_trade_fingerprints(hours=12.0)
@@ -394,10 +420,10 @@ class SportsArbBot:
       else:
         continue
       actions.append(result)
+      seen.add(fp)
       if result.get("ok"):
         placed += 1
         day_n += 1
-        seen.add(fp)
         if strat == "dutch_same":
           dutch_spend += cost
         else:
@@ -434,7 +460,21 @@ class SportsArbBot:
     if not ticker or contracts < 1 or ask <= 0:
       return {"ok": False, "action": "live_skip", "reason": "bad_leg"}
 
+    if _kalshi_leg_already_positioned(self.kalshi, ticker=ticker, side=side, contracts=contracts):
+      return {
+        "ok": False,
+        "action": "live_skip",
+        "reason": "already_positioned",
+        "strategy": "value_sharp",
+        "event_ticker": opp.get("event_ticker"),
+        "ticker": ticker,
+      }
+
     try:
+      try:
+        self.kalshi.cancel_resting_orders_for_ticker(ticker)
+      except Exception:
+        pass
       cents = _ask_cents(ask)
       kwargs: dict[str, Any] = {
         "ticker": ticker,
@@ -494,23 +534,28 @@ class SportsArbBot:
         "order_ids": [oid] if oid else [],
       }
     except Exception as exc:
-      log.warning("sports live value failed: %s", exc)
+      err = str(exc)
+      log.warning("sports live value failed: %s", err)
       try:
         self.kalshi.cancel_resting_orders_for_ticker(ticker)
       except Exception:
         pass
+      extra = {"error": err, "selection": opp.get("selection")}
+      if "409" in err or "Conflict" in err:
+        extra["error_code"] = "kalshi_409_conflict"
       self.store.log_trade(
         opp,
         mode="live",
         status="live_failed",
-        extra={"error": str(exc), "selection": opp.get("selection")},
+        extra=extra,
       )
       return {
         "ok": False,
         "action": "live_failed",
         "strategy": "value_sharp",
-        "error": str(exc),
+        "error": err,
         "event_ticker": opp.get("event_ticker"),
+        "error_code": extra.get("error_code"),
       }
 
   def _execute_live_cover(self, opp: dict[str, Any]) -> dict[str, Any]:
