@@ -1209,13 +1209,14 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
 def pnl_first_four_k_week_plan(_: None = Depends(_session_user)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  from src.trading.four_k_week_plan import build_four_k_week_plan_report, ensure_four_k_week_plan
+  from src.trading.four_k_week_plan import build_four_k_week_plan_report_cached
 
   try:
-    ensure_four_k_week_plan(_loop, _cfg)
-  except Exception:
-    log.exception("four_k_week_plan ensure failed")
-  return build_four_k_week_plan_report(_loop, _cfg)
+    return build_four_k_week_plan_report_cached(_loop, _cfg)
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
 
 
 @app.get("/api/pnl-first/kalshi-live-report")

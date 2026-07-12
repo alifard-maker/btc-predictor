@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+import sqlite3
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from src.trading.bot_runtime import parse_stats_epoch_at, set_stats_epoch_at, stats_epoch_at
 from src.trading.probe_24h import effective_compare_stats_epoch_at, probe_24h_cfg, probe_stats_epoch_iso
 from src.trading.terminal_shadow_logger import summarize_track_b_shadow, track_b_epoch_iso
+
+log = logging.getLogger(__name__)
+
+_REPORT_CACHE: dict[str, Any] = {"mono_at": 0.0, "payload": None}
+_REPORT_CACHE_TTL_SEC = 30.0
 
 
 def four_k_week_plan_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
@@ -51,8 +59,10 @@ def _lane_pnl_from_store(
   *,
   mode: str,
   since: datetime | None,
+  trade_limit: int = 800,
 ) -> dict[str, Any]:
-  trades = store.list_trades(limit=5000)
+  """Lightweight closed-trade summary since epoch (plan card only)."""
+  trades = store.list_trades(limit=trade_limit)
   if since is not None:
     trades = [t for t in trades if (_parse_ts(t.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)) >= since]
   trades = [t for t in trades if str(t.get("mode") or "").lower() == mode.lower()]
@@ -62,43 +72,44 @@ def _lane_pnl_from_store(
 
   pnl = round(sum(float(effective_exit_pnl_usd(t) or 0) for t in exits), 2)
   events = {str(t.get("event_ticker") or "") for t in enters if t.get("event_ticker")}
+  trial_events = {str(t.get("event_ticker") or "") for t in enters if t.get("event_ticker")}
   return {
     "net_pnl_usd": pnl,
     "filled_enters": len(enters),
     "exits": len(exits),
     "periods_with_entries": len({e for e in events if e}),
+    "_entry_events": trial_events,
   }
+
+
+def _matched_hours_since_epoch(live_store: Any, trial_store: Any, *, since: datetime | None) -> int:
+  """Count hours where both live and trial had filled enters (cheap set intersect)."""
+  live = _lane_pnl_from_store(live_store, mode="live", since=since, trade_limit=400)
+  trial_mode = str(trial_store.get_settings().mode or "paper").lower()
+  trial = _lane_pnl_from_store(trial_store, mode=trial_mode, since=since, trade_limit=400)
+  live_ev = set(live.pop("_entry_events", set()))
+  trial_ev = set(trial.pop("_entry_events", set()))
+  return len(live_ev & trial_ev)
 
 
 def _track_a_lane(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
   from src.trading.compare_paper_twins import compare_store_kinds
-  from src.trading.hourly_live_trial_compare import build_hourly_live_trial_compare
-  from src.trading.hourly_live_trial_align import HourlyLiveTrialAlignConfig
-  from src.assets import asset_cfg
 
   asset = "eth"
   live_kind, trial_kind = compare_store_kinds(asset)
   live_store = loop.hourly_bot_store(asset, kind=live_kind)
   trial_store = loop.hourly_bot_store(asset, kind=trial_kind)
-  acfg = asset_cfg(cfg, asset)
-  align = HourlyLiveTrialAlignConfig.from_cfg(acfg, kind="hourly")
   epoch = effective_compare_stats_epoch_at(live_store, cfg)
-  compare = build_hourly_live_trial_compare(
-    live_store,
-    trial_store,
-    asset=asset,
-    limit_hours=168,
-    live_kind=live_kind,
-    trial_kind=trial_kind,
-    pair_window_seconds=align.compare_pair_window_seconds,
-    stats_epoch_at=epoch,
-  )
-  hours = compare.get("hours") or []
-  live_pnl = round(sum(float((h.get("live") or {}).get("net_pnl_usd") or 0) for h in hours), 2)
-  trial_pnl = round(sum(float((h.get("trial") or {}).get("net_pnl_usd") or 0) for h in hours), 2)
-  matched_hours = sum(1 for h in hours if h.get("both_active"))
-  hours_with_live = sum(1 for h in hours if (h.get("live") or {}).get("has_activity"))
+  epoch_dt = parse_stats_epoch_at(epoch)
+  live_stats = _lane_pnl_from_store(live_store, mode="live", since=epoch_dt, trade_limit=500)
+  live_stats.pop("_entry_events", None)
+  trial_mode = str(trial_store.get_settings().mode or "paper").lower()
+  trial_stats = _lane_pnl_from_store(trial_store, mode=trial_mode, since=epoch_dt, trade_limit=500)
+  trial_stats.pop("_entry_events", None)
+  matched_hours = _matched_hours_since_epoch(live_store, trial_store, since=epoch_dt)
   probe = probe_24h_cfg(cfg)
+  live_pnl = float(live_stats.get("net_pnl_usd") or 0)
+  trial_pnl = float(trial_stats.get("net_pnl_usd") or 0)
   return {
     "lane": "track_a",
     "label": "Track A · ETH hourly mid-hour (probe)",
@@ -113,7 +124,7 @@ def _track_a_lane(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
       "kind": live_kind,
       "net_pnl_usd": live_pnl,
       "matched_hours": matched_hours,
-      "hours_with_live": hours_with_live,
+      "hours_with_live": live_stats.get("periods_with_entries", 0),
     },
     "trial": {
       "kind": trial_kind,
@@ -143,12 +154,18 @@ def _slot15_eth_lane(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
 def build_four_k_week_plan_report(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
   plan = four_k_week_plan_cfg(cfg)
   week = int(plan.get("week", 1))
-  track_b = summarize_track_b_shadow(cfg, asset="eth")
-  lanes = {
-    "track_a": _track_a_lane(loop, cfg),
-    "track_b_shadow": track_b,
-    "slot15_eth": _slot15_eth_lane(loop, cfg),
-  }
+  try:
+    track_b = summarize_track_b_shadow(cfg, asset="eth")
+    lanes = {
+      "track_a": _track_a_lane(loop, cfg),
+      "track_b_shadow": track_b,
+      "slot15_eth": _slot15_eth_lane(loop, cfg),
+    }
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      log.warning("four_k_week_plan: db busy — %s", exc)
+      raise
+    raise
   week_targets = {
     1: {
       "hour_cap_usd": 15,
@@ -185,6 +202,41 @@ def build_four_k_week_plan_report(loop: Any, cfg: dict[str, Any] | None) -> dict
     "track_b_epoch_at": track_b_epoch_iso(cfg),
     "probe_stats_epoch_at": probe_stats_epoch_iso(cfg),
   }
+
+
+def build_four_k_week_plan_report_cached(
+  loop: Any,
+  cfg: dict[str, Any] | None,
+  *,
+  ttl_sec: float = _REPORT_CACHE_TTL_SEC,
+) -> dict[str, Any]:
+  """Return cached plan summary when fresh to avoid SQLite lock storms."""
+  now = time.monotonic()
+  cached = _REPORT_CACHE.get("payload")
+  if cached and (now - float(_REPORT_CACHE.get("mono_at") or 0)) < ttl_sec:
+    return {**cached, "cached": True, "cache_age_sec": round(now - float(_REPORT_CACHE["mono_at"]), 1)}
+
+  try:
+    payload = build_four_k_week_plan_report(loop, cfg)
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower() and cached:
+      return {
+        **cached,
+        "cached": True,
+        "stale": True,
+        "stale_reason": "db_busy",
+        "error": str(exc),
+      }
+    raise
+
+  _REPORT_CACHE["mono_at"] = now
+  _REPORT_CACHE["payload"] = payload
+  return {**payload, "cached": False, "cache_age_sec": 0.0}
+
+
+def invalidate_four_k_week_plan_cache() -> None:
+  _REPORT_CACHE["mono_at"] = 0.0
+  _REPORT_CACHE["payload"] = None
 
 
 def _apply_stats_epoch(store: Any, epoch_raw: str | None) -> dict[str, Any]:

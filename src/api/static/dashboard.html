@@ -4864,7 +4864,8 @@
         if (sum) sum.textContent = `$4k/week plan · Week ${data.week}`;
       }
       if (!data || !data.ok) {
-        el.innerHTML = `<p class="muted">Plan status unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
+        const staleNote = data?.stale ? ` <span class="muted">(stale — ${data.stale_error || data.error || 'refresh failed'})</span>` : '';
+        el.innerHTML = `<p class="muted">Plan status unavailable${data?.error ? `: ${data.error}` : ''}.${staleNote}</p>`;
         return;
       }
       const lanes = data.lanes || {};
@@ -4896,12 +4897,15 @@
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 0">
           Week ${data.week} targets: $${wc.hour_cap_usd ?? 15}/h cap · $${wc.stake_usd ?? 2.5} stake · ${wc.max_enters_per_hour ?? 2} enters/h · ${wc.min_edge_cents ?? 18}¢ edge · capital ${wc.capital_usd || '200–500'} · target ${wc.target_weekly_usd || '25–75'}/wk.
           Track B logs hourly terminal window only (no orders). Slot15 is KXETH15M — not Track B.
+          ${data.stale ? `<span class="muted"> · showing last good snapshot (${data.stale_error || data.stale_reason || 'refresh slow'})</span>` : ''}
+          ${data.cached && !data.stale ? `<span class="muted"> · server cache ${data.cache_age_sec != null ? Number(data.cache_age_sec).toFixed(0) + 's' : ''}</span>` : ''}
         </p>`;
     }
 
     let fourKPlanInFlight = false;
     let fourKPlanLastAt = 0;
-    const FOUR_K_PLAN_INTERVAL_MS = 30000;
+    let fourKPlanLastData = null;
+    const FOUR_K_PLAN_INTERVAL_MS = 60000;
 
     async function loadFourKWeekPlan(force = false) {
       if (!force && fourKPlanInFlight) return;
@@ -4909,12 +4913,17 @@
       if (!force && now - fourKPlanLastAt < FOUR_K_PLAN_INTERVAL_MS) return;
       fourKPlanInFlight = true;
       try {
-        const data = await getWithTimeout('/api/pnl-first/four-k-week-plan', 15000);
+        const data = await getWithTimeout('/api/pnl-first/four-k-week-plan', 25000);
         fourKPlanLastAt = Date.now();
+        fourKPlanLastData = data;
         renderFourKWeekPlan(data);
       } catch (e) {
         fourKPlanLastAt = Date.now();
-        renderFourKWeekPlan({ ok: false, error: e.message });
+        if (fourKPlanLastData && fourKPlanLastData.ok) {
+          renderFourKWeekPlan({ ...fourKPlanLastData, stale: true, stale_error: e.message });
+        } else {
+          renderFourKWeekPlan({ ok: false, error: e.message });
+        }
       } finally {
         fourKPlanInFlight = false;
       }
