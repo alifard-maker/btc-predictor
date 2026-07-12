@@ -62,6 +62,136 @@ def open_range_contracts_on_band(
   return round(total, 2)
 
 
+# Per-asset defaults (~0.1–0.18% of spot + σ term). Config overrides these per asset.
+_ASSET_SPOT_GUARD_DEFAULTS: dict[str, dict[str, float]] = {
+  "btc": {"min_buffer_usd": 75.0, "sigma_buffer_fraction": 0.20, "min_spot_pct_buffer": 0.12},
+  "eth": {"min_buffer_usd": 12.0, "sigma_buffer_fraction": 0.22, "min_spot_pct_buffer": 0.18},
+  "spx": {"min_buffer_usd": 25.0, "sigma_buffer_fraction": 0.18, "min_spot_pct_buffer": 0.10},
+  "ndx": {"min_buffer_usd": 90.0, "sigma_buffer_fraction": 0.18, "min_spot_pct_buffer": 0.10},
+}
+
+
+def _asset_from_cfg(cfg: dict[str, Any] | None, asset: str | None = None) -> str:
+  if asset:
+    return str(asset).lower()
+  if cfg and cfg.get("_asset"):
+    return str(cfg["_asset"]).lower()
+  return "btc"
+
+
+def _range_band_spot_guard_cfg(
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str,
+  asset: str | None = None,
+) -> dict[str, Any]:
+  asset_l = _asset_from_cfg(cfg, asset)
+  defaults = dict(_ASSET_SPOT_GUARD_DEFAULTS.get(asset_l, _ASSET_SPOT_GUARD_DEFAULTS["btc"]))
+  inv = _live_inventory_cfg(cfg, kind=kind)
+  raw = dict(inv.get("range_band_spot_entry_guard") or {})
+  by_asset = raw.pop("by_asset", None) or inv.get("range_band_spot_entry_guard_by_asset") or {}
+  if isinstance(by_asset, dict):
+    asset_raw = by_asset.get(asset_l)
+    if isinstance(asset_raw, dict):
+      raw = {**raw, **asset_raw}
+  enabled = raw.get("enabled")
+  if enabled is None:
+    enabled = inv.get("range_band_spot_guard_enabled", True)
+  return {
+    "enabled": bool(enabled),
+    "min_buffer_usd": float(
+      raw.get("min_buffer_usd", inv.get("range_band_spot_min_buffer_usd", defaults["min_buffer_usd"])),
+    ),
+    "sigma_buffer_fraction": float(
+      raw.get(
+        "sigma_buffer_fraction",
+        inv.get("range_band_spot_sigma_fraction", defaults["sigma_buffer_fraction"]),
+      ),
+    ),
+    "min_spot_pct_buffer": float(
+      raw.get("min_spot_pct_buffer", defaults["min_spot_pct_buffer"]),
+    ),
+    "asset": asset_l,
+  }
+
+
+def range_band_spot_entry_buffer_usd(
+  *,
+  spot_price: float,
+  terminal_sigma: float | None,
+  cfg: dict[str, Any] | None,
+  kind: str = "hourly",
+  asset: str | None = None,
+) -> float:
+  """Effective USD buffer for range-band spot entry guard."""
+  gcfg = _range_band_spot_guard_cfg(cfg, kind=kind, asset=asset)
+  buffer = float(gcfg["min_buffer_usd"])
+  pct = float(gcfg["min_spot_pct_buffer"])
+  if pct > 0 and spot_price > 0:
+    buffer = max(buffer, spot_price * pct / 100.0)
+  if terminal_sigma is not None and terminal_sigma > 0:
+    buffer = max(buffer, float(terminal_sigma) * float(gcfg["sigma_buffer_fraction"]))
+  return round(buffer, 2)
+
+
+def range_band_spot_entry_block_reason(
+  *,
+  pick: dict[str, Any] | None,
+  side: str,
+  spot_price: float | None,
+  terminal_sigma: float | None = None,
+  cfg: dict[str, Any] | None,
+  kind: str = "hourly",
+  asset: str | None = None,
+) -> str | None:
+  """Block range-band entries when live spot hasn't reached the band (μ-only edge is misleading).
+
+  YES: spot must be within buffer of band floor (or inside band).
+  NO: spot must be within buffer of band cap (or outside band the other way).
+  """
+  if not is_range_pick(pick):
+    return None
+  gcfg = _range_band_spot_guard_cfg(cfg, kind=kind, asset=asset)
+  if not gcfg["enabled"] or spot_price is None:
+    return None
+  floor = (pick or {}).get("floor_strike")
+  cap = (pick or {}).get("cap_strike")
+  if floor is None or cap is None:
+    return None
+  try:
+    floor_f = float(floor)
+    cap_f = float(cap)
+    spot = float(spot_price)
+  except (TypeError, ValueError):
+    return None
+
+  sigma: float | None = None
+  if terminal_sigma is not None:
+    try:
+      sigma = float(terminal_sigma)
+    except (TypeError, ValueError):
+      sigma = None
+
+  buffer = range_band_spot_entry_buffer_usd(
+    spot_price=spot,
+    terminal_sigma=sigma,
+    cfg=cfg,
+    kind=kind,
+    asset=asset or gcfg.get("asset"),
+  )
+
+  side_l = str(side).lower()
+  if side_l == "yes":
+    if spot + buffer < floor_f:
+      gap = floor_f - spot
+      return f"range_band_spot_below_floor:{gap:.0f}>{buffer:.0f}"
+  elif side_l == "no":
+    if spot - buffer > cap_f:
+      gap = spot - cap_f
+      return f"range_band_spot_above_cap:{gap:.0f}>{buffer:.0f}"
+  return None
+
+
 def max_contracts_per_range_band_per_hour(
   cfg: dict[str, Any] | None,
   *,

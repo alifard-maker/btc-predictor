@@ -49,7 +49,7 @@ Enabled by default (`log_backup` in `config.yaml`):
 | Path | Contents |
 |------|----------|
 | `/data/backups/paper/` | Paper trade CSVs + `audit_trades.jsonl` |
-| `/data/backups/live/` | **Live trades for tax** — CSVs + append-only audit log |
+| `/data/backups/live/` | **Live trades for tax** — CSVs + append-only audit log (all bots: BTC/ETH/SPX/NDX hourly, trials, slot15, v2) |
 | `/data/backups/snapshots/` | Timestamped full DB copies (90-day retention) |
 
 - Runs every **15 minutes** and on **startup**

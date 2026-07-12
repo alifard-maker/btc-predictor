@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import math
 import os
+import sqlite3
 import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -311,7 +313,7 @@ def _volume_health_fields() -> dict[str, Any]:
 
 
 @app.get("/health")
-def health():
+def health(lite: bool = Query(default=False)):
   """Always return 200 so Railway healthchecks pass."""
   base = {
     "status": "starting",
@@ -321,6 +323,24 @@ def health():
   }
   if _loop is None:
     return base
+  if lite:
+    st = _loop.lite_dashboard_health()
+    kalshi = st.get("kalshi") or {}
+    return {
+      "status": "ok",
+      "service": "btc-predictor",
+      "version": APP_VERSION,
+      **_volume_health_fields(),
+      "scheduler_running": st.get("scheduler_running"),
+      "data_dir": st.get("data_dir"),
+      "volume_mounted_at_data": st.get("volume_mounted_at_data"),
+      "kalshi": {
+        "authenticated": bool(kalshi.get("authenticated")),
+        "balance_usd": kalshi.get("balance_usd"),
+        "balance_cents": kalshi.get("balance_cents"),
+      },
+      "bots_paused": st.get("bots_paused"),
+    }
   status = _loop.status()
   out = {
     "status": "ok",
@@ -786,6 +806,9 @@ def _apply_hourly_bot_settings(
     "use_accumulated_profit": bool(body.get("use_accumulated_profit", current.use_accumulated_profit)),
     "profit_use_pct": float(body.get("profit_use_pct", current.profit_use_pct)),
     "paper_auto_refill": bool(body.get("paper_auto_refill", current.paper_auto_refill)),
+    "live_auto_refill_hour_budget": bool(
+      body.get("live_auto_refill_hour_budget", current.live_auto_refill_hour_budget)
+    ),
     "aggressive_entries": bool(body.get("aggressive_entries", current.aggressive_entries)),
     "auto_stopped": auto_stopped,
   })
@@ -899,6 +922,60 @@ def hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
     raise HTTPException(500, f"Kalshi sync failed: {e}") from e
 
 
+def _hourly_kalshi_fill_summary_response(
+  asset: str,
+  since: str | None,
+  *,
+  event_ticker: str | None = None,
+) -> dict[str, Any]:
+  from datetime import datetime, timezone
+
+  from src.trading.bot_runtime import stats_epoch_at
+  from src.trading.kalshi_fill_sync import summarize_kalshi_experiment_fills
+
+  kalshi = _loop._kalshi_for(asset)
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    raise HTTPException(503, "Kalshi not authenticated")
+  store = _loop.hourly_bot_store(asset, kind="hourly")
+  since_dt: datetime | None = None
+  if since:
+    try:
+      since_norm = str(since).replace("Z", "+00:00").replace(" ", "+")
+      since_dt = datetime.fromisoformat(since_norm)
+      if since_dt.tzinfo is None:
+        since_dt = since_dt.replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+      raise HTTPException(400, f"Invalid since: {since}") from exc
+  else:
+    with store._connect() as conn:
+      raw = stats_epoch_at(conn)
+    if raw:
+      since_dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+      if since_dt.tzinfo is None:
+        since_dt = since_dt.replace(tzinfo=timezone.utc)
+  if since_dt is None:
+    raise HTTPException(400, "Provide since= or set stats_epoch_at on the bot store")
+  return summarize_kalshi_experiment_fills(
+    kalshi,
+    since=since_dt,
+    critical=True,
+    asset=asset,
+    event_ticker=event_ticker,
+  )
+
+
+@app.get("/api/hourly/bot/kalshi-fill-summary")
+def hourly_bot_kalshi_fill_summary(
+  since: str | None = Query(default=None, description="ISO-8601 UTC lower bound (defaults to stats_epoch_at)"),
+  event_ticker: str | None = Query(default=None, description="Limit to one hourly event (Kalshi ground truth)"),
+  _: None = Depends(_session_user),
+):
+  """Realized P&L from Kalshi hourly fill history (exchange source of truth)."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_kalshi_fill_summary_response("btc", since, event_ticker=event_ticker)
+
+
 @app.get("/api/hourly/bot")
 def hourly_bot_status(
   lightweight: bool = Query(default=True),
@@ -956,7 +1033,7 @@ def _hourly_bot_fresh_start(store, tab_fn, asset: str, *, kind: str = "hourly"):
   return _hourly_bot_clear_history(store, tab_fn, asset, kind=kind)
 
 
-def _slot15_bot_clear_history(store, tab_fn, asset: str):
+def _slot15_bot_clear_history(store, tab_fn, asset: str, *, kind: str = "slot15", status_fn=None):
   from src.trading.bot_risk_state import bot_risk_key, get_bot_risk_coordinator
 
   settings = store.get_settings()
@@ -964,13 +1041,20 @@ def _slot15_bot_clear_history(store, tab_fn, asset: str):
   store.clear_history(cap, mode=str(settings.mode or "paper"))
   coord = get_bot_risk_coordinator()
   if coord:
-    coord.reset_bot_daily_pnl(bot_risk_key("slot15", asset))
+    coord.reset_bot_daily_pnl(bot_risk_key(kind, asset))
   tab = tab_fn()
-  return _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+  if status_fn is None:
+    return _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+  return status_fn(asset, tab if tab.get("ok") else None)
 
 
-def _slot15_bot_fresh_start(store, tab_fn, asset: str):
-  return _slot15_bot_clear_history(store, tab_fn, asset)
+def _slot15_bot_fresh_start(store, tab_fn, asset: str, *, kind: str = "slot15", status_fn=None):
+  return _slot15_bot_clear_history(store, tab_fn, asset, kind=kind, status_fn=status_fn)
+
+
+def _apply_slot15_trial_bot_settings(store, body: dict[str, Any], *, cfg: dict[str, Any] | None = None):
+  body = {**body, "mode": "paper"}
+  return _apply_slot15_bot_settings(store, body, cfg=cfg)
 
 
 def _override_daily_cap_hourly(asset: str, *, kind: str = "hourly") -> dict[str, Any]:
@@ -986,15 +1070,24 @@ def _override_daily_cap_hourly(asset: str, *, kind: str = "hourly") -> dict[str,
   return status
 
 
-def _override_daily_cap_slot15(asset: str) -> dict[str, Any]:
+def _override_daily_cap_slot15(
+  asset: str,
+  *,
+  kind: str = "slot15",
+  store=None,
+  status_fn=None,
+) -> dict[str, Any]:
   from src.assets import asset_cfg
   from src.trading.bot_risk_gates import override_daily_loss_cap
 
-  store = _loop.slot15_bot_store(asset)
+  store = store or _loop.slot15_bot_store(asset)
   acfg = _loop._acfg_15m(asset) if asset == "btc" else (_loop._eth_cfg or asset_cfg(_cfg, asset))
-  daily = override_daily_loss_cap(store, kind="slot15", asset=asset, cfg=acfg)
+  daily = override_daily_loss_cap(store, kind=kind, asset=asset, cfg=acfg)
   tab = _loop._slot15_tab(asset)
-  status = _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+  if status_fn is None:
+    status = _loop.slot15_bot_status(asset, tab if tab.get("ok") else None)
+  else:
+    status = status_fn(asset, tab if tab.get("ok") else None)
   status["daily_loss"] = daily
   return status
 
@@ -1055,7 +1148,12 @@ def bots_performance_report(_: None = Depends(_session_user)):
     raise HTTPException(503, "Service starting")
   from src.trading.bot_performance_report import build_all_bots_performance_report
 
-  return build_all_bots_performance_report(_loop)
+  try:
+    return build_all_bots_performance_report(_loop)
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
 
 
 @app.get("/api/bots/risk-status")
@@ -1065,9 +1163,145 @@ def bots_risk_status(_: None = Depends(_session_user)):
   return _loop.bot_risk_status()
 
 
+@app.get("/api/pnl-first/manager")
+def pnl_first_manager_status(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.pnl_first_railway_manager import (
+    PnlFirstManagerConfig,
+    compute_btc_live_trade_timing,
+    compute_live_milestone,
+    manager_status_snapshot,
+    run_preflight,
+  )
+
+  from src.trading.pnl_first_backtest_runner import backtest_status, run_live_pnl_audit
+
+  mgr = PnlFirstManagerConfig.from_cfg(_cfg)
+  snap = manager_status_snapshot(_loop)
+
+  def _safe(label: str, fn):
+    try:
+      return fn()
+    except Exception as exc:
+      return {"ok": False, "error": f"{label}:{type(exc).__name__}:{exc}"}
+
+  return {
+    "config": {
+      "enabled": mgr.enabled,
+      "phase": mgr.phase,
+      "enforce_sleep": mgr.enforce_sleep,
+      "trading_armed": mgr.trading_armed,
+      "auto_wake_when_ready": mgr.auto_wake_when_ready,
+      "live_cap_usd": mgr.live_cap_usd,
+      "interval_seconds": mgr.interval_seconds,
+    },
+    "runtime": snap,
+    "preflight_now": _safe("preflight", lambda: run_preflight(_loop, _cfg)),
+    "milestone_now": _safe("milestone", lambda: compute_live_milestone(_loop, _cfg)),
+    "backtest_queue": _safe("backtest_queue", lambda: backtest_status(_cfg)),
+    "live_audit": _safe("live_audit", lambda: run_live_pnl_audit(_loop, _cfg)),
+    "trade_timing": _safe("trade_timing", lambda: compute_btc_live_trade_timing(_loop, _cfg)),
+  }
+
+
+@app.get("/api/pnl-first/four-k-week-plan/revision")
+def pnl_first_four_k_week_plan_revision(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.four_k_week_plan import four_k_week_plan_revision_cached
+
+  try:
+    return four_k_week_plan_revision_cached(_loop, _cfg)
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
+
+
+@app.get("/api/pnl-first/four-k-week-plan")
+def pnl_first_four_k_week_plan(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.four_k_week_plan import build_four_k_week_plan_report_cached
+
+  try:
+    return build_four_k_week_plan_report_cached(_loop, _cfg)
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
+
+
+@app.get("/api/pnl-first/kalshi-live-report")
+def pnl_first_kalshi_live_report(
+  asset: str = Query(default="btc", pattern="^(btc|eth)$"),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.kalshi_live_report import build_kalshi_live_report
+
+  return build_kalshi_live_report(_loop, _cfg, asset=asset)
+
+
+@app.get("/api/pnl-first/regroup-milestones")
+def pnl_first_regroup_milestones(_: None = Depends(_session_user)):
+  from src.trading.pnl_first_health_watchdog import load_regroup_milestones
+
+  return load_regroup_milestones(_cfg)
+
+
+@app.get("/api/pnl-first/paper-ab")
+def pnl_first_paper_ab(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.pnl_first_paper_ab import paper_ab_output_path, write_paper_ab_report
+
+  try:
+    return write_paper_ab_report(_loop, _cfg)
+  except Exception as exc:
+    path = paper_ab_output_path(_cfg)
+    if path.exists():
+      import json
+
+      stale = json.loads(path.read_text(encoding="utf-8"))
+      stale["stale_fallback"] = True
+      stale["refresh_error"] = f"{type(exc).__name__}:{exc}"
+      return stale
+    raise HTTPException(500, f"paper_ab report failed: {exc}") from exc
+
+
+@app.get("/api/pnl-first/health")
+def pnl_first_health(_: None = Depends(_session_user)):
+  import json
+  from pathlib import Path
+
+  path = Path(os.getenv("DATA_DIR", "data")) / "logs" / "pnl_first_manager" / "health_latest.json"
+  if path.exists():
+    return json.loads(path.read_text(encoding="utf-8"))
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.pnl_first_health_watchdog import run_health_watchdog
+
+  return run_health_watchdog(_loop, _cfg)
+
+
+@app.get("/api/pnl-first/epoch-reconcile")
+def pnl_first_epoch_reconcile(
+  asset: str = Query(default="btc", pattern="^(btc|eth)$"),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.epoch_reconcile import build_epoch_reconcile_report
+
+  return build_epoch_reconcile_report(_loop, _cfg, asset=asset)
+
+
 @app.get("/api/bots/hourly-live-trial-compare")
 def bots_hourly_live_trial_compare(
-  asset: str = Query(default="btc", pattern="^(btc|eth)$"),
+  asset: str = Query(default="btc", pattern="^(btc|eth|spx|ndx)$"),
   limit_hours: int = Query(default=24, ge=1, le=72),
   _: None = Depends(_session_user),
 ):
@@ -1075,20 +1309,80 @@ def bots_hourly_live_trial_compare(
     raise HTTPException(503, "Service starting")
   from src.trading.hourly_live_trial_compare import build_hourly_live_trial_compare
   from src.trading.hourly_live_trial_align import HourlyLiveTrialAlignConfig
+  from src.trading.compare_paper_twins import compare_store_kinds, ensure_compare_paper_twins
+  from src.trading.probe_24h import effective_compare_stats_epoch_at, ensure_probe_stats_epoch
   from src.assets import asset_cfg
 
-  live_store = _loop.hourly_bot_store(asset, kind="hourly")
-  trial_store = _loop.hourly_bot_store(asset, kind="hourly_trial")
-  acfg = asset
-  cfg = asset_cfg(_cfg, acfg)
+  # Keep fair paper twins armed so matched hours can populate.
+  if asset in ("btc", "eth"):
+    try:
+      ensure_compare_paper_twins(_loop, _cfg)
+      ensure_probe_stats_epoch(_loop, _cfg)
+    except Exception:
+      log.exception("compare_paper_twins ensure failed for %s", asset)
+
+  live_kind, trial_kind = compare_store_kinds(asset)
+  live_store = _loop.hourly_bot_store(asset, kind=live_kind)
+  trial_store = _loop.hourly_bot_store(asset, kind=trial_kind)
+  cfg = asset_cfg(_cfg, asset)
   align = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
-  return build_hourly_live_trial_compare(
-    live_store,
-    trial_store,
-    asset=asset,
-    limit_hours=limit_hours,
-    pair_window_seconds=align.compare_pair_window_seconds,
-  )
+  stats_epoch_at = effective_compare_stats_epoch_at(live_store, _cfg)
+  try:
+    out = build_hourly_live_trial_compare(
+      live_store,
+      trial_store,
+      asset=asset,
+      limit_hours=limit_hours,
+      live_kind=live_kind,
+      trial_kind=trial_kind,
+      pair_window_seconds=align.compare_pair_window_seconds,
+      stats_epoch_at=stats_epoch_at,
+    )
+    trial_settings = trial_store.get_settings()
+    out["paper_twin"] = {
+      "kind": trial_kind,
+      "enabled": bool(trial_settings.enabled),
+      "mode": trial_settings.mode,
+      "continuous": bool(trial_settings.continuous),
+      "max_spend_per_hour_usd": trial_settings.max_spend_per_hour_usd,
+    }
+    return out
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
+
+
+@app.get("/api/bots/slot15-live-trial-compare")
+def bots_slot15_live_trial_compare(
+  asset: str = Query(default="eth", pattern="^(btc|eth)$"),
+  limit_slots: int = Query(default=24, ge=1, le=48),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if asset == "eth" and _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  from src.trading.hourly_live_trial_align import HourlyLiveTrialAlignConfig
+  from src.trading.hourly_live_trial_compare import build_slot15_live_trial_compare
+  from src.assets import asset_cfg
+
+  live_store = _loop.slot15_bot_store(asset)
+  trial_store = _loop.slot15_trial_bot_store(asset)
+  acfg = _loop._acfg_15m(asset) if asset == "btc" else (_loop._eth_cfg or asset_cfg(_cfg, asset))
+  align = HourlyLiveTrialAlignConfig.from_cfg(acfg, kind="slot15")
+  try:
+    return build_slot15_live_trial_compare(
+      live_store,
+      trial_store,
+      asset=asset,
+      limit_slots=limit_slots,
+      pair_window_seconds=align.compare_pair_window_seconds,
+    )
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
 
 
 @app.post("/api/admin/bots/auto-tune")
@@ -1121,6 +1415,23 @@ def eth_hourly_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
   tab = _loop._hourly_tab_for_bot_status("eth")
   status = _loop.hourly_bot_status("eth", tab if tab and tab.get("ok") else None)
   return {"sync": result, "bot": status}
+
+
+@app.get("/api/eth/hourly/bot/live-reconcile")
+def eth_hourly_bot_live_reconcile(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.hourly_live_reconcile("eth")
+
+
+@app.get("/api/eth/hourly/bot/kalshi-fill-summary")
+def eth_hourly_bot_kalshi_fill_summary(
+  since: str | None = Query(default=None, description="ISO-8601 UTC lower bound (defaults to stats_epoch_at)"),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _hourly_kalshi_fill_summary_response("eth", since)
 
 
 @app.post("/api/eth/hourly/bot/settings")
@@ -1185,6 +1496,57 @@ def eth_hourly_bot_trades(
   if event_ticker:
     out["hour_summary"] = store.hour_interval_summary(event_ticker)
   return out
+
+
+@app.get("/api/eth/hourly-live/bot")
+def eth_hourly_live_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  tab = _loop._hourly_tab_for_bot_status("eth")
+  return _loop.hourly_live_bot_status(
+    "eth",
+    tab if tab and tab.get("ok") else None,
+    lightweight=lightweight,
+  )
+
+
+@app.get("/api/eth/hourly-live/bot/trades")
+def eth_hourly_live_bot_trades(
+  limit: int = Query(default=100, le=200),
+  event_ticker: str | None = Query(default=None),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  store = _loop.hourly_live_bot_store("eth")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["hour_summary"] = store.hour_interval_summary(event_ticker)
+  return out
+
+
+@app.get("/api/eth/hourly-live/bot/live-reconcile")
+def eth_hourly_live_bot_live_reconcile(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  return _loop.hourly_live_reconcile("eth", kind="hourly_live")
+
+
+@app.post("/api/eth/hourly-live/bot/sync-kalshi-fills")
+def eth_hourly_live_bot_sync_kalshi_fills(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  result = _loop.sync_hourly_kalshi_fills("eth", kind="hourly_live", force=True)
+  tab = _loop._hourly_tab_for_bot_status("eth")
+  status = _loop.hourly_live_bot_status(
+    "eth",
+    tab if tab and tab.get("ok") else None,
+  )
+  return {"sync": result, "bot": status}
 
 
 @app.get("/api/hourly-v2/bot")
@@ -1749,13 +2111,20 @@ def slot15_bot_trades(
 
 
 @app.get("/api/eth/15m/bot")
-def eth_slot15_bot_status(_: None = Depends(_session_user)):
+def eth_slot15_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   if _loop.eth_calibration is None:
     raise HTTPException(503, "ETH 15m disabled")
-  tab = _loop._slot15_tab("eth")
-  return _loop.slot15_bot_status("eth", tab if tab.get("ok") else None)
+  tab = _loop._slot15_tab_cached("eth")
+  return _loop.slot15_bot_status(
+    "eth",
+    tab if tab.get("ok") else None,
+    lightweight=lightweight,
+  )
 
 
 @app.post("/api/eth/15m/bot/settings")
@@ -1827,6 +2196,114 @@ def eth_slot15_bot_trades(
   if _loop.eth_calibration is None:
     raise HTTPException(503, "ETH 15m disabled")
   store = _loop.slot15_bot_store("eth")
+  trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+  out: dict[str, Any] = {"trades": trades}
+  if event_ticker:
+    out["slot_summary"] = store.slot_interval_summary(event_ticker)
+  return out
+
+
+@app.get("/api/eth/15m-trial/bot")
+def eth_slot15_trial_bot_status(
+  lightweight: bool = Query(default=True),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  tab = _loop._slot15_tab_cached("eth")
+  return _loop.slot15_trial_bot_status(
+    "eth",
+    tab if tab.get("ok") else None,
+    lightweight=lightweight,
+  )
+
+
+@app.post("/api/eth/15m-trial/bot/settings")
+async def eth_slot15_trial_bot_settings(request: Request, _: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  body = await request.json()
+  store = _loop.slot15_trial_bot_store("eth")
+  from src.assets import asset_cfg
+
+  eth_cfg = _loop._eth_cfg or asset_cfg(_cfg, "eth")
+  _apply_slot15_trial_bot_settings(store, body, cfg=eth_cfg)
+  tab = _loop._slot15_tab("eth")
+  return _loop.slot15_trial_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/15m-trial/bot/reset-bankroll")
+def eth_slot15_trial_bot_reset_bankroll(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  store = _loop.slot15_trial_bot_store("eth")
+  settings = store.get_settings()
+  store.reset_paper_bankroll(settings.max_spend_per_slot_usd)
+  tab = _loop._slot15_tab("eth")
+  return _loop.slot15_trial_bot_status("eth", tab if tab.get("ok") else None)
+
+
+@app.post("/api/eth/15m-trial/bot/fresh-start")
+def eth_slot15_trial_bot_fresh_start(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _slot15_bot_fresh_start(
+    _loop.slot15_trial_bot_store("eth"),
+    lambda: _loop._slot15_tab("eth"),
+    "eth",
+    kind="slot15_trial",
+    status_fn=_loop.slot15_trial_bot_status,
+  )
+
+
+@app.post("/api/eth/15m-trial/bot/clear-history")
+def eth_slot15_trial_bot_clear_history(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _slot15_bot_clear_history(
+    _loop.slot15_trial_bot_store("eth"),
+    lambda: _loop._slot15_tab("eth"),
+    "eth",
+    kind="slot15_trial",
+    status_fn=_loop.slot15_trial_bot_status,
+  )
+
+
+@app.post("/api/eth/15m-trial/bot/override-daily-cap")
+def eth_slot15_trial_bot_override_daily_cap(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  return _override_daily_cap_slot15(
+    "eth",
+    kind="slot15_trial",
+    store=_loop.slot15_trial_bot_store("eth"),
+    status_fn=_loop.slot15_trial_bot_status,
+  )
+
+
+@app.get("/api/eth/15m-trial/bot/trades")
+def eth_slot15_trial_bot_trades(
+  limit: int = Query(default=100, le=200),
+  event_ticker: str | None = Query(default=None),
+  _: None = Depends(_session_user),
+):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  if _loop.eth_calibration is None:
+    raise HTTPException(503, "ETH 15m disabled")
+  store = _loop.slot15_trial_bot_store("eth")
   trades = store.list_trades(limit=limit, event_ticker=event_ticker)
   out: dict[str, Any] = {"trades": trades}
   if event_ticker:
@@ -1993,34 +2470,35 @@ def admin_snapshot_stats(
 
 @app.post("/api/admin/fresh-start-all-paper-bots")
 def admin_fresh_start_all_paper_bots(_: None = Depends(_session_user)):
-  """Clear trade logs and reset bankroll for every paper bot (BTC/ETH hourly + 15m)."""
+  """Clear trade logs for every bot; paper bots also reset bankroll (live bots: log wipe only)."""
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  results: dict[str, Any] = {}
-  for asset in ("btc", "eth"):
-    h_store = _loop.hourly_bot_store(asset)
-    h_settings = h_store.get_settings()
-    if h_settings.mode == "paper":
-      results[f"hourly_{asset}"] = h_store.fresh_start_paper(h_settings.max_spend_per_hour_usd)
-    ht_store = _loop.hourly_trial_bot_store(asset)
-    ht_settings = ht_store.get_settings()
-    if ht_settings.mode == "paper":
-      results[f"hourly_trial_{asset}"] = ht_store.fresh_start_paper(ht_settings.max_spend_per_hour_usd)
-    if asset == "btc":
-      for trial_kind, store_fn in (
-        ("hourly_trial_rally", _loop.hourly_trial_rally_bot_store),
-        ("hourly_trial_soft", _loop.hourly_trial_soft_bot_store),
-        ("hourly_trial_mech", _loop.hourly_trial_mech_bot_store),
-      ):
-        t_store = store_fn(asset)
-        t_settings = t_store.get_settings()
-        if t_settings.mode == "paper":
-          results[f"{trial_kind}_{asset}"] = t_store.fresh_start_paper(t_settings.max_spend_per_hour_usd)
-    s_store = _loop.slot15_bot_store(asset)
-    s_settings = s_store.get_settings()
-    if s_settings.mode == "paper":
-      results[f"slot15_{asset}"] = s_store.fresh_start_paper(s_settings.max_spend_per_slot_usd)
+  from src.trading.bot_fresh_start_all import fresh_start_all_bot_stores
+
+  results = fresh_start_all_bot_stores(_loop, _cfg)
   return {"status": "ok", "reset": results}
+
+
+@app.post("/api/admin/set-stats-epoch")
+def admin_set_stats_epoch(
+  at: str = Query(
+    default="2026-07-04T16:59:00+00:00",
+    description="ISO-8601 instant; stats count from here forward (default Jul 4 2026 12:59 PM EDT)",
+  ),
+  _: None = Depends(_session_user),
+):
+  """Backdate stats window on all bot DBs without clearing trades."""
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.bot_fresh_start_all import set_stats_epoch_all_stores
+
+  try:
+    parsed = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+  except ValueError as exc:
+    raise HTTPException(400, f"Invalid at timestamp: {at}") from exc
+  at_iso = parsed.astimezone(timezone.utc).isoformat()
+  results = set_stats_epoch_all_stores(_loop, at_iso)
+  return {"status": "ok", "stats_epoch_at": at_iso, "stores": results}
 
 
 @app.post("/api/admin/reset-stats")
@@ -2110,4 +2588,13 @@ register_index_hourly_routes(
   lambda: _cfg,
   _session_user,
   _apply_hourly_bot_settings,
+)
+
+from src.api.sports_routes import register_sports_routes
+
+register_sports_routes(
+  app,
+  lambda: _loop,
+  lambda: _cfg,
+  _session_user,
 )

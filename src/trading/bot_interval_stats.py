@@ -36,7 +36,11 @@ def compute_interval_performance(
   mode_params: list[Any] = []
   if mode:
     mode_clause = " AND mode = ?"
-    mode_params = [mode]
+    mode_params.append(mode)
+
+  from src.trading.bot_runtime import event_in_stats_epoch, stats_epoch_at
+
+  epoch = stats_epoch_at(conn)
 
   rows = conn.execute(
     f"""
@@ -47,7 +51,7 @@ def compute_interval_performance(
       COALESCE(SUM(CASE WHEN action = 'enter' AND status = 'filled' THEN 1 ELSE 0 END), 0) AS enter_count,
       MIN(created_at) AS first_trade_at
     FROM bot_trades
-    WHERE action NOT IN ('auto_stop', 'paper_refill'){mode_clause}
+    WHERE action NOT IN ('auto_stop', 'paper_refill', 'live_hour_refill'){mode_clause}
     GROUP BY event_ticker
     ORDER BY first_trade_at ASC
     """,
@@ -65,11 +69,17 @@ def compute_interval_performance(
 
   for row in rows:
     event = str(row["event_ticker"])
+    if not event_in_stats_epoch(
+      event,
+      epoch,
+      first_trade_at=row["first_trade_at"],
+    ):
+      continue
     realized = round(float(row["realized_pnl_usd"] or 0), 2)
     exit_count = int(row["exit_count"] or 0)
     enter_count = int(row["enter_count"] or 0)
-    if exit_count > 0 and realized == 0 and realized_pnl_fn is not None:
-      realized = realized_pnl_fn(event)
+    if exit_count > 0 and realized_pnl_fn is not None:
+      realized = round(float(realized_pnl_fn(event)), 2)
 
     outcome = _classify_interval(realized, exit_count=exit_count, enter_count=enter_count)
     if event == current_event_ticker:
@@ -110,4 +120,5 @@ def compute_interval_performance(
     "interval_profit_usd": round(profit_pnl_usd, 2),
     "interval_loss_usd": round(loss_pnl_usd, 2),
     "current_interval": current_interval,
+    "stats_epoch_at": epoch,
   }

@@ -262,6 +262,7 @@
       <button type="button" class="tab" id="tab-ndx-hourly" data-panel="panel-ndx-hourly" onclick="switchTab('ndx-hourly')">NDX Hourly</button>
       <button type="button" class="tab" id="tab-trials" data-panel="panel-trials" onclick="switchTab('trials')">Trials</button>
       <button type="button" class="tab" id="tab-hourly-v2" data-panel="panel-hourly-v2" onclick="switchTab('hourly-v2')">Hourly V2</button>
+      <button type="button" class="tab" id="tab-sports" data-panel="panel-sports" onclick="switchTab('sports')">Sports</button>
     </nav>
 
     <div id="bot-risk-banner" class="card" style="display:none;margin-bottom:.75rem;border-color:var(--warn);background:rgba(255,180,0,.08)"></div>
@@ -272,9 +273,20 @@
       <div id="bot-performance-report"><p class="muted">Loading…</p></div>
     </details>
 
+    <details class="card" id="epoch-reconcile-card" open>
+      <summary style="cursor:pointer;font-weight:600">Epoch reconcile · bot vs Kalshi P&amp;L</summary>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Per-hour realized P&amp;L since <code>phase_started_at</code> / stats epoch. Compares bot trade log exits to Kalshi fill pairing. Drift highlights reconciliation gaps.</p>
+      <div class="compare-toolbar">
+        <span class="muted" style="font-size:.72rem">Asset:</span>
+        <button type="button" class="btn-secondary epoch-reconcile-asset-btn active" data-asset="btc" onclick="setEpochReconcileAsset('btc')">BTC</button>
+        <button type="button" class="btn-secondary epoch-reconcile-asset-btn" data-asset="eth" onclick="setEpochReconcileAsset('eth')">ETH</button>
+      </div>
+      <div id="epoch-reconcile-report"><p class="muted">Loading…</p></div>
+    </details>
+
     <details class="card" id="hourly-live-trial-compare-card" open>
       <summary style="cursor:pointer;font-weight:600">Live hourly vs paper trial · hour-by-hour</summary>
-      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Side-by-side comparison for the <strong>same Kalshi hour</strong> (<code>event_ticker</code>): live BTC/ETH hourly bot (<strong>mode=live</strong>) vs paper <strong>hourly trial</strong>. Shows entries, exit reasons, and realized net P&amp;L per hour.</p>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Side-by-side for the <strong>same Kalshi hour</strong> (<code>event_ticker</code>). <strong>BTC</strong> live hourly vs paper <strong>Trial Mech</strong>. <strong>ETH</strong> live hourly vs paper <strong>standard trial</strong>. Entries, exit reasons, and realized net P&amp;L per hour.</p>
       <div class="compare-toolbar">
         <span class="muted" style="font-size:.72rem">Asset:</span>
         <button type="button" class="btn-secondary compare-asset-btn active" data-asset="btc" onclick="setCompareAsset('btc')">BTC</button>
@@ -283,35 +295,109 @@
       <div id="hourly-live-trial-compare"><p class="muted">Loading…</p></div>
     </details>
 
+    <details class="card" id="four-k-week-plan-card" open>
+      <summary style="cursor:pointer;font-weight:600">$4k/week plan · Week 1</summary>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Separate P&amp;L lanes: <strong>Track A</strong> ETH hourly probe, <strong>Track B shadow</strong> (terminal 15m on hourly strikes, no orders), <strong>Slot15 ETH</strong> paper (KXETH15M — separate product).</p>
+      <div id="four-k-week-plan"><p class="muted">Loading…</p></div>
+    </details>
+
     <details class="card guide-card" id="app-guide">
-      <summary>Guide · tabs, predictions &amp; terminology</summary>
+      <summary>Guide · dashboard, bots, buttons &amp; terminology</summary>
       <div class="guide-body">
-        <p>This dashboard shows <strong>model forecasts</strong> and <strong>Kalshi mispricing</strong> for BTC (and ETH on the hourly tab). It does <strong>not</strong> place trades. All times are <strong>Eastern (ET)</strong> unless noted.</p>
+        <p>This dashboard runs <strong>server-side bots</strong> (paper or live on Kalshi) plus <strong>model forecasts</strong>. All times are <strong>Eastern (ET)</strong>. Expand sections below for each area.</p>
+
+        <h3>Top of page — header &amp; global actions</h3>
+        <dl class="guide-glossary">
+          <dt><strong>Refresh</strong></dt>
+          <dd>Reloads the active tab (predictions, bot status, health). Auto-runs every ~10s.</dd>
+          <dt><strong>Sign out</strong></dt>
+          <dd>Ends your session (shared password gate).</dd>
+          <dt><strong>Reset</strong> (zoom)</dt>
+          <dd>Resets page zoom to 100%, not bot data.</dd>
+          <dt><strong>Kalshi cash</strong></dt>
+          <dd>Your linked account balance (live trading). Bot sizing still uses <strong>max at-risk $/hour</strong> or <strong>$/slot</strong>, not your full wallet.</dd>
+          <dt><strong>Fresh start all bots</strong> <span class="muted" style="font-size:.72rem">(footer of status strip)</span></dt>
+          <dd>Clears <strong>every</strong> bot trade log and resets each <strong>paper</strong> bankroll. <strong>Live</strong> bots: log wipe only — open Kalshi positions are unchanged. Use after a code release for clean stats.</dd>
+        </dl>
+
+        <h3>Paper bot performance · calibration report</h3>
+        <p>Collapsed panel under the header. Shows closed round-trip stats from bot SQLite logs — <strong>not</strong> the same as hourly <em>model</em> calibration further down each tab.</p>
+        <ul>
+          <li><strong>Scoped to your tab</strong> — ETH Hourly shows ETH bots only; BTC Hourly shows BTC; 15m tabs show that asset’s slot bot.</li>
+          <li><strong>Experiment table</strong> — P&amp;L since <code>experiment_start_at</code> in config (current code era). Main hourly + trial bots side by side.</li>
+          <li><strong>Rolling windows (1h–48h)</strong> — Exits in that time window from the trade log. After a fresh start, these stay near zero.</li>
+          <li><strong>60d / per-bot blocks</strong> — Entry-price buckets, spread buckets, auto-tune notes. Trials are labeled and excluded from “main” totals.</li>
+          <li><strong>Ask-edge gate</strong> — Bot only enters when model probability beats Kalshi ask by N cents after fees.</li>
+        </ul>
+
+        <h3>Live hourly vs paper trial · hour-by-hour</h3>
+        <p>On <strong>BTC Hourly</strong> and <strong>ETH Hourly</strong> tabs only. Compares the <strong>same Kalshi hour</strong> (<code>event_ticker</code>) for:</p>
+        <ul>
+          <li><strong>BTC</strong> — live hourly bot vs paper <strong>Trial Mech</strong></li>
+          <li><strong>ETH</strong> — live hourly bot vs paper <strong>standard trial</strong></li>
+        </ul>
+        <p class="muted" style="font-size:.78rem">Use the <strong>BTC / ETH</strong> toggle in the panel. On 15m tabs, slot-level compare is in the ETH 15m bot section instead.</p>
+
+        <h3>Bot card — controls on every auto-bet panel</h3>
+        <dl class="guide-glossary">
+          <dt><strong>Auto-bet</strong></dt>
+          <dd>Master ON/OFF. When ON, the server polls Kalshi every ~5–10s and enters/exits without the browser open.</dd>
+          <dt><strong>Paper / Live</strong></dt>
+          <dd><strong>Paper</strong> = simulated fills and bankroll. <strong>Live</strong> = real Kalshi orders (requires API keys + live password prompt).</dd>
+          <dt><strong>Max at-risk $/hour</strong> (hourly) or <strong>$/slot</strong> (15m)</dt>
+          <dd>Cap on concurrent exposure <em>and</em> (usually) total $ entered per hour/slot. <strong>Auto-refill</strong> (live): winning streak extends effective cap; paper: refills bankroll when empty.</dd>
+          <dt><strong>STRONG / ACTIONABLE</strong></dt>
+          <dd>Filter entries. <strong>Both OFF</strong> = “free mode” (any actionable signal; regime advisory on hourly).</dd>
+          <dt><strong>Use profits</strong></dt>
+          <dd>Live: add realized hour P&amp;L to deployable budget (separate from auto-refill win boost).</dd>
+          <dt><strong>Fresh start</strong> <span class="muted" style="font-size:.72rem">(paper)</span></dt>
+          <dd>Clears trade log, open positions in DB, cooldowns, tuning state; resets paper bankroll to max cap. Settings (mode, caps) kept.</dd>
+          <dt><strong>Clear history</strong> <span class="muted" style="font-size:.72rem">(live)</span></dt>
+          <dd>Same log wipe as fresh start for live — does <strong>not</strong> close Kalshi positions. Use when dashboard log is stale vs exchange.</dd>
+          <dt><strong>Reset bankroll</strong> <span class="muted" style="font-size:.72rem">(paper)</span></dt>
+          <dd>Resets paper cash to max cap without deleting trade history (rare; prefer fresh start).</dd>
+          <dt><strong>Override daily cap</strong></dt>
+          <dd>One-click lift of the $50/day loss stop for this bot (resets at midnight NY).</dd>
+          <dt><strong>Interval record (live/paper)</strong></dt>
+          <dd>Win/loss/breakeven <strong>per hour or slot</strong> from closed P&amp;L. Counts only trades since last <strong>Fresh start</strong> or <strong>Clear history</strong>. Breakeven = net P&amp;L within ±0.5¢ for that hour. Live: Kalshi sync no longer backfills hours before fresh start.</dd>
+          <dt><strong>Sync fills</strong> <span class="muted" style="font-size:.72rem">(live)</span></dt>
+          <dd>Pull recent Kalshi fills into the log; fixes reconcile drift. Respects fresh-start cutoff — won’t re-import old hours as breakevens.</dd>
+        </dl>
 
         <h3>The tabs</h3>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.5rem">Main tabs show live hourly bots and predictions. The <strong>Trials</strong> tab holds parallel paper benchmark bots (different entry mechanics, same leg exits).</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.5rem">Main tabs = production bots + predictions. <strong>Trials</strong> = parallel paper benchmarks. <strong>Hourly V2</strong> = isolated path-memory experiment.</p>
         <div class="guide-tabs">
           <div class="guide-tab-box">
             <h4>BTC 15m</h4>
-            <p><strong>Kalshi KXBTC15M</strong> — will BTC finish <em>above or below</em> its price at each :00, :15, :30, :45 open?</p>
+            <p><strong>KXBTC15M</strong> — will BTC finish <em>above or below</em> its price at each :00, :15, :30, :45 open?</p>
             <p>Signals: <strong>LONG</strong> / <strong>SHORT</strong> / <strong>NO TRADE</strong>, plus mid-slot <strong>LATE</strong>, <strong>2nd Chance</strong>, and <strong>FLIP</strong>. Settlement uses <strong>BRTI</strong> vs slot t=0.</p>
             <p class="muted" style="font-size:.75rem">Not per-contract BUY YES/NO — that vocabulary is on the hourly tabs.</p>
           </div>
           <div class="guide-tab-box">
             <h4>ETH 15m</h4>
-            <p><strong>Kalshi KXETH15M</strong> — same slot structure for ETH. Settlement uses <strong>ERTI</strong> (CF Benchmarks Ethereum RTI) vs slot t=0.</p>
-            <p>Same LONG/SHORT/NO TRADE + LATE / 2nd Chance / FLIP signals as BTC 15m. Live price via ERTI (Kalshi) or Coinbase ETH/USD fallback.</p>
+            <p><strong>KXETH15M</strong> — same slot structure for ETH. Settlement uses <strong>ERTI</strong> (CF Benchmarks Ethereum RTI) vs slot t=0.</p>
+            <p>Includes optional <strong>15m trial</strong> bot and live-vs-trial slot compare when trial is enabled.</p>
           </div>
           <div class="guide-tab-box">
             <h4>BTC Hourly</h4>
-            <p><strong>KXBTCD</strong> thresholds (above/below strikes) + <strong>KXBTC</strong> range bands ($20 “stall” buckets). Settles each hour on <strong>BRTI</strong>.</p>
-            <p>Hour-open snapshot at <strong>:00 ET</strong>; official pick <strong>locks at :05 ET</strong>. <strong>Locked @ :05</strong> is scored; <strong>Hour open @ :00</strong> is a frozen preview; <strong>Live</strong> updates with the market.</p>
-            <p><strong>Strategy 1</strong> = threshold table. <strong>Strategy 2</strong> = range bands near forecast μ.</p>
+            <p><strong>KXBTCD</strong> thresholds + <strong>KXBTC</strong> range bands. Settles each hour on <strong>BRTI</strong>.</p>
+            <p>Hour-open at <strong>:00 ET</strong>; official lock at <strong>:05 ET</strong>. Strategy 1 = thresholds; Strategy 2 = range bands.</p>
           </div>
           <div class="guide-tab-box">
             <h4>ETH Hourly</h4>
-            <p>Same layout as BTC Hourly for <strong>KXETHD</strong> / <strong>KXETH</strong>. Settlement index is <strong>ERTI</strong> (CF Benchmarks Ethereum RTI).</p>
-            <p>Hour-open at <strong>:00 ET</strong>, official lock at <strong>:05 ET</strong>. Same ML + structure blend as BTC hourly (trained on ETH candles nightly). Paper bot thresholds auto-tune after 7+ days of trades.</p>
+            <p><strong>KXETHD</strong> / <strong>KXETH</strong> on <strong>ERTI</strong>. Same layout as BTC hourly; live vs <strong>standard trial</strong> compare in the top panel.</p>
+          </div>
+          <div class="guide-tab-box">
+            <h4>SPX / NDX Hourly</h4>
+            <p>Index hourly ladders during US RTH (9:30–16:00 ET). Mechanics aligned with ETH hourly live. Paper trials for benchmarking.</p>
+          </div>
+          <div class="guide-tab-box">
+            <h4>Trials</h4>
+            <p>BTC: Rally, Soft, Mech trial bots. ETH: standard trial. Same entries as main hourly, different exit profiles (leg TP/stop vs thesis exits).</p>
+          </div>
+          <div class="guide-tab-box">
+            <h4>Hourly V2</h4>
+            <p>Separate predictor (path memory, no v1 LightGBM blend). Own DB, paper bot, calibration — compare accuracy vs main hourly here.</p>
           </div>
         </div>
 
@@ -323,7 +409,7 @@
           <li><strong>Best edge</strong> — Largest |model − Kalshi| gap among nearby contracts.</li>
           <li><strong>Hour open @ :00</strong> — Snapshot at top of hour; frozen preview until :05 official lock.</li>
           <li><strong>Locked @ :05</strong> — Official snapshot for calibration; does not move when the market drifts.</li>
-          <li><strong>Hourly calibration</strong> — After settle, compares locked picks to actual index (Brier, BUY YES/NO hit rate, in-band rate for range bands).</li>
+          <li><strong>Hourly calibration</strong> (per tab) — After settle, compares locked picks to actual index (Brier, BUY hit rate). Different from the top <em>paper bot performance</em> panel.</li>
         </ul>
 
         <h3>Contract signals (BTC &amp; ETH hourly tables)</h3>
@@ -364,6 +450,13 @@
           <li><strong>In-band hit rate</strong> — % of hours settle index landed inside the locked range band.</li>
           <li><strong>All BUY-signal bands @ lock</strong> — Every band with BUY YES or BUY NO frozen in the near-μ slice at :05 (can be multiple per hour).</li>
           <li><strong>Epoch / all-time</strong> — Current scoring window vs archived history (15m tab); hourly uses resolved event rows since last reset.</li>
+        </ul>
+
+        <h3>Performance &amp; errors</h3>
+        <ul>
+          <li><strong>Health: Timeout after …ms</strong> — Server busy (often Kalshi API or SQLite lock). Wait and hit Refresh; panels load independently.</li>
+          <li><strong>Loading…</strong> on a panel — That API is still running or failed silently; check the red error strip or Refresh.</li>
+          <li><strong>429 / circuit breaker</strong> — Kalshi rate limit; bot entries pause briefly; banner may show at top.</li>
         </ul>
 
         <div class="guide-note">Guidance only — not financial advice. Kalshi settlement uses CF Benchmarks indices (BRTI / ERTI). Past calibration does not guarantee future results.</div>
@@ -492,10 +585,20 @@
 
     <div id="panel-eth-15m" style="display:none">
     <div class="card" id="eth-slot15-bot-card">
-      <h2>ETH 15m auto-bet</h2>
-      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> (browser not required when Auto-bet is ON) — continuous enter/exit within your <strong>max at-risk $/slot</strong>. Uses LONG/SHORT, late entry, and flip signals from the monitor. <strong>Both filters off</strong> = free mode.</p>
+      <h2>ETH 15m auto-bet (live)</h2>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> (browser not required when Auto-bet is ON) — live entries aligned with paper via <strong>live_trial_align</strong> (cross spread when edge allows). Uses LONG/SHORT, late entry, and flip signals.</p>
       <div id="eth-slot15-bot"><p class="muted">Loading…</p></div>
     </div>
+    <div class="card" id="eth-slot15-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
+      <h2>ETH 15m Trial (paper)</h2>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper shadow for ETH 15m live — same slot signals and entries, pure paper fills (+3¢ / −4¢ leg exits). Enable Auto-bet for A/B comparison below.</p>
+      <div id="eth-slot15-trial-bot"><p class="muted">Loading…</p></div>
+    </div>
+    <details class="card" id="eth-slot15-live-trial-compare-card" open>
+      <summary style="cursor:pointer;font-weight:600">ETH 15m live vs paper trial · slot-by-slot</summary>
+      <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Same 15m slot (<code>slot_key</code>) — live ETH 15m vs paper trial bot.</p>
+      <div id="eth-slot15-live-trial-compare"><p class="muted">Loading…</p></div>
+    </details>
     <div class="card ref-override" id="eth15-ref-override-panel">
       <label for="eth15-ref-override-input">Override Kalshi t=0 (optional)</label>
       <div class="ref-override-row">
@@ -578,9 +681,14 @@
 
     <div id="panel-eth-hourly" style="display:none">
       <div class="card" id="eth-hourly-bot-card">
-        <h2>ETH hourly auto-bet</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON (browser not required) — continuous enter/exit within your <strong>max at-risk $/hour</strong> (open exposure only; exits free budget). <strong>Paper/Live and Auto-bet are independent</strong> from BTC Hourly. <strong>Cumulative $ entered</strong> can exceed your cap when the bot rotates through many round-trips. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
+        <h2>ETH hourly auto-bet (paper)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON (browser not required) — continuous enter/exit within your <strong>max at-risk $/hour</strong> (open exposure only; exits free budget). <strong>Paper arm</strong> of the dual ETH experiment — live mirror panel below uses identical mechanics on Kalshi. Uses <strong>standard trial</strong> live guards (stricter than BTC Mech) — see bot panel for active filters. <strong>Cumulative $ entered</strong> can exceed your cap when the bot rotates through many round-trips. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
         <div id="eth-hourly-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="eth-hourly-live-bot-card">
+        <h2>ETH hourly live mirror</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same P&amp;L-first hourly mechanics as the paper bot above, executed <strong>live on Kalshi</strong>. Armed by the <strong>P&amp;L-first manager</strong> (<code>eth.hourly.bot.live_mirror</code>) — settings are read-only here. Separate trade log and stats epoch from paper (Jul 10 06:45 UTC). Kalshi sync imports real fills into this log.</p>
+        <div id="eth-hourly-live-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="eth-hourly-guide-card">
         <h2>How to read this tab</h2>
@@ -622,9 +730,19 @@
     <div id="panel-spx-hourly" style="display:none">
       <div class="card" id="spx-hourly-bot-card">
         <h2>SPX hourly auto-bet (KXINXU)</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live S&amp;P 500 hourly threshold ladder. US RTH only (9:30–16:00 ET). Price via ^GSPC.</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live S&amp;P 500 hourly — same entry/exit mechanics as <strong>ETH Hourly Live</strong> (standard trial align). US RTH only (9:30–16:00 ET). Price via ^GSPC.</p>
         <div id="spx-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="spx-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
+        <h2>SPX Hourly Trial (paper)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper benchmark for SPX live — same entries as live, <strong>15m-style leg exits</strong> (+3¢ / −4¢). Enable Auto-bet for A/B comparison below.</p>
+        <div id="spx-hourly-trial-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <details class="card" id="spx-hourly-live-trial-compare-card" open>
+        <summary style="cursor:pointer;font-weight:600">SPX live vs paper trial · hour-by-hour</summary>
+        <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Same Kalshi hour (<code>event_ticker</code>) — live SPX hourly vs paper standard trial.</p>
+        <div id="spx-hourly-live-trial-compare"><p class="muted">Loading…</p></div>
+      </details>
       <div class="card" id="spx-hourly-guide-card">
         <h2>How to read this tab</h2>
         <div id="spx-hourly-guide"><p class="muted">Loading…</p></div>
@@ -663,9 +781,19 @@
     <div id="panel-ndx-hourly" style="display:none">
       <div class="card" id="ndx-hourly-bot-card">
         <h2>NDX hourly auto-bet (KXNASDAQ100U)</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live Nasdaq-100 hourly threshold ladder. US RTH only (9:30–16:00 ET). Price via ^NDX.</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live Nasdaq-100 hourly — same entry/exit mechanics as <strong>ETH Hourly Live</strong> (standard trial align). US RTH only (9:30–16:00 ET). Price via ^NDX.</p>
         <div id="ndx-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="ndx-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
+        <h2>NDX Hourly Trial (paper)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper benchmark for NDX live — same entries as live, <strong>15m-style leg exits</strong> (+3¢ / −4¢). Enable Auto-bet for A/B comparison below.</p>
+        <div id="ndx-hourly-trial-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <details class="card" id="ndx-hourly-live-trial-compare-card" open>
+        <summary style="cursor:pointer;font-weight:600">NDX live vs paper trial · hour-by-hour</summary>
+        <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Same Kalshi hour (<code>event_ticker</code>) — live NDX hourly vs paper standard trial.</p>
+        <div id="ndx-hourly-live-trial-compare"><p class="muted">Loading…</p></div>
+      </details>
       <div class="card" id="ndx-hourly-guide-card">
         <h2>How to read this tab</h2>
         <div id="ndx-hourly-guide"><p class="muted">Loading…</p></div>
@@ -761,12 +889,73 @@
         </div>
       </div>
     </div>
+
+    <div id="panel-sports" style="display:none">
+      <div class="card">
+        <h2>Sports arb · Goal 2 covers + Goal 3 value</h2>
+        <p class="muted" style="font-size:.78rem;margin:0 0 .65rem">Shared auto-scan. Arm <strong>Goal 2</strong> and/or <strong>Goal 3</strong> live separately (password) with dedicated $ budgets. Poly CLOB auth can be ready while <code>allow_live</code> stays off. <strong>Max/scan</strong> = max live fills each scan cycle (0=∞). <strong>Max/day</strong> = max live fills per day (0=∞).</p>
+        <div id="sports-bot-status"><p class="muted">Loading…</p></div>
+        <div class="bot-row" style="margin-top:.5rem;gap:.65rem;flex-wrap:wrap;align-items:center">
+          <label class="bot-label">Auto-scan
+            <label class="switch"><input type="checkbox" id="sports-enabled" onchange="saveSportsSettings()"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="Max live fills per scan cycle (0 = unlimited)">Max/scan
+            <input type="number" id="sports-max-scan" min="0" step="1" value="0" style="width:3.5rem;margin-left:.35rem" onchange="saveSportsSettings()">
+          </label>
+          <label class="bot-label" title="Max live fills per day across strategies (0 = unlimited)">Max/day
+            <input type="number" id="sports-max-day" min="0" step="1" value="0" style="width:3.5rem;margin-left:.35rem" onchange="saveSportsSettings()">
+          </label>
+          <button type="button" class="btn-secondary" style="font-size:.72rem" onclick="sportsScanNow()">Scan now</button>
+          <button type="button" class="btn-secondary" style="font-size:.72rem" onclick="sportsFreshStart()">Fresh start</button>
+        </div>
+        <div class="bot-row" style="margin-top:.65rem;gap:.85rem;flex-wrap:wrap;align-items:center;padding:.55rem .65rem;border:1px solid rgba(255,255,255,.08);border-radius:8px">
+          <strong style="font-size:.78rem;min-width:4.5rem">Goal 2</strong>
+          <span class="muted" style="font-size:.72rem">Dutch covers</span>
+          <label class="bot-label">Live
+            <label class="switch"><input type="checkbox" id="sports-dutch-live" onchange="onSportsStrategyLiveToggle('dutch')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="Goal 2 daily live spend budget (0 = unlimited)">Budget $
+            <input type="number" id="sports-dutch-budget" min="0" step="1" value="40" style="width:4.5rem;margin-left:.35rem" onchange="saveSportsSettings()">
+          </label>
+          <label class="bot-label" title="Goal 2 max $ per opportunity (0 = unlimited)">$/opp
+            <input type="number" id="sports-dutch-stake" min="0" step="1" value="5" style="width:3.5rem;margin-left:.35rem" onchange="saveSportsSettings()">
+          </label>
+          <span class="muted" style="font-size:.68rem" id="sports-dutch-spend">spent —</span>
+        </div>
+        <div class="bot-row" style="margin-top:.45rem;gap:.85rem;flex-wrap:wrap;align-items:center;padding:.55rem .65rem;border:1px solid rgba(255,255,255,.08);border-radius:8px">
+          <strong style="font-size:.78rem;min-width:4.5rem">Goal 3</strong>
+          <span class="muted" style="font-size:.72rem">Value vs sharp</span>
+          <label class="bot-label">Live
+            <label class="switch"><input type="checkbox" id="sports-value-live" onchange="onSportsStrategyLiveToggle('value')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="Goal 3 daily live spend budget (0 = unlimited)">Budget $
+            <input type="number" id="sports-value-budget" min="0" step="1" value="40" style="width:4.5rem;margin-left:.35rem" onchange="saveSportsSettings()">
+          </label>
+          <label class="bot-label" title="Goal 3 max $ per opportunity (0 = unlimited)">$/opp
+            <input type="number" id="sports-value-stake" min="0" step="1" value="5" style="width:3.5rem;margin-left:.35rem" onchange="saveSportsSettings()">
+          </label>
+          <label class="bot-label" title="Goal 3: only trade value picks with STRONG bet_assessment (≥6¢ edge, high match, coherence)">Strong Bets
+            <label class="switch"><input type="checkbox" id="sports-value-strong-bets" onchange="saveSportsSettings()"><span class="slider"></span></label>
+          </label>
+          <span class="muted" style="font-size:.68rem" id="sports-value-spend">spent —</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Open opportunities</h2>
+        <div id="sports-opportunities"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Trade log</h2>
+        <p class="muted" style="font-size:.72rem;margin:0 0 .5rem">Live fills stay pinned for <strong>24h</strong>; paper signals append below and can be cleared without wiping live history.</p>
+        <div id="sports-trades"><p class="muted">Loading…</p></div>
+      </div>
+    </div>
   </div>
 
   <script>
     /* Inlined from bot_settings_ui.js — must load before dashboard init (external script 404 broke all UI). */
     (function () {
-      const BOT_SETTING_FIELDS = ['enabled', 'mode', 'allow_strong', 'allow_actionable', 'use_accumulated_profit', 'profit_use_pct', 'paper_auto_refill', 'aggressive_entries'];
+      const BOT_SETTING_FIELDS = ['enabled', 'mode', 'allow_strong', 'allow_actionable', 'use_accumulated_profit', 'profit_use_pct', 'paper_auto_refill', 'live_auto_refill_hour_budget', 'aggressive_entries'];
       const PATCH_CONFIRM_MS = 120000;
       function botUiKey(kind, asset) { return `${kind}-${asset}`; }
       function normalizeBotSettings(raw, maxKey) {
@@ -780,6 +969,7 @@
           use_accumulated_profit: !!raw.use_accumulated_profit,
           profit_use_pct: Number(raw.profit_use_pct ?? 100),
           paper_auto_refill: raw.paper_auto_refill !== false,
+          live_auto_refill_hour_budget: !!raw.live_auto_refill_hour_budget,
           aggressive_entries: !!raw.aggressive_entries,
         };
       }
@@ -811,10 +1001,15 @@
           const age = Date.now() - patchConfirmed.at;
           if (age >= 0 && age < PATCH_CONFIRM_MS) {
             const conf = normalizeBotSettings(patchConfirmed.settings, maxKey);
-            if (conf && srv.enabled !== conf.enabled) return false;
+            if (conf) {
+              if (srv.enabled !== conf.enabled) return false;
+              if (srv[maxKey] !== conf[maxKey]) return false;
+            }
           }
         }
-        if (domNorm && known && domNorm.enabled && known.enabled && !srv.enabled) return false;
+        // Never let a stale poll flip auto-bet while DOM and last-known agree.
+        if (domNorm && known && domNorm.enabled === known.enabled && domNorm.enabled !== srv.enabled) return false;
+        if (domNorm && srv && domNorm[maxKey] !== srv[maxKey]) return false;
         if (!known || !botSettingsEqual(srv, known, maxKey)) return true;
         return !botSettingsEqual(srv, domNorm, maxKey);
       }
@@ -835,6 +1030,7 @@
       normalizeBotSettings,
       mergeBotSettings,
       shouldUpdateSettingsFromServer,
+      PATCH_CONFIRM_MS = 120000,
     } = window.BotSettingsUi || {};
     let activeTab = '15m';
     let hourlyRenderTab = 'daily';
@@ -843,14 +1039,38 @@
     let trialsFetchGen = 0;
     let hourlyV2FetchGen = 0;
     let slot15FetchGen = 0;
+    let slot15TrialFetchGen = 0;
+    let loadAllInFlight = false;
+    let loadAllStartedAt = 0;
+    const LOAD_ALL_STUCK_MS = 35000;
+    let liveMonitorInFlight = false;
+    let liveMonitorLastAt = 0;
+    const LIVE_MONITOR_INTERVAL_MS = 3000;
+    const LOAD_ALL_INTERVAL_MS = 10000;
+    let slot15CompareLastAt = 0;
+    let slot15CompareInFlight = false;
+    const SLOT15_COMPARE_INTERVAL_MS = 30000;
+    const HOURLY_COMPARE_INTERVAL_MS = 30000;
+    const PERF_REPORT_INTERVAL_MS = 60000;
+    const FOUR_K_REVISION_INTERVAL_MS = 60000;
+    let hourlyCompareLastAt = 0;
+    let hourlyCompareInFlight = false;
+    let perfReportLastAt = 0;
+    let lastPerfReport = null;
+    let perfReportInFlight = false;
+    const SLOT15_TRIAL_KIND = 'slot15_trial';
+    function isSlot15TrialKind(kind) { return kind === SLOT15_TRIAL_KIND; }
     let hourlyGuideCheatOpen = false;
     const lastBotStatus = { btc: null, eth: null, spx: null, ndx: null };
+    const lastHourlyLiveBotStatus = { eth: null };
     const lastV2BotStatus = { btc: null, eth: null };
     const lastHourlyTrialBotStatusByKey = {};
     const HOURLY_TRIAL_KINDS = new Set(['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft', 'hourly_trial_mech']);
     const HOURLY_V2_KIND = 'hourly_v2';
+    const HOURLY_LIVE_KIND = 'hourly_live';
     function isHourlyTrialKind(kind) { return HOURLY_TRIAL_KINDS.has(kind); }
     function isHourlyV2Kind(kind) { return kind === HOURLY_V2_KIND; }
+    function isHourlyLiveKind(kind) { return kind === HOURLY_LIVE_KIND; }
     function hourlyTrialKindsForAsset(asset) {
       return asset === 'btc'
         ? ['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft', 'hourly_trial_mech']
@@ -863,8 +1083,10 @@
       lastHourlyTrialBotStatusByKey[botUiKey(kind, asset)] = data;
     }
     const lastSlot15BotStatus = { btc: null, eth: null };
+    const lastSlot15TrialBotStatus = { eth: null };
     const lastKnownBotSettings = {};
     const pendingBotPatch = {};
+    const capSaveTimers = {};
     const botAutoStoppedPrev = {};
     const settingsPatchConfirmed = {};
     const botSettingsDomReady = {};
@@ -970,6 +1192,11 @@
       if (asset === 'spx') return '/api/spx/hourly/bot';
       if (asset === 'ndx') return '/api/ndx/hourly/bot';
       return '/api/hourly/bot';
+    }
+
+    function hourlyLiveBotApiBase(asset) {
+      if (asset === 'eth') return '/api/eth/hourly-live/bot';
+      return null;
     }
 
     function hourlyApiFor(tab) {
@@ -1421,16 +1648,39 @@
     function renderBetAssessmentBanner(a, compact = false) {
       if (!a) return '';
       const tone = a.actionable_tone || 'weak';
-      const qKey = a.slot_quality || a.hour_quality || 'WEAK';
+      const qKey = a.edge_tier || a.slot_quality || a.hour_quality || 'WEAK';
       const qTone = String(qKey).toLowerCase();
-      const qualityLabel = a.slot_quality_label || a.hour_quality_label || '';
+      const qualityLabel = a.edge_tier_label || a.slot_quality_label || a.hour_quality_label || '';
       const detail = a.detail && !compact ? `<p class="bet-detail muted">${a.detail}</p>` : '';
+      const metaBits = [];
+      if (a.match_quality) metaBits.push(`match ${a.match_quality}`);
+      if (a.coherence_score != null) metaBits.push(`coh ${Number(a.coherence_score).toFixed(2)}`);
+      if (a.spread_cents != null) metaBits.push(`spr ${Number(a.spread_cents).toFixed(0)}¢`);
+      const metaLine = metaBits.length
+        ? `<div class="muted" style="font-size:.62rem;margin-top:.2rem">${metaBits.join(' · ')}</div>`
+        : '';
       const wrapCls = compact ? 'bet-banner-wrap bet-banner-compact' : 'bet-banner-wrap';
       return `<div class="${wrapCls}">
         <div class="bet-actionable bet-actionable-${tone}">${a.actionable_headline || ''}</div>
         <div class="bet-quality bet-quality-${qTone}">${qualityLabel}</div>
+        ${metaLine}
         ${detail}
       </div>`;
+    }
+
+    function renderSportsBetAssessmentCell(a) {
+      if (!a) return '<span class="muted">—</span>';
+      const tier = a.edge_tier || 'WEAK';
+      const tierCls = String(tier).toLowerCase();
+      const headline = a.actionable_headline || tier;
+      const sub = [
+        a.match_quality ? `match ${a.match_quality}` : '',
+        a.coherence_score != null ? `coh ${Number(a.coherence_score).toFixed(2)}` : '',
+        a.liquidity_ok === false ? 'illiquid' : '',
+      ].filter(Boolean).join(' · ');
+      return `<div class="bet-actionable bet-actionable-${a.actionable_tone || tierCls}" style="font-size:.68rem;padding:.35rem .45rem">${headline}</div>
+        <div class="bet-quality bet-quality-${tierCls}" style="font-size:.62rem;margin-top:.2rem;padding:.2rem .35rem">${a.edge_tier_label || tier}</div>
+        ${sub ? `<div class="muted" style="font-size:.58rem;margin-top:.15rem">${sub}</div>` : ''}`;
     }
 
     function renderPrediction(p) {
@@ -1521,7 +1771,7 @@
         <strong class="${statusCls}">${statusLabel}</strong>
         · Last bot cycle: <strong>${formatCycleAge(cycleAt)}</strong>
         · ${autoHint}
-        <div class="muted" style="margin-top:.25rem;font-size:.65rem">Bots poll every ~5s on the server when Auto-bet is ON. Paper bankroll and trade logs survive redeploys only with a Railway volume mounted at <code>/data</code>.${dataHint} <button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .45rem;margin-left:.35rem" onclick="freshStartAllPaperBots()">Fresh start all paper bots</button></div>
+        <div class="muted" style="margin-top:.25rem;font-size:.65rem">Bots poll every ~5s on the server when Auto-bet is ON. Paper bankroll and trade logs survive redeploys only with a Railway volume mounted at <code>/data</code>.${dataHint} <button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .45rem;margin-left:.35rem" onclick="freshStartAllPaperBots()">Fresh start all bots</button></div>
       </div>`;
     }
 
@@ -1612,13 +1862,30 @@
       }
     }
 
+    function syncGlobalComparePanel() {
+      const el = $('hourly-live-trial-compare');
+      if (!el) return;
+      if (activeTab === '15m' || activeTab === 'eth-15m') {
+        el.innerHTML = '<p class="muted" style="font-size:.78rem">Hour-by-hour <strong>live vs paper trial</strong> compare is on the <strong>BTC Hourly</strong> and <strong>ETH Hourly</strong> tabs. On <strong>ETH 15m</strong>, use the slot compare panel in that tab’s bot section.</p>';
+        return;
+      }
+      if (activeTab === 'trials' || activeTab === 'hourly-v2') {
+        el.innerHTML = '<p class="muted" style="font-size:.78rem">Open <strong>BTC Hourly</strong> or <strong>ETH Hourly</strong> for the global live-vs-trial table. This tab has its own bot cards below.</p>';
+        return;
+      }
+      if (isHourlyTab(activeTab)) {
+        loadHourlyLiveTrialCompare();
+      }
+    }
+
     function renderStatus(h) {
       if (h.version) $('app-version').textContent = h.version;
       renderKalshiBalanceHeader(h.kalshi);
-      renderBotRiskBanner(h.bot_risk);
+      if (h.bot_risk) renderBotRiskBanner(h.bot_risk);
       schedulerRunning = !!h.scheduler_running;
-      serverDataDir = h.data_dir || '';
-      volumeMountedAtData = h.volume_mounted_at_data === true;
+      if (h.data_dir) serverDataDir = h.data_dir;
+      if (h.volume_mounted_at_data != null) volumeMountedAtData = h.volume_mounted_at_data === true;
+      if (!h.candles_15m && !h.eth_15m) return;
       const api = slot15Api();
       const data = activeTab === 'eth-15m' ? (h.eth_15m || h) : h;
       const series = data.series_ticker || api.series;
@@ -1892,6 +2159,9 @@
 
     async function loadLiveMonitor() {
       if (activeTab !== '15m' && activeTab !== 'eth-15m') return;
+      const now = Date.now();
+      if (liveMonitorInFlight || now - liveMonitorLastAt < LIVE_MONITOR_INTERVAL_MS) return;
+      liveMonitorInFlight = true;
       try {
         const api = slot15Api();
         let refQ = '';
@@ -1899,17 +2169,69 @@
         if (stored?.slot_start && stored.price > 0) {
           refQ = `?reference_override=${encodeURIComponent(stored.price)}`;
         }
-        const m = await get(api.monitor + refQ);
+        const m = await getWithTimeout(api.monitor + refQ, 8000);
+        liveMonitorLastAt = Date.now();
         if (stored?.slot_start && m?.slot_start && stored.slot_start !== m.slot_start) {
           clearStoredRefOverride();
-          return get(api.monitor).then(renderSlotMonitor);
+          const m2 = await getWithTimeout(api.monitor, 8000);
+          renderSlotMonitor(m2);
+          return;
         }
         renderSlotMonitor(m);
-      } catch (_) {}
+      } catch (_) {
+        liveMonitorLastAt = Date.now();
+      } finally {
+        liveMonitorInFlight = false;
+      }
+    }
+
+    function persistHourlyCapIfDirty(asset, kind = 'hourly') {
+      const key = botUiKey(kind, asset);
+      if (pendingBotPatch[key]) return;
+      const maxKey = 'max_spend_per_hour_usd';
+      const dom = readBotSettingsFromDom(asset, kind);
+      if (!dom) return;
+      const cached = hourlyBotCache(kind, asset);
+      const serverCap = Number(cached?.settings?.[maxKey]);
+      const domCap = Number(dom[maxKey]);
+      if (!Number.isFinite(domCap) || (Number.isFinite(serverCap) && domCap === serverCap)) return;
+      if (isHourlyTrialKind(kind)) saveHourlyTrialBotSettings(asset, undefined, kind);
+      else saveHourlyBotSettings(asset, undefined, kind);
+    }
+
+    function persistSlot15CapIfDirty(asset) {
+      const key = botUiKey('slot15', asset);
+      if (pendingBotPatch[key]) return;
+      const dom = readSlot15BotSettingsFromDom(asset);
+      if (!dom) return;
+      const cached = lastSlot15BotStatus[asset];
+      const serverCap = Number(cached?.settings?.max_spend_per_slot_usd);
+      const domCap = Number(dom.max_spend_per_slot_usd);
+      if (!Number.isFinite(domCap) || (Number.isFinite(serverCap) && domCap === serverCap)) return;
+      saveSlot15BotSettings(asset);
+    }
+
+    function persistBotSettingsBeforeTabLeave(fromTab) {
+      if (!fromTab || fromTab === 'trials' || fromTab === 'hourly-v2' || fromTab === 'sports') return;
+      if (fromTab === '15m') {
+        persistSlot15CapIfDirty('btc');
+        return;
+      }
+      if (fromTab === 'eth-15m') {
+        persistSlot15CapIfDirty('eth');
+        return;
+      }
+      if (isHourlyTab(fromTab)) {
+        const asset = hourlyAssetForTab(fromTab);
+        persistHourlyCapIfDirty(asset, 'hourly');
+        if (asset === 'spx' || asset === 'ndx') persistHourlyCapIfDirty(asset, 'hourly_trial');
+      }
     }
 
     function switchTab(name) {
+      persistBotSettingsBeforeTabLeave(activeTab);
       activeTab = name;
+      if (lastPerfReport?.ok) renderBotPerformanceReport(lastPerfReport);
       $('panel-15m').style.display = name === '15m' ? '' : 'none';
       $('panel-eth-15m').style.display = name === 'eth-15m' ? '' : 'none';
       $('panel-daily').style.display = name === 'daily' ? '' : 'none';
@@ -1918,6 +2240,7 @@
       $('panel-ndx-hourly').style.display = name === 'ndx-hourly' ? '' : 'none';
       $('panel-trials').style.display = name === 'trials' ? '' : 'none';
       $('panel-hourly-v2').style.display = name === 'hourly-v2' ? '' : 'none';
+      $('panel-sports').style.display = name === 'sports' ? '' : 'none';
       $('tab-15m').classList.toggle('active', name === '15m');
       $('tab-eth-15m').classList.toggle('active', name === 'eth-15m');
       $('tab-daily').classList.toggle('active', name === 'daily');
@@ -1926,6 +2249,11 @@
       $('tab-ndx-hourly').classList.toggle('active', name === 'ndx-hourly');
       $('tab-trials').classList.toggle('active', name === 'trials');
       $('tab-hourly-v2').classList.toggle('active', name === 'hourly-v2');
+      $('tab-sports').classList.toggle('active', name === 'sports');
+      if (name === 'sports') {
+        loadSports();
+        return;
+      }
       if (name === 'hourly-v2') {
         for (const asset of ['btc', 'eth']) {
           const cached = lastV2BotStatus[asset];
@@ -1955,9 +2283,13 @@
       }
       if (isHourlyTab(name)) {
         const asset = hourlyAssetForTab(name);
+        setCompareAsset(asset);
         const cached = lastBotStatus[asset];
         const key = botUiKey('hourly', asset);
-        if (cached?.settings && !pendingBotPatch[key]) {
+        const domSettings = readBotSettingsFromDom(asset, 'hourly');
+        if (domSettings && !pendingBotPatch[key]) {
+          lastKnownBotSettings[key] = normalizeBotSettings(domSettings, 'max_spend_per_hour_usd');
+        } else if (cached?.settings && !pendingBotPatch[key]) {
           lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_hour_usd');
         }
         if (cached) renderHourlyBot(cached, asset);
@@ -1973,6 +2305,14 @@
           lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_slot_usd');
         }
         if (cached) renderSlot15Bot(cached, asset);
+        if (name === 'eth-15m') {
+          const trialCached = lastSlot15TrialBotStatus.eth;
+          const trialKey = botUiKey(SLOT15_TRIAL_KIND, 'eth');
+          if (trialCached?.settings && !pendingBotPatch[trialKey]) {
+            lastKnownBotSettings[trialKey] = normalizeBotSettings(trialCached.settings, 'max_spend_per_slot_usd');
+          }
+          if (trialCached) renderSlot15TrialBot(trialCached, 'eth');
+        }
         loadAll();
         return;
       }
@@ -2434,7 +2774,13 @@
     function mergeV2BotStatus(asset, incoming) {
       if (!incoming?.ok) return lastV2BotStatus[asset];
       const prev = lastV2BotStatus[asset];
-      const merged = prev ? { ...prev, ...incoming, settings: mergeBotSettings(incoming.settings, prev.settings) } : incoming;
+      const merged = prev
+        ? {
+          ...prev,
+          ...incoming,
+          settings: mergeBotSettingsForCache(HOURLY_V2_KIND, asset, incoming.settings, prev.settings),
+        }
+        : incoming;
       lastV2BotStatus[asset] = merged;
       return merged;
     }
@@ -2557,11 +2903,16 @@
       return `${hourlyBotApiBase(asset)}/clear-history`;
     }
 
-    function hourlyBotSyncKalshiUrl(asset) {
+    function hourlyBotSyncKalshiUrl(asset, kind = 'hourly') {
+      if (isHourlyLiveKind(kind)) return `${hourlyLiveBotApiBase(asset)}/sync-kalshi-fills`;
       return `${hourlyBotApiBase(asset)}/sync-kalshi-fills`;
     }
 
     function hourlyBotStatusUrl(asset, kind = 'hourly', lightweight = true) {
+      if (isHourlyLiveKind(kind)) {
+        const base = hourlyLiveBotApiBase(asset);
+        return `${base}?lightweight=${lightweight}`;
+      }
       if (isHourlyTrialKind(kind)) return hourlyTrialBotStatusUrl(asset, kind);
       if (isHourlyV2Kind(kind)) {
         const base = asset === 'eth' ? '/api/eth/hourly-v2/bot' : '/api/hourly-v2/bot';
@@ -2580,6 +2931,10 @@
     const ETH_HOURLY_TRIAL_API = {
       hourly_trial: '/api/eth/hourly-trial/bot',
     };
+    const INDEX_HOURLY_TRIAL_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot' },
+    };
     const HOURLY_TRIAL_SETTINGS_API = {
       hourly_trial: '/api/hourly-trial/bot/settings',
       hourly_trial_rally: '/api/hourly-trial-rally/bot/settings',
@@ -2588,6 +2943,10 @@
     };
     const ETH_HOURLY_TRIAL_SETTINGS_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/settings',
+    };
+    const INDEX_HOURLY_TRIAL_SETTINGS_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot/settings' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot/settings' },
     };
     const HOURLY_TRIAL_RESET_API = {
       hourly_trial: '/api/hourly-trial/bot/reset-bankroll',
@@ -2598,6 +2957,10 @@
     const ETH_HOURLY_TRIAL_RESET_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/reset-bankroll',
     };
+    const INDEX_HOURLY_TRIAL_RESET_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot/reset-bankroll' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot/reset-bankroll' },
+    };
     const HOURLY_TRIAL_FRESH_API = {
       hourly_trial: '/api/hourly-trial/bot/fresh-start',
       hourly_trial_rally: '/api/hourly-trial-rally/bot/fresh-start',
@@ -2606,6 +2969,10 @@
     };
     const ETH_HOURLY_TRIAL_FRESH_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/fresh-start',
+    };
+    const INDEX_HOURLY_TRIAL_FRESH_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot/fresh-start' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot/fresh-start' },
     };
     const HOURLY_TRIAL_CLEAR_API = {
       hourly_trial: '/api/hourly-trial/bot/clear-history',
@@ -2616,29 +2983,47 @@
     const ETH_HOURLY_TRIAL_CLEAR_API = {
       hourly_trial: '/api/eth/hourly-trial/bot/clear-history',
     };
+    const INDEX_HOURLY_TRIAL_CLEAR_API = {
+      spx: { hourly_trial: '/api/spx/hourly-trial/bot/clear-history' },
+      ndx: { hourly_trial: '/api/ndx/hourly-trial/bot/clear-history' },
+    };
+
+    function indexHourlyTrialApiMap(asset) {
+      return INDEX_HOURLY_TRIAL_API[asset] || null;
+    }
 
     function hourlyTrialBotStatusUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_API[kind] || ETH_HOURLY_TRIAL_API.hourly_trial;
+      const idx = indexHourlyTrialApiMap(asset);
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_API[kind] || HOURLY_TRIAL_API.hourly_trial;
     }
 
     function hourlyTrialBotSettingsUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_SETTINGS_API[kind] || ETH_HOURLY_TRIAL_SETTINGS_API.hourly_trial;
+      const idx = INDEX_HOURLY_TRIAL_SETTINGS_API[asset];
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_SETTINGS_API[kind] || HOURLY_TRIAL_SETTINGS_API.hourly_trial;
     }
 
     function hourlyTrialBotResetBankrollUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_RESET_API[kind] || ETH_HOURLY_TRIAL_RESET_API.hourly_trial;
+      const idx = INDEX_HOURLY_TRIAL_RESET_API[asset];
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_RESET_API[kind] || HOURLY_TRIAL_RESET_API.hourly_trial;
     }
 
     function hourlyTrialBotFreshStartUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_FRESH_API[kind] || ETH_HOURLY_TRIAL_FRESH_API.hourly_trial;
+      const idx = INDEX_HOURLY_TRIAL_FRESH_API[asset];
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_FRESH_API[kind] || HOURLY_TRIAL_FRESH_API.hourly_trial;
     }
 
     function hourlyTrialBotClearHistoryUrl(asset, kind = 'hourly_trial') {
       if (asset === 'eth') return ETH_HOURLY_TRIAL_CLEAR_API[kind] || ETH_HOURLY_TRIAL_CLEAR_API.hourly_trial;
+      const idx = INDEX_HOURLY_TRIAL_CLEAR_API[asset];
+      if (idx) return idx[kind] || idx.hourly_trial;
       return HOURLY_TRIAL_CLEAR_API[kind] || HOURLY_TRIAL_CLEAR_API.hourly_trial;
     }
 
@@ -2659,6 +3044,8 @@
       if (!serverSettings && !prevSettings) return undefined;
       if (!serverSettings) return prevSettings;
       if (!prevSettings) return serverSettings;
+      const isSlot15Kind = kind === 'slot15' || kind === 'slot15_trial';
+      const maxKey = isSlot15Kind ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
       const merged = { ...prevSettings, ...serverSettings };
       const key = botUiKey(kind, asset);
       if (prevSettings.enabled && !serverSettings.enabled) {
@@ -2666,6 +3053,45 @@
         const confirmed = settingsPatchConfirmed[key];
         if (known?.enabled || confirmed?.settings?.enabled) {
           merged.enabled = true;
+        }
+      }
+      if (!prevSettings.enabled && serverSettings.enabled) {
+        const known = lastKnownBotSettings[key];
+        const confirmed = settingsPatchConfirmed[key];
+        if (known && !known.enabled) {
+          merged.enabled = false;
+        } else if (confirmed?.settings && confirmed.settings.enabled === false) {
+          merged.enabled = false;
+        }
+      }
+      const confirmed = settingsPatchConfirmed[key];
+      if (confirmed?.settings && confirmed.at && Date.now() - confirmed.at < PATCH_CONFIRM_MS) {
+        const conf = normalizeBotSettings(confirmed.settings, maxKey);
+        const srv = normalizeBotSettings(serverSettings, maxKey);
+        if (conf && srv && conf[maxKey] !== srv[maxKey]) {
+          merged[maxKey] = conf[maxKey];
+        }
+        if (conf && srv && conf.live_auto_refill_hour_budget !== srv.live_auto_refill_hour_budget) {
+          merged.live_auto_refill_hour_budget = conf.live_auto_refill_hour_budget;
+        }
+        if (conf && srv && conf.paper_auto_refill !== srv.paper_auto_refill) {
+          merged.paper_auto_refill = conf.paper_auto_refill;
+        }
+      }
+      const domSettings = isSlot15Kind
+        ? (kind === 'slot15_trial' ? readSlot15TrialBotSettingsFromDom(asset) : readSlot15BotSettingsFromDom(asset))
+        : readBotSettingsFromDom(asset, kind);
+      if (domSettings) {
+        const domNorm = normalizeBotSettings(domSettings, maxKey);
+        const srv = normalizeBotSettings(serverSettings, maxKey);
+        if (domNorm && srv && domNorm[maxKey] !== srv[maxKey]) {
+          merged[maxKey] = domNorm[maxKey];
+        }
+        if (domNorm && srv && domNorm.live_auto_refill_hour_budget !== srv.live_auto_refill_hour_budget) {
+          merged.live_auto_refill_hour_budget = domNorm.live_auto_refill_hour_budget;
+        }
+        if (domNorm && srv && domNorm.paper_auto_refill !== srv.paper_auto_refill) {
+          merged.paper_auto_refill = domNorm.paper_auto_refill;
         }
       }
       return merged;
@@ -2702,8 +3128,40 @@
       return merged;
     }
 
+    function mergeHourlyLiveBotStatus(asset, incoming) {
+      if (!incoming || !incoming.ok || (incoming.asset && incoming.asset !== asset)) {
+        return lastHourlyLiveBotStatus[asset];
+      }
+      const prev = lastHourlyLiveBotStatus[asset];
+      if (!prev) {
+        lastHourlyLiveBotStatus[asset] = incoming;
+        return incoming;
+      }
+      const eventTicker = incoming.event_ticker
+        || (incoming.hour_summary || incoming.hourly_summary || {}).event_ticker
+        || prev.event_ticker;
+      const prevHs = prev.hour_summary || prev.hourly_summary || {};
+      const nextHs = incoming.hour_summary || incoming.hourly_summary || {};
+      const mergedHs = mergeHourSummary(prevHs, nextHs, eventTicker);
+      const merged = {
+        ...prev,
+        ...incoming,
+        event_ticker: eventTicker,
+        settings: mergeBotSettingsForCache(HOURLY_LIVE_KIND, asset, incoming.settings, prev.settings),
+        hour_summary: mergedHs,
+        hourly_summary: mergedHs,
+        open_positions: incoming.open_positions ?? prev.open_positions,
+        recent_trades: (incoming.recent_trades && incoming.recent_trades.length)
+          ? incoming.recent_trades
+          : prev.recent_trades,
+      };
+      lastHourlyLiveBotStatus[asset] = merged;
+      return merged;
+    }
+
     function botForceKey(kind, asset) {
-      if (isHourlyTrialKind(kind) || isHourlyV2Kind(kind)) return botUiKey(kind, asset);
+      if (isHourlyTrialKind(kind) || isHourlyV2Kind(kind) || isHourlyLiveKind(kind)) return botUiKey(kind, asset);
+      if (isSlot15TrialKind(kind)) return `${asset}-trial`;
       return asset;
     }
 
@@ -2717,6 +3175,7 @@
 
     function hourlyBotCache(kind, asset) {
       if (isHourlyV2Kind(kind)) return lastV2BotStatus[asset];
+      if (isHourlyLiveKind(kind)) return lastHourlyLiveBotStatus[asset];
       return isHourlyTrialKind(kind) ? getTrialBotCache(kind, asset) : lastBotStatus[asset];
     }
 
@@ -2751,15 +3210,63 @@
 
     const botForceSettingsRender = { btc: true, eth: true };
     const hourlyTrialForceSettingsRender = {};
-    const slot15BotForceSettingsRender = { btc: true, eth: true };
+    const slot15BotForceSettingsRender = { btc: true, eth: true, 'eth-trial': true };
+
+    function botCapSaveFn(asset, kind = 'hourly') {
+      if (isHourlyTrialKind(kind)) return `scheduleHourlyCapSave('${asset}', '${kind}')`;
+      if (isHourlyV2Kind(kind)) return `scheduleHourlyCapSave('${asset}', 'hourly_v2')`;
+      return `scheduleHourlyCapSave('${asset}', 'hourly')`;
+    }
+
+    function scheduleHourlyCapSave(asset, kind = 'hourly') {
+      const key = botUiKey(kind, asset);
+      if (capSaveTimers[key]) clearTimeout(capSaveTimers[key]);
+      capSaveTimers[key] = setTimeout(() => {
+        capSaveTimers[key] = null;
+        if (isHourlyTrialKind(kind)) saveHourlyTrialBotSettings(asset, undefined, kind);
+        else saveHourlyBotSettings(asset, undefined, kind);
+      }, 400);
+    }
+
+    function scheduleSlot15CapSave(asset, trial = false) {
+      const key = botUiKey(trial ? 'slot15_trial' : 'slot15', asset);
+      if (capSaveTimers[key]) clearTimeout(capSaveTimers[key]);
+      capSaveTimers[key] = setTimeout(() => {
+        capSaveTimers[key] = null;
+        if (trial) saveSlot15TrialBotSettings(asset);
+        else saveSlot15BotSettings(asset);
+      }, 400);
+    }
+
+    function botDeployableHint(s, serverSettings, bot, periodLabel) {
+      const maxKey = periodLabel === 'slot' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+      const uiCap = Number(s?.[maxKey]);
+      const savedCap = Number(serverSettings?.[maxKey]);
+      const remaining = Number(bot?.remaining_usd);
+      const hints = [];
+      if (Number.isFinite(uiCap) && Number.isFinite(savedCap) && Math.abs(uiCap - savedCap) > 0.009) {
+        hints.push(`saved cap $${savedCap.toFixed(2)}`);
+      }
+      if (
+        (s?.mode || serverSettings?.mode) === 'live'
+        && Number.isFinite(remaining)
+        && Number.isFinite(uiCap)
+        && remaining > uiCap + 0.01
+      ) {
+        hints.push('includes hour P&amp;L / refill boost');
+      }
+      return hints.length ? ` <span class="muted" style="font-size:.62rem">(${hints.join(' · ')})</span>` : '';
+    }
 
     function botDomPrefix(kind, asset) {
+      if (kind === 'slot15_trial') return `slot15-trial-${asset}`;
       if (kind === 'slot15') return `slot15-${asset}`;
       if (kind === 'hourly_trial_rally') return `trial-rally-${asset}`;
       if (kind === 'hourly_trial_soft') return `trial-soft-${asset}`;
       if (kind === 'hourly_trial_mech') return `trial-mech-${asset}`;
       if (isHourlyV2Kind(kind)) return `v2-${asset}`;
       if (isHourlyTrialKind(kind)) return `trial-${asset}`;
+      if (isHourlyLiveKind(kind)) return `live-${asset}`;
       return asset;
     }
 
@@ -2769,6 +3276,7 @@
       if (kind === 'hourly_trial_mech') return `${asset}-hourly-trial-mech-bot-settings`;
       if (isHourlyV2Kind(kind)) return `${asset}-hourly-v2-bot-settings`;
       if (isHourlyTrialKind(kind)) return `${asset}-hourly-trial-bot-settings`;
+      if (isHourlyLiveKind(kind)) return `${asset}-hourly-live-bot-settings`;
       return `${asset}-hourly-bot-settings`;
     }
 
@@ -2778,28 +3286,53 @@
       if (kind === 'hourly_trial_mech') return `${asset}-hourly-trial-mech-bot`;
       if (isHourlyV2Kind(kind)) return `${asset}-hourly-v2-bot`;
       if (isHourlyTrialKind(kind)) return `${asset}-hourly-trial-bot`;
+      if (isHourlyLiveKind(kind)) return `${asset}-hourly-live-bot`;
       return `${asset}-hourly-bot`;
     }
 
     function shouldRenderHourlyBot(asset, kind = 'hourly') {
       if (isHourlyV2Kind(kind)) return activeTab === 'hourly-v2';
-      if (isHourlyTrialKind(kind)) return activeTab === 'trials';
+      if (isHourlyLiveKind(kind)) return asset === 'eth' && activeTab === 'eth-hourly';
+      if (isHourlyTrialKind(kind)) {
+        if (activeTab === 'trials') return true;
+        if (asset === 'spx' && activeTab === 'spx-hourly') return true;
+        if (asset === 'ndx' && activeTab === 'ndx-hourly') return true;
+        return false;
+      }
       return activeTab === hourlyTabForAsset(asset);
+    }
+
+    function botAutoRefillChecked(s) {
+      return (s.mode || 'paper') === 'live'
+        ? !!s.live_auto_refill_hour_budget
+        : s.paper_auto_refill !== false;
+    }
+
+    function botAutoRefillTooltip(mode) {
+      if (mode === 'live') {
+        return 'When ON, realized hour wins extend deployable capital. After losses exhaust deploy with no open legs, adds another max-cap chunk for the hour. Max at-risk always caps concurrent open exposure.';
+      }
+      return 'When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.';
     }
 
     function readBotSettingsFromDom(asset, kind = 'hourly') {
       const p = botDomPrefix(kind, asset);
       const enabledEl = $(`bot-enabled-${p}`);
       if (!enabledEl) return null;
+      const mode = $(`bot-live-${p}`)?.checked ? 'live' : 'paper';
+      const refillOn = !!$(`bot-auto-refill-${p}`)?.checked;
+      const key = botUiKey(kind, asset);
+      const prev = lastKnownBotSettings[key] || {};
       return {
         enabled: !!enabledEl.checked,
-        mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
+        mode,
         max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '10'),
         allow_strong: !!$(`bot-strong-${p}`)?.checked,
         allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
         use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
         profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
-        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        paper_auto_refill: mode === 'paper' ? refillOn : prev.paper_auto_refill !== false,
+        live_auto_refill_hour_budget: mode === 'live' ? refillOn : !!prev.live_auto_refill_hour_budget,
         aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
     }
@@ -2814,13 +3347,17 @@
       const p = botDomPrefix(kind, asset);
       const saveFn = isHourlyTrialKind(kind)
         ? `saveHourlyTrialBotSettings('${asset}', undefined, '${kind}')`
-        : `saveHourlyBotSettings('${asset}')`;
-      const modeFn = isHourlyTrialKind(kind)
+        : isHourlyV2Kind(kind)
+          ? `saveHourlyBotSettings('${asset}', undefined, 'hourly_v2')`
+          : `saveHourlyBotSettings('${asset}')`;
+      const modeFn = isHourlyTrialKind(kind) || isHourlyV2Kind(kind)
         ? `onBotModeToggle('${asset}', event, '${kind}')`
         : `onBotModeToggle('${asset}', event)`;
       const profitsFn = isHourlyTrialKind(kind)
         ? `onBotUseProfitsToggle('${asset}', '${kind}')`
-        : `onBotUseProfitsToggle('${asset}', 'hourly')`;
+        : isHourlyV2Kind(kind)
+          ? `onBotUseProfitsToggle('${asset}', 'hourly_v2')`
+          : `onBotUseProfitsToggle('${asset}', 'hourly')`;
       return `
         <div class="bot-row">
           <label class="bot-label">Auto-bet
@@ -2835,7 +3372,7 @@
         </div>
         <div class="bot-row">
           <label class="bot-label" title="Max open exposure at once this hour — not cumulative spend">Max at-risk $ / hour
-            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 10}" style="width:5rem;margin-left:.35rem" onchange="${saveFn}">
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 10}" style="width:5rem;margin-left:.35rem" oninput="${botCapSaveFn(asset, kind)}" onchange="${saveFn}" onblur="${saveFn}">
           </label>
           <label class="bot-label">STRONG bets
             <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
@@ -2849,10 +3386,29 @@
           <label class="bot-label" title="% of interval profit deployable when Use profits is ON (0–100).">Profit use %
             <input type="number" id="bot-profit-use-pct-${p}" min="0" max="100" step="5" value="${s.profit_use_pct ?? 100}" style="width:3.5rem;margin-left:.35rem" ${s.use_accumulated_profit ? '' : 'disabled'} onchange="${saveFn}">
           </label>
-          <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
-            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
+          <label class="bot-label" title="${botAutoRefillTooltip(s.mode || 'paper')}">Auto-refill
+            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${botAutoRefillChecked(s) ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
           </label>
           ${botAggressiveToggleHtml(p, s, saveFn)}
+        </div>`;
+    }
+
+    function ethLiveMirrorSettingsHtml(asset, s) {
+      const enabled = !!s.enabled;
+      const enabledCls = enabled ? 'up' : 'down';
+      const maxSpend = Number(s.max_spend_per_hour_usd ?? 10);
+      const freeMode = !s.allow_strong && !s.allow_actionable;
+      return `
+        <div class="bot-row" style="padding:.35rem .15rem .45rem;border-bottom:1px solid rgba(148,163,184,.12);margin-bottom:.35rem">
+          <p class="muted" style="font-size:.72rem;margin:0 0 .55rem"><strong>Manager-controlled</strong> — mirrors paper mechanics on Kalshi. Edit <code>eth.hourly.bot.live_mirror</code> or use the P&amp;L-first manager; this panel is read-only.</p>
+          <div class="bot-row" style="margin:0">
+            <div class="bot-stat"><span class="muted">Auto-bet</span><strong class="${enabledCls}">${enabled ? 'ON' : 'OFF'}</strong></div>
+            <div class="bot-stat"><span class="muted">Mode</span><strong class="bot-mode-live">LIVE</strong></div>
+            <div class="bot-stat"><span class="muted" title="Max open exposure per hour">Max at-risk $ / hour</span><strong>$${maxSpend.toFixed(0)}</strong></div>
+            <div class="bot-stat"><span class="muted">STRONG</span><strong>${s.allow_strong ? 'ON' : 'OFF'}</strong></div>
+            <div class="bot-stat"><span class="muted">ACTIONABLE</span><strong>${s.allow_actionable ? 'ON' : 'OFF'}</strong></div>
+            <div class="bot-stat"><span class="muted">Filters</span><strong>${freeMode ? 'FREE' : 'guarded'}</strong></div>
+          </div>
         </div>`;
     }
 
@@ -2886,9 +3442,12 @@
         else if (cur.outcome === 'pending') curLabel = 'open position(s)';
         currentPart = ` · Current ${unitSingular}: ${curLabel}`;
       }
+      const epochNote = ip.stats_epoch_at
+        ? `<span class="muted" style="font-size:.62rem;display:block;margin-top:.1rem">Since fresh start / clear history (${time(ip.stats_epoch_at)}).</span>`
+        : '';
       return `
         <div class="bot-row" style="padding:.25rem .15rem .35rem;border-top:1px solid rgba(148,163,184,.12);margin-top:.15rem">
-          <div class="bot-stat"><span class="muted" title="Completed ${unit} with net closed P&amp;L for ${modeLabel} trades only">Interval record (${modeLabel.toLowerCase()})</span><strong><span class="up">${profits} profit</span> / <span class="down">${losses} loss</span>${bePart}</strong><span class="muted" style="font-size:.64rem">${currentPart}</span></div>
+          <div class="bot-stat"><span class="muted" title="Completed ${unit} with net closed P&amp;L for ${modeLabel} trades only (since last fresh start on live)">Interval record (${modeLabel.toLowerCase()})</span><strong><span class="up">${profits} profit</span> / <span class="down">${losses} loss</span>${bePart}</strong><span class="muted" style="font-size:.64rem">${currentPart}</span>${epochNote}</div>
           ${scored > 0 ? `<div class="bot-stat"><span class="muted">Net across scored ${unit}</span><strong class="${netCls}">${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(2)}</strong></div>` : ''}
           ${scored > 0 ? `<div class="bot-stat"><span class="muted">Win rate</span><strong>${winRate}</strong></div>` : ''}
         </div>`;
@@ -2968,29 +3527,34 @@
         </div>`;
     }
 
-    function botLiveKalshiCashHtml(s, bot) {
+    function botLiveKalshiCashHtml(s, bot, kind = 'hourly') {
       if ((s.mode || 'paper') !== 'live') return '';
       const bal = formatKalshiBalance(lastKalshiStatus);
       const text = bal
         ? `<strong style="color:#86efac">${bal}</strong> in your linked Kalshi account`
         : '<span class="muted">Kalshi cash unavailable — check API keys</span>';
       const asset = bot?.asset || 'btc';
-      const kind = bot?.bot_kind || 'hourly';
-      const clearBtn = `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.35rem" onclick="clearBotHistory('hour', '${asset}', '${kind}')">Clear history</button>`;
+      const botKind = bot?.bot_kind || kind;
+      const clearBtn = isHourlyLiveKind(botKind)
+        ? ''
+        : `<button type="button" class="btn-secondary" style="font-size:.68rem;padding:.25rem .55rem;margin-left:.25rem" onclick="clearBotHistory('hour', '${asset}', '${botKind}')">Clear history</button>`;
       return `<p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Account cash (Kalshi): ${text}. Bot sizing still uses <strong>max at-risk</strong> below, not your full wallet.${clearBtn}</p>`;
     }
 
     async function resetPaperBankroll(period, asset, kind = 'hourly') {
       const url = period === 'hour'
         ? (isHourlyTrialKind(kind) ? hourlyTrialBotResetBankrollUrl(asset, kind) : hourlyBotResetBankrollUrl(asset))
-        : slot15BotResetBankrollUrl(asset);
-      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (period === 'hour' ? 'hourly' : '15m');
+        : (isSlot15TrialKind(kind) ? slot15TrialBotResetBankrollUrl(asset) : slot15BotResetBankrollUrl(asset));
+      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind)
+        : isSlot15TrialKind(kind) ? '15m trial'
+        : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Reset ${asset.toUpperCase()} ${label} paper bankroll to max at-risk cap? Trade log is kept.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
         if (period === 'hour') renderHourlyBot(bot, asset, kind);
+        else if (isSlot15TrialKind(kind)) renderSlot15TrialBot(bot, asset);
         else renderSlot15Bot(bot, asset);
       } catch (e) {
         showError('Reset bankroll: ' + e.message);
@@ -3000,14 +3564,17 @@
     async function clearBotHistory(period, asset, kind = 'hourly') {
       const url = period === 'hour'
         ? (isHourlyTrialKind(kind) ? hourlyTrialBotClearHistoryUrl(asset, kind) : hourlyBotClearHistoryUrl(asset))
-        : slot15BotClearHistoryUrl(asset);
-      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (period === 'hour' ? 'hourly' : '15m');
+        : (isSlot15TrialKind(kind) ? slot15TrialBotClearHistoryUrl(asset) : slot15BotClearHistoryUrl(asset));
+      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind)
+        : isSlot15TrialKind(kind) ? '15m trial'
+        : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Clear ${asset.toUpperCase()} ${label} bot history?\n\nRemoves trade log and open bot legs from the server DB. Does not touch your Kalshi account or wallet.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
         if (period === 'hour') renderHourlyBot(bot, asset, kind);
+        else if (isSlot15TrialKind(kind)) renderSlot15TrialBot(bot, asset);
         else renderSlot15Bot(bot, asset);
       } catch (e) {
         showError('Clear history: ' + e.message);
@@ -3017,14 +3584,17 @@
     async function freshStartPaperBot(period, asset, kind = 'hourly') {
       const url = period === 'hour'
         ? (isHourlyTrialKind(kind) ? hourlyTrialBotFreshStartUrl(asset, kind) : hourlyBotFreshStartUrl(asset))
-        : slot15BotFreshStartUrl(asset);
-      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (period === 'hour' ? 'hourly' : '15m');
+        : (isSlot15TrialKind(kind) ? slot15TrialBotFreshStartUrl(asset) : slot15BotFreshStartUrl(asset));
+      const label = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind)
+        : isSlot15TrialKind(kind) ? '15m trial'
+        : (period === 'hour' ? 'hourly' : '15m');
       if (!confirm(`Fresh start ${asset.toUpperCase()} ${label} paper bot?\n\nClears trade log, open positions, cooldowns, and resets bankroll to max at-risk.`)) return;
       try {
         const res = await fetch(url, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
         if (period === 'hour') renderHourlyBot(bot, asset, kind);
+        else if (isSlot15TrialKind(kind)) renderSlot15TrialBot(bot, asset);
         else renderSlot15Bot(bot, asset);
       } catch (e) {
         showError('Fresh start: ' + e.message);
@@ -3032,7 +3602,7 @@
     }
 
     async function freshStartAllPaperBots() {
-      if (!confirm('Fresh start ALL paper bots (BTC + ETH hourly and 15m)?\n\nClears every trade log and resets each paper bankroll. Live-mode bots are skipped.')) return;
+      if (!confirm('Fresh start ALL bots (BTC + ETH hourly/15m, trials, v2, SPX/NDX)?\n\nClears every trade log and resets each paper bankroll. Live bots: log wipe only (Kalshi positions unchanged).')) return;
       try {
         const res = await fetch('/api/admin/fresh-start-all-paper-bots', { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
@@ -3176,9 +3746,12 @@
       botRestingTradesVisible[key] = !botRestingTradesVisible[key];
       const cache = kind === 'slot15'
         ? lastSlot15BotStatus[asset]
-        : hourlyBotCache(kind, asset);
+        : kind === 'slot15_trial'
+          ? lastSlot15TrialBotStatus[asset]
+          : hourlyBotCache(kind, asset);
       if (!cache) return;
       if (kind === 'slot15') renderSlot15Bot(cache, asset);
+      else if (kind === 'slot15_trial') renderSlot15TrialBot(cache, asset);
       else renderHourlyBot(cache, asset, kind);
     }
 
@@ -3266,7 +3839,7 @@
       try {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), 60000);
-        const res = await fetch(hourlyBotSyncKalshiUrl(asset), {
+        const res = await fetch(hourlyBotSyncKalshiUrl(asset, kind), {
           method: 'POST',
           credentials: 'same-origin',
           signal: ctrl.signal,
@@ -3274,7 +3847,9 @@
         clearTimeout(timer);
         if (!res.ok) throw new Error(await parseSettingsError(res));
         const data = await res.json();
-        const bot = mergeBotStatus(asset, data.bot || data);
+        const bot = isHourlyLiveKind(kind)
+          ? mergeHourlyLiveBotStatus(asset, data.bot || data)
+          : mergeBotStatus(asset, data.bot || data);
         if (shouldRenderHourlyBot(asset, kind)) renderHourlyBot(bot, asset, kind);
         if (data.sync?.skipped === 'kalshi_not_authenticated') {
           showError('Kalshi sync failed: API not authenticated on server.');
@@ -3284,7 +3859,7 @@
           ? 'Kalshi sync timed out after 60s — try again.'
           : ('Kalshi sync failed: ' + (e.message || e));
         showError(msg);
-        const cached = lastBotStatus[asset];
+        const cached = hourlyBotCache(kind, asset);
         if (cached?.ok && shouldRenderHourlyBot(asset, kind)) renderHourlyBot(cached, asset, kind);
       } finally {
         if (btn) {
@@ -3342,18 +3917,24 @@
         'hourly_trial_soft:btc': '/api/hourly-trial-soft/bot/override-daily-cap',
         'hourly_trial_mech:btc': '/api/hourly-trial-mech/bot/override-daily-cap',
         'hourly_trial:eth': '/api/eth/hourly-trial/bot/override-daily-cap',
+        'hourly_trial:spx': '/api/spx/hourly-trial/bot/override-daily-cap',
+        'hourly_trial:ndx': '/api/ndx/hourly-trial/bot/override-daily-cap',
         'slot15:btc': '/api/slot15/bot/override-daily-cap',
         'slot15:eth': '/api/eth/15m/bot/override-daily-cap',
+        'slot15_trial:eth': '/api/eth/15m-trial/bot/override-daily-cap',
       };
       const path = paths[`${kind}:${asset}`];
       if (!path) return;
-      const kindLabel = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind) : (kind === 'hourly' ? 'hourly' : '15m');
+      const kindLabel = isHourlyTrialKind(kind) ? hourlyTrialKindLabel(kind)
+        : isSlot15TrialKind(kind) ? '15m trial'
+        : (kind === 'hourly' ? 'hourly' : '15m');
       if (!confirm(`Resume ${asset.toUpperCase()} ${kindLabel} entries for the rest of today?\n\nDaily loss is still tracked; the $ cap will not block this bot until tomorrow (ET).`)) return;
       try {
         const res = await fetch(path, { method: 'POST' });
         if (!res.ok) throw new Error(await res.text());
         const bot = await res.json();
         if (kind === 'hourly' || isHourlyTrialKind(kind)) renderHourlyBot(bot, asset, kind);
+        else if (isSlot15TrialKind(kind)) renderSlot15TrialBot(bot, asset);
         else renderSlot15Bot(bot, asset);
         const h = await get('/api/health');
         if (h) renderStatus(h);
@@ -3386,6 +3967,9 @@
       }
       if (raw.startsWith('already_open:')) return 'already holding this contract (no add-to)';
       if (raw.startsWith('ask_edge_too_low:')) return `ask-edge thin (${raw.slice('ask_edge_too_low:'.length)})`;
+      if (raw.startsWith('pnl_first_regime_blocked:')) {
+        return `regime blocked (${raw.slice('pnl_first_regime_blocked:'.length)})`;
+      }
       if (raw.startsWith('reentry_cooldown:')) return 're-entry cooldown';
       if (raw.startsWith('cheap_leg_cut_cooldown:')) return 'cheap leg cut cooldown';
       if (raw.startsWith('scale_in_not_winner:')) return 'already open — leg not winning enough to add';
@@ -3429,14 +4013,49 @@
         : 'Signal filter: STRONG/ACTIONABLE applies.';
     }
 
-    function botEntryWatchHtml(bot, periodLabel, freeMode) {
+    function botRegimeGateHtml(bot, periodLabel) {
+      if (periodLabel !== 'hour') return '';
+      const w = bot?.entry_watch;
+      if (!w) return '';
+      const reasons = w.regime_reasons || [];
+      const minFlags = w.regime_min_flags_to_block ?? 2;
+      const blocked = w.regime_blocked === true || w.regime_allow_trade === false;
+      if (!blocked && !reasons.length) return '';
+      const flagCount = reasons.length;
+      const pnlFirst = bot?.live_entry_guards?.mechanics_profile === 'pnl_first';
+      const freeMode = !(bot?.settings?.allow_strong || bot?.settings?.allow_actionable);
+      const boxBase = 'font-size:.68rem;margin:.25rem 0 .35rem;padding:.45rem .55rem;border-radius:6px';
+      let status;
+      let style;
+      if (blocked) {
+        status = 'BLOCKED — no new entries';
+        style = `${boxBase};background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3)`;
+      } else {
+        status = `Advisory — ${flagCount}/${minFlags} flag${flagCount === 1 ? '' : 's'}`;
+        style = `${boxBase};background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25)`;
+      }
+      let modeNote = '';
+      if (pnlFirst && (bot?.settings?.mode === 'live')) {
+        modeNote = 'P&amp;L-first live: regime enforced even when STRONG/ACTIONABLE are off.';
+      } else if (freeMode && !blocked) {
+        modeNote = `FREE mode: entries allowed until ${minFlags}+ flags (need ${Math.max(0, minFlags - flagCount)} more to block).`;
+      } else if (blocked) {
+        modeNote = `${flagCount} flag${flagCount === 1 ? '' : 's'} met the ${minFlags}-flag block threshold.`;
+      }
+      const list = reasons.length
+        ? `<ul style="margin:.3rem 0 0 1rem;padding:0;font-size:.62rem">${reasons.map((r) => `<li>${r}</li>`).join('')}</ul>`
+        : '<p style="margin:.3rem 0 0;font-size:.62rem;opacity:.88">No reason text on tab — check hourly prediction cards.</p>';
+      return `<div class="muted" style="${style}"><strong>Regime gate · ${status}</strong>${modeNote ? `<p style="margin:.25rem 0 0;font-size:.62rem;opacity:.88">${modeNote}</p>` : ''}${list}</div>`;
+    }
+
+    function botEntryWatchHtml(bot, periodLabel, freeMode, deployHint = '') {
       const w = bot.entry_watch;
       if (!w) return '';
       const openN = bot.open_position_count ?? 0;
       const maxPos = bot.max_concurrent_positions ?? (periodLabel === 'hour' ? 3 : 1);
       const slotsLine = ` · <strong>${openN}/${maxPos}</strong> slots`;
       const deployLine = bot.remaining_usd != null
-        ? ` · <strong>$${Number(bot.remaining_usd).toFixed(2)}</strong> deployable`
+        ? ` · <strong>$${Number(bot.remaining_usd).toFixed(2)}</strong> deployable${deployHint}`
         : '';
       const skipRaw = bot.last_skip_reason || '';
       const skipBrief = skipRaw ? botSkipReasonBrief(skipRaw) : '';
@@ -3503,7 +4122,8 @@
         hour_budget_exhausted: 'No deployable budget left this hour.',
         slot_budget_exhausted: 'No deployable budget left this slot.',
         fully_deployed: 'Max at-risk reached — waiting for an exit to free budget.',
-        no_buy_yes_no_candidates: 'No BUY YES/NO candidates in live picks.',
+        no_buy_yes_no_candidates: 'No BUY YES/NO candidates in live picks (NEUTRAL signal or no actionable contracts).',
+        regime_blocked: 'Regime gate blocked new entries — model/chop filter active.',
         no_long_short_candidates: 'No LONG/SHORT entry signals on 15m tab.',
         no_liquidity: 'No usable bid/ask on Kalshi for paper fill.',
         spread_too_wide: 'Bid/ask spread too wide for paper entry.',
@@ -3543,6 +4163,14 @@
         const src = raw.slice('settlement_index_not_live:'.length);
         return `Live entries blocked — settlement index required but feed is ${refSourceLabel(src)}. Exits still run.`;
       }
+      if (raw.startsWith('regime_blocked:')) {
+        const detail = raw.slice('regime_blocked:'.length);
+        return `Regime blocked new entries — ${detail}`;
+      }
+      if (raw.startsWith('pnl_first_regime_blocked:')) {
+        const detail = raw.slice('pnl_first_regime_blocked:'.length);
+        return `P&amp;L-first regime block — ${detail}. See Regime gate panel for all flags.`;
+      }
       return labels[raw] || raw;
     }
 
@@ -3559,6 +4187,19 @@
       return `<p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem;padding:.45rem .55rem;background:rgba(239,68,68,.1);border-radius:6px;border:1px solid rgba(239,68,68,.3)"><strong>Live entry guard:</strong> ${id} feed not active (${src}). Live entries are blocked until Kalshi CF Benchmarks index is live. Paper mode unaffected. Exits still run.</p>`;
     }
 
+    function botLiveEntryGuardHtml(bot) {
+      const g = bot?.live_entry_guards;
+      if (!g || g.mode !== 'live' || !g.live_execution_label) return '';
+      const notes = (g.notes || []).map((n) => `<li>${n}</li>`).join('');
+      const compare = g.btc_comparison_hint
+        ? `<p style="margin:.35rem 0 0;font-size:.62rem;opacity:.88">${g.btc_comparison_hint}</p>`
+        : '';
+      const style = g.live_execution_style === 'standard_trial'
+        ? 'background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.22)'
+        : 'background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.18)';
+      return `<div class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem;padding:.45rem .55rem;border-radius:6px;${style}"><strong>Live execution profile:</strong> ${g.live_execution_label}${notes ? `<ul style="margin:.3rem 0 0 1rem;padding:0;font-size:.62rem">${notes}</ul>` : ''}${compare}</div>`;
+    }
+
     function botSkipReasonHtml(bot) {
       if (!bot || !bot.last_skip_reason) return '';
       return `<p class="muted" style="font-size:.68rem;margin:.35rem 0 .45rem;padding:.45rem .55rem;background:rgba(148,163,184,.08);border-radius:6px"><strong>Last skip:</strong> ${botSkipReasonLabel(bot.last_skip_reason)}</p>`;
@@ -3566,7 +4207,7 @@
 
     function applyBotSettingsToDom(kind, asset, settings) {
       const p = botDomPrefix(kind, asset);
-      const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+      const maxKey = (kind === 'slot15' || kind === 'slot15_trial') ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
       const s = normalizeBotSettings(settings, maxKey);
       if (!s) return;
       const set = (id, checked) => {
@@ -3579,7 +4220,7 @@
       set(`bot-strong-${p}`, s.allow_strong);
       set(`bot-actionable-${p}`, s.allow_actionable);
       set(`bot-use-profits-${p}`, s.use_accumulated_profit);
-      set(`bot-auto-refill-${p}`, s.paper_auto_refill);
+      set(`bot-auto-refill-${p}`, botAutoRefillChecked(s));
       set(`bot-aggressive-${p}`, s.aggressive_entries);
       const pctEl = $(`bot-profit-use-pct-${p}`);
       if (pctEl) {
@@ -3591,27 +4232,42 @@
     }
 
     function syncBotSettingsUi(kind, asset, serverSettings, forceFlags) {
-      const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+      const isSlot15Kind = kind === 'slot15' || kind === 'slot15_trial';
+      const maxKey = isSlot15Kind ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
       const key = botUiKey(kind, asset);
-      const settingsWrapId = kind === 'slot15'
-        ? `${asset}-slot15-bot-settings`
-        : hourlyBotSettingsWrapId(kind, asset);
+      const settingsWrapId = kind === 'slot15_trial'
+        ? `${asset}-slot15-trial-bot-settings`
+        : kind === 'slot15'
+          ? `${asset}-slot15-bot-settings`
+          : hourlyBotSettingsWrapId(kind, asset);
       const settingsWrap = $(settingsWrapId);
       if (!settingsWrap) return normalizeBotSettings(serverSettings, maxKey) || serverSettings || {};
 
+      if (isHourlyLiveKind(kind)) {
+        settingsWrap.innerHTML = ethLiveMirrorSettingsHtml(asset, serverSettings);
+        botSettingsDomReady[key] = true;
+        const norm = normalizeBotSettings(serverSettings, maxKey);
+        lastKnownBotSettings[key] = norm;
+        return norm || serverSettings;
+      }
+
       const pending = pendingBotPatch[key];
-      const domSettings = kind === 'slot15'
-        ? readSlot15BotSettingsFromDom(asset)
-        : readBotSettingsFromDom(asset, kind);
+      const domSettings = kind === 'slot15_trial'
+        ? readSlot15TrialBotSettingsFromDom(asset)
+        : kind === 'slot15'
+          ? readSlot15BotSettingsFromDom(asset)
+          : readBotSettingsFromDom(asset, kind);
       const lastKnown = lastKnownBotSettings[key];
       const patchConfirmed = settingsPatchConfirmed[key];
       const forceKey = botForceKey(kind, asset);
       const needStructure = !botSettingsDomReady[key] && (!domSettings || forceFlags[forceKey]);
 
       if (needStructure) {
-        settingsWrap.innerHTML = kind === 'slot15'
-          ? slot15BotSettingsHtml(asset, serverSettings)
-          : botSettingsHtml(asset, serverSettings, kind);
+        settingsWrap.innerHTML = kind === 'slot15_trial'
+          ? slot15TrialBotSettingsHtml(asset, serverSettings)
+          : kind === 'slot15'
+            ? slot15BotSettingsHtml(asset, serverSettings)
+            : botSettingsHtml(asset, serverSettings, kind);
         forceFlags[forceKey] = false;
         botSettingsDomReady[key] = true;
         const norm = normalizeBotSettings(serverSettings, maxKey);
@@ -3652,7 +4308,7 @@
       botAutoStoppedPrev[key] = !!autoStopped;
       if (autoStopped && !wasStopped) {
         applyBotSettingsToDom(kind, asset, serverSettings);
-        const maxKey = kind === 'slot15' ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
+        const maxKey = (kind === 'slot15' || kind === 'slot15_trial') ? 'max_spend_per_slot_usd' : 'max_spend_per_hour_usd';
         lastKnownBotSettings[key] = normalizeBotSettings(serverSettings, maxKey);
       }
     }
@@ -3686,7 +4342,117 @@
       }
     }
 
+    function perfScopeForTab(tab) {
+      if (tab === 'eth-hourly') return { asset: 'eth', label: 'ETH Hourly', hourlyOnly: true };
+      if (tab === 'daily') return { asset: 'btc', label: 'BTC Hourly', hourlyOnly: true };
+      if (tab === 'eth-15m') return { asset: 'eth', label: 'ETH 15m', kinds: ['slot15'] };
+      if (tab === '15m') return { asset: 'btc', label: 'BTC 15m', kinds: ['slot15'] };
+      if (tab === 'spx-hourly') return { asset: 'spx', label: 'SPX Hourly', hourlyOnly: true };
+      if (tab === 'ndx-hourly') return { asset: 'ndx', label: 'NDX Hourly', hourlyOnly: true };
+      if (tab === 'trials') return { trialsOnly: true, label: 'All trial bots' };
+      return null;
+    }
+
+    function perfBotMatchesScope(bot, scope) {
+      if (!scope) return true;
+      if (scope.trialsOnly) return isHourlyTrialKind(bot.kind);
+      if (bot.asset !== scope.asset) return false;
+      if (scope.kinds) return scope.kinds.includes(bot.kind);
+      if (scope.hourlyOnly) return bot.kind === 'hourly' || isHourlyTrialKind(bot.kind);
+      return true;
+    }
+
+    function perfCombineSummaries(reports) {
+      let closed = 0;
+      let pnl = 0;
+      let wins = 0;
+      for (const r of reports) {
+        const sm = r.summary || {};
+        closed += sm.closed_trades || 0;
+        pnl += sm.total_pnl_usd || 0;
+        wins += sm.wins || 0;
+      }
+      return {
+        closed_trades: closed,
+        total_pnl_usd: Math.round(pnl * 100) / 100,
+        win_rate: closed ? Math.round((wins / closed) * 1000) / 1000 : null,
+      };
+    }
+
+    function perfCombineRolling(reports, windowKey) {
+      let closed = 0;
+      let pnl = 0;
+      let wins = 0;
+      let losses = 0;
+      let lossPnl = 0;
+      for (const r of reports) {
+        const block = (r.rolling_windows || {})[windowKey]
+          || (windowKey === 'last_1h' ? r.last_60_min : null)
+          || {};
+        const sm = block.summary || {};
+        closed += sm.closed_trades || 0;
+        pnl += sm.total_pnl_usd || 0;
+        wins += sm.wins || 0;
+        losses += sm.loss_count != null ? sm.loss_count : (sm.losses || 0);
+        lossPnl += sm.loss_pnl_usd || 0;
+      }
+      const out = {
+        closed_trades: closed,
+        total_pnl_usd: Math.round(pnl * 100) / 100,
+        loss_count: losses,
+        loss_pnl_usd: Math.round(lossPnl * 100) / 100,
+      };
+      if (closed) out.win_rate = Math.round((wins / closed) * 1000) / 1000;
+      return out;
+    }
+
+    function perfCombineWindowDays(reports) {
+      let closed = 0;
+      let pnl = 0;
+      let wins = 0;
+      for (const r of reports) {
+        const sm = (r.last_60_days || {}).summary || {};
+        closed += sm.closed_trades || 0;
+        pnl += sm.total_pnl_usd || 0;
+        wins += sm.wins || 0;
+      }
+      const out = { closed_trades: closed, total_pnl_usd: Math.round(pnl * 100) / 100, window_days: 60 };
+      if (closed) out.win_rate = Math.round((wins / closed) * 1000) / 1000;
+      return out;
+    }
+
+    function filterPerformanceReportForTab(report, tab) {
+      const scope = perfScopeForTab(tab);
+      if (!report || !report.ok || !scope) return report;
+      const bots = (report.bots || []).filter((b) => perfBotMatchesScope(b, scope));
+      const main = bots.filter((b) => !isHourlyTrialKind(b.kind));
+      const trial = bots.filter((b) => isHourlyTrialKind(b.kind));
+      const rollingKeys = ['last_1h', 'last_2h', 'last_4h', 'last_12h', 'last_24h', 'last_48h'];
+      const combinedRolling = {};
+      for (const key of rollingKeys) combinedRolling[key] = perfCombineRolling(main, key);
+      const combinedTrialRolling = {};
+      for (const key of rollingKeys) combinedTrialRolling[key] = perfCombineRolling(trial, key);
+      const expBlock = (report.experiments_by_asset || {})[scope.asset] || null;
+      return {
+        ...report,
+        _perf_scope: scope,
+        bots,
+        main_bots: main,
+        trial_bots: trial,
+        combined: perfCombineSummaries(main),
+        combined_trial: perfCombineSummaries(trial),
+        combined_60_days: perfCombineWindowDays(main),
+        combined_trial_60_days: perfCombineWindowDays(trial),
+        combined_rolling_windows: combinedRolling,
+        combined_trial_rolling_windows: combinedTrialRolling,
+        combined_last_60_min: combinedRolling.last_1h,
+        experiment_bots: expBlock?.bots || [],
+        experiment_start_at: expBlock?.start_at || null,
+      };
+    }
+
     function renderBotPerformanceReport(report) {
+      report = filterPerformanceReportForTab(report, activeTab);
       const el = $('bot-performance-report');
       if (!el) return;
       if (!report || !report.ok) {
@@ -3737,7 +4503,11 @@
         experimentHtml = `<p class="muted" style="font-size:.68rem;margin:0 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Live vs trials — since ${startLabel} EDT</p>
           <table style="width:100%;font-size:.72rem;margin-bottom:.65rem"><thead><tr><th>Bot</th><th>Closed</th><th>Win%</th><th>P&amp;L</th></tr></thead><tbody>${rows}</tbody></table>`;
       }
-      let html = `${experimentHtml}<div class="perf-grid">
+      const scope = report._perf_scope;
+      const scopeNote = scope
+        ? `<p class="muted" style="font-size:.68rem;margin:0 0 .5rem">Showing <strong>${scope.label}</strong> only (matches active tab). Rolling windows use the <strong>full trade log</strong> — use the experiment table or Fresh start on the bot card to focus on the current code era.</p>`
+        : `<p class="muted" style="font-size:.68rem;margin:0 0 .5rem">All paper bots. Switch to a product tab (BTC Hourly, ETH Hourly, 15m) to filter this report.</p>`;
+      let html = `${scopeNote}${experimentHtml}<div class="perf-grid">
         <div class="perf-stat muted">Main bots closed trades<strong>${combined.closed_trades ?? 0}</strong></div>
         <div class="perf-stat muted">Main win rate<strong>${combWr}</strong></div>
         <div class="perf-stat muted">Main realized P&amp;L<strong>${combPnl}</strong></div>
@@ -3834,12 +4604,21 @@
       el.innerHTML = html;
     }
 
-    async function loadBotPerformanceReport() {
+    async function loadBotPerformanceReport(force = false) {
+      const now = Date.now();
+      if (!force && perfReportInFlight) return;
+      if (!force && now - perfReportLastAt < PERF_REPORT_INTERVAL_MS) return;
+      perfReportInFlight = true;
       try {
-        const report = await get('/api/bots/performance-report');
+        const report = await getWithTimeout('/api/bots/performance-report', 20000);
+        perfReportLastAt = Date.now();
+        lastPerfReport = report;
         renderBotPerformanceReport(report);
       } catch (e) {
+        perfReportLastAt = Date.now();
         renderBotPerformanceReport({ ok: false, error: e.message });
+      } finally {
+        perfReportInFlight = false;
       }
     }
 
@@ -3851,6 +4630,75 @@
         btn.classList.toggle('active', btn.dataset.asset === asset);
       });
       loadHourlyLiveTrialCompare();
+    }
+
+    let epochReconcileAsset = 'btc';
+    let epochReconcileInFlight = false;
+    let epochReconcileLastAt = 0;
+    const EPOCH_RECONCILE_INTERVAL_MS = 60000;
+
+    function setEpochReconcileAsset(asset) {
+      epochReconcileAsset = asset;
+      document.querySelectorAll('.epoch-reconcile-asset-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.asset === asset);
+      });
+      loadEpochReconcile(true);
+    }
+
+    function renderEpochReconcileReport(data) {
+      const el = $('epoch-reconcile-report');
+      if (!el) return;
+      if (!data || !data.ok) {
+        el.innerHTML = `<p class="muted">Epoch reconcile unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
+        return;
+      }
+      const totals = data.totals || {};
+      const startLabel = data.epoch_start_at
+        ? new Date(data.epoch_start_at).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+        : 'epoch';
+      const rows = (data.rows || []).map((r) => {
+        const driftCls = (r.drift || 0) > 0.01 ? 'pos' : ((r.drift || 0) < -0.01 ? 'neg' : 'muted');
+        return `<tr>
+          <td><code style="font-size:.68rem">${r.event_ticker}</code></td>
+          <td>${botPnlUsd(r.bot_pnl)}</td>
+          <td>${botPnlUsd(r.kalshi_pnl)}</td>
+          <td class="${driftCls}">${botPnlUsd(r.drift)}</td>
+          <td class="muted">${r.bot_trades ?? 0}</td>
+          <td class="muted">${r.kalshi_closed ?? 0}</td>
+        </tr>`;
+      }).join('');
+      el.innerHTML = `<p class="muted" style="font-size:.68rem;margin:0 0 .45rem">Since ${startLabel} EDT · ${String(data.asset || '').toUpperCase()}</p>
+        <div class="perf-grid" style="margin-bottom:.55rem">
+          <div class="perf-stat muted">Bot total<strong>${botPnlUsd(totals.bot_pnl)}</strong></div>
+          <div class="perf-stat muted">Kalshi total<strong>${botPnlUsd(totals.kalshi_pnl)}</strong></div>
+          <div class="perf-stat muted">Drift<strong>${botPnlUsd(totals.drift)}</strong></div>
+        </div>
+        <table class="compare-mini-table" style="width:100%">
+          <thead><tr>
+            <th>Event</th><th>Bot P&amp;L</th><th>Kalshi P&amp;L</th><th>Drift</th><th>Bot exits</th><th>Kalshi closed</th>
+          </tr></thead>
+          <tbody>${rows || '<tr><td colspan="6" class="muted">No closed trades since epoch.</td></tr>'}</tbody>
+        </table>`;
+    }
+
+    async function loadEpochReconcile(force = false) {
+      if (!force && epochReconcileInFlight) return;
+      const now = Date.now();
+      if (!force && now - epochReconcileLastAt < EPOCH_RECONCILE_INTERVAL_MS) return;
+      epochReconcileInFlight = true;
+      try {
+        const data = await getWithTimeout(
+          `/api/pnl-first/epoch-reconcile?asset=${encodeURIComponent(epochReconcileAsset)}`,
+          20000,
+        );
+        epochReconcileLastAt = Date.now();
+        renderEpochReconcileReport(data);
+      } catch (e) {
+        epochReconcileLastAt = Date.now();
+        renderEpochReconcileReport({ ok: false, error: e.message });
+      } finally {
+        epochReconcileInFlight = false;
+      }
     }
 
     function compareSideSummary(side) {
@@ -3951,8 +4799,8 @@
       return html;
     }
 
-    function renderHourlyLiveTrialCompare(data) {
-      const el = $('hourly-live-trial-compare');
+    function renderHourlyLiveTrialCompare(data, targetId = 'hourly-live-trial-compare') {
+      const el = $(targetId);
       if (!el) return;
       if (!data || !data.ok) {
         el.innerHTML = `<p class="muted">Comparison unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
@@ -3960,10 +4808,26 @@
       }
       const hours = data.hours || [];
       if (!hours.length) {
-        el.innerHTML = `<p class="muted">No matched hourly events yet for ${String(data.asset || compareAsset).toUpperCase()} (live hourly + paper trial).</p>`;
+        const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : (data.trial_kind === 'slot15_trial' ? '15m trial' : 'standard trial');
+        const periodNoun = data.live_kind === 'slot15' ? '15m slots' : 'hourly events';
+        const paperHint = data.live_kind === 'slot15' && data.live_mode === 'paper'
+          ? ' Enable Auto-bet on both the main ETH 15m bot (paper) and the trial bot, then wait for the same slot to trade on both.'
+          : (data.live_kind === 'slot15'
+            ? ' Enable Auto-bet on both the live ETH 15m bot and the trial bot for matched slots.'
+            : '');
+        el.innerHTML = `<p class="muted">No matched ${periodNoun} yet for ${String(data.asset || compareAsset).toUpperCase()} (main ${data.live_mode || 'live'} + paper ${trialLabel}).${paperHint}</p>`;
         return;
       }
-      const meta = `<p class="muted" style="font-size:.68rem;margin:0 0 .65rem">${hours.length} hour(s) · ${data.matched_event_count ?? 0} with both bots active · live <strong>${data.live_mode}</strong> vs trial <strong>${data.trial_mode}</strong> · pair window <strong>${data.pair_window_seconds ?? 180}s</strong></p>`;
+      const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : (data.trial_kind === 'slot15_trial' ? '15m trial' : 'standard trial');
+      const periodWord = data.live_kind === 'slot15' ? 'slot(s)' : 'hour(s)';
+      const liveColTitle = data.live_kind === 'slot15'
+        ? (data.live_mode === 'paper' ? 'Main 15m (paper)' : 'Live 15m')
+        : 'Live hourly';
+      const trialColTitle = data.live_kind === 'slot15' ? 'Paper trial' : `Paper ${trialLabel}`;
+      const epochNote = data.stats_epoch_at
+        ? ` · since ${time(data.stats_epoch_at)}`
+        : '';
+      const meta = `<p class="muted" style="font-size:.68rem;margin:0 0 .65rem">${hours.length} ${periodWord} · ${data.matched_event_count ?? 0} with both bots active · live <strong>${data.live_mode}</strong> vs paper <strong>${trialLabel}</strong> · pair window <strong>${data.pair_window_seconds ?? 180}s</strong>${epochNote}</p>`;
       const blocks = hours.map((h) => {
         const bothBadge = h.both_active
           ? '<span class="up" style="font-size:.65rem">both active</span>'
@@ -3985,8 +4849,8 @@
           <p class="muted" style="font-size:.65rem;margin:.15rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Paired entries (same contract + side)</p>
           ${comparePairsTable(ep.pairs, ep.unpaired_live, ep.unpaired_trial)}
           <div class="compare-grid" style="margin-top:.55rem">
-            ${compareSideColumn('Live hourly', h.live, 'compare-col-live')}
-            ${compareSideColumn('Paper trial', h.trial, 'compare-col-trial')}
+            ${compareSideColumn(liveColTitle, h.live, 'compare-col-live')}
+            ${compareSideColumn(trialColTitle, h.trial, 'compare-col-trial')}
           </div>
         </div>`;
       }).join('');
@@ -3994,13 +4858,178 @@
       el.innerHTML = `${meta}${blocks}<p class="muted" style="font-size:.65rem;margin:.35rem 0 0">Generated ${gen}</p>`;
     }
 
-    async function loadHourlyLiveTrialCompare() {
+    function renderFourKWeekPlan(data) {
+      const el = $('four-k-week-plan');
+      const card = $('four-k-week-plan-card');
+      if (!el) return;
+      if (card && data?.week) {
+        const sum = card.querySelector('summary');
+        if (sum) sum.textContent = `$4k/week plan · Week ${data.week}`;
+      }
+      if (!data || !data.ok) {
+        const staleNote = data?.stale ? ` <span class="muted">(stale — ${data.stale_error || data.error || 'refresh failed'})</span>` : '';
+        el.innerHTML = `<p class="muted">Plan status unavailable${data?.error ? `: ${data.error}` : ''}.${staleNote}</p>`;
+        return;
+      }
+      const lanes = data.lanes || {};
+      const ta = lanes.track_a || {};
+      const tb = lanes.track_b_shadow || {};
+      const s15 = lanes.slot15_eth || {};
+      const wc = data.week_config || {};
+      const fmtPnl = (v) => v == null ? '—' : `${Number(v) >= 0 ? '+' : ''}$${Number(v).toFixed(2)}`;
+      const fmtEpoch = (iso) => iso ? time(iso) : '—';
+
+      const laneRow = (label, pnl, detail, cls) => `
+        <div class="bot-stat" style="min-width:9rem">
+          <span class="muted" style="font-size:.62rem">${label}</span>
+          <strong class="${cls || (Number(pnl) >= 0 ? 'up' : 'down')}">${fmtPnl(pnl)}</strong>
+          <div class="muted" style="font-size:.62rem;margin-top:.15rem">${detail}</div>
+        </div>`;
+
+      const promo = tb.promotion_ready
+        ? '<span class="up">promotion gate met (shadow)</span>'
+        : `<span class="muted">shadow collecting · need ${tb.promotion?.min_events ?? 50} events / ${tb.promotion?.min_median_edge_cents_final_10m ?? 8}¢ median</span>`;
+
+      el.innerHTML = `
+        <div class="bot-row" style="flex-wrap:wrap;gap:.5rem;margin-bottom:.45rem">
+          ${laneRow('Track A · ETH live', ta.live?.net_pnl_usd, `epoch ${fmtEpoch(ta.stats_epoch_at)} · matched ${ta.live?.matched_hours ?? 0}h`, '')}
+          ${laneRow('Track A · ETH trial', ta.trial?.net_pnl_usd, `probe ${ta.probe_24h?.min_ask_edge_cents ?? 18}¢ · ≤${ta.probe_24h?.max_filled_enters_per_hour ?? 2}/h`, '')}
+          ${laneRow('Track B · shadow', tb.shadow_would_pnl_usd, `events ${tb.events_logged ?? 0} · median ${tb.median_edge_cents != null ? tb.median_edge_cents + '¢' : '—'} · ${promo}`, Number(tb.shadow_would_pnl_usd) >= 0 ? 'up' : 'down')}
+          ${laneRow('Slot15 · ETH paper', s15.net_pnl_usd, `epoch ${fmtEpoch(s15.stats_epoch_at)} · slots ${s15.periods_with_entries ?? 0} · ${s15.enabled ? 'ON' : 'OFF'}`, '')}
+        </div>
+        <p class="muted" style="font-size:.68rem;margin:.25rem 0 0">
+          Week ${data.week} targets: $${wc.hour_cap_usd ?? 15}/h cap · $${wc.stake_usd ?? 2.5} stake · ${wc.max_enters_per_hour ?? 2} enters/h · ${wc.min_edge_cents ?? 18}¢ edge · capital ${wc.capital_usd || '200–500'} · target ${wc.target_weekly_usd || '25–75'}/wk.
+          Track B logs hourly terminal window only (no orders). Slot15 is KXETH15M — not Track B.
+          ${data.stale ? `<span class="muted"> · showing last good snapshot (${data.stale_error || data.stale_reason || 'refresh slow'})</span>` : ''}
+          ${data.cached && !data.stale ? `<span class="muted"> · server cache ${data.cache_age_sec != null ? Number(data.cache_age_sec).toFixed(0) + 's' : ''}</span>` : ''}
+        </p>`;
+    }
+
+    let fourKPlanInFlight = false;
+    let fourKPlanRevisionInFlight = false;
+    let fourKPlanLastData = null;
+    let fourKPlanRevision = null;
+    let fourKPlanRevisionLastAt = 0;
+    const fourKPlanBotClosed = {};
+
+    function fourKPlanLaneKey(kind, asset) {
+      if (asset !== 'eth') return null;
+      if (kind === 'hourly_live') return 'track_a_live';
+      if (kind === 'hourly_trial') return 'track_a_trial';
+      if (kind === 'slot15') return 'slot15';
+      return null;
+    }
+
+    function noteFourKPlanBotClosed(bot, kind, asset) {
+      const lane = fourKPlanLaneKey(kind, asset);
+      if (!lane || !bot?.ok) return;
+      const closed = Number(bot.experiment_performance?.summary?.closed_trades ?? 0);
+      const prev = fourKPlanBotClosed[lane];
+      fourKPlanBotClosed[lane] = closed;
+      if (prev !== undefined && closed > prev) {
+        checkFourKWeekPlanRevision(true);
+      }
+    }
+
+    async function loadFourKWeekPlan(force = false) {
+      if (fourKPlanInFlight) return;
+      fourKPlanInFlight = true;
       try {
-        const data = await get(`/api/bots/hourly-live-trial-compare?asset=${encodeURIComponent(compareAsset)}&limit_hours=24`);
+        const data = await getWithTimeout('/api/pnl-first/four-k-week-plan', 25000);
+        fourKPlanLastData = data;
+        renderFourKWeekPlan(data);
+      } catch (e) {
+        if (fourKPlanLastData && fourKPlanLastData.ok) {
+          renderFourKWeekPlan({ ...fourKPlanLastData, stale: true, stale_error: e.message });
+        } else {
+          renderFourKWeekPlan({ ok: false, error: e.message });
+        }
+      } finally {
+        fourKPlanInFlight = false;
+      }
+    }
+
+    async function checkFourKWeekPlanRevision(forceFull = false) {
+      const now = Date.now();
+      if (!forceFull && now - fourKPlanRevisionLastAt < FOUR_K_REVISION_INTERVAL_MS) return;
+      if (fourKPlanRevisionInFlight) return;
+      fourKPlanRevisionInFlight = true;
+      try {
+        const rev = await getWithTimeout('/api/pnl-first/four-k-week-plan/revision', 8000);
+        fourKPlanRevisionLastAt = Date.now();
+        if (!rev?.ok) {
+          if (fourKPlanLastData == null) await loadFourKWeekPlan(true);
+          return;
+        }
+        const changed = forceFull || fourKPlanRevision === null || rev.revision !== fourKPlanRevision;
+        fourKPlanRevision = rev.revision;
+        if (changed) await loadFourKWeekPlan(true);
+      } catch (_) {
+        if (fourKPlanLastData == null) await loadFourKWeekPlan(true).catch(() => {});
+      } finally {
+        fourKPlanRevisionInFlight = false;
+      }
+    }
+
+    async function loadHourlyLiveTrialCompare(force = false) {
+      if (!force && hourlyCompareInFlight) return;
+      const now = Date.now();
+      if (!force && now - hourlyCompareLastAt < HOURLY_COMPARE_INTERVAL_MS) return;
+      hourlyCompareInFlight = true;
+      try {
+        const data = await getWithTimeout(
+          `/api/bots/hourly-live-trial-compare?asset=${encodeURIComponent(compareAsset)}&limit_hours=24`,
+          15000,
+        );
+        hourlyCompareLastAt = Date.now();
         renderHourlyLiveTrialCompare(data);
       } catch (e) {
+        hourlyCompareLastAt = Date.now();
         renderHourlyLiveTrialCompare({ ok: false, error: e.message });
+      } finally {
+        hourlyCompareInFlight = false;
       }
+    }
+
+    async function loadIndexHourlyLiveTrialCompare(asset) {
+      const targetId = `${asset}-hourly-live-trial-compare`;
+      try {
+        const data = await get(`/api/bots/hourly-live-trial-compare?asset=${encodeURIComponent(asset)}&limit_hours=24`);
+        renderHourlyLiveTrialCompare(data, targetId);
+      } catch (e) {
+        renderHourlyLiveTrialCompare({ ok: false, error: e.message }, targetId);
+      }
+    }
+
+    async function loadSlot15LiveTrialCompare(force = false) {
+      const targetId = 'eth-slot15-live-trial-compare';
+      if (activeTab !== 'eth-15m') return;
+      const now = Date.now();
+      if (!force && slot15CompareInFlight) return;
+      if (!force && now - slot15CompareLastAt < SLOT15_COMPARE_INTERVAL_MS) return;
+      slot15CompareInFlight = true;
+      try {
+        const data = await getWithTimeout('/api/bots/slot15-live-trial-compare?asset=eth&limit_slots=24', 12000);
+        slot15CompareLastAt = Date.now();
+        if (activeTab === 'eth-15m') renderHourlyLiveTrialCompare(data, targetId);
+      } catch (e) {
+        slot15CompareLastAt = Date.now();
+        if (activeTab === 'eth-15m') renderHourlyLiveTrialCompare({ ok: false, error: e.message }, targetId);
+      } finally {
+        slot15CompareInFlight = false;
+      }
+    }
+
+    function refreshIndexTrialBot(asset, tabAtStart, gen) {
+      getWithTimeout(hourlyTrialBotStatusUrl(asset, 'hourly_trial'), 15000).then((trialBot) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        if (trialBot) trialBot = mergeHourlyTrialBotStatus(asset, trialBot, 'hourly_trial');
+        if (trialBot) renderHourlyBot(trialBot, asset, 'hourly_trial');
+      }).catch(() => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        const cached = getTrialBotCache('hourly_trial', asset);
+        if (cached) renderHourlyBot(cached, asset, 'hourly_trial');
+      });
     }
 
     function renderOpenPositionsPanel(openPos, opts) {
@@ -4021,6 +5050,9 @@
         const alert = pa.alert || 'HOLD';
         const alertCls = alert === 'TAKE PROFIT' ? 'up' : alert === 'CUT LOSSES' ? 'down' : 'muted';
         const upnl = p.unrealized_pnl_usd;
+        const legTag = p.leg_strategy === 's2_range' ? 'S2' : 'S1';
+        const kalshiOnly = !!p.kalshi_only;
+        const contractCell = `${p.label || p.market_ticker || '—'}${kalshiOnly ? ' <span class="muted" title="On Kalshi but not yet in bot trade log">· Kalshi</span>' : ''}`;
         const markDelta = pa.mark_vs_entry_cents ?? (
           p.mark_price_cents != null && p.entry_price_cents != null
             ? Number(p.mark_price_cents) - Number(p.entry_price_cents)
@@ -4032,8 +5064,8 @@
         const compareLabel = opts.compareLabel || 'Slot (BRTI)';
         if (dualView) {
           return `<tr>
-            <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
-            <td>${(p.side || '').toUpperCase()} ×${botContractsSize(p)}</td>
+            <td style="font-size:.68rem">${contractCell}</td>
+            <td><span class="muted" style="font-size:.62rem">${legTag}</span> ${(p.side || '').toUpperCase()} ×${botContractsSize(p)}</td>
             <td>${botCents(p.entry_price_cents)}</td>
             <td style="font-size:.65rem" title="Kalshi bid/ask on held side">${botMarkBook(p)}</td>
             <td>${botCents(p.mark_price_cents)}</td>
@@ -4044,8 +5076,8 @@
           </tr>`;
         }
         return `<tr>
-          <td style="font-size:.68rem">${p.label || p.market_ticker || '—'}</td>
-          <td>${(p.side || '').toUpperCase()} ×${botContractsSize(p)}</td>
+          <td style="font-size:.68rem">${contractCell}</td>
+          <td><span class="muted" style="font-size:.62rem">${legTag}</span> ${(p.side || '').toUpperCase()} ×${botContractsSize(p)}</td>
           <td>${botCents(p.entry_price_cents)}</td>
           <td style="font-size:.65rem" title="Kalshi bid/ask on held side">${botMarkBook(p)}</td>
           <td>${botCents(p.mark_price_cents)}</td>
@@ -4055,7 +5087,7 @@
       }).join('');
       const head = dualView
         ? `<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Bid/Ask</th><th>Mark</th><th>Mark Δ</th><th>Unreal. P&amp;L</th><th>Leg alert</th><th>${opts.compareLabel || 'Slot (BRTI)'}</th></tr></thead>`
-        : '<thead><tr><th>Contract</th><th>Size</th><th>Entry</th><th>Bid/Ask</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>';
+        : '<thead><tr><th>Contract</th><th>Leg · Size</th><th>Entry</th><th>Bid/Ask</th><th>Mark</th><th>Unreal. P&amp;L</th><th>Alert</th></tr></thead>';
       const title = dualView
         ? `Open positions · leg mark P&amp;L + ${opts.compareLabel || 'slot BRTI'} view`
         : 'Open positions · live mark-to-market';
@@ -4070,7 +5102,8 @@
     }
 
     function slot15BotStatusUrl(asset) {
-      return asset === 'eth' ? '/api/eth/15m/bot' : '/api/slot15/bot';
+      const q = '?lightweight=true';
+      return asset === 'eth' ? `/api/eth/15m/bot${q}` : `/api/slot15/bot${q}`;
     }
 
     function mergeSlot15Summary(prev, next, eventTicker) {
@@ -4128,6 +5161,101 @@
       return asset === 'eth' ? '/api/eth/15m/bot/clear-history' : '/api/slot15/bot/clear-history';
     }
 
+    function slot15TrialBotStatusUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot?lightweight=true' : null;
+    }
+
+    function slot15TrialBotSettingsUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot/settings' : null;
+    }
+
+    function slot15TrialBotResetBankrollUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot/reset-bankroll' : null;
+    }
+
+    function slot15TrialBotFreshStartUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot/fresh-start' : null;
+    }
+
+    function slot15TrialBotClearHistoryUrl(asset) {
+      return asset === 'eth' ? '/api/eth/15m-trial/bot/clear-history' : null;
+    }
+
+    function mergeSlot15TrialBotStatus(asset, incoming) {
+      if (!incoming || !incoming.ok || (incoming.asset && incoming.asset !== asset)) {
+        return lastSlot15TrialBotStatus[asset];
+      }
+      const prev = lastSlot15TrialBotStatus[asset];
+      if (!prev) {
+        lastSlot15TrialBotStatus[asset] = incoming;
+        return incoming;
+      }
+      const eventTicker = incoming.event_ticker
+        || (incoming.slot_summary || {}).event_ticker
+        || prev.event_ticker;
+      const mergedSs = mergeSlot15Summary(prev.slot_summary || {}, incoming.slot_summary || {}, eventTicker);
+      const merged = {
+        ...prev,
+        ...incoming,
+        event_ticker: eventTicker,
+        settings: mergeBotSettingsForCache(SLOT15_TRIAL_KIND, asset, incoming.settings, prev.settings),
+        slot_summary: mergedSs,
+        open_positions: incoming.open_positions ?? prev.open_positions,
+        recent_trades: incoming.recent_trades ?? prev.recent_trades,
+      };
+      lastSlot15TrialBotStatus[asset] = merged;
+      return merged;
+    }
+
+    function readSlot15TrialBotSettingsFromDom(asset) {
+      const p = `slot15-trial-${asset}`;
+      const enabledEl = $(`bot-enabled-${p}`);
+      if (!enabledEl) return null;
+      return {
+        enabled: !!enabledEl.checked,
+        mode: 'paper',
+        max_spend_per_slot_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '25'),
+        allow_strong: !!$(`bot-strong-${p}`)?.checked,
+        allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
+        use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
+        profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
+        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
+      };
+    }
+
+    function slot15TrialBotSettingsHtml(asset, s) {
+      const p = `slot15-trial-${asset}`;
+      return `
+        <div class="bot-row">
+          <label class="bot-label">Auto-bet
+            <label class="switch"><input type="checkbox" id="bot-enabled-${p}" ${s.enabled ? 'checked' : ''} onchange="saveSlot15TrialBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <span class="muted" style="font-size:.72rem;align-self:center">Paper only — shadow of live ETH 15m</span>
+        </div>
+        <div class="bot-row">
+          <label class="bot-label" title="Max open exposure at once this slot — not cumulative spend">Max at-risk $ / slot
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_slot_usd ?? 25}" style="width:5rem;margin-left:.35rem" oninput="scheduleSlot15CapSave('${asset}', true)" onchange="saveSlot15TrialBotSettings('${asset}')" onblur="saveSlot15TrialBotSettings('${asset}')">
+          </label>
+          <label class="bot-label">STRONG bets
+            <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="saveSlot15TrialBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label">ACTIONABLE bets
+            <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="saveSlot15TrialBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="When ON, wins increase deployable capital and cumulative $ entered per slot can exceed max at-risk. When OFF, capped at max at-risk $ for this slot only.">Use profits
+            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit ? 'checked' : ''} onchange="onBotUseProfitsToggle('${asset}', 'slot15_trial')"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="% of interval profit deployable when Use profits is ON (0–100).">Profit use %
+            <input type="number" id="bot-profit-use-pct-${p}" min="0" max="100" step="5" value="${s.profit_use_pct ?? 100}" style="width:3.5rem;margin-left:.35rem" ${s.use_accumulated_profit ? '' : 'disabled'} onchange="saveSlot15TrialBotSettings('${asset}')">
+          </label>
+          <label class="bot-label" title="When ON and bankroll hits $0 with no open positions, add another max at-risk chunk and keep trading.">Auto-refill
+            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${s.paper_auto_refill !== false ? 'checked' : ''} onchange="saveSlot15TrialBotSettings('${asset}')"><span class="slider"></span></label>
+          </label>
+          ${botAggressiveToggleHtml(p, s, `saveSlot15TrialBotSettings('${asset}')`)}
+        </div>`;
+    }
+
     function readSlot15BotSettingsFromDom(asset) {
       const p = `slot15-${asset}`;
       const enabledEl = $(`bot-enabled-${p}`);
@@ -4161,7 +5289,7 @@
         </div>
         <div class="bot-row">
           <label class="bot-label" title="Max open exposure at once this slot — not cumulative spend">Max at-risk $ / slot
-            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_slot_usd ?? 25}" style="width:5rem;margin-left:.35rem" onchange="saveSlot15BotSettings('${asset}')">
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_slot_usd ?? 25}" style="width:5rem;margin-left:.35rem" oninput="scheduleSlot15CapSave('${asset}')" onchange="saveSlot15BotSettings('${asset}')" onblur="saveSlot15BotSettings('${asset}')">
           </label>
           <label class="bot-label">STRONG bets
             <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="saveSlot15BotSettings('${asset}')"><span class="slider"></span></label>
@@ -4283,6 +5411,7 @@
         ${tradeLogHtml}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
+      noteFourKPlanBotClosed(bot, 'slot15', asset);
     }
 
     function onSlot15BotModeToggle(asset, ev) {
@@ -4371,6 +5500,136 @@
       }
     }
 
+    function renderSlot15TrialBot(bot, asset) {
+      const kind = SLOT15_TRIAL_KIND;
+      const el = $(`${asset}-slot15-trial-bot`);
+      if (!el) return;
+      if (activeTab !== 'eth-15m' || asset !== 'eth') return;
+      if (bot && bot.asset && bot.asset !== asset) return;
+      if (bot && bot.ok) bot = mergeSlot15TrialBotStatus(asset, bot) || bot;
+      if (!bot || !bot.ok) {
+        const statusWrap = $(`${asset}-slot15-trial-bot-status`);
+        const msg = `<p class="muted">Trial bot unavailable${bot?.error ? `: ${bot.error}` : ''}.</p>`;
+        if (statusWrap) {
+          statusWrap.innerHTML = msg;
+        } else {
+          el.innerHTML = msg;
+          slot15BotForceSettingsRender[`${asset}-trial`] = true;
+        }
+        return;
+      }
+      const serverSettings = bot.settings || {};
+      noteAutoStoppedTransition(kind, asset, bot.auto_stopped, serverSettings);
+      const settingsWrapId = `${asset}-slot15-trial-bot-settings`;
+      const statusWrapId = `${asset}-slot15-trial-bot-status`;
+      if (!$(settingsWrapId)) {
+        el.innerHTML = `<div class="bot-panel"><div id="${settingsWrapId}"></div><div id="${statusWrapId}"></div></div>`;
+      }
+      const settingsWrap = $(settingsWrapId);
+      const statusWrap = $(statusWrapId);
+      if (!settingsWrap || !statusWrap) return;
+
+      const s = syncBotSettingsUi(kind, asset, serverSettings, slot15BotForceSettingsRender);
+      const modeCls = 'bot-mode-paper';
+      const freeMode = !s.allow_strong && !s.allow_actionable;
+      const openN = bot.open_position_count ?? 0;
+      const ss = bot.slot_summary || {};
+      const realized = ss.realized_pnl_usd ?? 0;
+      const unrealized = ss.unrealized_pnl_usd ?? 0;
+      const totalPnl = ss.total_pnl_usd ?? (realized + unrealized);
+      const totalCls = totalPnl > 0 ? 'up' : totalPnl < 0 ? 'down' : 'muted';
+      const realizedCls = realized > 0 ? 'up' : realized < 0 ? 'down' : 'muted';
+      const unrealCls = unrealized > 0 ? 'up' : unrealized < 0 ? 'down' : 'muted';
+      const slotId = bot.slot_label || ss.event_ticker || bot.event_ticker || '—';
+      const tradeSource = (bot.slot_trades && bot.slot_trades.length) ? bot.slot_trades : (bot.recent_trades || []);
+      const openPosHtml = renderOpenPositionsPanel(bot.open_positions, {
+        indexLabel: bot.index_label || 'ERTI',
+        indexNow: bot.index_now_price,
+        dualLegSlotView: true,
+        slotMonitor: bot.slot_monitor,
+      });
+      const tradesScroll = captureBotTradesScroll(statusWrap);
+      const autoStopHtml = botAutoStopBanner(bot, 'slot', kind, asset);
+      const watchHtml = botEntryWatchHtml(bot, 'slot', freeMode);
+      const serverBanner = botServerBanner(bot, s);
+      const emptyLog = s.enabled
+        ? `No trial activity yet${freeMode ? ' — free mode waits for any live LONG/SHORT on the 15m tab' : ' — waiting for STRONG/ACTIONABLE signal within your filters'}. Bot polls every ~5s on the server.`
+        : 'No filled trades this slot yet. Auto-bet is off.';
+      const tradeLogHtml = botTradeLogHtml(bot, tradeSource, {
+        kind,
+        asset,
+        periodColLabel: 'Slot',
+        currentPeriodId: ss.event_ticker || bot.event_ticker,
+        intervalSummary: ss,
+        emptyLog,
+      });
+      statusWrap.innerHTML = `
+        ${serverBanner}
+        ${autoStopHtml}
+        ${watchHtml}
+        <p class="muted" style="font-size:.68rem;margin:.25rem 0 .35rem"><strong>ETH</strong> · <strong class="${modeCls}">PAPER TRIAL</strong> P&amp;L for slot <strong>${slotId}</strong> only (resets each new 15m window). Trade log keeps all slots.</p>
+        <div class="bot-row" style="margin-top:.15rem;padding:.55rem .65rem;background:rgba(15,23,42,.35);border-radius:8px">
+          <div class="bot-stat"><span class="muted">Slot total</span><strong class="${totalCls}">${totalPnl >= 0 ? '+' : ''}$${Number(totalPnl).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Realized (closed)</span><strong class="${realizedCls}">${realized >= 0 ? '+' : ''}$${Number(realized).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Unrealized (open)</span><strong class="${unrealCls}">${unrealized >= 0 ? '+' : ''}$${Number(unrealized).toFixed(2)}</strong></div>
+        </div>
+        <div class="bot-row" style="padding:0 .15rem .35rem">
+          <div class="bot-stat"><span class="muted">Filled enters / exits (slot)</span><strong>${ss.filled_enter_count_this_slot ?? ss.enter_count ?? 0} / ${ss.exit_count ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Sum of all filled enter costs this slot">Cumulative entered (churn)</span><strong>$${Number(ss.total_entered_usd ?? 0).toFixed(2)}</strong></div>
+        </div>
+        ${botIntervalPerformanceHtml(bot, s, 'slot')}
+        <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">Paper bankroll persists across slots. Max at-risk caps concurrent open exposure. <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
+        ${botPaperBankrollHtml(bot, s, 'slot')}
+        ${openPosHtml}
+        <div class="bot-row">
+          <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">PAPER TRIAL${freeMode ? ' · FREE' : ''}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Persistent paper capital">Paper bankroll</span><strong>$${Number(bot.slot_bankroll_usd ?? (Number(s.max_spend_per_slot_usd || 25) + realized)).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Open exposure from bot-tracked legs right now">Bot at-risk now</span><strong>${botAtRiskHtml(bot)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
+        </div>
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log shows filled + skipped by default. Use <strong>Fresh start</strong> to wipe the server log and reset bankroll.</p>
+        ${tradeLogHtml}
+      `;
+      restoreBotTradesScroll(statusWrap, tradesScroll);
+    }
+
+    async function saveSlot15TrialBotSettings(asset) {
+      const kind = SLOT15_TRIAL_KIND;
+      const maxKey = 'max_spend_per_slot_usd';
+      const key = botUiKey(kind, asset);
+      const body = readSlot15TrialBotSettingsFromDom(asset);
+      if (!body) return false;
+      const previousKnown = lastKnownBotSettings[key];
+      pendingBotPatch[key] = normalizeBotSettings(body, maxKey);
+      try {
+        const res = await fetch(slot15TrialBotSettingsUrl(asset), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const msg = await parseSettingsError(res);
+          pendingBotPatch[key] = null;
+          if (previousKnown) applyBotSettingsToDom(kind, asset, previousKnown);
+          showError('15m trial bot settings: ' + msg);
+          return false;
+        }
+        pendingBotPatch[key] = null;
+        if (activeTab === 'eth-15m') {
+          const bot = await res.json();
+          recordSettingsPatchConfirm(kind, asset, bot.settings || body, maxKey);
+          renderSlot15TrialBot(bot, asset);
+        }
+        return true;
+      } catch (e) {
+        pendingBotPatch[key] = null;
+        if (previousKnown) applyBotSettingsToDom(kind, asset, previousKnown);
+        showError('15m trial bot settings: ' + e.message);
+        return false;
+      }
+    }
+
     function renderHourlyBot(bot, asset, kind = 'hourly') {
       const isTrial = isHourlyTrialKind(kind);
       const el = $(hourlyBotPanelId(kind, asset));
@@ -4381,6 +5640,7 @@
       if (bot && bot.ok) {
         bot = (isTrial ? mergeHourlyTrialBotStatus(asset, bot, kind)
           : isHourlyV2Kind(kind) ? mergeV2BotStatus(asset, bot)
+          : isHourlyLiveKind(kind) ? mergeHourlyLiveBotStatus(asset, bot)
           : mergeBotStatus(asset, bot)) || bot;
       } else if (cached?.ok) {
         bot = cached;
@@ -4410,6 +5670,7 @@
 
       const forceFlags = isTrial ? hourlyTrialForceSettingsRender : botForceSettingsRender;
       const s = syncBotSettingsUi(kind, asset, serverSettings, forceFlags);
+      const deployHint = botDeployableHint(s, serverSettings, bot, 'hour');
       const modeCls = s.mode === 'live' ? 'bot-mode-live' : 'bot-mode-paper';
       const freeMode = !s.allow_strong && !s.allow_actionable;
       const exposure = bot.open_exposure_usd ?? bot.spent_usd ?? 0;
@@ -4426,7 +5687,8 @@
       const tradeSource = (() => {
         const all = bot.recent_trades || [];
         if (s.mode !== 'live') {
-          return (bot.hour_trades && bot.hour_trades.length) ? bot.hour_trades : all;
+          // Paper log spans all hours (hour P&L stats use hour_summary above).
+          return all;
         }
         const filled = all.filter((t) => ['filled', 'reconciled', 'skipped'].includes(String(t.status || '').toLowerCase()));
         const resting = all.filter((t) => String(t.status || '').toLowerCase() === 'resting');
@@ -4441,7 +5703,9 @@
       const tradesScroll = captureBotTradesScroll(statusWrap);
       const autoStopHtml = botAutoStopBanner(bot, 'hour', kind, asset);
       const settlementIndexHtml = settlementIndexWarningHtml(bot);
-      const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode);
+      const entryGuardHtml = botLiveEntryGuardHtml(bot);
+      const regimeGateHtml = botRegimeGateHtml(bot, 'hour');
+      const watchHtml = botEntryWatchHtml(bot, 'hour', freeMode, deployHint);
       const serverBanner = botServerBanner(bot, s);
       const reconcileHtml = botLiveReconcileHtml(bot);
       const kalshiSyncHtml = botKalshiSyncHtml(bot, asset, kind);
@@ -4459,6 +5723,8 @@
       statusWrap.innerHTML = `
         ${serverBanner}
         ${settlementIndexHtml}
+        ${entryGuardHtml}
+        ${regimeGateHtml}
         ${autoStopHtml}
         ${watchHtml}
         ${reconcileHtml}
@@ -4476,7 +5742,7 @@
         ${botIntervalPerformanceHtml(bot, s, 'hour')}
         ${botExperimentPerformanceHtml(bot)}
         <p class="muted" style="font-size:.65rem;margin:0 0 .35rem;padding:0 .15rem">${s.mode === 'paper' ? 'Paper bankroll persists across hours. Max at-risk caps concurrent open exposure.' : 'Hour bankroll = max cap + realized P&amp;L this hour (live only).' } <strong>Available to enter</strong> = deployable capital minus at-risk now.</p>
-        ${botLiveKalshiCashHtml(s, bot)}
+        ${botLiveKalshiCashHtml(s, bot, kind)}
         ${botLivePerformanceHtml(bot, s, 'hour')}
         ${botPaperBankrollHtml(bot, s, 'hour')}
         ${openPosHtml}
@@ -4484,14 +5750,15 @@
           <div class="bot-stat"><span class="muted">Mode</span><strong class="${modeCls}">${(s.mode || 'paper').toUpperCase()}${freeMode ? ' · FREE' : ''}</strong></div>
           <div class="bot-stat"><span class="muted" title="${s.mode === 'paper' ? 'Persistent paper capital' : 'Max cap + realized P&amp;L this hour'}">${s.mode === 'paper' ? 'Paper bankroll' : 'Hour bankroll'}</span><strong>$${Number(bot.hour_bankroll_usd ?? (Number(s.max_spend_per_hour_usd || 25) + realized)).toFixed(2)}</strong></div>
           <div class="bot-stat"><span class="muted" title="Open exposure from bot-tracked legs right now">Bot at-risk now</span><strong>${botAtRiskHtml(bot)}</strong></div>
-          <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Bankroll minus open exposure">Available to enter</span><strong>$${Number(bot.remaining_usd || 0).toFixed(2)}</strong>${deployHint}</div>
           <div class="bot-stat"><span class="muted">Open legs</span><strong>${openN}</strong></div>
           <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${bot.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
         </div>
-        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Trade log shows filled + skipped by default. Use <strong>Clear history</strong> (live) or <strong>Fresh start</strong> (paper) to wipe the server log.</p>
+        <p class="muted" style="font-size:.68rem;margin:.45rem 0 0">${isHourlyLiveKind(kind) ? 'Live mirror log — manager-controlled; use Kalshi sync to import fills.' : 'Trade log shows filled + skipped by default. Use <strong>Clear history</strong> (live) or <strong>Fresh start</strong> (paper) to wipe the server log.'}</p>
         ${tradeLogHtml}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
+      noteFourKPlanBotClosed(bot, kind, asset);
     }
 
     function onBotModeToggle(asset, ev, kind = 'hourly') {
@@ -4542,6 +5809,7 @@
       const useProfits = !!$(`bot-use-profits-${p}`)?.checked;
       if (pctEl) pctEl.disabled = !useProfits;
       if (kind === 'slot15') saveSlot15BotSettings(asset);
+      else if (isSlot15TrialKind(kind)) saveSlot15TrialBotSettings(asset);
       else if (isHourlyTrialKind(kind)) saveHourlyTrialBotSettings(asset, undefined, kind);
       else saveHourlyBotSettings(asset, undefined, kind);
     }
@@ -4550,17 +5818,10 @@
       const maxKey = 'max_spend_per_hour_usd';
       const key = botUiKey(kind, asset);
       const p = botDomPrefix(kind, asset);
-      const enabledEl = $(`bot-enabled-${p}`);
-      if (!enabledEl) return false;
+      const domSettings = readBotSettingsFromDom(asset, kind);
+      if (!domSettings) return false;
       const body = {
-        enabled: !!enabledEl.checked,
-        mode: $(`bot-live-${p}`)?.checked ? 'live' : 'paper',
-        max_spend_per_hour_usd: parseFloat($(`bot-max-spend-${p}`)?.value || '10'),
-        allow_strong: !!$(`bot-strong-${p}`)?.checked,
-        allow_actionable: !!$(`bot-actionable-${p}`)?.checked,
-        use_accumulated_profit: !!$(`bot-use-profits-${p}`)?.checked,
-        profit_use_pct: parseFloat($(`bot-profit-use-pct-${p}`)?.value || '100'),
-        paper_auto_refill: !!$(`bot-auto-refill-${p}`)?.checked,
+        ...domSettings,
         aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
       };
       if (livePassword) body.live_password = livePassword;
@@ -4779,7 +6040,7 @@
       const gen = ++slot15FetchGen;
       const asset = tabAtStart === 'eth-15m' ? 'eth' : 'btc';
       try {
-        const botDirect = await get(slot15BotStatusUrl(asset));
+        const botDirect = await getWithTimeout(slot15BotStatusUrl(asset), 12000);
         if (gen !== slot15FetchGen || activeTab !== tabAtStart) return;
         let bot = botDirect || predictionBot;
         if (botDirect && predictionBot) {
@@ -4801,6 +6062,23 @@
       }
     }
 
+    async function loadSlot15TrialBot() {
+      const tabAtStart = activeTab;
+      if (tabAtStart !== 'eth-15m') return;
+      const gen = ++slot15TrialFetchGen;
+      const asset = 'eth';
+      try {
+        const botDirect = await getWithTimeout(slot15TrialBotStatusUrl(asset), 12000);
+        if (gen !== slot15TrialFetchGen || activeTab !== tabAtStart) return;
+        const bot = mergeSlot15TrialBotStatus(asset, botDirect);
+        if (bot) renderSlot15TrialBot(bot, asset);
+      } catch (_) {
+        if (gen !== slot15TrialFetchGen || activeTab !== tabAtStart) return;
+        const cached = lastSlot15TrialBotStatus[asset];
+        if (cached) renderSlot15TrialBot(cached, asset);
+      }
+    }
+
     function refreshHourlyBotTradeLog(asset, tabAtStart, gen) {
       const url = `${hourlyBotApiBase(asset)}/trades?limit=200`;
       getWithTimeout(url, 15000).then((data) => {
@@ -4809,6 +6087,40 @@
         if (!cached?.ok) return;
         const merged = mergeBotStatus(asset, { ...cached, recent_trades: data.trades || [] });
         if (merged?.ok && shouldRenderHourlyBot(asset, 'hourly')) renderHourlyBot(merged, asset);
+      }).catch(() => {});
+    }
+
+    function refreshHourlyLiveBotTradeLog(tabAtStart, gen) {
+      const url = `${hourlyLiveBotApiBase('eth')}/trades?limit=200`;
+      getWithTimeout(url, 15000).then((data) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        const cached = lastHourlyLiveBotStatus.eth;
+        if (!cached?.ok) return;
+        const merged = mergeHourlyLiveBotStatus('eth', { ...cached, recent_trades: data.trades || [] });
+        if (merged?.ok && shouldRenderHourlyBot('eth', HOURLY_LIVE_KIND)) renderHourlyBot(merged, 'eth', HOURLY_LIVE_KIND);
+      }).catch(() => {});
+    }
+
+    function refreshHourlyLiveBotDirect(tabAtStart, gen) {
+      getWithTimeout(hourlyBotStatusUrl('eth', HOURLY_LIVE_KIND, true), 15000).then((botDirect) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        if (!botDirect?.ok) {
+          const cached = lastHourlyLiveBotStatus.eth;
+          if (cached?.ok) renderHourlyBot(cached, 'eth', HOURLY_LIVE_KIND);
+          return;
+        }
+        const bot = mergeHourlyLiveBotStatus('eth', botDirect);
+        if (bot?.ok && activeTab === tabAtStart) renderHourlyBot(bot, 'eth', HOURLY_LIVE_KIND);
+        refreshHourlyLiveBotTradeLog(tabAtStart, gen);
+      }).catch(() => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        const cached = lastHourlyLiveBotStatus.eth;
+        if (cached) renderHourlyBot(cached, 'eth', HOURLY_LIVE_KIND);
+      });
+      getWithTimeout(hourlyBotStatusUrl('eth', HOURLY_LIVE_KIND, false), 30000).then((fullBot) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart || !fullBot?.ok) return;
+        renderHourlyBot(mergeHourlyLiveBotStatus('eth', fullBot), 'eth', HOURLY_LIVE_KIND);
+        refreshHourlyLiveBotTradeLog(tabAtStart, gen);
       }).catch(() => {});
     }
 
@@ -4864,6 +6176,16 @@
       const cached = lastBotStatus[asset];
       if (cached) renderHourlyBot(cached, asset);
       else renderHourlyBot({ ok: false, error: 'Loading bot status…' }, asset);
+      if (asset === 'eth') {
+        const liveCached = lastHourlyLiveBotStatus.eth;
+        if (liveCached) renderHourlyBot(liveCached, 'eth', HOURLY_LIVE_KIND);
+        else renderHourlyBot({ ok: false, error: 'Loading live mirror…' }, 'eth', HOURLY_LIVE_KIND);
+      }
+      if (asset === 'spx' || asset === 'ndx') {
+        const trialCached = getTrialBotCache('hourly_trial', asset);
+        if (trialCached) renderHourlyBot(trialCached, asset, 'hourly_trial');
+        else renderHourlyBot({ ok: false, error: 'Loading trial bot…' }, asset, 'hourly_trial');
+      }
       get(api.calibration).catch(() => ({ summary: {} })).then((cal) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderHourlyCalibration(cal);
@@ -4877,6 +6199,11 @@
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderDaily(d);
         refreshHourlyBotDirect(asset, tabAtStart, gen, null);
+        if (asset === 'eth') refreshHourlyLiveBotDirect(tabAtStart, gen);
+        if (asset === 'spx' || asset === 'ndx') {
+          refreshIndexTrialBot(asset, tabAtStart, gen);
+          loadIndexHourlyLiveTrialCompare(asset);
+        }
       } catch (e) {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderDaily({ ok: false, error: e.message, bot: cached || undefined });
@@ -4884,6 +6211,362 @@
         renderHourlyHistory([]);
         if (cached) renderHourlyBot(cached, asset);
         else renderHourlyBot({ ok: false, error: e.message }, asset);
+      }
+    }
+
+    function formatSportsEdgeCents(prob) {
+      if (prob == null || Number.isNaN(Number(prob))) return null;
+      const c = Number(prob) * 100;
+      return `${c >= 0 ? '+' : ''}${c.toFixed(1)}¢`;
+    }
+
+    function shortSportsEdgeDetail(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return '';
+      const cut = s.indexOf(' · ');
+      return cut > 0 ? s.slice(cut + 3) : s;
+    }
+
+    function renderSportsClosestMiss(data) {
+      const meta = ((data || {}).runtime || {}).last_scan_meta || {};
+      const strat = (data || {}).strategies || {};
+      const settings = (data || {}).settings || {};
+      const valueMinC = Number((strat.value_sharp || {}).min_edge_prob ?? 0.03) * 100;
+      const dutchMinC = Number((strat.dutch_same || {}).min_edge_usd ?? 0.01) * 100;
+      const dutchMeta = meta.dutch || {};
+      const valueMeta = meta.value || {};
+      const kalshiMeta = valueMeta.kalshi || {};
+      const polyMeta = valueMeta.poly || {};
+      const rows = [];
+
+      if (dutchMeta.best_binary_edge != null) {
+        const edgeC = Number(dutchMeta.best_binary_edge) * 100;
+        rows.push({
+          label: 'Goal 2 Dutch',
+          edge: formatSportsEdgeCents(dutchMeta.best_binary_edge),
+          need: `+${dutchMinC.toFixed(0)}¢`,
+          gap: edgeC - dutchMinC,
+          detail: shortSportsEdgeDetail(dutchMeta.best_binary_detail),
+        });
+      }
+      if (dutchMeta.best_multi_edge != null) {
+        const edgeC = Number(dutchMeta.best_multi_edge) * 100;
+        rows.push({
+          label: 'Goal 2 multi-ML',
+          edge: formatSportsEdgeCents(dutchMeta.best_multi_edge),
+          need: `+${dutchMinC.toFixed(0)}¢`,
+          gap: edgeC - dutchMinC,
+          detail: shortSportsEdgeDetail(dutchMeta.best_multi_detail),
+        });
+      }
+      const kalshiEdge = kalshiMeta.best_edge_prob ?? valueMeta.best_edge_prob;
+      if (kalshiEdge != null) {
+        const edgeC = Number(kalshiEdge) * 100;
+        rows.push({
+          label: 'Goal 3 Kalshi',
+          edge: formatSportsEdgeCents(kalshiEdge),
+          need: `+${valueMinC.toFixed(0)}¢`,
+          gap: edgeC - valueMinC,
+          detail: shortSportsEdgeDetail(kalshiMeta.best_edge_detail || valueMeta.best_edge_detail),
+        });
+      }
+      if (polyMeta.best_edge_prob != null) {
+        const edgeC = Number(polyMeta.best_edge_prob) * 100;
+        rows.push({
+          label: 'Goal 3 Poly',
+          edge: formatSportsEdgeCents(polyMeta.best_edge_prob),
+          need: `+${valueMinC.toFixed(0)}¢`,
+          gap: edgeC - valueMinC,
+          detail: '',
+        });
+      }
+      if (!rows.length) return '';
+
+      const items = rows.map((r) => {
+        const gapCls = r.gap >= 0 ? 'up' : 'down';
+        const gapTxt = `${r.gap >= 0 ? '+' : ''}${r.gap.toFixed(1)}¢ vs floor`;
+        const detail = r.detail ? ` <span class="muted">(${r.detail})</span>` : '';
+        return `<span style="display:inline-block;margin:.15rem .65rem .15rem 0"><strong>${r.label}</strong> ${r.edge} <span class="muted">need ${r.need}</span> · <span class="${gapCls}">${gapTxt}</span>${detail}</span>`;
+      }).join('');
+
+      let gateNote = '';
+      if (settings.value_strong_bets_only) {
+        gateNote = ' <span class="muted">· Strong Bets ON (Goal 3 live needs STRONG tier when opps appear)</span>';
+      }
+      if (settings.value_live && !(data.polymarket || {}).clob?.allow_live) {
+        gateNote += ' <span class="muted">· Poly paper-only (allow_live=false)</span>';
+      }
+
+      return `<div class="sports-closest-miss" style="font-size:.72rem;margin:.45rem 0 .25rem;padding:.45rem .55rem;border:1px solid rgba(99,102,241,.28);border-radius:8px;background:rgba(99,102,241,.06)"><span class="muted" style="font-size:.62rem;text-transform:uppercase;letter-spacing:.04em">Closest miss · last scan</span><div style="margin-top:.3rem;line-height:1.45">${items}${gateNote}</div></div>`;
+    }
+
+    function renderSportsTradeRow(t) {
+      const st = t.status || t.mode || '—';
+      const stCls = String(st).includes('fail') ? 'down' : (String(st).includes('live') ? 'up' : 'muted');
+      const err = t.error || (t.extra && t.extra.error) || '';
+      const detail = err
+        ? `<div class="muted" style="font-size:.62rem;max-width:14rem;overflow:hidden;text-overflow:ellipsis" title="${String(err).replace(/"/g,'&quot;')}">${String(err).slice(0,80)}</div>`
+        : (t.selection ? `<div class="muted" style="font-size:.62rem">${t.selection}</div>` : '');
+      const tUrl = t.venue_url || (t.event_ticker && String(t.venue || 'kalshi').toLowerCase() !== 'polymarket'
+        ? `https://kalshi.com/markets/${String(t.series_ticker || String(t.event_ticker).split('-')[0] || '').toLowerCase()}/${t.event_ticker}`
+        : '');
+      const evtCell = tUrl
+        ? `<a href="${tUrl}" target="_blank" rel="noopener noreferrer" style="font-size:.68rem">${t.event_ticker || 'open'}</a>`
+        : (t.event_ticker || '—');
+      return `<tr><td>${t.created_at ? time(t.created_at) : '—'}</td><td>${(t.mode || '').toUpperCase()}</td><td class="${stCls}">${st}${detail}</td><td>${t.kind || t.strategy || '—'}</td><td>${evtCell}</td><td class="up">+$${Number(t.edge_usd || 0).toFixed(2)}</td><td>$${Number(t.total_cost_usd || t.cost_usd || 0).toFixed(2)}</td></tr>`;
+    }
+
+    function renderSportsTradesTable(rows) {
+      if (!rows.length) return '';
+      const body = rows.map(renderSportsTradeRow).join('');
+      return `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Mode</th><th>Status</th><th>Kind</th><th>Event</th><th>Edge</th><th>Cost</th></tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    function renderSports(data) {
+      const statusEl = $('sports-bot-status');
+      const oppEl = $('sports-opportunities');
+      const tradesEl = $('sports-trades');
+      if (!statusEl || !oppEl || !tradesEl) return;
+      const tradesScroll = captureBotTradesScroll(tradesEl);
+      const oppScroll = captureBotTradesScroll(oppEl);
+      if (!data || !data.ok) {
+        statusEl.innerHTML = `<p class="muted">Sports module unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
+        oppEl.innerHTML = '';
+        tradesEl.innerHTML = '';
+        return;
+      }
+      const s = data.settings || {};
+      const rt = data.runtime || {};
+      const meta = rt.last_scan_meta || {};
+      const strat = data.strategies || {};
+      const live = data.live || {};
+      const en = $('sports-enabled');
+      const maxScan = $('sports-max-scan');
+      const maxDay = $('sports-max-day');
+      const dutchLive = $('sports-dutch-live');
+      const valueLive = $('sports-value-live');
+      const dutchBudget = $('sports-dutch-budget');
+      const dutchStake = $('sports-dutch-stake');
+      const valueBudget = $('sports-value-budget');
+      const valueStake = $('sports-value-stake');
+      const valueStrongBets = $('sports-value-strong-bets');
+      if (en) en.checked = !!s.enabled;
+      if (maxScan) maxScan.value = s.max_live_per_scan ?? 0;
+      if (maxDay) maxDay.value = s.max_live_trades_per_day ?? 0;
+      if (dutchLive) dutchLive.checked = !!s.dutch_live;
+      if (valueLive) valueLive.checked = !!s.value_live;
+      if (dutchBudget) dutchBudget.value = s.dutch_max_open_usd ?? 40;
+      if (dutchStake) dutchStake.value = s.dutch_max_stake_usd ?? 5;
+      if (valueBudget) valueBudget.value = s.value_max_open_usd ?? 40;
+      if (valueStake) valueStake.value = s.value_max_stake_usd ?? 5;
+      if (valueStrongBets) valueStrongBets.checked = !!s.value_strong_bets_only;
+      const dutchSpendEl = $('sports-dutch-spend');
+      const valueSpendEl = $('sports-value-spend');
+      if (dutchSpendEl) {
+        const cap = Number(s.dutch_max_open_usd || 0) > 0 ? `$${Number(s.dutch_max_open_usd).toFixed(0)}` : '∞';
+        dutchSpendEl.textContent = `spent $${Number(live.dutch_spend_today_usd || 0).toFixed(2)} / ${cap}`;
+      }
+      if (valueSpendEl) {
+        const cap = Number(s.value_max_open_usd || 0) > 0 ? `$${Number(s.value_max_open_usd).toFixed(0)}` : '∞';
+        valueSpendEl.textContent = `spent $${Number(live.value_spend_today_usd || 0).toFixed(2)} / ${cap}`;
+      }
+      const dutchOn = !!(strat.dutch_same && strat.dutch_same.enabled);
+      const valueOn = !!(strat.value_sharp && strat.value_sharp.enabled);
+      const poly = data.polymarket || {};
+      const polyClob = poly.clob || {};
+      let polyLabel = 'off';
+      let polyCls = '';
+      if (poly.enabled) {
+        if (polyClob.allow_live && polyClob.authenticated) {
+          polyLabel = 'LIVE';
+          polyCls = 'up';
+        } else if (polyClob.live_ready || polyClob.authenticated) {
+          polyLabel = 'clob-ready';
+          polyCls = 'up';
+        } else if (polyClob.key_configured) {
+          polyLabel = 'auth-err';
+          polyCls = 'down';
+        } else {
+          polyLabel = poly.mode || 'paper';
+        }
+      }
+      const oddsOk = !!(strat.value_sharp && strat.value_sharp.odds_configured);
+      const dayCap = (Number(s.max_live_trades_per_day ?? 0) > 0) ? s.max_live_trades_per_day : '∞';
+      const scanCap = (Number(s.max_live_per_scan ?? 0) > 0) ? s.max_live_per_scan : '∞';
+      const eventsN = meta.events_scanned ?? '—';
+      const dutchN = meta.dutch_opportunities ?? '—';
+      const lastActs = meta.last_actions || [];
+      const dutchSkips = lastActs.filter((a) => a.strategy === 'dutch_same' && String(a.action || '').includes('skip'));
+      const dutchFilled = lastActs.filter((a) => a.strategy === 'dutch_same' && a.action === 'live_filled');
+      const dutchActNote = dutchSkips.length
+        ? 'last scan: ' + dutchSkips.slice(0, 2).map((a) => {
+            const cost = a.cost != null ? ' $' + Number(a.cost).toFixed(2) : '';
+            return String(a.reason || '') + cost;
+          }).join(' · ')
+        : (dutchFilled.length ? 'last scan: live filled' : (s.dutch_live && dutchN === 0 ? 'last scan: 0 dutch opps (books tight)' : ''));
+      const valueN = meta.value_opportunities ?? '—';
+      const assess = meta.bet_assessment || {};
+      const assessNote = (assess.STRONG || assess.MODERATE || assess.WEAK)
+        ? `assess S${assess.STRONG || 0}/M${assess.MODERATE || 0}/W${assess.WEAK || 0}`
+        : '';
+      const booksStale = !!meta.books_stale;
+      const valueMeta = meta.value || {};
+      const valueNote = valueMeta.error
+        ? `value err: ${valueMeta.error}`
+        : (valueMeta.sharp_events != null
+          ? `sharp ${valueMeta.sharp_events} · event-match ${valueMeta.event_matches ?? 0} · team-hits ${valueMeta.team_market_hits ?? 0} · below-edge ${valueMeta.below_min_edge ?? 0} · opps ${valueMeta.matched ?? 0}`
+          : (valueMeta.skipped ? String(valueMeta.skipped) : ''));
+      const dutchMeta = meta.dutch || {};
+      const dutchNote = dutchMeta.best_binary_edge != null || dutchMeta.best_multi_edge != null
+        ? `dutch checked ${dutchMeta.binary_checked ?? 0} · partitions ${dutchMeta.multi_partitions ?? 0}${dutchMeta.multi_reject_sum_ge_1 ? ` · ${dutchMeta.multi_reject_sum_ge_1} books sum≥$1` : ''}`
+        : (dutchMeta.binary_checked != null ? `dutch checked ${dutchMeta.binary_checked}` : '');
+      const closestMissHtml = renderSportsClosestMiss(data);
+      statusEl.innerHTML = `
+        <div class="bot-row">
+          <div class="bot-stat"><span class="muted">Scanner</span><strong class="${data.enabled ? 'up' : 'down'}">${data.enabled ? 'ON' : 'OFF'}</strong></div>
+          <div class="bot-stat"><span class="muted">Goal2 live</span><strong class="${s.dutch_live ? 'up' : 'down'}">${s.dutch_live ? 'ON' : 'OFF'}</strong></div>
+          <div class="bot-stat"><span class="muted">Goal3 live</span><strong class="${s.value_live ? 'up' : 'down'}">${s.value_live ? 'ON' : 'OFF'}</strong></div>
+          <div class="bot-stat"><span class="muted">dutch_same</span><strong class="${dutchOn ? 'up' : 'down'}">${dutchOn ? 'ON' : 'OFF'}</strong></div>
+          <div class="bot-stat"><span class="muted">value_sharp</span><strong class="${valueOn ? 'up' : 'down'}">${valueOn ? 'ON' : 'OFF'}</strong></div>
+          <div class="bot-stat"><span class="muted">Odds API</span><strong class="${oddsOk ? 'up' : 'down'}">${oddsOk ? 'key' : 'missing'}</strong></div>
+          <div class="bot-stat"><span class="muted">Polymarket</span><strong class="${polyCls}">${polyLabel}</strong></div>
+          <div class="bot-stat"><span class="muted">Kalshi auth</span><strong>${live.kalshi_authenticated ? 'Yes' : 'No'}</strong></div>
+          <div class="bot-stat"><span class="muted">Live fills</span><strong>${live.trades_today ?? 0} / ${dayCap}</strong></div>
+          <div class="bot-stat"><span class="muted">Per scan</span><strong>${scanCap}</strong></div>
+          <div class="bot-stat"><span class="muted">Scans/min</span><strong class="${(rt.scans_last_minute ?? 0) >= Math.max(1, (rt.scans_per_minute_expected || 6) - 1) ? 'up' : 'down'}">${rt.scans_last_minute ?? 0} / ${rt.scans_per_minute_expected ?? 6}</strong></div>
+          <div class="bot-stat"><span class="muted">Events</span><strong class="${Number(eventsN) > 0 ? 'up' : 'down'}">${eventsN}${booksStale ? ' stale' : ''}</strong></div>
+          <div class="bot-stat"><span class="muted">Dutch/Value</span><strong>${dutchN} / ${valueN}</strong></div>
+          <div class="bot-stat"><span class="muted">Last scan</span><strong>${rt.last_scan_at ? time(rt.last_scan_at) : '—'}</strong></div>
+          <div class="bot-stat"><span class="muted">Opps</span><strong>${data.opportunity_count ?? 0}</strong></div>
+        </div>
+        ${closestMissHtml}
+        <p class="muted" style="font-size:.68rem;margin:.35rem 0 0">${data.note || ''}${assessNote ? ` · ${assessNote}` : ''}${valueNote ? ` · ${valueNote}` : ''}${dutchNote ? ` · ${dutchNote}` : ''}${dutchActNote ? ` · ${dutchActNote}` : ''}${rt.last_error ? ` · Error: ${rt.last_error}` : ''}${booksStale ? ' · Kalshi books stale (rate-limit fallback)' : ''}</p>`;
+
+      const opps = data.opportunities || [];
+      if (!opps.length) {
+        const why = Number(eventsN) === 0
+          ? 'No event books on last scan (Kalshi empty/429 — check Events + stale).'
+          : 'No covers / value edges on last scan — see closest miss above for how far books are from the floor.';
+        oppEl.innerHTML = `<p class="muted">${why}</p>`;
+      } else {
+        const rows = opps.map((o) => {
+          const legs = (o.legs || []).map((l) => `${(l.side || 'yes').toUpperCase()} ${l.ticker || l.outcome || ''} @ ${((l.ask || 0) * 100).toFixed(0)}¢×${l.contracts || 1}`).join(' · ');
+          const edgeExtra = o.fair_prob != null ? ` fair=${(Number(o.fair_prob)*100).toFixed(0)}¢ ask=${(Number(o.venue_ask||0)*100).toFixed(0)}¢` : '';
+          const venue = String(o.venue || 'kalshi').toLowerCase();
+          const url = o.venue_url || (venue === 'kalshi' && o.event_ticker
+            ? `https://kalshi.com/markets/${String(o.series_ticker || String(o.event_ticker).split('-')[0] || '').toLowerCase()}/${o.event_ticker}${o.legs && o.legs[0] && o.legs[0].ticker ? '/' + o.legs[0].ticker : ''}`
+            : '');
+          const linkLabel = venue === 'polymarket' ? 'Poly' : 'Kalshi';
+          const link = url
+            ? ` <a href="${url}" target="_blank" rel="noopener noreferrer" style="font-size:.65rem">${linkLabel} ↗</a>`
+            : '';
+          const tickerNote = o.event_ticker
+            ? `<div class="muted" style="font-size:.62rem"><code>${o.event_ticker}</code>${link}</div>`
+            : (link ? `<div>${link}</div>` : '');
+          return `<tr><td>${o.strategy || '—'}<div class="muted" style="font-size:.65rem">${o.kind || ''}${o.venue ? ' · '+o.venue : ''}</div></td><td>${o.selection || o.title || o.event_ticker || '—'}${tickerNote}<div class="muted" style="font-size:.65rem">${o.title && o.selection ? o.title : ''}</div></td><td>${renderSportsBetAssessmentCell(o.bet_assessment)}</td><td class="up">+$${Number(o.edge_usd || 0).toFixed(2)}<div class="muted" style="font-size:.65rem">${edgeExtra}</div></td><td>$${Number(o.total_cost_usd || 0).toFixed(2)}</td><td style="font-size:.68rem">${legs}</td></tr>`;
+        }).join('');
+        oppEl.innerHTML = `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Strategy</th><th>Pick</th><th>Assessment</th><th>Edge</th><th>Cost</th><th>Legs</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      }
+
+      const tradeLog = data.trade_log || {};
+      const liveTrades = tradeLog.live_trades || (data.recent_trades || []).filter((t) => String(t.mode || '').toLowerCase() === 'live');
+      const paperTrades = tradeLog.paper_trades || (data.recent_trades || []).filter((t) => String(t.mode || '').toLowerCase() !== 'live');
+      const liveHours = tradeLog.live_retention_hours || 24;
+      if (!liveTrades.length && !paperTrades.length) {
+        tradesEl.innerHTML = '<p class="muted">No sports trades yet.</p>';
+      } else {
+        const liveBlock = liveTrades.length
+          ? `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .25rem"><strong>Live</strong> — pinned ${liveHours}h (${liveTrades.length})</p>${renderSportsTradesTable(liveTrades)}`
+          : `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .25rem"><strong>Live</strong> — none in last ${liveHours}h</p>`;
+        const paperBlock = paperTrades.length
+          ? `<p class="muted" style="font-size:.68rem;margin:.65rem 0 .25rem"><strong>Paper signals</strong> — recent (${paperTrades.length})</p>${renderSportsTradesTable(paperTrades)}`
+          : '';
+        tradesEl.innerHTML = liveBlock + paperBlock;
+      }
+      restoreBotTradesScroll(tradesEl, tradesScroll);
+      restoreBotTradesScroll(oppEl, oppScroll);
+    }
+
+    function onSportsStrategyLiveToggle(which) {
+      const el = which === 'dutch' ? $('sports-dutch-live') : $('sports-value-live');
+      if (!el) return;
+      if (el.checked) {
+        const pwd = promptLivePassword();
+        if (!pwd) {
+          el.checked = false;
+          return;
+        }
+        saveSportsSettings(pwd);
+        return;
+      }
+      const pwd = promptLivePassword();
+      if (!pwd) {
+        el.checked = true;
+        return;
+      }
+      saveSportsSettings(pwd);
+    }
+
+    async function saveSportsSettings(livePassword) {
+      const body = {
+        enabled: !!$('sports-enabled')?.checked,
+        dutch_live: !!$('sports-dutch-live')?.checked,
+        value_live: !!$('sports-value-live')?.checked,
+        dutch_max_open_usd: Number($('sports-dutch-budget')?.value || 0),
+        dutch_max_stake_usd: Number($('sports-dutch-stake')?.value || 0),
+        value_max_open_usd: Number($('sports-value-budget')?.value || 0),
+        value_max_stake_usd: Number($('sports-value-stake')?.value || 0),
+        value_strong_bets_only: !!$('sports-value-strong-bets')?.checked,
+        max_live_per_scan: Number($('sports-max-scan')?.value || 0),
+        max_live_trades_per_day: Number($('sports-max-day')?.value || 0),
+      };
+      if (livePassword) body.live_password = livePassword;
+      try {
+        const res = await fetch('/api/sports/bot/settings', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await parseSettingsError(res));
+        renderSports(await res.json());
+      } catch (e) {
+        showError('Sports settings: ' + e.message);
+        loadSports();
+      }
+    }
+
+    async function loadSports() {
+      if (activeTab !== 'sports') return;
+      try {
+        const data = await getWithTimeout('/api/sports/bot', 20000);
+        if (activeTab !== 'sports') return;
+        renderSports(data);
+      } catch (e) {
+        if (activeTab !== 'sports') return;
+        renderSports({ ok: false, error: e.message });
+      }
+    }
+
+    async function sportsScanNow() {
+      try {
+        const res = await fetch('/api/sports/bot/scan', { method: 'POST', credentials: 'same-origin' });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        renderSports(data.bot || data);
+      } catch (e) {
+        showError('Sports scan: ' + e.message);
+      }
+    }
+
+    async function sportsFreshStart() {
+      if (!confirm('Clear sports opportunity log and paper trade history? Live trades from the last 24h are kept.')) return;
+      try {
+        const res = await fetch('/api/sports/bot/fresh-start', { method: 'POST', credentials: 'same-origin' });
+        if (!res.ok) throw new Error(await res.text());
+        renderSports(await res.json());
+      } catch (e) {
+        showError('Sports fresh start: ' + e.message);
       }
     }
 
@@ -4923,6 +6606,13 @@
     }
 
     async function loadAll() {
+      if (loadAllInFlight) {
+        if (Date.now() - loadAllStartedAt < LOAD_ALL_STUCK_MS) return;
+        loadAllInFlight = false;
+      }
+      loadAllInFlight = true;
+      loadAllStartedAt = Date.now();
+      try {
       $('error').style.display = 'none';
       $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { timeZone: TZ });
 
@@ -4933,17 +6623,19 @@
       }
 
       const tasks = [
-        get('/health').then(renderStatus).catch(e => showError('Health: ' + e.message)),
+        getWithTimeout('/health?lite=1', 12000).then(renderStatus).catch(e => showError('Health: ' + e.message)),
       ];
       loadBotPerformanceReport();
-      loadHourlyLiveTrialCompare();
+      loadEpochReconcile();
+      checkFourKWeekPlanRevision();
+      syncGlobalComparePanel();
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();
         tasks.push(
-        get(api.prediction + refQ).then((p) => {
+        getWithTimeout(api.prediction + refQ, 15000).then((p) => {
           if (stored?.slot_start && p?.slot_start && stored.slot_start !== p.slot_start) {
             clearStoredRefOverride();
-            return get(api.prediction).then((p2) => {
+            return getWithTimeout(api.prediction, 15000).then((p2) => {
               renderPrediction(p2);
               loadSlot15Bot(p2?.bot);
             });
@@ -4951,15 +6643,15 @@
           renderPrediction(p);
           loadSlot15Bot(p?.bot);
         }).catch(() => { renderPrediction(null); renderSlotMonitor(null); loadSlot15Bot(null); }),
-        get(api.monitor + refQ).then((m) => {
+        getWithTimeout(api.monitor + refQ, 12000).then((m) => {
           if (stored?.slot_start && m?.slot_start && stored.slot_start !== m.slot_start) {
             clearStoredRefOverride();
-            return get(api.monitor).then(renderSlotMonitor);
+            return getWithTimeout(api.monitor, 12000).then(renderSlotMonitor);
           }
           renderSlotMonitor(m);
         }).catch(() => {}),
-        get(api.history).then(renderHistory).catch(() => renderHistory([])),
-        get(api.calibration).then(renderCalibration).catch((e) => {
+        getWithTimeout(api.history, 15000).then(renderHistory).catch(() => renderHistory([])),
+        getWithTimeout(api.calibration, 15000).then(renderCalibration).catch((e) => {
           const calEl = s15$('calibration');
           if (calEl) calEl.innerHTML = `<p class="muted">Calibration unavailable: ${e.message || 'API error'}</p>`;
         }),
@@ -4967,20 +6659,30 @@
         if (activeTab === '15m') {
           tasks.push(get('/api/postmortems?limit=12').then(renderPostmortems).catch(() => renderPostmortems([])));
         }
+        if (activeTab === 'eth-15m') {
+          loadSlot15TrialBot();
+          loadSlot15LiveTrialCompare();
+        }
       } else if (isHourlyTab(activeTab)) {
         loadDaily();
       } else if (activeTab === 'trials') {
         tasks.push(loadTrials());
       } else if (activeTab === 'hourly-v2') {
         tasks.push(loadHourlyV2());
+      } else if (activeTab === 'sports') {
+        tasks.push(loadSports());
       }
       await Promise.all(tasks);
+      } finally {
+        loadAllInFlight = false;
+      }
     }
 
+    syncGlobalComparePanel();
     loadAll();
     updateEdtClock();
-    setInterval(loadAll, 5000);
-    setInterval(loadLiveMonitor, 1000);
+    setInterval(loadAll, LOAD_ALL_INTERVAL_MS);
+    setInterval(loadLiveMonitor, LIVE_MONITOR_INTERVAL_MS);
     setInterval(updateEdtClock, 1000);
 
     (function initDashboardZoom() {

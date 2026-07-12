@@ -11,7 +11,10 @@ from src.trading.live_range_guards import (
   is_range_pick,
   open_range_contracts_on_band,
   range_band_hour_cap_block_reason,
+  range_band_spot_entry_block_reason,
+  range_band_spot_entry_buffer_usd,
 )
+from src.assets import asset_cfg
 
 
 class _Store:
@@ -97,6 +100,135 @@ def test_open_range_contracts_includes_resting():
     store, "EV", "T", "no", store.open_positions("EV"),
   )
   assert total == 5.0
+
+
+def _b63625_pick() -> dict:
+  return {
+    "strike_type": "between",
+    "contract_type": "range",
+    "ticker": "KXBTC-26JUL0417-B63625",
+    "floor_strike": 63500.0,
+    "cap_strike": 63749.99,
+  }
+
+
+def _spot_guard_cfg() -> dict:
+  return {
+    "hourly": {
+      "bot": {
+        "live_inventory": {
+          "range_band_spot_entry_guard": {
+            "enabled": True,
+            "min_buffer_usd": 75,
+            "sigma_buffer_fraction": 0.20,
+          },
+        },
+      },
+    },
+  }
+
+
+def test_range_band_spot_guard_blocks_yes_when_spot_below_floor():
+  """Reproduces B63625 — spot ~63200, band floor 63500, model μ edge is misleading."""
+  reason = range_band_spot_entry_block_reason(
+    pick=_b63625_pick(),
+    side="yes",
+    spot_price=63200.0,
+    terminal_sigma=180.0,
+    cfg=_spot_guard_cfg(),
+  )
+  assert reason and reason.startswith("range_band_spot_below_floor:")
+
+
+def test_range_band_spot_guard_allows_yes_inside_band():
+  assert range_band_spot_entry_block_reason(
+    pick=_b63625_pick(),
+    side="yes",
+    spot_price=63600.0,
+    terminal_sigma=180.0,
+    cfg=_spot_guard_cfg(),
+  ) is None
+
+
+def test_range_band_spot_guard_allows_yes_near_floor_within_buffer():
+  # floor 63500, buffer max(75, 36)=75 → spot 63430 ok
+  assert range_band_spot_entry_block_reason(
+    pick=_b63625_pick(),
+    side="yes",
+    spot_price=63430.0,
+    terminal_sigma=180.0,
+    cfg=_spot_guard_cfg(),
+  ) is None
+
+
+def test_range_band_spot_guard_blocks_no_when_spot_above_cap():
+  reason = range_band_spot_entry_block_reason(
+    pick=_b63625_pick(),
+    side="no",
+    spot_price=63900.0,
+    terminal_sigma=180.0,
+    cfg=_spot_guard_cfg(),
+  )
+  assert reason and reason.startswith("range_band_spot_above_cap:")
+
+
+def test_range_band_spot_guard_skips_non_range():
+  assert range_band_spot_entry_block_reason(
+    pick={"strike_type": "greater", "floor_strike": 63500.0},
+    side="yes",
+    spot_price=63200.0,
+    cfg=_spot_guard_cfg(),
+  ) is None
+
+
+def test_range_band_spot_guard_eth_asset_defaults():
+  """ETH ~$3.5k — tighter absolute buffer than BTC."""
+  pick = {
+    "strike_type": "between",
+    "contract_type": "range",
+    "ticker": "KXETH-26JUL0417-B3525",
+    "floor_strike": 3525.0,
+    "cap_strike": 3549.99,
+  }
+  cfg = asset_cfg(
+    {
+      "paths": {"logs": "/tmp", "models": "/tmp", "candles": "/tmp"},
+      "eth": {"enabled": True},
+      "hourly": {"bot": {"live_inventory": {}}},
+    },
+    "eth",
+  )
+  # spot $18 below floor; ETH buffer ~$12 (max of $12 floor, 0.18%*3500≈$6.3)
+  reason = range_band_spot_entry_block_reason(
+    pick=pick,
+    side="yes",
+    spot_price=3507.0,
+    terminal_sigma=45.0,
+    cfg=cfg,
+    asset="eth",
+  )
+  assert reason and reason.startswith("range_band_spot_below_floor:")
+
+
+def test_range_band_spot_guard_spx_by_asset_override():
+  cfg = _spot_guard_cfg()
+  buf = range_band_spot_entry_buffer_usd(
+    spot_price=6000.0,
+    terminal_sigma=30.0,
+    cfg=cfg,
+    asset="spx",
+  )
+  assert buf >= 25.0
+
+
+def test_range_band_spot_guard_ndx_defaults_without_config():
+  buf = range_band_spot_entry_buffer_usd(
+    spot_price=22000.0,
+    terminal_sigma=80.0,
+    cfg={"_asset": "ndx"},
+    asset="ndx",
+  )
+  assert buf >= 90.0
 
 
 def test_estrat_for_range_scale_in_disables_scale_in():

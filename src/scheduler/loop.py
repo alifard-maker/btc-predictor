@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -121,6 +122,9 @@ class PredictionLoop:
     from src.scheduler.index_hourly_support import init_index_assets
 
     init_index_assets(self)
+    from src.scheduler.sports_support import init_sports
+
+    init_sports(self)
 
   def _asset_hourly_calibration(self, asset: str) -> HourlyCalibrationTracker:
     asset = asset.lower()
@@ -365,9 +369,11 @@ class PredictionLoop:
       stores.append(self.hourly_trial_bot_store("eth"))
       if self._slot15m_enabled("eth"):
         stores.append(self.slot15_bot_store("eth"))
+        stores.append(self.slot15_trial_bot_store("eth"))
     for asset in ("spx", "ndx"):
       if asset_enabled(self.cfg, asset):
         stores.append(self.hourly_bot_store(asset))
+        stores.append(self.hourly_trial_bot_store(asset))
     if asset_v2_enabled(self.cfg, "btc"):
       stores.append(self.hourly_bot_store("btc", kind="hourly_v2"))
     if asset_v2_enabled(self.cfg, "eth"):
@@ -388,6 +394,28 @@ class PredictionLoop:
       "kalshi_circuit": kalshi,
       "bots_paused": bool(daily.get("any_cap_active")) or bool(kalshi.get("entries_blocked")),
       "live_hourly": self._live_hourly_pulse(),
+      "pnl_first_manager": self._pnl_first_manager_pulse(),
+    }
+
+  def _pnl_first_manager_pulse(self) -> dict[str, Any]:
+    from src.trading.pnl_first_railway_manager import manager_status_snapshot
+
+    mgr_cfg = self.cfg.get("pnl_first_manager") or {}
+    if not mgr_cfg.get("enabled", True):
+      return {"enabled": False}
+    snap = manager_status_snapshot(self)
+    last = snap.get("last_status_file") or snap.get("last_report") or {}
+    pre = last.get("preflight") or {}
+    mile = last.get("milestone") or {}
+    return {
+      "enabled": True,
+      "phase": mgr_cfg.get("phase", "prep"),
+      "trading_armed": bool(mgr_cfg.get("trading_armed", False)),
+      "cycle": last.get("cycle"),
+      "preflight_ok": pre.get("ok"),
+      "preflight_issues": pre.get("issues"),
+      "milestone_streak": mile.get("consecutive_pipeline_hours") or mile.get("consecutive_positive_hours"),
+      "milestone_target": mile.get("target_pipeline_hours") or mile.get("target_positive_hours"),
     }
 
   def _live_hourly_pulse(self) -> dict[str, Any]:
@@ -426,7 +454,11 @@ class PredictionLoop:
           from src.trading.live_reconcile import build_live_reconcile_report
 
           positions = store.all_open_live_positions() if hasattr(store, "all_open_live_positions") else []
-          recon = build_live_reconcile_report(bot_positions=positions, kalshi=kalshi)
+          recon = build_live_reconcile_report(
+            bot_positions=positions,
+            kalshi=kalshi,
+            asset=asset,
+          )
           kalshi_heavy = [
             m for m in (recon.get("mismatches") or [])
             if float(m.get("kalshi_contracts") or 0) > float(m.get("contracts") or 0) + 0.24
@@ -496,6 +528,8 @@ class PredictionLoop:
       return f"hourly_trial_mech_bot_{asset}.db"
     if kind == "hourly_v2":
       return f"hourly_v2_bot_{asset}.db"
+    if kind == "hourly_live":
+      return f"hourly_live_bot_{asset}.db"
     return f"hourly_bot_{asset}.db"
 
   def _hourly_bot_label(self, kind: str, label_asset: str) -> str:
@@ -505,6 +539,7 @@ class PredictionLoop:
       "hourly_trial_soft": f"{label_asset} Hourly Trial — Soft",
       "hourly_trial_mech": f"{label_asset} Hourly Trial — Mech",
       "hourly_v2": f"{label_asset} Hourly V2 (path)",
+      "hourly_live": f"{label_asset} Hourly Live (mirror)",
     }
     if kind in labels:
       return labels[kind]
@@ -534,6 +569,9 @@ class PredictionLoop:
   def hourly_trial_mech_bot_store(self, asset: str):
     return self.hourly_bot_store(asset, kind="hourly_trial_mech")
 
+  def hourly_live_bot_store(self, asset: str):
+    return self.hourly_bot_store(asset, kind="hourly_live")
+
   def hourly_bot(self, asset: str, *, kind: str = "hourly"):
     asset = asset.lower()
     key = self._hourly_bot_key(kind, asset)
@@ -556,6 +594,9 @@ class PredictionLoop:
 
   def hourly_trial_mech_bot(self, asset: str):
     return self.hourly_bot(asset, kind="hourly_trial_mech")
+
+  def hourly_live_bot(self, asset: str):
+    return self.hourly_bot(asset, kind="hourly_live")
 
   def eth_hourly_bot_store(self):
     return self.hourly_bot_store("eth")
@@ -624,6 +665,8 @@ class PredictionLoop:
       event_ticker = (tab.get("event") or {}).get("event_ticker")
     store = self.hourly_bot_store(asset, kind=kind)
     status = store.status(event_ticker)
+    if not event_ticker:
+      event_ticker = status.get("event_ticker")
     status["ok"] = True
     status["asset"] = asset
     status["bot_kind"] = kind
@@ -649,8 +692,19 @@ class PredictionLoop:
       else []
     )
     open_pos = list(status.get("open_positions") or [])
+    kalshi = self._kalshi_for(asset)
     if settings.mode == "live" and kind == "hourly":
       open_pos = store.all_open_live_positions()
+      if event_ticker and kalshi and kalshi.authenticated:
+        from src.trading.live_reconcile import merge_kalshi_hourly_open_positions
+
+        open_pos = merge_kalshi_hourly_open_positions(
+          open_pos,
+          kalshi,
+          event_ticker,
+          tab=tab if tab and tab.get("ok") else None,
+          asset=asset,
+        )
     if tab and tab.get("ok"):
       from src.trading.hourly_bot import enrich_open_positions_live
 
@@ -661,6 +715,7 @@ class PredictionLoop:
         acfg,
         settings=settings,
         bot_kind=kind,
+        kalshi=kalshi if settings.mode == "live" else None,
       )
       status["open_positions"] = open_pos
       status["open_position_count"] = len(open_pos)
@@ -676,18 +731,24 @@ class PredictionLoop:
       hs["total_pnl_usd"] = round(realized + unrealized, 2)
       status["hourly_summary"] = hs
       status["hour_summary"] = hs
-    kalshi = self._kalshi_for(asset)
     status["kalshi_authenticated"] = bool(kalshi and kalshi.authenticated)
     if tab and tab.get("ok"):
       live = tab.get("live") or tab
       primary = live.get("primary_pick") or {}
       regime = live.get("regime") or {}
+      hrcfg = dict((acfg.get("hourly") or {}).get("regime") or {})
+      regime_reasons = list(regime.get("reasons") or regime.get("block_reasons") or [])
+      allow_trade = regime.get("allow_trade")
+      if allow_trade is None:
+        allow_trade = regime.get("blocked") is not True
       status["entry_watch"] = {
         "signal": primary.get("signal"),
         "label": primary.get("label"),
         "edge": primary.get("edge"),
-        "regime_allow_trade": regime.get("allow_trade"),
-        "regime_reasons": list(regime.get("reasons") or [])[:3],
+        "regime_allow_trade": allow_trade,
+        "regime_blocked": allow_trade is False,
+        "regime_reasons": regime_reasons[:5],
+        "regime_min_flags_to_block": int(hrcfg.get("min_reasons_to_block", 2)),
       }
     from src.trading.bot_auto_tuning import effective_entry_strategy
 
@@ -717,6 +778,15 @@ class PredictionLoop:
       status["hourly_summary"] = hs
       status["hour_summary"] = hs
     self._attach_settlement_index_status(status, tab, asset=asset)
+    if kind == "hourly" and str(settings.mode).lower() == "live":
+      from src.trading.live_entry_guard_summary import build_live_entry_guard_summary
+
+      status["live_entry_guards"] = build_live_entry_guard_summary(
+        acfg,
+        mode=settings.mode,
+        kind=kind,
+        asset=asset,
+      )
     self._attach_bot_daily_loss(status, kind=kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
     if (
@@ -739,6 +809,7 @@ class PredictionLoop:
         kalshi=kalshi,
         event_ticker=event_ticker,
         market_tickers=market_tickers or None,
+        asset=asset,
       )
     if not lightweight:
       from src.trading.bot_performance_report import build_experiment_summary
@@ -796,6 +867,7 @@ class PredictionLoop:
       kalshi=kalshi,
       event_ticker=event_ticker,
       market_tickers=market_tickers or None,
+      asset=asset,
     )
 
   def sync_hourly_kalshi_fills(
@@ -822,6 +894,15 @@ class PredictionLoop:
     self._last_kalshi_sync[key] = report
     self._kalshi_sync_mono[key] = time.monotonic()
     return report
+
+  def hourly_live_bot_status(
+    self,
+    asset: str,
+    tab: dict[str, Any] | None = None,
+    *,
+    lightweight: bool = False,
+  ) -> dict[str, Any]:
+    return self.hourly_bot_status(asset, tab, kind="hourly_live", lightweight=lightweight)
 
   def hourly_trial_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
     return self.hourly_bot_status(asset, tab, kind="hourly_trial")
@@ -1095,6 +1176,11 @@ class PredictionLoop:
       return
     self._run_hourly_bot_continuous("eth", kind="hourly_trial")
 
+  def run_eth_hourly_live_bot_continuous(self) -> None:
+    if not asset_enabled(self.cfg, "eth"):
+      return
+    self._run_hourly_bot_continuous("eth", kind="hourly_live")
+
   def _run_hourly_bot_intrahour(self, asset: str) -> None:
     self._run_hourly_bot_continuous(asset)
 
@@ -1116,6 +1202,17 @@ class PredictionLoop:
       self._slot15_bot_stores[asset] = Slot15BotStore(logs / f"slot15_bot_{asset}.db")
     return self._slot15_bot_stores[asset]
 
+  def slot15_trial_bot_store(self, asset: str):
+    asset = asset.lower()
+    key = f"trial:{asset}"
+    if key not in self._slot15_bot_stores:
+      from src.trading.slot15_bot_store import Slot15BotStore
+
+      acfg = self._acfg_15m(asset)
+      logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
+      self._slot15_bot_stores[key] = Slot15BotStore(logs / f"slot15_trial_bot_{asset}.db")
+    return self._slot15_bot_stores[key]
+
   def slot15_bot(self, asset: str):
     asset = asset.lower()
     if asset not in self._slot15_bots:
@@ -1123,8 +1220,21 @@ class PredictionLoop:
 
       store = self.slot15_bot_store(asset)
       kalshi = self._kalshi_for(asset)
-      self._slot15_bots[asset] = Slot15Bot(store, kalshi_client=kalshi, asset=asset)
+      self._slot15_bots[asset] = Slot15Bot(store, kalshi_client=kalshi, asset=asset, kind="slot15")
     return self._slot15_bots[asset]
+
+  def slot15_trial_bot(self, asset: str):
+    asset = asset.lower()
+    key = f"trial:{asset}"
+    if key not in self._slot15_bots:
+      from src.trading.slot15_bot import Slot15Bot
+
+      store = self.slot15_trial_bot_store(asset)
+      kalshi = self._kalshi_for(asset)
+      self._slot15_bots[key] = Slot15Bot(
+        store, kalshi_client=kalshi, asset=asset, kind="slot15_trial",
+      )
+    return self._slot15_bots[key]
 
   def _slot_times_match(
     self,
@@ -1216,21 +1326,57 @@ class PredictionLoop:
       "index_id": index_label,
     }
 
-  def slot15_bot_status(self, asset: str, tab: dict[str, Any] | None = None) -> dict[str, Any]:
+  def _slot15_tab_cached(
+    self,
+    asset: str,
+    reference_override: float | None = None,
+    *,
+    max_age_sec: float | None = None,
+  ) -> dict[str, Any]:
+    """Reuse recent slot15 tab payload to cut Kalshi discovery calls."""
+    asset = asset.lower()
+    if max_age_sec is None:
+      acfg = self._acfg_15m(asset)
+      max_age_sec = float(
+        ((acfg.get("intra_slot") or {}).get("bot") or {}).get("tab_cache_seconds", 10)
+      )
+    if reference_override is None:
+      row = self._slot15_tab_cache.get(asset)
+      if row:
+        tab, ts = row
+        if time.monotonic() - ts < max_age_sec:
+          return tab
+    tab = self._slot15_tab(asset, reference_override)
+    if reference_override is None and tab.get("ok"):
+      self._store_tab_cache(self._slot15_tab_cache, asset, tab)
+    return tab
+
+  def slot15_bot_status(
+    self,
+    asset: str,
+    tab: dict[str, Any] | None = None,
+    *,
+    store=None,
+    risk_kind: str = "slot15",
+    bot_kind: str = "slot15",
+    lightweight: bool = False,
+  ) -> dict[str, Any]:
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):
       return {"ok": False, "error": "ETH 15m disabled"}
     if tab is None:
-      tab = self._slot15_tab(asset)
+      tab = self._slot15_tab_cached(asset)
     slot_key = tab.get("slot_key") if tab.get("ok") else None
-    status = self.slot15_bot_store(asset).status(slot_key)
+    store = store or self.slot15_bot_store(asset)
+    status = store.status(slot_key)
     status["ok"] = True
     status["asset"] = asset
+    status["bot_kind"] = bot_kind
     status["slot_label"] = tab.get("slot_label") if tab else None
-    store = self.slot15_bot_store(asset)
-    status["recent_trades"] = store.list_trades(limit=100)
+    trade_limit = 35 if lightweight else 100
+    status["recent_trades"] = store.list_trades(limit=trade_limit)
     status["slot_trades"] = (
-      store.list_trades(limit=50, event_ticker=slot_key) if slot_key else []
+      store.list_trades(limit=35 if lightweight else 50, event_ticker=slot_key) if slot_key else []
     )
     open_pos = list(status.get("open_positions") or [])
     if tab and tab.get("ok"):
@@ -1274,7 +1420,7 @@ class PredictionLoop:
         "late_entry_action": monitor.get("late_entry_action") or "",
         "flip_action": monitor.get("flip_action") or "",
         "monitor_action": monitor.get("action"),
-        "last_entry_attempt": self.slot15_bot_store(asset).last_entry_attempt(),
+        "last_entry_attempt": store.last_entry_attempt(),
       }
     from src.trading.bot_auto_tuning import effective_entry_strategy
 
@@ -1305,9 +1451,15 @@ class PredictionLoop:
       ss["stake_cap_utilization"] = stake_cap
       status["slot_summary"] = ss
     self._attach_settlement_index_status(status, tab, asset=asset)
-    self._attach_bot_daily_loss(status, kind="slot15", asset=asset)
+    self._attach_bot_daily_loss(status, kind=risk_kind, asset=asset)
     self._attach_index_now_to_bot_status(status, tab, asset=asset)
-    if status.get("settings", {}).get("mode") == "live" and kalshi and kalshi.authenticated:
+    if (
+      not lightweight
+      and bot_kind == "slot15"
+      and status.get("settings", {}).get("mode") == "live"
+      and kalshi
+      and kalshi.authenticated
+    ):
       from src.trading.live_reconcile import build_live_reconcile_report
 
       market_tickers: set[str] = set()
@@ -1322,8 +1474,25 @@ class PredictionLoop:
         bot_positions=list(status.get("open_positions") or []),
         kalshi=kalshi,
         market_tickers=market_tickers or None,
+        asset=asset,
       )
     return status
+
+  def slot15_trial_bot_status(
+    self,
+    asset: str,
+    tab: dict[str, Any] | None = None,
+    *,
+    lightweight: bool = False,
+  ) -> dict[str, Any]:
+    return self.slot15_bot_status(
+      asset,
+      tab,
+      store=self.slot15_trial_bot_store(asset),
+      risk_kind="slot15_trial",
+      bot_kind="slot15_trial",
+      lightweight=lightweight,
+    )
 
   def _ensure_slot_prediction_current(self, asset: str) -> None:
     """Refresh in-memory prediction when the active slot rolled but cron has not run yet."""
@@ -1341,7 +1510,7 @@ class PredictionLoop:
     except Exception as e:
       log.warning("%s 15m: could not refresh slot prediction at rollover: %s", asset.upper(), e)
 
-  def _run_slot15_bot_continuous(self, asset: str) -> None:
+  def _run_slot15_bot_continuous(self, asset: str, tab: dict[str, Any] | None = None) -> None:
     asset = asset.lower()
     if asset == "eth" and not self._slot15m_enabled("eth"):
       return
@@ -1355,10 +1524,10 @@ class PredictionLoop:
           store.set_last_skip_reason("auto_bet_off")
         return
       self._ensure_slot_prediction_current(asset)
-      tab = self._cached_tab_if_throttled(self._slot15_tab_cache, asset)
       if tab is None:
-        tab = self._slot15_tab(asset)
-        self._store_tab_cache(self._slot15_tab_cache, asset, tab)
+        tab = self._cached_tab_if_throttled(self._slot15_tab_cache, asset)
+      if tab is None:
+        tab = self._slot15_tab_cached(asset)
       if tab.get("ok"):
         acfg = self._acfg_15m(asset)
         self.slot15_bot(asset).run_continuous_cycle(tab, cfg=acfg)
@@ -1374,6 +1543,49 @@ class PredictionLoop:
     if not self._slot15m_enabled("eth"):
       return
     self._run_slot15_bot_continuous("eth")
+
+  def run_eth_slot15_bots_continuous(self) -> None:
+    """Single ETH 15m tick — one Kalshi tab fetch for main + optional trial bot."""
+    if not self._slot15m_enabled("eth"):
+      return
+    tab = self._slot15_tab_cached("eth")
+    self._run_slot15_bot_continuous("eth", tab=tab)
+    eth_cfg = self._eth_cfg or asset_cfg(self.cfg, "eth")
+    trial_cfg = ((eth_cfg.get("intra_slot") or {}).get("bot") or {}).get("trial") or {}
+    if not trial_cfg.get("continuous_enabled", False):
+      return
+    self._run_slot15_trial_bot_continuous("eth", tab=tab)
+
+  def _run_slot15_trial_bot_continuous(self, asset: str, tab: dict[str, Any] | None = None) -> None:
+    asset = asset.lower()
+    if asset == "eth" and not self._slot15m_enabled("eth"):
+      return
+    self.all_bot_stores()
+    store = self.slot15_trial_bot_store(asset)
+    settings = store.get_settings()
+    active = settings.enabled and settings.continuous
+    try:
+      if not active:
+        if not settings.enabled:
+          store.set_last_skip_reason("auto_bet_off")
+        return
+      self._ensure_slot_prediction_current(asset)
+      if tab is None:
+        tab = self._cached_tab_if_throttled(self._slot15_tab_cache, asset)
+      if tab is None:
+        tab = self._slot15_tab_cached(asset)
+      if tab.get("ok"):
+        acfg = self._acfg_15m(asset)
+        self.slot15_trial_bot(asset).run_continuous_cycle(tab, cfg=acfg)
+    except Exception as e:
+      log.exception("%s 15m trial bot continuous cycle failed: %s", asset.upper(), e)
+    finally:
+      store.record_cycle(active=active)
+
+  def run_eth_slot15_trial_bot_continuous(self) -> None:
+    if not self._slot15m_enabled("eth"):
+      return
+    self._run_slot15_trial_bot_continuous("eth")
 
   def _hourly_tab_prediction(self, asset: str, *, include_bot: bool = True) -> dict[str, Any]:
     asset = asset.lower()
@@ -1517,6 +1729,12 @@ class PredictionLoop:
     elif asset == "eth":
       self.latest_eth_hourly_prediction = out
       self._hourly_prediction_mono["eth"] = time.monotonic()
+      try:
+        from src.trading.terminal_shadow_logger import maybe_log_terminal_shadow
+
+        maybe_log_terminal_shadow(out, self.cfg, asset="eth")
+      except Exception as e:
+        log.warning("Track B shadow log skipped: %s", e)
       if include_bot:
         out["bot"] = self.hourly_bot_status("eth", out)
     else:
@@ -2362,8 +2580,44 @@ class PredictionLoop:
 
     return {"ok": True, "bots": results, "tuned_at": datetime.now(timezone.utc).isoformat()}
 
+  def _adaptive_calibration_specs(self) -> list[tuple[str, str, Any, dict[str, Any]]]:
+    """All bot stores that use adaptive bucket calibration."""
+    from src.assets import asset_cfg, asset_v2_enabled, asset_v2_runtime_cfg
+    from src.backtest.mechanics_profiles import HOURLY_TRIAL_KINDS
+
+    specs: list[tuple[str, str, Any, dict[str, Any]]] = []
+
+    def add(kind: str, asset: str, cfg: dict[str, Any]) -> None:
+      specs.append((kind, asset, self.hourly_bot_store(asset, kind=kind), cfg))
+
+    add("hourly", "btc", self.cfg)
+    if asset_enabled(self.cfg, "eth"):
+      add("hourly", "eth", self._eth_cfg or asset_cfg(self.cfg, "eth"))
+
+    for tk in HOURLY_TRIAL_KINDS:
+      add(tk, "btc", self.cfg)
+    if asset_enabled(self.cfg, "eth"):
+      add("hourly_trial", "eth", self._eth_cfg or asset_cfg(self.cfg, "eth"))
+
+    for asset in ("spx", "ndx"):
+      if not asset_enabled(self.cfg, asset):
+        continue
+      acfg = self._acfg(asset)
+      add("hourly", asset, acfg)
+      add("hourly_trial", asset, acfg)
+
+    if asset_v2_enabled(self.cfg, "btc"):
+      add("hourly_v2", "btc", asset_v2_runtime_cfg(self._btc_v2_cfg or self.cfg))
+    if asset_v2_enabled(self.cfg, "eth"):
+      add("hourly_v2", "eth", asset_v2_runtime_cfg(self._eth_v2_cfg or self.cfg))
+
+    specs.append(("slot15", "btc", self.slot15_bot_store("btc"), self._acfg_15m("btc")))
+    if self._slot15m_enabled("eth"):
+      specs.append(("slot15", "eth", self.slot15_bot_store("eth"), self._acfg_15m("eth")))
+    return specs
+
   def run_adaptive_calibration(self) -> dict[str, Any]:
-    """Refresh per-bucket pause/tighten/probe state from recent closed trades."""
+    """Refresh per-bucket throttle state from recent closed trades."""
     from src.trading.bot_adaptive_calibration import (
       adaptive_calibration_cfg,
       run_adaptive_calibration_for_store,
@@ -2374,25 +2628,7 @@ class PredictionLoop:
       return {"ok": False, "reason": "adaptive_calibration_disabled"}
 
     results: list[dict[str, Any]] = []
-    specs = (
-      ("hourly", "btc", self.hourly_bot_store("btc"), self.cfg),
-      ("hourly", "eth", self.hourly_bot_store("eth"), self._eth_cfg or self.cfg),
-      ("hourly_v2", "btc", self.hourly_bot_store("btc", kind="hourly_v2"), self._btc_v2_cfg or self.cfg),
-      ("hourly_v2", "eth", self.hourly_bot_store("eth", kind="hourly_v2"), self._eth_v2_cfg or self.cfg),
-      ("slot15", "btc", self.slot15_bot_store("btc"), self._acfg_15m("btc")),
-      ("slot15", "eth", self.slot15_bot_store("eth"), self._acfg_15m("eth")),
-    )
-    for kind, asset, store, bot_cfg in specs:
-      if bot_cfg is None:
-        continue
-      if asset == "eth" and kind == "slot15" and not self._slot15m_enabled("eth"):
-        continue
-      if kind == "hourly_v2" and not asset_v2_enabled(self.cfg, asset):
-        continue
-      if kind == "hourly_v2":
-        from src.assets import asset_v2_runtime_cfg
-
-        bot_cfg = asset_v2_runtime_cfg(bot_cfg)
+    for kind, asset, store, bot_cfg in self._adaptive_calibration_specs():
       try:
         out = run_adaptive_calibration_for_store(store, cfg=bot_cfg, kind=kind)
         out["kind"] = kind
@@ -2400,12 +2636,13 @@ class PredictionLoop:
         results.append(out)
         if out.get("ok"):
           log.info(
-            "%s %s adaptive calibration: paused=%s probing=%s tightened=%s",
+            "%s %s adaptive calibration: throttled=%s (L1=%s L2=%s L3=%s)",
             asset.upper(),
             kind,
-            out.get("paused_buckets"),
-            out.get("probing_buckets"),
-            out.get("tightened_buckets"),
+            out.get("throttled_buckets"),
+            out.get("throttle_level_1"),
+            out.get("throttle_level_2"),
+            out.get("throttle_level_3"),
           )
       except Exception as e:
         log.warning("%s %s adaptive calibration failed: %s", asset.upper(), kind, e)
@@ -2541,9 +2778,22 @@ class PredictionLoop:
             id="hourly_trial_bot_continuous_eth",
             max_instances=1,
           )
+        live_mirror = bot_cfg.get("live_mirror") or {}
+        if live_mirror.get("enabled") and live_mirror.get("continuous_enabled", True):
+          poll_sec = int(live_mirror.get("poll_seconds", bot_cfg.get("poll_seconds", 10)))
+          scheduler.add_job(
+            self.run_eth_hourly_live_bot_continuous,
+            "interval",
+            seconds=poll_sec,
+            id="eth_hourly_live_bot_continuous",
+            max_instances=1,
+          )
     from src.scheduler.index_hourly_support import schedule_index_hourly_jobs
 
     schedule_index_hourly_jobs(self, scheduler)
+    from src.scheduler.sports_support import schedule_sports_jobs
+
+    schedule_sports_jobs(self, scheduler)
 
   def _schedule_hourly_v2(self, scheduler) -> None:
     from src.assets import asset_v2_cfg
@@ -3075,6 +3325,38 @@ class PredictionLoop:
   def status(self) -> dict[str, Any]:
     return self._status_for_asset("btc")
 
+  def lite_dashboard_health(self) -> dict[str, Any]:
+    """Fast header poll — no parquet loads, uses cached Kalshi balance only."""
+    logs_path = Path(self.cfg.get("paths", {}).get("logs", "data/logs"))
+    data_dir = str(logs_path.parent)
+    kalshi = self.kalshi
+    k: dict[str, Any] = {
+      "authenticated": bool(kalshi.authenticated),
+    }
+    if kalshi.authenticated:
+      bal = kalshi.portfolio_balance()
+      cents = kalshi.balance_cents_from_payload(bal)
+      k["balance_cents"] = cents
+      k["balance_usd"] = kalshi.balance_usd_from_cents(cents)
+    out: dict[str, Any] = {
+      "scheduler_running": self._scheduler is not None and getattr(self._scheduler, "running", False),
+      "data_dir": data_dir,
+      "kalshi": k,
+    }
+    try:
+      from src.trading.kalshi_circuit import get_circuit_breaker
+
+      brk = get_circuit_breaker()
+      out["bots_paused"] = bool(brk and brk.is_paused())
+    except Exception:
+      pass
+    try:
+      vol_path = Path(data_dir)
+      out["volume_mounted_at_data"] = vol_path.is_dir() and os.access(vol_path, os.W_OK)
+    except Exception:
+      out["volume_mounted_at_data"] = None
+    return out
+
   def eth_status(self) -> dict[str, Any]:
     if not self._slot15m_enabled("eth"):
       return {"ok": False, "error": "ETH 15m disabled"}
@@ -3139,6 +3421,15 @@ class PredictionLoop:
       pass
     return out
 
+  def run_pnl_first_manager(self) -> dict[str, Any]:
+    from src.trading.pnl_first_railway_manager import run_manager_tick
+
+    try:
+      return run_manager_tick(self)
+    except Exception as e:
+      log.exception("pnl_first_manager tick failed: %s", e)
+      return {"ok": False, "error": str(e)}
+
   def run_log_backup(self, *, reason: str = "scheduled") -> dict[str, Any]:
     from src.backup.logs_backup import run_full_backup
 
@@ -3179,11 +3470,12 @@ class PredictionLoop:
       if ebot_cfg.get("continuous_enabled", True):
         poll_sec = int(ebot_cfg.get("poll_seconds", 10))
         scheduler.add_job(
-          self.run_eth_slot15_bot_continuous,
+          self.run_eth_slot15_bots_continuous,
           "interval",
           seconds=poll_sec,
-          id="eth_slot15_bot_continuous",
+          id="eth_slot15_bots_continuous",
           max_instances=1,
+          replace_existing=True,
         )
 
   def _schedule_predictions(self, scheduler) -> None:
@@ -3320,6 +3612,23 @@ class PredictionLoop:
         id="log_backup_now",
       )
       log.info("Log backup scheduled every %s min → %s/backups", interval_min, backup_cfg.get("backup_dir") or "{DATA_DIR}/backups")
+    mgr_cfg = self.cfg.get("pnl_first_manager") or {}
+    if mgr_cfg.get("enabled", True):
+      interval_s = float(mgr_cfg.get("interval_seconds", 30))
+      scheduler.add_job(
+        self.run_pnl_first_manager,
+        "interval",
+        seconds=interval_s,
+        id="pnl_first_manager",
+        max_instances=1,
+      )
+      scheduler.add_job(
+        self.run_pnl_first_manager,
+        "date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=20),
+        id="pnl_first_manager_now",
+      )
+      log.info("P&L-first Railway manager scheduled every %ss", interval_s)
     poll_sec = float(self.cfg.get("kalshi", {}).get("brti_poll_sec", 1))
     scheduler.add_job(self.poll_brti, "interval", seconds=poll_sec, id="brti_poll", max_instances=1)
     scheduler.add_job(self.poll_brti, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=1), id="brti_now")
@@ -3341,6 +3650,23 @@ class PredictionLoop:
         log.info("ETH hourly settings mirrored from BTC: %s", mirror_stats)
     except Exception as e:
       log.warning("ETH hourly settings mirror skipped: %s", e)
+    try:
+      from src.trading.compare_paper_twins import ensure_compare_paper_twins
+      from src.trading.probe_24h import ensure_probe_stats_epoch
+
+      twin_stats = ensure_compare_paper_twins(self)
+      if twin_stats.get("active"):
+        log.info("Compare paper twins: %s", twin_stats)
+      probe_epoch = ensure_probe_stats_epoch(self, self.cfg)
+      if probe_epoch.get("probe_stats_epoch_at"):
+        log.info("Probe 24h stats epoch: %s", probe_epoch)
+      from src.trading.four_k_week_plan import ensure_four_k_week_plan
+
+      plan_boot = ensure_four_k_week_plan(self, self.cfg)
+      if plan_boot.get("track_b_shadow_enabled"):
+        log.info("$4k/week plan boot: %s", plan_boot)
+    except Exception as e:
+      log.warning("Compare paper twins ensure skipped: %s", e)
     log.info("Scheduler started: 15m slots at :00/:15/:30/:45 ET (%s)", self.tz)
     return scheduler
 

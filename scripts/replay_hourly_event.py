@@ -45,6 +45,7 @@ from src.trading.live_regime_adaptive import (
   defense_entries_blocked,
 )
 from src.trading.entry_strategy import (
+  CycleEntryBudget,
   ask_cents_for_side,
   correlation_block_reason,
   entry_budget_usd,
@@ -351,10 +352,10 @@ def replay_event(
     estrat_poll = apply_adaptive_passive_guards(estrat, adaptive, cfg)
     pricing = adaptive_live_entry_pricing(base_pricing, adaptive, cfg)
 
-    entries = 0
-    for _c, _e, _s, pick, _bet in ranked[:estrat_poll.max_entries_per_cycle]:
-      if entries >= estrat_poll.max_entries_per_cycle:
-        break
+    cycle_budget = CycleEntryBudget(estrat_poll)
+    for _c, _e, _s, pick, _bet in ranked[:cycle_budget.max_cycle_candidates()]:
+      if not cycle_budget.can_enter(pick):
+        continue
       if len(state.legs) >= estrat_poll.max_concurrent_positions:
         break
       if state.cash_at_risk >= max_spend:
@@ -398,7 +399,7 @@ def replay_event(
       remaining = max_spend - state.cash_at_risk
       stake = entry_budget_usd(
         estrat=estrat_poll, bankroll_usd=max_spend, remaining_usd=remaining,
-        pick=pick, side=side, entries_left=1,
+        pick=pick, side=side, entries_left=cycle_budget.entries_left(pick),
       )
       count = max(1, int(stake // (price_cents / 100.0))) if price_cents else 0
       adopted_cap = live_exit.max_adopted_contracts or 2
@@ -445,7 +446,7 @@ def replay_event(
       )
       state.legs.append(leg)
       state.cash_at_risk += cost
-      entries += 1
+      cycle_budget.record_entry(pick)
       state.log.append({
         "at": ts.isoformat(), "action": "enter", "status": "filled",
         "mode": resolved["execution_mode"], "ticker": pick["ticker"],

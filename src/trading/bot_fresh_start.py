@@ -10,7 +10,7 @@ from src.trading.paper_bankroll import reset_paper_bankroll
 
 def clear_bot_history(conn: sqlite3.Connection) -> None:
   """Delete trades, positions, cooldowns, and tuning state."""
-  from src.trading.bot_runtime import migrate_bot_runtime
+  from src.trading.bot_runtime import migrate_bot_runtime, set_stats_epoch_now
   from src.trading.bot_tuning_store import save_adaptive_calibration, save_auto_tuning
   from src.trading.bot_cheap_leg_cooldown import clear_cheap_leg_cut_cooldowns
 
@@ -21,6 +21,7 @@ def clear_bot_history(conn: sqlite3.Connection) -> None:
   save_auto_tuning(conn, {})
   save_adaptive_calibration(conn, {})
   migrate_bot_runtime(conn)
+  set_stats_epoch_now(conn)
   conn.execute(
     """
     UPDATE bot_runtime

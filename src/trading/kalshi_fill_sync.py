@@ -133,6 +133,12 @@ def _fill_action_side(
       side = "no"
   if action in ("buy", "sell") and side in ("yes", "no"):
     return ticker, action, side
+  if not action and book in ("bid", "ask") and side in ("yes", "no"):
+    from src.data.kalshi import v2_action_side_from_book
+
+    pair = v2_action_side_from_book(book_side=book, outcome_side=side)
+    if pair:
+      return ticker, pair[0], pair[1]
   oid = str(fill.get("order_id") or "")
   if oid and oid in order_cache:
     act, sd = order_cache[oid]
@@ -260,6 +266,25 @@ def _should_run_fill_backfill(store: Any, *, force: bool = False) -> bool:
   return True
 
 
+def _sync_cutoff(store: Any, hours: float) -> datetime:
+  """Earliest fill timestamp to import — respects fresh-start stats epoch."""
+  cutoff = datetime.now(timezone.utc) - timedelta(hours=float(hours))
+  try:
+    with store._connect() as conn:
+      from src.trading.bot_runtime import stats_epoch_at
+
+      raw = stats_epoch_at(conn)
+      if raw:
+        epoch = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if epoch.tzinfo is None:
+          epoch = epoch.replace(tzinfo=timezone.utc)
+        if epoch > cutoff:
+          cutoff = epoch
+  except Exception:
+    pass
+  return cutoff
+
+
 def backfill_kalshi_hourly_fills(
   store: Any,
   kalshi: Any,
@@ -280,7 +305,7 @@ def backfill_kalshi_hourly_fills(
 
   from src.trading.bot_live_exit import cap_adopted_contracts
 
-  cutoff = datetime.now(timezone.utc) - timedelta(hours=float(hours))
+  cutoff = _sync_cutoff(store, hours)
   raw_fills = kalshi.list_fills(limit=500, critical=critical)
   if order_cache is None:
     order_cache = _build_order_direction_cache(kalshi)
@@ -489,6 +514,150 @@ def _has_filled_enter_for_order(store: Any, order_id: str) -> bool:
   return row is not None
 
 
+def _has_exit_for_kalshi_order(store: Any, order_id: str) -> bool:
+  with store._connect() as conn:
+    row = conn.execute(
+      """
+      SELECT 1 FROM bot_trades
+      WHERE kalshi_order_id = ? AND action = 'exit'
+        AND mode = 'live' AND status IN ('filled', 'reconciled')
+      LIMIT 1
+      """,
+      (order_id,),
+    ).fetchone()
+  return row is not None
+
+
+def _filled_enter_for_kalshi_order(store: Any, order_id: str) -> dict[str, Any] | None:
+  with store._connect() as conn:
+    row = conn.execute(
+      """
+      SELECT * FROM bot_trades
+      WHERE kalshi_order_id = ? AND action = 'enter'
+        AND mode = 'live' AND status = 'filled'
+      ORDER BY created_at DESC LIMIT 1
+      """,
+      (order_id,),
+    ).fetchone()
+  return dict(row) if row else None
+
+
+def _reconciled_scratch_exit_for_position(store: Any, position_id: str) -> dict[str, Any] | None:
+  if not position_id:
+    return None
+  with store._connect() as conn:
+    row = conn.execute(
+      """
+      SELECT * FROM bot_trades
+      WHERE position_id = ? AND action = 'exit' AND mode = 'live'
+        AND status = 'reconciled' AND COALESCE(pnl_usd, 0) = 0
+        AND kalshi_order_id IS NULL
+      ORDER BY created_at DESC LIMIT 1
+      """,
+      (position_id,),
+    ).fetchone()
+  return dict(row) if row else None
+
+
+def _repair_or_log_exit_for_known_enter(
+  store: Any,
+  *,
+  buy: dict[str, Any],
+  sell: dict[str, Any],
+  leg_event: str,
+) -> dict[str, Any] | None:
+  """Pair a Kalshi sell with an already-imported enter (fix scratch reconciles)."""
+  oid_buy = str(buy["order_id"])
+  oid_sell = str(sell["order_id"])
+  enter = _filled_enter_for_kalshi_order(store, oid_buy)
+  if not enter:
+    return None
+
+  contracts = max(
+    1,
+    int(
+      round(
+        min(
+          float(buy["contracts"]),
+          float(sell["contracts"]),
+          float(enter.get("contracts") or buy["contracts"]),
+        )
+      )
+    ),
+  )
+  entry_c = int(enter.get("entry_price_cents") or buy["price_cents"])
+  exit_c = int(sell["price_cents"])
+  pnl = round(
+    float(
+      leg_pnl_usd(
+        entry_price_cents=entry_c,
+        mark_or_exit_cents=exit_c,
+        contracts=contracts,
+      )
+      or 0.0,
+    ),
+    2,
+  )
+  sell_iso = sell.get("created_at").isoformat() if sell.get("created_at") else None
+  scratch = _reconciled_scratch_exit_for_position(store, str(enter.get("position_id") or ""))
+
+  if scratch:
+    detail = (
+      f"{scratch.get('detail') or 'Live EXIT reconciled'} · "
+      f"repaired from Kalshi sell fill (order {oid_sell}) @ {exit_c}¢ "
+      f"— {'+' if pnl >= 0 else ''}${pnl:.2f}"
+    )
+    with store._connect() as conn:
+      conn.execute(
+        """
+        UPDATE bot_trades
+        SET exit_price_cents = ?, price_cents = ?, pnl_usd = ?,
+            status = 'filled', kalshi_order_id = ?, contracts = ?, detail = ?
+        WHERE id = ?
+        """,
+        (exit_c, exit_c, pnl, oid_sell, contracts, detail, scratch["id"]),
+      )
+    return {
+      "action": "repaired_scratch_exit",
+      "order_id": oid_sell,
+      "ticker": str(sell["ticker"]),
+      "pnl_usd": pnl,
+    }
+
+  if _has_exit_for_kalshi_order(store, oid_sell):
+    return None
+
+  detail = (
+    f"Live EXIT backfilled from Kalshi fills (paired enter {oid_buy}, order {oid_sell}) "
+    f"— {'+' if pnl >= 0 else ''}${pnl:.2f}"
+  )
+  store.log_trade({
+    "event_ticker": str(enter.get("event_ticker") or leg_event),
+    "trigger": "kalshi_fill_sync",
+    "action": "exit",
+    "mode": "live",
+    "market_ticker": str(sell["ticker"]),
+    "side": str(sell["side"]),
+    "contracts": contracts,
+    "price_cents": exit_c,
+    "entry_price_cents": entry_c,
+    "exit_price_cents": exit_c,
+    "pnl_usd": pnl,
+    "label": enter.get("label"),
+    "status": "filled",
+    "detail": detail,
+    "position_id": enter.get("position_id"),
+    "kalshi_order_id": oid_sell,
+    "created_at": sell_iso,
+  })
+  return {
+    "action": "backfilled_exit_for_known_enter",
+    "order_id": oid_sell,
+    "ticker": str(sell["ticker"]),
+    "pnl_usd": pnl,
+  }
+
+
 def replay_closed_legs_from_kalshi_fills(
   store: Any,
   kalshi: Any,
@@ -506,7 +675,7 @@ def replay_closed_legs_from_kalshi_fills(
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": True, "changes": []}
 
-  cutoff = datetime.now(timezone.utc) - timedelta(hours=float(hours))
+  cutoff = _sync_cutoff(store, hours)
   raw_fills = kalshi.list_fills(limit=500, critical=critical)
   if order_cache is None:
     order_cache = _build_order_direction_cache(kalshi)
@@ -534,18 +703,12 @@ def replay_closed_legs_from_kalshi_fills(
     sells = [o for o in leg_orders if o["action"] == "sell"]
     for buy in buys:
       oid_buy = str(buy["order_id"])
-      if (oid_buy, "enter") in known:
-        continue
-      # Skip if any filled enter exists for this leg in window
-      if _has_filled_enter_for_order(store, oid_buy):
-        known.add((oid_buy, "enter"))
-        continue
-      # Find matching sell after buy
       buy_time = buy.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
       sell = next(
         (
           s for s in sells
           if (str(s["order_id"]), "exit") not in known
+          and not _has_exit_for_kalshi_order(store, str(s["order_id"]))
           and (s.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= buy_time
         ),
         None,
@@ -553,6 +716,23 @@ def replay_closed_legs_from_kalshi_fills(
       if not sell:
         continue
       oid_sell = str(sell["order_id"])
+
+      has_enter = (oid_buy, "enter") in known or _has_filled_enter_for_order(store, oid_buy)
+      if has_enter:
+        known.add((oid_buy, "enter"))
+        repaired = _repair_or_log_exit_for_known_enter(
+          store,
+          buy=buy,
+          sell=sell,
+          leg_event=leg_event,
+        )
+        if repaired:
+          changes.append(repaired)
+          known.add((oid_sell, "exit"))
+        continue
+
+      if (oid_buy, "enter") in known:
+        continue
       contracts = max(1, int(round(min(float(buy["contracts"]), float(sell["contracts"])))))
       entry_c = int(buy["price_cents"])
       exit_c = int(sell["price_cents"])
@@ -620,6 +800,96 @@ def replay_closed_legs_from_kalshi_fills(
   return {"ok": True, "changes": changes}
 
 
+def _settlement_created_at(row: dict[str, Any]) -> datetime | None:
+  raw = row.get("settled_time") or row.get("created_time") or row.get("ts")
+  if not raw:
+    return None
+  try:
+    if isinstance(raw, (int, float)):
+      return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+    return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+  except (TypeError, ValueError, OSError):
+    return None
+
+
+def _settlement_contract_count(row: dict[str, Any], side: str) -> float:
+  side_l = str(side or "").lower()
+  if side_l not in ("yes", "no"):
+    return 0.0
+  for key in (f"{side_l}_count_fp", f"{side_l}_count"):
+    raw = row.get(key)
+    if raw is None or raw == "":
+      continue
+    try:
+      val = float(raw)
+    except (TypeError, ValueError):
+      continue
+    if val > 0:
+      return val
+  return 0.0
+
+
+def _exit_cents_from_settlement(row: dict[str, Any], *, side: str) -> int | None:
+  """Binary payout on the held leg from a Kalshi /portfolio/settlements row."""
+  result = str(row.get("market_result") or "").lower()
+  if result in ("void", "scalar", ""):
+    return None
+  yes_cents: int | None = None
+  raw_value = row.get("value")
+  if raw_value not in (None, ""):
+    try:
+      yes_cents = max(0, min(100, int(raw_value)))
+    except (TypeError, ValueError):
+      yes_cents = None
+  if yes_cents is None:
+    if result == "yes":
+      yes_cents = 100
+    elif result == "no":
+      yes_cents = 0
+    else:
+      return None
+  if str(side).lower() == "yes":
+    return yes_cents
+  return 100 - yes_cents
+
+
+def _aggregate_settlements_to_exits(
+  settlements: list[dict[str, Any]],
+  *,
+  asset: str | None = None,
+) -> list[dict[str, Any]]:
+  """Synthetic sell orders from Kalshi settlement payouts (held-to-expiry exits)."""
+  out: list[dict[str, Any]] = []
+  for row in settlements:
+    ticker = str(row.get("ticker") or row.get("market_ticker") or "").strip()
+    leg_event = market_ticker_event_ticker(ticker)
+    if not leg_event or not is_kalshi_hourly_event(leg_event):
+      continue
+    if asset and not hourly_fill_belongs_to_asset(ticker, asset):
+      continue
+    ts = _settlement_created_at(row)
+    for side in ("yes", "no"):
+      contracts = _settlement_contract_count(row, side)
+      if contracts < 0.05:
+        continue
+      exit_c = _exit_cents_from_settlement(row, side=side)
+      if exit_c is None:
+        continue
+      settle_key = ts.isoformat() if isinstance(ts, datetime) else "unknown"
+      out.append({
+        "order_id": f"settle:{ticker}:{side}:{settle_key}",
+        "ticker": ticker,
+        "action": "sell",
+        "side": side,
+        "contracts": contracts,
+        "price_cents": exit_c,
+        "created_at": ts,
+        "exit_source": "settlement",
+      })
+  out.sort(key=lambda r: r.get("created_at") or datetime.min.replace(tzinfo=timezone.utc))
+  return out
+
+
 def sync_kalshi_fills_to_store(
   store: Any,
   kalshi: Any,
@@ -657,32 +927,60 @@ def summarize_kalshi_experiment_fills(
   critical: bool = True,
   max_fills: int = 1000,
   asset: str | None = None,
+  event_ticker: str | None = None,
 ) -> dict[str, Any]:
   """
   Realized P&L from Kalshi hourly fill history since an instant (exchange source of truth).
-  Pairs buy+sell on the same ticker/side; open legs are excluded from closed P&L.
+  Pairs buy fills with sell fills or settlement payouts on the same ticker/side; open legs
+  are excluded from closed P&L.
   """
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return {"ok": False, "error": "Kalshi not authenticated"}
 
+  from src.trading.hourly_event_time import canonical_hourly_event_ticker
+
+  event_filter: str | None = None
+  if event_ticker:
+    event_filter = canonical_hourly_event_ticker(str(event_ticker))
+
   raw_fills = kalshi.list_fills(limit=min(max_fills, 1000), critical=critical)
+  raw_settlements = kalshi.list_settlements(limit=min(max_fills, 1000), critical=critical)
   order_cache = _build_order_direction_cache(kalshi)
-  hourly_fills = [
-    f for f in raw_fills
-    if market_ticker_event_ticker(_fill_market_ticker(f))
-    and is_kalshi_hourly_event(market_ticker_event_ticker(_fill_market_ticker(f)) or "")
-    and (not asset or hourly_fill_belongs_to_asset(_fill_market_ticker(f), asset))
-    and (_fill_created_at(f) is None or _fill_created_at(f) >= since)
+  hourly_all: list[dict[str, Any]] = []
+  fills_since: list[dict[str, Any]] = []
+  for fill in raw_fills:
+    ticker = _fill_market_ticker(fill)
+    leg_event = market_ticker_event_ticker(ticker)
+    if not leg_event or not is_kalshi_hourly_event(leg_event):
+      continue
+    if event_filter and canonical_hourly_event_ticker(leg_event) != event_filter:
+      continue
+    if asset and not hourly_fill_belongs_to_asset(ticker, asset):
+      continue
+    hourly_all.append(fill)
+    ts = _fill_created_at(fill)
+    if ts is None or ts >= since:
+      fills_since.append(fill)
+  settlement_exits = _aggregate_settlements_to_exits(raw_settlements, asset=asset)
+  settlements_since = [
+    s for s in settlement_exits
+    if s.get("created_at") is None or s["created_at"] >= since
   ]
-  orders = _aggregate_fills_to_orders(hourly_fills, order_cache=order_cache)
+  # Pair on all hourly fills so pre-epoch buys consume post-epoch sells; only count
+  # round-trips opened on/after stats_epoch_at in closed_trades / P&L.
+  orders = _aggregate_fills_to_orders(hourly_all, order_cache=order_cache)
   legs: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
   for order in orders:
     legs[(str(order["ticker"]), str(order["side"]))].append(order)
 
+  settlement_by_leg: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+  for exit_row in settlement_exits:
+    settlement_by_leg[(str(exit_row["ticker"]), str(exit_row["side"]))].append(exit_row)
+
   closed_pnls: list[float] = []
   wins = 0
   losses = 0
-  for leg_orders in legs.values():
+  for (ticker, side), leg_orders in legs.items():
     buys = sorted(
       [o for o in leg_orders if o["action"] == "buy"],
       key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
@@ -691,11 +989,30 @@ def summarize_kalshi_experiment_fills(
       [o for o in leg_orders if o["action"] == "sell"],
       key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
     )
+    leg_settlements = settlement_by_leg.get((ticker, side), [])
+    exits = sorted(
+      sells + leg_settlements,
+      key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
+    )
     sell_i = 0
-    for buy in buys:
+    epoch_buys = sorted(
+      [
+        b for b in buys
+        if (b.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= since
+      ],
+      key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    epoch_exits = sorted(
+      [
+        s for s in exits
+        if (s.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= since
+      ],
+      key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    for buy in epoch_buys:
       buy_time = buy.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
-      while sell_i < len(sells):
-        sell = sells[sell_i]
+      while sell_i < len(epoch_exits):
+        sell = epoch_exits[sell_i]
         sell_time = sell.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
         if sell_time < buy_time:
           sell_i += 1
@@ -703,6 +1020,7 @@ def summarize_kalshi_experiment_fills(
         contracts = max(1, int(round(min(float(buy["contracts"]), float(sell["contracts"])))))
         entry_c = int(buy["price_cents"])
         exit_c = int(sell["price_cents"])
+        sell_i += 1
         pnl = round(
           float(
             leg_pnl_usd(
@@ -719,21 +1037,61 @@ def summarize_kalshi_experiment_fills(
           wins += 1
         elif pnl < 0:
           losses += 1
-        sell_i += 1
         break
       else:
-        break
+        continue
 
   total = round(sum(closed_pnls), 2)
   n = len(closed_pnls)
+  buy_orders = sum(1 for leg in legs.values() for o in leg if o["action"] == "buy")
+  sell_orders = sum(1 for leg in legs.values() for o in leg if o["action"] == "sell")
+  post_epoch_buys = 0
+  post_epoch_sells = 0
+  post_epoch_settlements = len(settlements_since)
+  pairable_legs = 0
+  for (ticker, side), leg in legs.items():
+    epoch_leg_buys = [
+      b for b in leg
+      if b["action"] == "buy"
+      and (b.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= since
+    ]
+    epoch_leg_sells = [
+      s for s in leg
+      if s["action"] == "sell"
+      and (s.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= since
+    ]
+    epoch_leg_settlements = [
+      s for s in settlement_by_leg.get((ticker, side), [])
+      if (s.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= since
+    ]
+    post_epoch_buys += len(epoch_leg_buys)
+    post_epoch_sells += len(epoch_leg_sells)
+    for buy in epoch_leg_buys:
+      buy_time = buy.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
+      epoch_exits = epoch_leg_sells + epoch_leg_settlements
+      if any(
+        (s.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)) >= buy_time
+        for s in epoch_exits
+      ):
+        pairable_legs += 1
+        break
   out: dict[str, Any] = {
     "ok": True,
     "source": "kalshi_fills",
+    "event_ticker": event_filter,
     "closed_trades": n,
     "total_pnl_usd": total,
     "wins": wins,
     "losses": losses,
-    "fills_scanned": len(hourly_fills),
+    "fills_scanned": len(fills_since),
+    "fills_total": len(hourly_all),
+    "buy_orders": buy_orders,
+    "sell_orders": sell_orders,
+    "settlement_exits": len(settlement_exits),
+    "post_epoch_buys": post_epoch_buys,
+    "post_epoch_sells": post_epoch_sells,
+    "post_epoch_settlements": post_epoch_settlements,
+    "pairable_legs": pairable_legs,
   }
   if n:
     out["win_rate"] = round(wins / n, 3)

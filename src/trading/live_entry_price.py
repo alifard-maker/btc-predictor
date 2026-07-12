@@ -20,6 +20,7 @@ class LiveEntryPricingConfig:
   cross_spread_enabled: bool = True
   cross_spread_min_edge_cents: float = 12.0
   passive_limit_at: PassiveLimitAt = "mid"
+  taker_only: bool = False
 
   @classmethod
   def from_bot_cfg(cls, bot_cfg: dict[str, Any] | None) -> LiveEntryPricingConfig:
@@ -31,6 +32,7 @@ class LiveEntryPricingConfig:
       cross_spread_enabled=bool(raw.get("cross_spread_enabled", True)),
       cross_spread_min_edge_cents=float(raw.get("cross_spread_min_edge_cents", 12.0)),
       passive_limit_at=passive,  # type: ignore[arg-type]
+      taker_only=bool(raw.get("taker_only", False)),
     )
 
 
@@ -44,7 +46,7 @@ def live_entry_pricing_from_cfg(
   if not cfg:
     pricing = LiveEntryPricingConfig()
   elif kind == "slot15":
-    pricing = LiveEntryPricingConfig.from_bot_cfg((cfg.get("slot15") or {}).get("bot"))
+    pricing = LiveEntryPricingConfig.from_bot_cfg((cfg.get("intra_slot") or {}).get("bot"))
   else:
     from src.backtest.mechanics_profiles import entry_kind_for_bot
 
@@ -54,8 +56,9 @@ def live_entry_pricing_from_cfg(
       pricing = LiveEntryPricingConfig.from_bot_cfg(cfg.get("bot"))
   if aggressive:
     pricing = replace(pricing, cross_spread_min_edge_cents=10.0)
-  else:
+  elif not pricing.taker_only:
     # Passive preset: never cross the spread in live (backtest + live both worse).
+    # pnl_first sets taker_only=True — cross-spread must stay on or every entry is blocked.
     pricing = replace(pricing, cross_spread_enabled=False)
   return pricing
 
@@ -132,6 +135,17 @@ def resolve_live_entry_price(
     return {
       "price_cents": int(ask),
       "execution_mode": "cross_spread",
+      "bid_cents": bid,
+      "ask_cents": ask,
+      "spread_cents": spread,
+      "ask_edge_cents": ask_edge,
+      "cross_spread_min_edge_cents": cross_threshold,
+    }
+
+  if pricing.taker_only:
+    return {
+      "price_cents": None,
+      "execution_mode": "blocked_taker_only",
       "bid_cents": bid,
       "ask_cents": ask,
       "spread_cents": spread,

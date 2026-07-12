@@ -114,6 +114,93 @@ def test_compare_filters_by_mode(tmp_path: Path):
   assert live_hour["trial"]["has_activity"] is True
 
 
+def test_compare_filters_post_epoch_events_by_settle(tmp_path: Path):
+  live_db = tmp_path / "hourly_bot_btc.db"
+  trial_db = tmp_path / "hourly_trial_bot_btc.db"
+  live_store = HourlyBotStore(live_db)
+  trial_store = HourlyBotStore(trial_db)
+  epoch = "2026-07-04T16:59:00+00:00"
+  from src.trading.bot_runtime import set_stats_epoch_at
+
+  with live_store._connect() as conn:
+    set_stats_epoch_at(conn, epoch)
+
+  _log_trade(
+    live_store,
+    event_ticker="KXBTCD-26JUL0322",
+    created_at="2026-07-04T18:44:00+00:00",
+    mode="live",
+  )
+  _log_trade(
+    live_store,
+    event_ticker="KXBTCD-26JUL0413",
+    created_at="2026-07-04T18:05:00+00:00",
+    mode="live",
+  )
+  _log_trade(
+    trial_store,
+    event_ticker="KXBTCD-26JUL0413",
+    created_at="2026-07-04T18:06:00+00:00",
+    mode="paper",
+  )
+
+  out = build_hourly_live_trial_compare(
+    live_store,
+    trial_store,
+    asset="btc",
+    limit_hours=10,
+    live_mode="live",
+    trial_mode="paper",
+    stats_epoch_at=epoch,
+  )
+
+  tickers = [h["event_ticker"] for h in out["hours"]]
+  assert "KXBTCD-26JUL0322" not in tickers
+  assert "KXBTCD-26JUL0413" in tickers
+  assert "KXBTC-26JUL0413" not in tickers
+  assert out["stats_epoch_at"] == epoch
+
+
+def test_compare_canonicalizes_sibling_event_tickers(tmp_path: Path):
+  live_db = tmp_path / "hourly_bot_btc.db"
+  trial_db = tmp_path / "hourly_trial_bot_btc.db"
+  live_store = HourlyBotStore(live_db)
+  trial_store = HourlyBotStore(trial_db)
+
+  _log_trade(
+    live_store,
+    event_ticker="KXBTC-26JUL0413",
+    market_ticker="KXBTC-26JUL0413-B62850",
+    created_at="2026-07-04T17:05:00+00:00",
+    mode="live",
+  )
+  _log_trade(
+    live_store,
+    event_ticker="KXBTCD-26JUL0413",
+    created_at="2026-07-04T17:06:00+00:00",
+    mode="live",
+  )
+  _log_trade(
+    trial_store,
+    event_ticker="KXBTCD-26JUL0413",
+    created_at="2026-07-04T17:06:30+00:00",
+    mode="paper",
+  )
+
+  out = build_hourly_live_trial_compare(
+    live_store,
+    trial_store,
+    asset="btc",
+    limit_hours=5,
+    live_mode="live",
+    trial_mode="paper",
+  )
+
+  tickers = [h["event_ticker"] for h in out["hours"]]
+  assert tickers.count("KXBTCD-26JUL0413") == 1
+  assert "KXBTC-26JUL0413" not in tickers
+
+
 def test_compare_pairs_entries_within_window(tmp_path):
   from pathlib import Path
 

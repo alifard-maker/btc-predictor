@@ -10,6 +10,7 @@ const BOT_SETTING_FIELDS = [
   'allow_actionable',
   'use_accumulated_profit',
   'paper_auto_refill',
+  'live_auto_refill_hour_budget',
 ];
 
 const PATCH_CONFIRM_MS = 120000;
@@ -28,6 +29,7 @@ function normalizeBotSettings(raw, maxKey) {
     allow_actionable: !!raw.allow_actionable,
     use_accumulated_profit: !!raw.use_accumulated_profit,
     paper_auto_refill: raw.paper_auto_refill !== false,
+    live_auto_refill_hour_budget: !!raw.live_auto_refill_hour_budget,
   };
 }
 
@@ -63,18 +65,46 @@ function shouldUpdateSettingsFromServer({
   if (!dom) return true;
 
   const domNorm = normalizeBotSettings(dom, maxKey);
+  // Live/paper mismatch is safety-critical — always trust server over stale DOM.
+  if (domNorm && srv.mode && domNorm.mode !== srv.mode) return true;
   const known = lastKnown ? normalizeBotSettings(lastKnown, maxKey) : domNorm;
 
   if (patchConfirmed && patchConfirmed.at && patchConfirmed.settings) {
     const age = Date.now() - patchConfirmed.at;
     if (age >= 0 && age < PATCH_CONFIRM_MS) {
       const conf = normalizeBotSettings(patchConfirmed.settings, maxKey);
-      if (conf && srv.enabled !== conf.enabled) return false;
+      if (conf) {
+        if (srv.enabled !== conf.enabled) return false;
+        if (srv[maxKey] !== conf[maxKey]) return false;
+        if (srv.live_auto_refill_hour_budget !== conf.live_auto_refill_hour_budget) return false;
+        if (srv.paper_auto_refill !== conf.paper_auto_refill) return false;
+      }
     }
   }
 
-  // Never let a stale poll turn auto-bet OFF while UI and last-known both say ON.
-  if (domNorm && known && domNorm.enabled && known.enabled && !srv.enabled) {
+  // Never let a stale poll flip auto-bet while DOM and last-known agree.
+  if (domNorm && known && domNorm.enabled === known.enabled && domNorm.enabled !== srv.enabled) {
+    return false;
+  }
+
+  // Never let a stale poll flip auto-refill while DOM and last-known agree.
+  if (
+    domNorm && known
+    && domNorm.live_auto_refill_hour_budget === known.live_auto_refill_hour_budget
+    && domNorm.live_auto_refill_hour_budget !== srv.live_auto_refill_hour_budget
+  ) {
+    return false;
+  }
+  if (
+    domNorm && known
+    && domNorm.paper_auto_refill === known.paper_auto_refill
+    && domNorm.paper_auto_refill !== srv.paper_auto_refill
+  ) {
+    return false;
+  }
+
+  // Never clobber max cap input from a stale poll while DOM shows a different value.
+  if (domNorm && srv && domNorm[maxKey] !== srv[maxKey]) {
     return false;
   }
 

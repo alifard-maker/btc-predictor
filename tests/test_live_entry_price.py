@@ -88,3 +88,43 @@ def test_passive_preset_disables_cross_spread_in_cfg():
   estrat = EntryStrategyConfig(min_ask_edge_cents=5.0)
   resolved = resolve_live_entry_price(pick, "yes", pricing=pricing, estrat=estrat)
   assert resolved["execution_mode"] == "passive_limit"
+
+
+def test_taker_only_preset_keeps_cross_spread_enabled():
+  cfg = {
+    "hourly": {
+      "bot": {
+        "live_entry": {
+          "cross_spread_enabled": True,
+          "cross_spread_min_edge_cents": 15,
+          "taker_only": True,
+        }
+      }
+    }
+  }
+  pricing = live_entry_pricing_from_cfg(cfg, kind="hourly", aggressive=False)
+  assert pricing.cross_spread_enabled is True
+  assert pricing.taker_only is True
+  pick = _pick(model_prob=0.58, yes_bid=40, yes_ask=42)
+  estrat = EntryStrategyConfig(min_ask_edge_cents=15.0)
+  resolved = resolve_live_entry_price(pick, "yes", pricing=pricing, estrat=estrat)
+  assert resolved["execution_mode"] == "cross_spread"
+  assert resolved["price_cents"] == 42
+
+
+def test_slot15_live_entry_reads_intra_slot_bot():
+  cfg = {
+    "intra_slot": {
+      "bot": {
+        "live_entry": {
+          "cross_spread_enabled": True,
+          "cross_spread_min_edge_cents": 15,
+          "passive_limit_at": "bid",
+        }
+      }
+    }
+  }
+  pricing = live_entry_pricing_from_cfg(cfg, kind="slot15", aggressive=False)
+  assert pricing.cross_spread_min_edge_cents == 15.0
+  assert pricing.passive_limit_at == "bid"
+

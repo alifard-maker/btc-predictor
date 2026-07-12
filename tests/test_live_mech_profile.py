@@ -7,13 +7,16 @@ from src.backtest.mechanics_profiles import (
   live_mechanics_profile_for_cfg,
 )
 from src.trading.hourly_live_trial_align import (
-  live_entry_execution_mirror_active,
+  live_entry_stake_mirror_active,
+  live_mech_paper_mirror_active,
   live_resting_entry_guards_active,
   live_trial_align_active,
   live_trial_exit_align_active,
   should_mirror_trial_entry_execution,
   should_use_trial_leg_exits,
 )
+from src.trading.entry_strategy import EntryStrategyConfig
+from src.trading.hourly_live_trial_align import apply_mirror_trial_entry_estrat
 
 
 def _cfg(**overrides):
@@ -46,7 +49,8 @@ def test_live_mech_profile_not_applied_to_eth_without_key():
 def test_entry_align_off_exit_align_on_with_mech_profile():
   cfg = _cfg()
   assert not live_trial_align_active(cfg, kind="hourly", mode="live")
-  assert live_entry_execution_mirror_active(cfg, kind="hourly", mode="live")
+  assert live_mech_paper_mirror_active(cfg, kind="hourly", mode="live")
+  assert live_entry_stake_mirror_active(cfg, kind="hourly", mode="live")
   assert should_mirror_trial_entry_execution(cfg, kind="hourly", mode="live")
   assert live_trial_exit_align_active(cfg, kind="hourly", mode="live")
   assert live_resting_entry_guards_active(cfg, kind="hourly", mode="live")
@@ -56,7 +60,22 @@ def test_entry_align_off_exit_align_on_with_mech_profile():
   )
 
 
+def test_mech_mirror_restores_trial_scale_in_and_stake():
+  cfg = _cfg()
+  cfg["hourly"]["bot"]["entry_strategy"] = {
+    "allow_scale_in": True,
+    "scale_in_max_legs_per_ticker": 4,
+    "max_stake_per_entry_usd": 3.5,
+  }
+  base = EntryStrategyConfig(max_stake_per_entry_usd=10.0, allow_scale_in=False)
+  out = apply_mirror_trial_entry_estrat(base, cfg, kind="hourly", mode="live")
+  assert out.allow_scale_in is True
+  assert out.scale_in_max_legs_per_ticker == 4
+  assert out.max_stake_per_entry_usd == 4.0
+
+
 def test_entry_align_on_without_mech_profile():
   cfg = {"hourly": {"bot": {"live_trial_align": {"enabled": True}}}}
   assert live_trial_align_active(cfg, kind="hourly", mode="live")
+  assert not live_mech_paper_mirror_active(cfg, kind="hourly", mode="live")
   assert live_trial_exit_align_active(cfg, kind="hourly", mode="live")

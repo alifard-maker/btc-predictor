@@ -31,5 +31,8 @@ rich>=13.7.0
 # Testing
 pytest>=8.0.0
 
+# Polymarket CLOB (Goal 3 live prep — orders gated by allow_live)
+py-clob-client-v2>=1.0.0
+
 # Optional deep learning (Phase 3)
 # torch>=2.2.0

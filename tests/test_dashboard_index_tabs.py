@@ -10,6 +10,8 @@ INDEX_PREFIXES = ("spx", "ndx")
 
 REQUIRED_SUFFIXES = (
   "hourly-bot",
+  "hourly-trial-bot",
+  "hourly-live-trial-compare",
   "hourly-guide",
   "daily-meta",
   "daily-freq-badge",
@@ -39,6 +41,7 @@ def test_dashboard_wires_index_hourly_api_paths():
   for asset in INDEX_PREFIXES:
     assert f"/api/{asset}/hourly/prediction" in html
     assert f"/api/{asset}/hourly/bot" in html
+    assert f"/api/{asset}/hourly-trial/bot" in html
 
 
 def test_should_render_hourly_bot_supports_index_assets():
@@ -47,3 +50,5 @@ def test_should_render_hourly_bot_supports_index_assets():
   assert "return activeTab === hourlyTabForAsset(asset)" in html
   assert "asset === 'spx'" in html
   assert "asset === 'ndx'" in html
+  assert "loadIndexHourlyLiveTrialCompare" in html
+  assert "refreshIndexTrialBot" in html

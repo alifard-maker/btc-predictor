@@ -217,6 +217,64 @@ def trail_exit_detail(
   return f"peak +${peak_usd:.2f} now +${unrealized_usd:.2f} — giveback {giveback:.0f}%"
 
 
+def should_defer_profit_target(
+  cfg: dict[str, Any] | None,
+  ctx: AdaptiveExitContext,
+  trading_mode: str | None,
+) -> bool:
+  """Skip fixed/adaptive profit target when enough time remains before settle (paper-only by default)."""
+  pnl_cfg = dict((cfg or {}).get("pnl_first") or {})
+  defer_minutes = float(pnl_cfg.get("defer_profit_target_minutes_to_settle", 0) or 0)
+  if defer_minutes <= 0:
+    return False
+  modes = [str(m).lower() for m in (pnl_cfg.get("defer_profit_target_modes") or [])]
+  if not modes or str(trading_mode or "").lower() not in modes:
+    return False
+  if ctx.seconds_remaining is None:
+    return False
+  return float(ctx.seconds_remaining) > defer_minutes * 60.0
+
+
+def should_defer_leg_stop(
+  cfg: dict[str, Any] | None,
+  ctx: AdaptiveExitContext,
+  trading_mode: str | None,
+) -> bool:
+  """Skip LEG STOP / early cut-loss when enough time remains before settle (paper-only by default)."""
+  pnl_cfg = dict((cfg or {}).get("pnl_first") or {})
+  defer_minutes = float(pnl_cfg.get("defer_leg_stop_minutes_to_settle", 0) or 0)
+  if defer_minutes <= 0:
+    return False
+  modes = [str(m).lower() for m in (pnl_cfg.get("defer_leg_stop_modes") or [])]
+  if not modes or str(trading_mode or "").lower() not in modes:
+    return False
+  if ctx.seconds_remaining is None:
+    return False
+  return float(ctx.seconds_remaining) > defer_minutes * 60.0
+
+
+def profit_exit_min_hold_seconds(
+  settings: ProfitExitSettings,
+  cfg: dict[str, Any] | None,
+  trading_mode: str | None,
+  *,
+  for_trail: bool = False,
+) -> int:
+  """Resolve min hold for profit-target vs trail (paper experiment override)."""
+  base = int(settings.min_hold_seconds)
+  pnl_cfg = dict((cfg or {}).get("pnl_first") or {})
+  hold_cfg = dict(pnl_cfg.get("paper_profit_exit_hold") or {})
+  if not hold_cfg.get("enabled"):
+    return base
+  modes = [str(m).lower() for m in (hold_cfg.get("modes") or ["paper"])]
+  if str(trading_mode or "").lower() not in modes:
+    return base
+  key = "trail_min_hold_seconds" if for_trail else "profit_target_min_hold_seconds"
+  if key in hold_cfg:
+    return int(hold_cfg[key])
+  return base
+
+
 def evaluate_adaptive_profit_exit(
   *,
   settings: ProfitExitSettings,
@@ -225,6 +283,8 @@ def evaluate_adaptive_profit_exit(
   peaks: dict[str, float],
   hold_seconds: float | None,
   ctx: AdaptiveExitContext,
+  cfg: dict[str, Any] | None = None,
+  trading_mode: str | None = None,
 ) -> tuple[str | None, str]:
   """Evaluate trailing and dynamic/fixed profit exits. Returns (reason, detail)."""
   if not settings.take_profit_enabled or unrealized_usd is None:
@@ -236,13 +296,16 @@ def evaluate_adaptive_profit_exit(
     cost_usd=cost_usd,
     peaks=peaks,
     settings=settings,
-    min_hold_seconds=settings.min_hold_seconds,
+    min_hold_seconds=profit_exit_min_hold_seconds(
+      settings, cfg, trading_mode, for_trail=True,
+    ),
     hold_seconds=hold_seconds,
   ):
     return "PROFIT TRAIL", trail_exit_detail(peaks, unrealized_usd)
 
   mode = str(settings.take_profit_mode or "hybrid").lower()
-  if mode in ("fixed", "adaptive", "hybrid"):
+  defer_target = should_defer_profit_target(cfg, ctx, trading_mode)
+  if mode in ("fixed", "adaptive", "hybrid") and not defer_target:
     tp_pct = (
       effective_take_profit_pct(settings, ctx)
       if mode in ("adaptive", "hybrid")
@@ -254,7 +317,9 @@ def evaluate_adaptive_profit_exit(
       cost_usd=cost_usd,
       take_profit_pct=tp_pct,
       take_profit_usd=float(settings.take_profit_usd),
-      min_hold_seconds=settings.min_hold_seconds,
+      min_hold_seconds=profit_exit_min_hold_seconds(
+        settings, cfg, trading_mode, for_trail=False,
+      ),
       hold_seconds=hold_seconds,
       profit_threshold_either=bool(
         getattr(settings, "take_profit_either_threshold", False)
@@ -606,11 +671,18 @@ def evaluate_slot15_leg_stop_loss(
   seconds_remaining: float | None = None,
   hours_to_settle: float | None = None,
   bot_cfg: dict[str, Any] | None = None,
+  trading_mode: str | None = None,
 ) -> tuple[str | None, str]:
   delta = mark_vs_entry_cents(pos, mark_cents)
   if delta is None or leg_cfg.leg_stop_loss_cents <= 0:
     return None, ""
   if delta <= -leg_cfg.leg_stop_loss_cents:
+    defer_ctx = AdaptiveExitContext(
+      seconds_remaining=seconds_remaining,
+      period_seconds=3600.0,
+    )
+    if should_defer_leg_stop(bot_cfg, defer_ctx, trading_mode):
+      return None, ""
     if gate_on_hourly_thesis and not hourly_mark_cut_allowed(
       pos,
       pick,
@@ -808,6 +880,7 @@ def evaluate_slot15_contract_exits(
   pick: dict[str, Any] | None = None,
   live_price: float | None = None,
   standard_hourly_alert: str | None = None,
+  trading_mode: str | None = None,
 ) -> tuple[str | None, str]:
   """Contract-first exit chain for 15m / hourly-trial bots; optional slot-monitor fallback last."""
   from src.backtest.mechanics_profiles import is_hourly_trial_kind
@@ -839,6 +912,7 @@ def evaluate_slot15_contract_exits(
     seconds_remaining=exit_ctx.seconds_remaining,
     hours_to_settle=hours_to_settle,
     bot_cfg=cfg,
+    trading_mode=trading_mode,
   )
   if reason:
     return reason, detail
@@ -894,6 +968,8 @@ def evaluate_slot15_contract_exits(
       peaks=peaks,
       hold_seconds=hold_seconds,
       ctx=exit_ctx,
+      cfg=cfg,
+      trading_mode=trading_mode,
     )
     if reason:
       return reason, detail

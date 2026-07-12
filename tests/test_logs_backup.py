@@ -10,11 +10,14 @@ from pathlib import Path
 import pytest
 
 from src.backup.logs_backup import (
+  BACKUP_ASSETS,
+  HOURLY_BOT_KINDS_BY_ASSET,
+  bot_db_specs,
   on_trade_logged,
   run_full_backup,
   volume_is_persistent,
 )
-from src.backup.trade_hook import notify_trade_logged, should_skip_audit_trade
+from src.backup.trade_hook import notify_trade_logged, parse_bot_db_meta, should_skip_audit_trade
 
 
 def _init_bot_db(path: Path) -> None:
@@ -98,6 +101,71 @@ def _init_bot_db(path: Path) -> None:
   )
   conn.commit()
   conn.close()
+
+
+def test_bot_db_specs_cover_every_bot():
+  cfg = {"paths": {"logs": "data/logs"}}
+  specs = bot_db_specs(cfg)
+  labels = {f"{asset}_{kind}" for asset, kind, _ in specs}
+  for asset, kinds in HOURLY_BOT_KINDS_BY_ASSET.items():
+    for kind in kinds:
+      assert f"{asset}_{kind}" in labels
+  assert "btc_slot15" in labels
+  assert "eth_slot15" in labels
+  assert "eth_slot15_trial" in labels
+  assert set(BACKUP_ASSETS) == {"btc", "eth", "spx", "ndx"}
+
+
+def test_parse_bot_db_meta_for_index_and_trial_bots():
+  assert parse_bot_db_meta(Path("hourly_bot_spx.db")) == ("spx", "hourly")
+  assert parse_bot_db_meta(Path("hourly_trial_bot_ndx.db")) == ("ndx", "hourly_trial")
+  assert parse_bot_db_meta(Path("hourly_trial_mech_bot_btc.db")) == ("btc", "hourly_trial_mech")
+  assert parse_bot_db_meta(Path("hourly_v2_bot_eth.db")) == ("eth", "hourly_v2")
+  assert parse_bot_db_meta(Path("slot15_bot_btc.db")) == ("btc", "slot15")
+  assert parse_bot_db_meta(Path("slot15_trial_bot_eth.db")) == ("eth", "slot15_trial")
+
+
+def test_full_backup_exports_index_live_trades():
+  with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    data = root / "data"
+    spx_db = data / "spx" / "logs" / "hourly_bot_spx.db"
+    _init_bot_db(spx_db)
+    conn = sqlite3.connect(spx_db)
+    conn.execute(
+      """
+      INSERT INTO bot_trades (
+        id, event_ticker, trigger, action, mode, market_ticker, side,
+        contracts, price_cents, cost_usd, status, created_at, kalshi_order_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """,
+      (
+        "spx-live-1",
+        "KXINXU-26JUL061000",
+        "continuous",
+        "enter",
+        "live",
+        "KXINXU-26JUL061000-T7619.9999",
+        "yes",
+        2,
+        45,
+        0.9,
+        "filled",
+        "2026-07-06T14:00:00+00:00",
+        "kalshi-spx-1",
+      ),
+    )
+    conn.commit()
+    conn.close()
+    cfg = {
+      "paths": {"logs": str(data / "logs")},
+      "log_backup": {"enabled": True, "backup_dir": str(root / "backups")},
+    }
+    manifest = run_full_backup(cfg, reason="test")
+    live_csv = root / "backups" / "live" / "spx_hourly" / "trades.csv"
+    assert live_csv.exists()
+    assert "kalshi-spx-1" in live_csv.read_text(encoding="utf-8")
+    assert manifest.get("live", {}).get("total_trades", 0) >= 1
 
 
 def test_full_backup_separates_paper_and_live():

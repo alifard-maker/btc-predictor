@@ -89,19 +89,56 @@ def touch_persistent_marker(data_dir: str | Path) -> None:
       continue
 
 
+HOURLY_BOT_KINDS_BY_ASSET: dict[str, tuple[str, ...]] = {
+  "btc": (
+    "hourly",
+    "hourly_trial",
+    "hourly_trial_rally",
+    "hourly_trial_soft",
+    "hourly_trial_mech",
+    "hourly_v2",
+  ),
+  "eth": ("hourly", "hourly_trial", "hourly_v2"),
+  "spx": ("hourly", "hourly_trial"),
+  "ndx": ("hourly", "hourly_trial"),
+}
+SLOT15_ASSETS = ("btc", "eth")
+BACKUP_ASSETS = tuple(HOURLY_BOT_KINDS_BY_ASSET.keys())
+SLOT15_TRIAL_KIND = "slot15_trial"
+
+
+def _asset_logs_dir(data_dir: Path, asset: str) -> Path:
+  if asset == "btc":
+    return data_dir / "logs"
+  return data_dir / asset / "logs"
+
+
+def _hourly_bot_db_filename(kind: str, asset: str) -> str:
+  if kind == "hourly_trial":
+    return f"hourly_trial_bot_{asset}.db"
+  if kind == "hourly_trial_rally":
+    return f"hourly_trial_rally_bot_{asset}.db"
+  if kind == "hourly_trial_soft":
+    return f"hourly_trial_soft_bot_{asset}.db"
+  if kind == "hourly_trial_mech":
+    return f"hourly_trial_mech_bot_{asset}.db"
+  if kind == "hourly_v2":
+    return f"hourly_v2_bot_{asset}.db"
+  return f"hourly_bot_{asset}.db"
+
+
 def bot_db_specs(cfg: dict[str, Any]) -> list[tuple[str, str, Path]]:
-  """(asset, kind, db_path) for all bot stores."""
+  """(asset, kind, db_path) for every bot store — live tax exports include all bots."""
   data_dir = Path(cfg["paths"]["logs"]).parent
   specs: list[tuple[str, str, Path]] = []
-  for asset in ("btc", "eth"):
-    logs = data_dir / "logs" if asset == "btc" else data_dir / asset / "logs"
-    specs.append((asset, "hourly", logs / f"hourly_bot_{asset}.db"))
-    specs.append((asset, "hourly_trial", logs / f"hourly_trial_bot_{asset}.db"))
-    if asset == "btc":
-      specs.append((asset, "hourly_trial_rally", logs / f"hourly_trial_rally_bot_{asset}.db"))
-      specs.append((asset, "hourly_trial_soft", logs / f"hourly_trial_soft_bot_{asset}.db"))
-      specs.append((asset, "hourly_trial_mech", logs / f"hourly_trial_mech_bot_{asset}.db"))
+  for asset, kinds in HOURLY_BOT_KINDS_BY_ASSET.items():
+    logs = _asset_logs_dir(data_dir, asset)
+    for kind in kinds:
+      specs.append((asset, kind, logs / _hourly_bot_db_filename(kind, asset)))
+  for asset in SLOT15_ASSETS:
+    logs = _asset_logs_dir(data_dir, asset)
     specs.append((asset, "slot15", logs / f"slot15_bot_{asset}.db"))
+    specs.append((asset, SLOT15_TRIAL_KIND, logs / f"slot15_trial_bot_{asset}.db"))
   return specs
 
 
@@ -119,8 +156,8 @@ def calibration_file_specs(cfg: dict[str, Any]) -> list[tuple[str, Path]]:
     "hourly_stats_epoch.json",
   )
   out: list[tuple[str, Path]] = []
-  for asset in ("btc", "eth"):
-    logs = data_dir / "logs" if asset == "btc" else data_dir / asset / "logs"
+  for asset in BACKUP_ASSETS:
+    logs = _asset_logs_dir(data_dir, asset)
     prefix = f"{asset}/"
     for name in names:
       out.append((prefix + name, logs / name))

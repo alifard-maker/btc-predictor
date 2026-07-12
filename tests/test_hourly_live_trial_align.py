@@ -78,8 +78,11 @@ def test_whipsaw_align_override():
   assert w.max_quick_exit_cuts_per_hour == 2
 
 
-def test_skip_soft_rally_when_align_enabled():
-  assert skip_soft_rally_entry_overlay(_cfg(), kind="hourly")
+def test_skip_soft_rally_only_for_mech_live():
+  assert not skip_soft_rally_entry_overlay(_cfg(), kind="hourly")
+  mech = _cfg()
+  mech["hourly"]["bot"]["live_mechanics_profile"] = "mechanical_fixes"
+  assert skip_soft_rally_entry_overlay(mech, kind="hourly")
   assert not skip_soft_rally_entry_overlay(_cfg(), kind="hourly_trial")
 
 

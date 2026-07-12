@@ -670,6 +670,27 @@ def test_skips_when_no_book_quotes_available():
     assert store.last_skip_reason() == "no_liquidity"
 
 
+def test_skips_regime_blocked_when_no_candidates():
+  with tempfile.TemporaryDirectory() as tmp:
+    store = HourlyBotStore(Path(tmp) / "bot.db")
+    store.save_settings(HourlyBotSettings(
+      enabled=True, max_spend_per_hour_usd=10.0, allow_strong=False, allow_actionable=False,
+    ))
+    bot = HourlyBot(store, asset="eth")
+    tab = _live_tab(regime_allow=False, pick={"ticker": "", "signal": "NEUTRAL", "edge": 0})
+    tab["live"]["regime"] = {
+      "allow_trade": False,
+      "blocked": True,
+      "reasons": ["Range compressed (1.40×)"],
+    }
+    tab["live"]["primary_pick"] = None
+    tab["live"]["strategy_threshold"] = {"best_edge": None, "most_likely": None, "contracts": []}
+    tab["live"]["strategy_range"] = {"best_edge": None, "most_likely": None, "contracts": []}
+    actions = bot.run_continuous_cycle(tab, cfg={"hourly": {"regime": {}, "intrahour": {"enabled": False}}})
+    assert actions == []
+    assert store.last_skip_reason() == "regime_blocked:Range compressed (1.40×)"
+
+
 def test_skips_new_entries_too_close_to_settle_even_in_free_mode():
   """FREE mode ignores regime but must not open legs in the last minutes of the hour."""
   with tempfile.TemporaryDirectory() as tmp:

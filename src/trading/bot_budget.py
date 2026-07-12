@@ -2,13 +2,46 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class BudgetSettings(Protocol):
   mode: str
   use_accumulated_profit: bool
   profit_use_pct: float
+  live_auto_refill_hour_budget: bool
+
+
+def _live_auto_refill_enabled(settings: BudgetSettings) -> bool:
+  return str(settings.mode).lower() == "live" and bool(
+    getattr(settings, "live_auto_refill_hour_budget", False)
+  )
+
+
+def live_win_cap_boost(settings: BudgetSettings, interval_realized_pnl_usd: float) -> float:
+  """Extra hour cap from realized wins when live auto-refill is enabled."""
+  if not _live_auto_refill_enabled(settings):
+    return 0.0
+  realized = float(interval_realized_pnl_usd)
+  if realized <= 0:
+    return 0.0
+  if settings.use_accumulated_profit:
+    pct = _clamp_profit_use_pct(settings.profit_use_pct) / 100.0
+    return realized * pct
+  return realized
+
+
+def live_effective_hour_cap(
+  max_cap: float,
+  settings: BudgetSettings,
+  interval_realized_pnl_usd: float,
+  *,
+  live_interval_extra_budget_usd: float = 0.0,
+) -> float:
+  """Max deployable $ this hour (concurrent + cumulative) including win boost."""
+  boost = live_win_cap_boost(settings, interval_realized_pnl_usd)
+  extra = max(0.0, float(live_interval_extra_budget_usd))
+  return float(max_cap) + boost + extra
 
 
 def _clamp_profit_use_pct(pct: float) -> float:
@@ -65,6 +98,7 @@ def remaining_budget_usd(
   interval_realized_pnl_usd: float,
   open_exposure_usd: float,
   interval_total_entered_usd: float,
+  live_interval_extra_budget_usd: float = 0.0,
 ) -> float:
   """Budget left for new entries after open exposure and optional interval cap."""
   deploy = deploy_bankroll_usd(
@@ -75,13 +109,25 @@ def remaining_budget_usd(
     paper_bankroll_usd=paper_bankroll_usd,
     interval_realized_pnl_usd=interval_realized_pnl_usd,
   )
-  concurrent_room = max(0.0, min(deploy, float(max_cap)) - open_exposure_usd)
   if settings.mode == "paper":
-    return concurrent_room
-  if settings.use_accumulated_profit:
-    return concurrent_room
-  interval_room = max(0.0, float(max_cap) - float(interval_total_entered_usd))
-  return min(concurrent_room, interval_room)
+    return max(0.0, min(deploy, float(max_cap)) - open_exposure_usd)
+
+  # Live max at-risk is concurrent open exposure (dashboard copy). Cumulative enter
+  # totals can exceed cap when positions rotate; interval_total_entered_usd only gates
+  # live auto-refill chunks (_maybe_live_refill_hour_budget), not deployable display.
+  deploy_for_entries = deploy
+  if _live_auto_refill_enabled(settings):
+    deploy_for_entries += max(0.0, float(live_interval_extra_budget_usd))
+    effective_max = live_effective_hour_cap(
+      max_cap,
+      settings,
+      interval_realized_pnl_usd,
+      live_interval_extra_budget_usd=live_interval_extra_budget_usd,
+    )
+    ceiling = min(deploy_for_entries, effective_max)
+  else:
+    ceiling = min(deploy, float(max_cap))
+  return max(0.0, ceiling - open_exposure_usd)
 
 
 def config_max_spend_per_hour(cfg: dict | None) -> float | None:

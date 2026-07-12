@@ -37,6 +37,7 @@ class HourlyBotSettings:
   auto_stopped: bool = False
   auto_stop_reason: str | None = None
   paper_auto_refill: bool = True
+  live_auto_refill_hour_budget: bool = False
   use_accumulated_profit: bool = False
   profit_use_pct: float = 100.0
   aggressive_entries: bool = False
@@ -72,6 +73,7 @@ class HourlyBotSettings:
       auto_stopped=bool(raw.get("auto_stopped", False)),
       auto_stop_reason=raw.get("auto_stop_reason"),
       paper_auto_refill=bool(raw.get("paper_auto_refill", True)),
+      live_auto_refill_hour_budget=bool(raw.get("live_auto_refill_hour_budget", False)),
       use_accumulated_profit=bool(raw.get("use_accumulated_profit", False)),
       profit_use_pct=float(raw.get("profit_use_pct", 100.0)),
       aggressive_entries=bool(raw.get("aggressive_entries", False)),
@@ -186,9 +188,9 @@ class HourlyBotStore:
     return settings, prev if rolled else None
 
   def _connect(self) -> sqlite3.Connection:
-    conn = sqlite3.connect(self.db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    from src.trading.bot_sqlite import connect_bot_db
+
+    return connect_bot_db(self.db_path)
 
   def _migrate(self, conn: sqlite3.Connection) -> None:
     from src.trading.bot_runtime import migrate_bot_runtime
@@ -196,6 +198,9 @@ class HourlyBotStore:
 
     migrate_paper_state(conn)
     migrate_bot_runtime(conn)
+    from src.trading.live_hour_budget import migrate_live_hour_budget
+
+    migrate_live_hour_budget(conn)
     from src.trading.bot_tuning_store import migrate_adaptive_calibration, migrate_auto_tuning
 
     migrate_auto_tuning(conn)
@@ -480,6 +485,23 @@ class HourlyBotStore:
     self.set_last_skip_reason(None)
     return state.to_dict()
 
+  def get_live_hour_budget_dict(self, event_ticker: str) -> dict[str, Any]:
+    from src.trading.live_hour_budget import get_live_hour_budget
+
+    with self._connect() as conn:
+      return get_live_hour_budget(conn, event_ticker)
+
+  def refill_live_hour_budget(self, event_ticker: str, max_cap: float) -> dict[str, Any]:
+    from src.trading.live_hour_budget import refill_live_hour_budget
+
+    with self._connect() as conn:
+      state = refill_live_hour_budget(conn, event_ticker, max_cap)
+    settings = self.get_settings()
+    if settings.auto_stopped and settings.auto_stop_reason == "budget_exhausted":
+      self.save_settings(HourlyBotSettings(**{**settings.to_dict(), "auto_stopped": False, "auto_stop_reason": None}))
+    self.set_last_skip_reason(None)
+    return state
+
   def _apply_paper_exit_pnl(self, pnl: float, default_cap: float) -> None:
     from src.trading.paper_bankroll import apply_paper_exit_pnl, get_paper_state
 
@@ -518,8 +540,13 @@ class HourlyBotStore:
       interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
     )
 
-  def _interval_total_entered_usd(self, event_ticker: str) -> float:
-    return self.hour_interval_summary(event_ticker)["total_entered_usd"]
+  def _interval_total_entered_usd(
+    self,
+    event_ticker: str,
+    settings: HourlyBotSettings | None = None,
+  ) -> float:
+    settings = settings or self.get_settings()
+    return self.hour_interval_summary(event_ticker, mode=settings.mode)["total_entered_usd"]
 
   def remaining_budget_usd(
     self,
@@ -532,13 +559,17 @@ class HourlyBotStore:
 
     settings = settings or self.get_settings()
     paper = self.ensure_paper_state(max_hourly).paper_bankroll_usd if settings.mode == "paper" else 0.0
+    extra = 0.0
+    if settings.mode == "live":
+      extra = float(self.get_live_hour_budget_dict(event_ticker).get("extra_budget_usd") or 0)
     return remaining_budget_usd(
       settings=settings,
       max_cap=max_hourly,
       paper_bankroll_usd=paper,
       interval_realized_pnl_usd=self.realized_pnl_usd(event_ticker),
       open_exposure_usd=self.open_exposure_usd(event_ticker, mode=settings.mode),
-      interval_total_entered_usd=self._interval_total_entered_usd(event_ticker),
+      interval_total_entered_usd=self._interval_total_entered_usd(event_ticker, settings),
+      live_interval_extra_budget_usd=extra,
     )
 
   def record_exit_cooldown(
@@ -818,6 +849,7 @@ class HourlyBotStore:
     )
 
   def _realized_pnl_usd(self, event_ticker: str, mode: str | None = None) -> float:
+    from src.trading.bot_exit_pnl import effective_exit_pnl_usd
     from src.trading.hourly_event_time import hourly_event_ticker_sql_variants
 
     clause, params = "", []
@@ -829,7 +861,8 @@ class HourlyBotStore:
     with self._connect() as conn:
       exits = conn.execute(
         f"""
-        SELECT pnl_usd, entry_price_cents, exit_price_cents, contracts, side
+        SELECT pnl_usd, entry_price_cents, exit_price_cents, price_cents,
+               contracts, side, action
         FROM bot_trades
         WHERE event_ticker IN ({placeholders}) AND action = 'exit' AND status IN ('filled', 'reconciled'){clause}
         """,
@@ -837,11 +870,7 @@ class HourlyBotStore:
       ).fetchall()
     total = 0.0
     for r in exits:
-      row = dict(r)
-      pnl = row.get("pnl_usd")
-      if pnl is None:
-        pnl = self._exit_pnl_from_prices(row)
-      total += float(pnl or 0)
+      total += effective_exit_pnl_usd(dict(r))
     return round(total, 2)
 
   def hour_closed_exit_stats(
@@ -869,12 +898,10 @@ class HourlyBotStore:
         [*variants, *params],
       ).fetchall()
     wins = losses = 0
+    from src.trading.bot_exit_pnl import effective_exit_pnl_usd
+
     for r in rows:
-      row = dict(r)
-      pnl = row.get("pnl_usd")
-      if pnl is None:
-        pnl = self._exit_pnl_from_prices(row)
-      pnl_f = float(pnl or 0)
+      pnl_f = effective_exit_pnl_usd(dict(r))
       if pnl_f > 0:
         wins += 1
       elif pnl_f < 0:

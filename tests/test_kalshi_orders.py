@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from src.data.kalshi import KalshiClient, parse_v2_order_response, v2_book_side, v2_price_dollars, v2_yes_price_cents
+from src.data.kalshi import KalshiClient, parse_v2_order_response, v2_action_side_from_book, v2_book_side, v2_price_dollars, v2_yes_price_cents
 
 
 def test_v2_book_side_buy_yes():
@@ -21,6 +21,13 @@ def test_v2_book_side_sell_yes():
 
 def test_v2_book_side_sell_no():
   assert v2_book_side(side="no", action="sell") == "bid"
+
+
+def test_v2_action_side_from_book_round_trip():
+  for side, action in (("yes", "buy"), ("no", "buy"), ("yes", "sell"), ("no", "sell")):
+    book = v2_book_side(side=side, action=action)
+    got = v2_action_side_from_book(book_side=book, outcome_side=side)
+    assert got == (action, side)
 
 
 def test_v2_price_dollars():

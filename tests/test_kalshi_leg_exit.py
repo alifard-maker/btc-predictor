@@ -41,6 +41,28 @@ def test_avg_sell_fill_cents_weighted():
   assert avg_sell_fill_cents(kalshi, market_ticker="T", side="no") == 35
 
 
+def test_avg_sell_fill_cents_v2_book_side():
+  kalshi = _KalshiStub(
+    fills=[
+      {
+        "market_ticker": "T",
+        "outcome_side": "no",
+        "book_side": "bid",
+        "yes_price_dollars": "0.7000",
+        "count_fp": "1.00",
+      },
+      {
+        "market_ticker": "T",
+        "outcome_side": "no",
+        "book_side": "bid",
+        "yes_price_dollars": "0.6000",
+        "count_fp": "1.00",
+      },
+    ],
+  )
+  assert avg_sell_fill_cents(kalshi, market_ticker="T", side="no") == 35
+
+
 def test_market_binary_exit_cents():
   kalshi = _KalshiStub(
     market={

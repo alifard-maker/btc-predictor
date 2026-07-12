@@ -1,0 +1,25 @@
+---
+description: Sports game-prediction edge roadmap (4 phases, 3–4 weeks)
+globs: btc-predictor/src/trading/sports*.py
+alwaysApply: false
+---
+
+# Sports edge strengthening roadmap
+
+Cheapest-first. Do not skip phases or jump to ML/news scraping.
+
+## Phase 1 — Bet assessment (annotate only)
+`sports_bet_assessment.py`: edge tier, match quality, partition coherence, liquidity sanity.
+Attach `bet_assessment` to every opportunity; **do not block live** yet.
+
+## Phase 2 — Multi-book consensus
+Require 2+ sharp books within ~2¢ of fair before live fire.
+
+## Phase 3 — Sport-specific gates (paper-learned)
+After ~30–50 legs/sport: ban losing price buckets; FIFA tie edge floor; tennis title match; MLB T-2h gate.
+
+## Phase 4 — Execution quality
+Live book before order; IOC when edge fat; passive only when edge ≥8¢+.
+
+## Do NOT do first
+Custom per-sport ML, injury/news scraping, bigger stakes before Phase 1 paper CLV.

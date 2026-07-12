@@ -248,6 +248,39 @@ def test_build_experiment_summary_filters_by_start():
     assert exp["summary"]["total_pnl_usd"] == 0.5
 
 
+def test_build_experiments_by_asset_eth_and_btc():
+  from datetime import datetime, timezone
+
+  from src.trading.bot_performance_report import build_experiments_by_asset
+
+  reports = [
+    {
+      "asset": "btc",
+      "kind": "hourly",
+      "experiment": {"label": "BTC Hourly", "summary": {"closed_trades": 2, "total_pnl_usd": 1.0}},
+    },
+    {
+      "asset": "eth",
+      "kind": "hourly",
+      "experiment": {"label": "ETH Hourly", "summary": {"closed_trades": 3, "total_pnl_usd": 2.0}},
+    },
+    {
+      "asset": "eth",
+      "kind": "hourly_trial",
+      "experiment": {"label": "ETH Hourly Trial", "summary": {"closed_trades": 5, "total_pnl_usd": 4.0}},
+    },
+  ]
+  starts = {
+    "btc": datetime(2026, 7, 2, 7, 20, tzinfo=timezone.utc),
+    "eth": datetime(2026, 7, 2, 20, 10, tzinfo=timezone.utc),
+  }
+  out = build_experiments_by_asset(reports, asset_starts=starts)
+  assert set(out.keys()) == {"btc", "eth"}
+  assert len(out["btc"]["bots"]) == 1
+  assert len(out["eth"]["bots"]) == 2
+  assert out["eth"]["start_at"].startswith("2026-07-02T20:10")
+
+
 def test_build_experiment_summary_filters_live_mode_only():
   with tempfile.TemporaryDirectory() as tmp:
     store = HourlyBotStore(Path(tmp) / "hourly_bot_btc.db")

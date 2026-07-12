@@ -54,6 +54,18 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
   from src.data.kalshi import load_kalshi_config
   cfg["kalshi"] = load_kalshi_config(cfg)
 
+  # Odds API key for sports value_sharp (never commit; Railway / .env)
+  if os.getenv("ODDS_API_KEY"):
+    cfg.setdefault("sports", {}).setdefault("strategies", {}).setdefault("value_sharp", {})
+    # Keep key out of nested cfg dumps where possible — clients read env directly.
+    cfg["sports"]["_odds_api_key_configured"] = True
+
+  # Polymarket CLOB — mark configured without embedding secrets in cfg
+  from src.data.polymarket_clob import polymarket_key_configured
+
+  if polymarket_key_configured():
+    cfg.setdefault("sports", {})["_polymarket_key_configured"] = True
+
   return cfg
 
 

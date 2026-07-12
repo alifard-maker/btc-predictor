@@ -20,11 +20,29 @@ def _cfg() -> dict[str, Any]:
   return _CFG
 
 
-def _bot_meta(db_path: Path) -> tuple[str, str]:
+def parse_bot_db_meta(db_path: Path) -> tuple[str, str]:
+  """Return (asset, kind) from a bot SQLite filename."""
   name = db_path.stem
+  prefixes = (
+    ("slot15_trial_bot_", "slot15_trial"),
+    ("slot15_bot_", "slot15"),
+    ("hourly_v2_bot_", "hourly_v2"),
+    ("hourly_trial_rally_bot_", "hourly_trial_rally"),
+    ("hourly_trial_soft_bot_", "hourly_trial_soft"),
+    ("hourly_trial_mech_bot_", "hourly_trial_mech"),
+    ("hourly_trial_bot_", "hourly_trial"),
+    ("hourly_bot_", "hourly"),
+  )
+  for prefix, kind in prefixes:
+    if name.startswith(prefix):
+      return name[len(prefix) :], kind
   asset = "eth" if name.endswith("_eth") else "btc"
   kind = "slot15" if "slot15" in name else "hourly"
   return asset, kind
+
+
+def _bot_meta(db_path: Path) -> tuple[str, str]:
+  return parse_bot_db_meta(db_path)
 
 
 def should_skip_audit_trade(db_path: Path, trade: dict[str, Any]) -> bool:

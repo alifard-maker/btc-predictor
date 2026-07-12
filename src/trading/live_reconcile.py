@@ -22,23 +22,14 @@ def _hourly_event_time_suffix(event_ticker: str) -> str | None:
 def _ticker_belongs_to_event(ticker: str, event_ticker: str | None) -> bool:
   if not event_ticker:
     return True
+  from src.trading.hourly_event_time import is_kalshi_hourly_event, ticker_belongs_to_hourly_event
+
   t = str(ticker)
   e = str(event_ticker)
   if t == e or t.startswith(f"{e}-"):
     return True
-  # Hourly BTC/ETH: threshold event KXBTCD-26JUN3004 + range legs KXBTC-26JUN3004-*.
-  suffix = _hourly_event_time_suffix(e)
-  if not suffix:
-    return False
-  sibling_prefixes: tuple[str, ...] = ()
-  if e.startswith("KXBTCD-"):
-    sibling_prefixes = ("KXBTC-",)
-  elif e.startswith("KXETHD-"):
-    sibling_prefixes = ("KXETH-",)
-  for prefix in sibling_prefixes:
-    root = f"{prefix}{suffix}"
-    if t == root or t.startswith(f"{root}-"):
-      return True
+  if is_kalshi_hourly_event(e):
+    return ticker_belongs_to_hourly_event(t, e)
   return False
 
 
@@ -224,3 +215,106 @@ def build_live_reconcile_report(
     "orphan_resting_sells": orphan_sells,
     "resting_sell_count": sum(len(v) for v in resting_sells.values()),
   }
+
+
+def _pick_label_from_tab(tab: dict[str, Any] | None, market_ticker: str) -> str | None:
+  if not tab:
+    return None
+  from src.trading.hourly_bot import _find_contract_in_live
+
+  live = tab.get("live") or tab
+  pick = _find_contract_in_live(live, market_ticker)
+  if pick and pick.get("label"):
+    return str(pick["label"])
+  return None
+
+
+def merge_kalshi_hourly_open_positions(
+  bot_positions: list[dict[str, Any]],
+  kalshi: Any,
+  event_ticker: str,
+  *,
+  tab: dict[str, Any] | None = None,
+  asset: str | None = None,
+) -> list[dict[str, Any]]:
+  """
+  Merge bot-tracked open legs with Kalshi inventory for this hourly window.
+
+  Includes Strategy-2 range bands (KXBTC-/KXETH-* siblings) that exist on Kalshi but
+  were never adopted into the bot log — so the dashboard open-positions panel
+  matches what you see on Kalshi.
+  """
+  if not kalshi or not getattr(kalshi, "authenticated", False) or not event_ticker:
+    return list(bot_positions)
+
+  from src.trading.hourly_event_time import ticker_belongs_to_hourly_event
+  from src.trading.live_position_sync import kalshi_position_leg
+  from src.trading.live_range_guards import is_range_market_ticker
+
+  bot_live = [
+    p for p in bot_positions
+    if normalize_position_mode(p.get("mode")) == "live"
+    and ticker_belongs_to_hourly_event(str(p.get("market_ticker") or ""), event_ticker)
+  ]
+  bot_keys = {
+    _leg_key(str(p.get("market_ticker") or ""), str(p.get("side") or ""))
+    for p in bot_live
+  }
+
+  kalshi_rows = kalshi.list_market_positions() if kalshi else []
+  if asset:
+    from src.trading.hourly_event_time import hourly_fill_belongs_to_asset
+
+    kalshi_rows = [
+      r for r in kalshi_rows
+      if hourly_fill_belongs_to_asset(str(r.get("ticker") or ""), asset)
+    ]
+  kalshi_rows = [
+    r for r in kalshi_rows
+    if _ticker_belongs_to_event(str(r.get("ticker") or ""), event_ticker)
+  ]
+  kalshi_agg = _aggregate_kalshi_positions(kalshi_rows)
+
+  merged = [dict(p) for p in bot_live]
+  for key, krow in kalshi_agg.items():
+    if key in bot_keys:
+      continue
+    ticker = str(krow["ticker"])
+    side = str(krow["side"])
+    snap = kalshi_position_leg(kalshi, ticker, side) or {}
+    entry_c = int(snap.get("entry_price_cents") or 0)
+    contracts = float(krow["contracts"])
+    if contracts < 0.05:
+      continue
+    cost_usd = snap.get("cost_usd")
+    if cost_usd is None:
+      try:
+        cost_usd = float(krow.get("market_exposure") or 0)
+      except (TypeError, ValueError):
+        cost_usd = 0.0
+    if entry_c <= 0 and cost_usd and contracts > 0:
+      entry_c = max(1, min(99, int(round(100.0 * float(cost_usd) / contracts))))
+    label = _pick_label_from_tab(tab, ticker)
+    is_range = is_range_market_ticker(ticker)
+    merged.append({
+      "id": f"kalshi-only:{key}",
+      "event_ticker": event_ticker,
+      "market_ticker": ticker,
+      "side": side,
+      "contracts": max(1, int(round(contracts))),
+      "contracts_fp": contracts,
+      "entry_price_cents": entry_c or None,
+      "cost_usd": round(float(cost_usd or 0), 2),
+      "label": label or ticker.rsplit("-", 1)[-1],
+      "mode": "live",
+      "entry_source": "kalshi_only",
+      "kalshi_only": True,
+      "leg_strategy": "s2_range" if is_range else "s1_threshold",
+    })
+
+  for row in merged:
+    if "leg_strategy" not in row:
+      ticker = str(row.get("market_ticker") or "")
+      row["leg_strategy"] = "s2_range" if is_range_market_ticker(ticker) else "s1_threshold"
+
+  return merged
