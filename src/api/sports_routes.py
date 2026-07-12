@@ -124,4 +124,4 @@ def register_sports_routes(app, loop_getter, cfg_getter, session_dep) -> None:
     store = sports_arb_store(_loop())
     if store is None:
       raise HTTPException(503, "Sports store unavailable")
-    return {"trades": store.list_trades(limit=limit)}
+    return {"trades": store.list_trades(limit=limit, for_display=True)}

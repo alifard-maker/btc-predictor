@@ -946,7 +946,7 @@
       </div>
       <div class="card">
         <h2>Trade log</h2>
-        <p class="muted" style="font-size:.72rem;margin:0 0 .5rem">Execution log (paper signals + live fills/fails). Game settlement / win-loss not tracked yet — check Kalshi portfolio for resolved P&amp;L.</p>
+        <p class="muted" style="font-size:.72rem;margin:0 0 .5rem">Live fills stay pinned for <strong>24h</strong>; paper signals append below and can be cleared without wiping live history.</p>
         <div id="sports-trades"><p class="muted">Loading…</p></div>
       </div>
     </div>
@@ -6237,6 +6237,28 @@
       return `<div class="sports-closest-miss" style="font-size:.72rem;margin:.45rem 0 .25rem;padding:.45rem .55rem;border:1px solid rgba(99,102,241,.28);border-radius:8px;background:rgba(99,102,241,.06)"><span class="muted" style="font-size:.62rem;text-transform:uppercase;letter-spacing:.04em">Closest miss · last scan</span><div style="margin-top:.3rem;line-height:1.45">${items}${gateNote}</div></div>`;
     }
 
+    function renderSportsTradeRow(t) {
+      const st = t.status || t.mode || '—';
+      const stCls = String(st).includes('fail') ? 'down' : (String(st).includes('live') ? 'up' : 'muted');
+      const err = t.error || (t.extra && t.extra.error) || '';
+      const detail = err
+        ? `<div class="muted" style="font-size:.62rem;max-width:14rem;overflow:hidden;text-overflow:ellipsis" title="${String(err).replace(/"/g,'&quot;')}">${String(err).slice(0,80)}</div>`
+        : (t.selection ? `<div class="muted" style="font-size:.62rem">${t.selection}</div>` : '');
+      const tUrl = t.venue_url || (t.event_ticker && String(t.venue || 'kalshi').toLowerCase() !== 'polymarket'
+        ? `https://kalshi.com/markets/${String(t.series_ticker || String(t.event_ticker).split('-')[0] || '').toLowerCase()}/${t.event_ticker}`
+        : '');
+      const evtCell = tUrl
+        ? `<a href="${tUrl}" target="_blank" rel="noopener noreferrer" style="font-size:.68rem">${t.event_ticker || 'open'}</a>`
+        : (t.event_ticker || '—');
+      return `<tr><td>${t.created_at ? time(t.created_at) : '—'}</td><td>${(t.mode || '').toUpperCase()}</td><td class="${stCls}">${st}${detail}</td><td>${t.kind || t.strategy || '—'}</td><td>${evtCell}</td><td class="up">+$${Number(t.edge_usd || 0).toFixed(2)}</td><td>$${Number(t.total_cost_usd || t.cost_usd || 0).toFixed(2)}</td></tr>`;
+    }
+
+    function renderSportsTradesTable(rows) {
+      if (!rows.length) return '';
+      const body = rows.map(renderSportsTradeRow).join('');
+      return `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Mode</th><th>Status</th><th>Kind</th><th>Event</th><th>Edge</th><th>Cost</th></tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
     function renderSports(data) {
       const statusEl = $('sports-bot-status');
       const oppEl = $('sports-opportunities');
@@ -6374,26 +6396,20 @@
         oppEl.innerHTML = `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Strategy</th><th>Pick</th><th>Assessment</th><th>Edge</th><th>Cost</th><th>Legs</th></tr></thead><tbody>${rows}</tbody></table></div>`;
       }
 
-      const trades = data.recent_trades || [];
-      if (!trades.length) {
+      const tradeLog = data.trade_log || {};
+      const liveTrades = tradeLog.live_trades || (data.recent_trades || []).filter((t) => String(t.mode || '').toLowerCase() === 'live');
+      const paperTrades = tradeLog.paper_trades || (data.recent_trades || []).filter((t) => String(t.mode || '').toLowerCase() !== 'live');
+      const liveHours = tradeLog.live_retention_hours || 24;
+      if (!liveTrades.length && !paperTrades.length) {
         tradesEl.innerHTML = '<p class="muted">No sports trades yet.</p>';
       } else {
-        const rows = trades.slice(0, 40).map((t) => {
-          const st = t.status || t.mode || '—';
-          const stCls = String(st).includes('fail') ? 'down' : (String(st).includes('live') ? 'up' : 'muted');
-          const err = t.error || (t.extra && t.extra.error) || '';
-          const detail = err
-            ? `<div class="muted" style="font-size:.62rem;max-width:14rem;overflow:hidden;text-overflow:ellipsis" title="${String(err).replace(/"/g,'&quot;')}">${String(err).slice(0,80)}</div>`
-            : (t.selection ? `<div class="muted" style="font-size:.62rem">${t.selection}</div>` : '');
-          const tUrl = t.venue_url || (t.event_ticker && String(t.venue || 'kalshi').toLowerCase() !== 'polymarket'
-            ? `https://kalshi.com/markets/${String(t.series_ticker || String(t.event_ticker).split('-')[0] || '').toLowerCase()}/${t.event_ticker}`
-            : '');
-          const evtCell = tUrl
-            ? `<a href="${tUrl}" target="_blank" rel="noopener noreferrer" style="font-size:.68rem">${t.event_ticker || 'open'}</a>`
-            : (t.event_ticker || '—');
-          return `<tr><td>${t.created_at ? time(t.created_at) : '—'}</td><td>${(t.mode || '').toUpperCase()}</td><td class="${stCls}">${st}${detail}</td><td>${t.kind || t.strategy || '—'}</td><td>${evtCell}</td><td class="up">+$${Number(t.edge_usd || 0).toFixed(2)}</td><td>$${Number(t.total_cost_usd || t.cost_usd || 0).toFixed(2)}</td></tr>`;
-        }).join('');
-        tradesEl.innerHTML = `<div class="bot-trades"><table style="width:100%"><thead><tr><th>Time</th><th>Mode</th><th>Status</th><th>Kind</th><th>Event</th><th>Edge</th><th>Cost</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        const liveBlock = liveTrades.length
+          ? `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .25rem"><strong>Live</strong> — pinned ${liveHours}h (${liveTrades.length})</p>${renderSportsTradesTable(liveTrades)}`
+          : `<p class="muted" style="font-size:.68rem;margin:.2rem 0 .25rem"><strong>Live</strong> — none in last ${liveHours}h</p>`;
+        const paperBlock = paperTrades.length
+          ? `<p class="muted" style="font-size:.68rem;margin:.65rem 0 .25rem"><strong>Paper signals</strong> — recent (${paperTrades.length})</p>${renderSportsTradesTable(paperTrades)}`
+          : '';
+        tradesEl.innerHTML = liveBlock + paperBlock;
       }
       restoreBotTradesScroll(tradesEl, tradesScroll);
       restoreBotTradesScroll(oppEl, oppScroll);
@@ -6472,7 +6488,7 @@
     }
 
     async function sportsFreshStart() {
-      if (!confirm('Clear sports opportunity log and paper trade history?')) return;
+      if (!confirm('Clear sports opportunity log and paper trade history? Live trades from the last 24h are kept.')) return;
       try {
         const res = await fetch('/api/sports/bot/fresh-start', { method: 'POST', credentials: 'same-origin' });
         if (!res.ok) throw new Error(await res.text());

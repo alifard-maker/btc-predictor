@@ -587,6 +587,31 @@ class SportsArbBot:
         "event_ticker": opp.get("event_ticker"),
       }
 
+  def _trade_log_cfg(self) -> dict[str, float | int]:
+    bot = dict(sports_cfg(self.cfg).get("bot") or {})
+    raw = dict(bot.get("trade_log") or {})
+    return {
+      "live_retention_hours": float(raw.get("live_retention_hours", 24.0)),
+      "paper_limit": int(raw.get("paper_display_limit", 40)),
+    }
+
+  def _trade_log_payload(self) -> dict[str, Any]:
+    cfg = self._trade_log_cfg()
+    log = self.store.list_trades_for_display(
+      live_retention_hours=float(cfg["live_retention_hours"]),
+      paper_limit=int(cfg["paper_limit"]),
+    )
+    return {
+      "recent_trades": log["recent_trades"],
+      "trade_log": {
+        "live_retention_hours": log["live_retention_hours"],
+        "live_trades": log["live_trades"],
+        "paper_trades": log["paper_trades"],
+        "live_count": log["live_count"],
+        "paper_count": log["paper_count"],
+      },
+    }
+
   def status(self) -> dict[str, Any]:
     settings = self.store.get_settings()
     runtime = self.store.runtime()
@@ -641,7 +666,7 @@ class SportsArbBot:
       "runtime": runtime,
       "opportunities": opps,
       "opportunity_count": len(opps),
-      "recent_trades": self.store.list_trades(limit=50),
+      **self._trade_log_payload(),
       "live": {
         "allow_live": self._live_allowed(),
         "kalshi_authenticated": bool(getattr(self.kalshi, "authenticated", False)),

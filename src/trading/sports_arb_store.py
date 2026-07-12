@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -379,22 +379,105 @@ class SportsArbStore:
     raw = str(row["json"]).strip()
     return raw not in ("", "{}")
 
-  def list_trades(self, *, limit: int = 100) -> list[dict[str, Any]]:
+  def _trade_from_row(self, r: sqlite3.Row) -> dict[str, Any]:
+    payload = json.loads(r["json"])
+    payload.update({
+      "id": int(r["id"]),
+      "created_at": r["created_at"],
+      "mode": r["mode"],
+      "status": r["status"],
+      "strategy": r["strategy"],
+      "event_ticker": r["event_ticker"],
+      "edge_usd": r["edge_usd"],
+      "cost_usd": r["cost_usd"],
+    })
+    return payload
+
+  def list_trades(
+    self,
+    *,
+    limit: int = 100,
+    for_display: bool = False,
+    live_retention_hours: float = 24.0,
+    paper_limit: int | None = None,
+  ) -> list[dict[str, Any]]:
+    """Return trades for dashboard/API.
+
+    When for_display=True, always include every live trade from the last
+    live_retention_hours, then append recent paper signals (paper_limit).
+    """
+    if not for_display:
+      with self._connect() as conn:
+        rows = conn.execute(
+          """
+          SELECT id, created_at, mode, status, strategy, event_ticker, edge_usd, cost_usd, json
+          FROM sports_trades ORDER BY id DESC LIMIT ?
+          """,
+          (int(limit),),
+        ).fetchall()
+      return [self._trade_from_row(r) for r in rows]
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=float(live_retention_hours))).isoformat()
+    p_cap = int(paper_limit if paper_limit is not None else max(limit, 40))
     with self._connect() as conn:
-      rows = conn.execute(
-        "SELECT created_at, mode, status, strategy, event_ticker, edge_usd, cost_usd, json FROM sports_trades ORDER BY id DESC LIMIT ?",
-        (int(limit),),
+      live_rows = conn.execute(
+        """
+        SELECT id, created_at, mode, status, strategy, event_ticker, edge_usd, cost_usd, json
+        FROM sports_trades
+        WHERE mode = 'live' AND created_at >= ?
+        ORDER BY id DESC
+        """,
+        (cutoff,),
       ).fetchall()
-    out: list[dict[str, Any]] = []
-    for r in rows:
-      payload = json.loads(r["json"])
-      payload.update({
-        "created_at": r["created_at"],
-        "mode": r["mode"],
-        "status": r["status"],
-      })
-      out.append(payload)
-    return out
+      paper_rows = conn.execute(
+        """
+        SELECT id, created_at, mode, status, strategy, event_ticker, edge_usd, cost_usd, json
+        FROM sports_trades
+        WHERE mode = 'paper' OR status = 'paper_signal'
+        ORDER BY id DESC LIMIT ?
+        """,
+        (p_cap,),
+      ).fetchall()
+
+    by_id: dict[int, dict[str, Any]] = {}
+    for r in list(live_rows) + list(paper_rows):
+      tid = int(r["id"])
+      by_id[tid] = self._trade_from_row(r)
+
+    merged = sorted(
+      by_id.values(),
+      key=lambda t: str(t.get("created_at") or ""),
+      reverse=True,
+    )
+    return merged
+
+  def list_trades_for_display(
+    self,
+    *,
+    live_retention_hours: float = 24.0,
+    paper_limit: int = 40,
+  ) -> dict[str, Any]:
+    """Split live/paper trade log for sports dashboard."""
+    rows = self.list_trades(
+      for_display=True,
+      live_retention_hours=live_retention_hours,
+      paper_limit=paper_limit,
+    )
+    live_rows = [t for t in rows if str(t.get("mode") or "").lower() == "live"]
+    live_ids = {int(t["id"]) for t in live_rows if t.get("id") is not None}
+    paper_rows = [
+      t for t in rows
+      if int(t.get("id") or -1) not in live_ids
+      and (str(t.get("mode") or "").lower() == "paper" or str(t.get("status") or "") == "paper_signal")
+    ]
+    return {
+      "live_retention_hours": live_retention_hours,
+      "live_trades": live_rows,
+      "paper_trades": paper_rows,
+      "recent_trades": rows,
+      "live_count": len(live_rows),
+      "paper_count": len(paper_rows),
+    }
 
   def runtime(self) -> dict[str, Any]:
     with self._connect() as conn:
@@ -424,11 +507,21 @@ class SportsArbStore:
       "last_scan_meta": meta,
     }
 
-  def fresh_start(self) -> None:
+  def fresh_start(self, *, preserve_live: bool = True) -> dict[str, Any]:
     with self._connect() as conn:
       conn.execute("DELETE FROM sports_opportunities")
-      conn.execute("DELETE FROM sports_trades")
+      if preserve_live:
+        paper_deleted = conn.execute(
+          "DELETE FROM sports_trades WHERE mode = 'paper' OR status = 'paper_signal'"
+        ).rowcount
+      else:
+        paper_deleted = conn.execute("DELETE FROM sports_trades").rowcount
       conn.execute("DELETE FROM sports_scan_ticks")
       conn.execute(
         "UPDATE sports_runtime SET last_scan_at=NULL, last_scan_ok=0, last_error=NULL, cycles_total=0, last_opp_count=0 WHERE id=1"
       )
+    return {
+      "ok": True,
+      "paper_trades_cleared": int(paper_deleted),
+      "live_trades_preserved": bool(preserve_live),
+    }

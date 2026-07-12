@@ -1334,6 +1334,9 @@ sports:
     max_live_per_scan: 0            # 0 = unlimited live fills per scan
     max_live_trades_per_day: 0      # 0 = unlimited live fills per day
     paper_bankroll_usd: 50
+    trade_log:
+      live_retention_hours: 24      # dashboard always shows live trades this long
+      paper_display_limit: 40       # recent paper signals appended after live block
   # Phase 1 — annotate opportunities (edge tier, coherence, liquidity); no live gates yet
   bet_assessment:
     enabled: true
