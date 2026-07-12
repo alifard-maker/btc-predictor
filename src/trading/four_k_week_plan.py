@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
@@ -10,12 +11,20 @@ from typing import Any
 
 from src.trading.bot_runtime import parse_stats_epoch_at, set_stats_epoch_at, stats_epoch_at
 from src.trading.probe_24h import effective_compare_stats_epoch_at, probe_24h_cfg, probe_stats_epoch_iso
-from src.trading.terminal_shadow_logger import summarize_track_b_shadow, track_b_epoch_iso
+from src.trading.terminal_shadow_logger import (
+  _epoch_ok,
+  shadow_log_dir,
+  summarize_track_b_shadow,
+  track_b_epoch_iso,
+  track_b_shadow_active,
+)
 
 log = logging.getLogger(__name__)
 
 _REPORT_CACHE: dict[str, Any] = {"mono_at": 0.0, "payload": None}
 _REPORT_CACHE_TTL_SEC = 30.0
+_REVISION_CACHE: dict[str, Any] = {"mono_at": 0.0, "payload": None}
+_REVISION_CACHE_TTL_SEC = 20.0
 
 
 def four_k_week_plan_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
@@ -204,6 +213,34 @@ def build_four_k_week_plan_report(loop: Any, cfg: dict[str, Any] | None) -> dict
   }
 
 
+def track_b_settled_count_fast(cfg: dict[str, Any] | None, *, asset: str = "eth") -> int:
+  """Lightweight settled-event count for revision polling (no full summarize)."""
+  if not track_b_shadow_active(cfg):
+    return 0
+  epoch_iso = track_b_epoch_iso(cfg)
+  root = shadow_log_dir(cfg)
+  count = 0
+  for path in sorted(root.glob("*.jsonl")):
+    try:
+      text = path.read_text(encoding="utf-8")
+    except OSError:
+      continue
+    for line in text.splitlines():
+      if not line.strip():
+        continue
+      try:
+        row = json.loads(line)
+      except json.JSONDecodeError:
+        continue
+      if str(row.get("asset") or "").lower() != str(asset).lower():
+        continue
+      if row.get("type") != "settlement":
+        continue
+      if _epoch_ok(str(row.get("ts") or ""), epoch_iso):
+        count += 1
+  return count
+
+
 def four_k_week_plan_revision(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
   """Cheap closed-trade counters — dashboard refreshes full plan only when this changes."""
   if not four_k_week_plan_active(cfg):
@@ -230,8 +267,7 @@ def four_k_week_plan_revision(loop: Any, cfg: dict[str, Any] | None) -> dict[str
   slot_stats = _lane_pnl_from_store(slot_store, mode=slot_mode, since=since, trade_limit=200)
   slot_stats.pop("_entry_events", None)
 
-  track_b = summarize_track_b_shadow(cfg, asset="eth")
-  settled = int(track_b.get("settled_events") or 0) if track_b.get("ok") else 0
+  settled = track_b_settled_count_fast(cfg, asset="eth")
 
   lanes = {
     "track_a_live_exits": int(live_stats.get("exits") or 0),
@@ -246,6 +282,36 @@ def four_k_week_plan_revision(loop: Any, cfg: dict[str, Any] | None) -> dict[str
     "slot15_exits",
   ))
   return {"ok": True, "revision": revision, "lanes": lanes}
+
+
+def four_k_week_plan_revision_cached(
+  loop: Any,
+  cfg: dict[str, Any] | None,
+  *,
+  ttl_sec: float = _REVISION_CACHE_TTL_SEC,
+) -> dict[str, Any]:
+  """Return cached revision counters when fresh (revision poll is high-frequency)."""
+  now = time.monotonic()
+  cached = _REVISION_CACHE.get("payload")
+  if cached and (now - float(_REVISION_CACHE.get("mono_at") or 0)) < ttl_sec:
+    return {**cached, "cached": True, "cache_age_sec": round(now - float(_REVISION_CACHE["mono_at"]), 1)}
+
+  try:
+    payload = four_k_week_plan_revision(loop, cfg)
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower() and cached:
+      return {
+        **cached,
+        "cached": True,
+        "stale": True,
+        "stale_reason": "db_busy",
+        "error": str(exc),
+      }
+    raise
+
+  _REVISION_CACHE["mono_at"] = now
+  _REVISION_CACHE["payload"] = payload
+  return {**payload, "cached": False, "cache_age_sec": 0.0}
 
 
 def build_four_k_week_plan_report_cached(
@@ -281,6 +347,8 @@ def build_four_k_week_plan_report_cached(
 def invalidate_four_k_week_plan_cache() -> None:
   _REPORT_CACHE["mono_at"] = 0.0
   _REPORT_CACHE["payload"] = None
+  _REVISION_CACHE["mono_at"] = 0.0
+  _REVISION_CACHE["payload"] = None
 
 
 def _apply_stats_epoch(store: Any, epoch_raw: str | None) -> dict[str, Any]:

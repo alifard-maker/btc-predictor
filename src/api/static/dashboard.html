@@ -1041,6 +1041,8 @@
     let slot15FetchGen = 0;
     let slot15TrialFetchGen = 0;
     let loadAllInFlight = false;
+    let loadAllStartedAt = 0;
+    const LOAD_ALL_STUCK_MS = 35000;
     let liveMonitorInFlight = false;
     let liveMonitorLastAt = 0;
     const LIVE_MONITOR_INTERVAL_MS = 3000;
@@ -1050,6 +1052,7 @@
     const SLOT15_COMPARE_INTERVAL_MS = 30000;
     const HOURLY_COMPARE_INTERVAL_MS = 30000;
     const PERF_REPORT_INTERVAL_MS = 60000;
+    const FOUR_K_REVISION_INTERVAL_MS = 60000;
     let hourlyCompareLastAt = 0;
     let hourlyCompareInFlight = false;
     let perfReportLastAt = 0;
@@ -4906,6 +4909,7 @@
     let fourKPlanRevisionInFlight = false;
     let fourKPlanLastData = null;
     let fourKPlanRevision = null;
+    let fourKPlanRevisionLastAt = 0;
     const fourKPlanBotClosed = {};
 
     function fourKPlanLaneKey(kind, asset) {
@@ -4946,10 +4950,13 @@
     }
 
     async function checkFourKWeekPlanRevision(forceFull = false) {
+      const now = Date.now();
+      if (!forceFull && now - fourKPlanRevisionLastAt < FOUR_K_REVISION_INTERVAL_MS) return;
       if (fourKPlanRevisionInFlight) return;
       fourKPlanRevisionInFlight = true;
       try {
         const rev = await getWithTimeout('/api/pnl-first/four-k-week-plan/revision', 8000);
+        fourKPlanRevisionLastAt = Date.now();
         if (!rev?.ok) {
           if (fourKPlanLastData == null) await loadFourKWeekPlan(true);
           return;
@@ -6232,7 +6239,7 @@
       const polyMeta = valueMeta.poly || {};
       const rows = [];
 
-      if dutchMeta.best_binary_edge != null) {
+      if (dutchMeta.best_binary_edge != null) {
         const edgeC = Number(dutchMeta.best_binary_edge) * 100;
         rows.push({
           label: 'Goal 2 Dutch',
@@ -6392,7 +6399,10 @@
       const dutchSkips = lastActs.filter((a) => a.strategy === 'dutch_same' && String(a.action || '').includes('skip'));
       const dutchFilled = lastActs.filter((a) => a.strategy === 'dutch_same' && a.action === 'live_filled');
       const dutchActNote = dutchSkips.length
-        ? `last scan: ${dutchSkips.slice(0, 2).map((a) => `${a.reason}${a.cost != null ? ` $${Number(a.cost).toFixed(2)}` : ''}`).join(' · ')}`
+        ? 'last scan: ' + dutchSkips.slice(0, 2).map((a) => {
+            const cost = a.cost != null ? ' $' + Number(a.cost).toFixed(2) : '';
+            return String(a.reason || '') + cost;
+          }).join(' · ')
         : (dutchFilled.length ? 'last scan: live filled' : (s.dutch_live && dutchN === 0 ? 'last scan: 0 dutch opps (books tight)' : ''));
       const valueN = meta.value_opportunities ?? '—';
       const assess = meta.bet_assessment || {};
@@ -6596,8 +6606,12 @@
     }
 
     async function loadAll() {
-      if (loadAllInFlight) return;
+      if (loadAllInFlight) {
+        if (Date.now() - loadAllStartedAt < LOAD_ALL_STUCK_MS) return;
+        loadAllInFlight = false;
+      }
       loadAllInFlight = true;
+      loadAllStartedAt = Date.now();
       try {
       $('error').style.display = 'none';
       $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { timeZone: TZ });
@@ -6618,10 +6632,10 @@
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();
         tasks.push(
-        get(api.prediction + refQ).then((p) => {
+        getWithTimeout(api.prediction + refQ, 15000).then((p) => {
           if (stored?.slot_start && p?.slot_start && stored.slot_start !== p.slot_start) {
             clearStoredRefOverride();
-            return get(api.prediction).then((p2) => {
+            return getWithTimeout(api.prediction, 15000).then((p2) => {
               renderPrediction(p2);
               loadSlot15Bot(p2?.bot);
             });
@@ -6629,15 +6643,15 @@
           renderPrediction(p);
           loadSlot15Bot(p?.bot);
         }).catch(() => { renderPrediction(null); renderSlotMonitor(null); loadSlot15Bot(null); }),
-        get(api.monitor + refQ).then((m) => {
+        getWithTimeout(api.monitor + refQ, 12000).then((m) => {
           if (stored?.slot_start && m?.slot_start && stored.slot_start !== m.slot_start) {
             clearStoredRefOverride();
-            return get(api.monitor).then(renderSlotMonitor);
+            return getWithTimeout(api.monitor, 12000).then(renderSlotMonitor);
           }
           renderSlotMonitor(m);
         }).catch(() => {}),
-        get(api.history).then(renderHistory).catch(() => renderHistory([])),
-        get(api.calibration).then(renderCalibration).catch((e) => {
+        getWithTimeout(api.history, 15000).then(renderHistory).catch(() => renderHistory([])),
+        getWithTimeout(api.calibration, 15000).then(renderCalibration).catch((e) => {
           const calEl = s15$('calibration');
           if (calEl) calEl.innerHTML = `<p class="muted">Calibration unavailable: ${e.message || 'API error'}</p>`;
         }),
@@ -6664,6 +6678,7 @@
       }
     }
 
+    syncGlobalComparePanel();
     loadAll();
     updateEdtClock();
     setInterval(loadAll, LOAD_ALL_INTERVAL_MS);
