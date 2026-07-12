@@ -14,6 +14,7 @@ from src.data.sports_markets import SportsMarketDiscovery, sports_cfg, sports_en
 from src.trading.sports_arb_engine import (
   scan_dutch_same_opportunities_with_meta,
   strategy_params_from_cfg,
+  validate_dutch_cover_opportunity,
 )
 from src.trading.sports_arb_store import SportsArbSettings, SportsArbStore
 from src.trading.sports_bet_assessment import assess_sports_opportunities, passes_value_strong_bets_gate
@@ -363,6 +364,13 @@ class SportsArbBot:
       if _already_seen(fp, seen):
         continue
       if strat == "dutch_same":
+        ok, reason = validate_dutch_cover_opportunity(
+          opp,
+          min_edge_usd=float(strategy_params_from_cfg(self.cfg).get("min_edge_usd", 0.01)),
+        )
+        if not ok:
+          actions.append({"action": "live_skip", "reason": reason, "event_ticker": opp.get("event_ticker")})
+          continue
         result = self._execute_live_cover(opp)
       elif strat == "value_sharp" and str(opp.get("venue") or "") == "kalshi":
         result = self._execute_live_value(opp)
@@ -493,6 +501,13 @@ class SportsArbBot:
     legs = list(opp.get("legs") or [])
     if len(legs) < 2:
       return {"ok": False, "action": "live_skip", "reason": "need_2_legs"}
+
+    ok, reason = validate_dutch_cover_opportunity(
+      opp,
+      min_edge_usd=float(strategy_params_from_cfg(self.cfg).get("min_edge_usd", 0.01)),
+    )
+    if not ok:
+      return {"ok": False, "action": "live_skip", "reason": reason}
 
     order_ids: list[str] = []
     filled_legs: list[dict[str, Any]] = []

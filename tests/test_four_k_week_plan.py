@@ -13,6 +13,7 @@ from src.trading.four_k_week_plan import (
   _lane_pnl_from_store,
   build_four_k_week_plan_report,
   build_four_k_week_plan_report_cached,
+  four_k_week_plan_revision,
   invalidate_four_k_week_plan_cache,
 )
 from src.trading.hourly_bot_store import HourlyBotSettings, HourlyBotStore
@@ -177,6 +178,22 @@ def test_build_four_k_week_plan_report_cached(plan_cfg, monkeypatch):
   assert first.get("cached") is False
   assert second.get("cached") is True
   assert second.get("cache_age_sec") is not None
+
+
+def test_four_k_week_plan_revision_changes_on_exit(tmp_path: Path, plan_cfg):
+  loop = _make_loop(tmp_path, plan_cfg)
+  live = loop.hourly_bot_store("eth", kind="hourly_live")
+  trial = loop.hourly_bot_store("eth", kind="hourly_trial")
+  _seed_enter_exit(live, mode="live", event="KXETH-H1", created_at="2026-07-12T16:00:00+00:00", pnl=3.0)
+
+  first = four_k_week_plan_revision(loop, plan_cfg)
+  assert first["ok"] is True
+  assert first["lanes"]["track_a_live_exits"] == 1
+
+  _seed_enter_exit(trial, mode="paper", event="KXETH-H1", created_at="2026-07-12T16:05:00+00:00", pnl=1.0)
+  second = four_k_week_plan_revision(loop, plan_cfg)
+  assert second["revision"] != first["revision"]
+  assert second["lanes"]["track_a_trial_exits"] == 1
 
 
 def test_cached_stale_on_db_busy(plan_cfg, monkeypatch):

@@ -204,6 +204,50 @@ def build_four_k_week_plan_report(loop: Any, cfg: dict[str, Any] | None) -> dict
   }
 
 
+def four_k_week_plan_revision(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
+  """Cheap closed-trade counters — dashboard refreshes full plan only when this changes."""
+  if not four_k_week_plan_active(cfg):
+    return {"ok": False, "enabled": False}
+
+  from src.trading.compare_paper_twins import compare_store_kinds
+
+  asset = "eth"
+  live_kind, trial_kind = compare_store_kinds(asset)
+  live_store = loop.hourly_bot_store(asset, kind=live_kind)
+  trial_store = loop.hourly_bot_store(asset, kind=trial_kind)
+  epoch = effective_compare_stats_epoch_at(live_store, cfg)
+  epoch_dt = parse_stats_epoch_at(epoch)
+
+  live_stats = _lane_pnl_from_store(live_store, mode="live", since=epoch_dt, trade_limit=200)
+  live_stats.pop("_entry_events", None)
+  trial_mode = str(trial_store.get_settings().mode or "paper").lower()
+  trial_stats = _lane_pnl_from_store(trial_store, mode=trial_mode, since=epoch_dt, trade_limit=200)
+  trial_stats.pop("_entry_events", None)
+
+  since = eth_slot15_experiment_start_at(cfg)
+  slot_store = loop.slot15_bot_store("eth")
+  slot_mode = str(slot_store.get_settings().mode or "paper").lower()
+  slot_stats = _lane_pnl_from_store(slot_store, mode=slot_mode, since=since, trade_limit=200)
+  slot_stats.pop("_entry_events", None)
+
+  track_b = summarize_track_b_shadow(cfg, asset="eth")
+  settled = int(track_b.get("settled_events") or 0) if track_b.get("ok") else 0
+
+  lanes = {
+    "track_a_live_exits": int(live_stats.get("exits") or 0),
+    "track_a_trial_exits": int(trial_stats.get("exits") or 0),
+    "track_b_settled_events": settled,
+    "slot15_exits": int(slot_stats.get("exits") or 0),
+  }
+  revision = "|".join(str(lanes[k]) for k in (
+    "track_a_live_exits",
+    "track_a_trial_exits",
+    "track_b_settled_events",
+    "slot15_exits",
+  ))
+  return {"ok": True, "revision": revision, "lanes": lanes}
+
+
 def build_four_k_week_plan_report_cached(
   loop: Any,
   cfg: dict[str, Any] | None,

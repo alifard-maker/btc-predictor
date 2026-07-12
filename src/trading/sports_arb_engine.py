@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -234,10 +235,74 @@ def kalshi_taker_fee_usd(price: float, contracts: int, fee_rate: float) -> float
   return float(fee_rate) * c * p * (1.0 - p)
 
 
+def execution_ask_decimal(ask: float) -> float:
+  """Kalshi live FOK uses ceiling cents — size covers on executable prices."""
+  return max(0.01, min(0.99, math.ceil(float(ask) * 100 - 1e-9) / 100.0))
+
+
 def _scale_contracts(max_stake_usd: float, unit_cost: float) -> int:
   if unit_cost <= 0 or max_stake_usd <= 0:
     return 0
   return max(1, int(max_stake_usd // unit_cost))
+
+
+def _size_equal_cover_contracts(
+  leg_asks: Sequence[float],
+  *,
+  fee_rate: float,
+  max_stake_usd: float,
+  min_edge_usd: float,
+) -> int:
+  """Pick one equal contract count for every leg.
+
+  Goal-2 covers must pay $n on any outcome. Every leg must use the same n;
+  per-leg sizing (e.g. max_stake on each side separately) can leave the
+  cheaper-favorite payout below total cost.
+  """
+  if not leg_asks or max_stake_usd <= 0:
+    return 0
+  exec_asks = [execution_ask_decimal(a) for a in leg_asks]
+
+  def totals(n: int) -> tuple[float, float, float]:
+    cost = sum(a * n for a in exec_asks)
+    fees = sum(kalshi_taker_fee_usd(a, n, fee_rate) for a in exec_asks)
+    payout = float(n)
+    return payout, cost, fees
+
+  unit_exec = sum(exec_asks)
+  unit_fees = sum(kalshi_taker_fee_usd(a, 1, fee_rate) for a in exec_asks)
+  n_cap = _scale_contracts(max_stake_usd, unit_exec + unit_fees)
+  if n_cap < 1:
+    return 0
+
+  for n in range(n_cap, 0, -1):
+    payout, cost, fees = totals(n)
+    edge = payout - cost - fees
+    if edge + 1e-9 >= float(min_edge_usd) and payout + 1e-9 >= cost + fees:
+      return n
+  return 0
+
+
+def validate_dutch_cover_opportunity(opp: dict[str, Any], *, min_edge_usd: float = 0.0) -> tuple[bool, str | None]:
+  """Pre-flight check before live FOK — catches unequal legs and payout < cost."""
+  legs = list(opp.get("legs") or [])
+  if len(legs) < 2:
+    return False, "need_2_legs"
+  counts = [int(leg.get("contracts") or 0) for leg in legs]
+  if any(c < 1 for c in counts):
+    return False, "bad_contracts"
+  if len(set(counts)) != 1:
+    return False, "unequal_leg_contracts"
+  n = counts[0]
+  payout = float(opp.get("payout_usd") or n)
+  cost = float(opp.get("total_cost_usd") or 0)
+  fees = float(opp.get("total_fees_usd") or 0)
+  if payout + 1e-9 < cost + fees:
+    return False, "payout_lt_cost"
+  edge = payout - cost - fees
+  if edge + 1e-9 < float(min_edge_usd):
+    return False, "edge_below_min"
+  return True, None
 
 
 def is_prop_like_text(*parts: str) -> bool:
@@ -350,20 +415,27 @@ def find_binary_yes_no_arb(
   if yes_ask <= 0 or no_ask <= 0 or yes_ask >= 1 or no_ask >= 1:
     return None
 
-  unit_cost = float(yes_ask) + float(no_ask)
-  unit_fees = kalshi_taker_fee_usd(yes_ask, 1, fee_rate) + kalshi_taker_fee_usd(no_ask, 1, fee_rate)
+  exec_yes = execution_ask_decimal(float(yes_ask))
+  exec_no = execution_ask_decimal(float(no_ask))
+  unit_cost = exec_yes + exec_no
+  unit_fees = kalshi_taker_fee_usd(exec_yes, 1, fee_rate) + kalshi_taker_fee_usd(exec_no, 1, fee_rate)
   unit_edge = 1.0 - unit_cost - unit_fees
   if unit_edge < float(min_edge_usd):
     return None
 
-  n = _scale_contracts(max_stake_usd, unit_cost + unit_fees)
+  n = _size_equal_cover_contracts(
+    [exec_yes, exec_no],
+    fee_rate=fee_rate,
+    max_stake_usd=max_stake_usd,
+    min_edge_usd=min_edge_usd,
+  )
   if n < 1:
     return None
 
-  yes_fee = kalshi_taker_fee_usd(yes_ask, n, fee_rate)
-  no_fee = kalshi_taker_fee_usd(no_ask, n, fee_rate)
-  yes_cost = float(yes_ask) * n
-  no_cost = float(no_ask) * n
+  yes_fee = kalshi_taker_fee_usd(exec_yes, n, fee_rate)
+  no_fee = kalshi_taker_fee_usd(exec_no, n, fee_rate)
+  yes_cost = exec_yes * n
+  no_cost = exec_no * n
   total_cost = yes_cost + no_cost
   total_fees = yes_fee + no_fee
   payout = float(n)
@@ -383,8 +455,8 @@ def find_binary_yes_no_arb(
     total_fees_usd=total_fees,
     payout_usd=payout,
     legs=[
-      SportsArbLeg(market.ticker, "yes", float(yes_ask), n, yes_cost, yes_fee),
-      SportsArbLeg(market.ticker, "no", float(no_ask), n, no_cost, no_fee),
+      SportsArbLeg(market.ticker, "yes", exec_yes, n, yes_cost, yes_fee),
+      SportsArbLeg(market.ticker, "no", exec_no, n, no_cost, no_fee),
     ],
   )
 
@@ -412,8 +484,9 @@ def find_multi_outcome_dutch(
     return None
 
   quotes = [(m, float(m.yes_ask or 0)) for m in partition]
-  unit_cost = sum(p for _, p in quotes)
-  unit_fees = sum(kalshi_taker_fee_usd(p, 1, fee_rate) for _, p in quotes)
+  exec_asks = [execution_ask_decimal(p) for _, p in quotes]
+  unit_cost = sum(exec_asks)
+  unit_fees = sum(kalshi_taker_fee_usd(a, 1, fee_rate) for a in exec_asks)
   unit_edge = 1.0 - unit_cost - unit_fees
   if unit_edge < float(min_edge_usd):
     return None
@@ -421,14 +494,19 @@ def find_multi_outcome_dutch(
   if unit_edge > float(max_edge_prob):
     return None
 
-  n = _scale_contracts(max_stake_usd, unit_cost + unit_fees)
+  n = _size_equal_cover_contracts(
+    exec_asks,
+    fee_rate=fee_rate,
+    max_stake_usd=max_stake_usd,
+    min_edge_usd=min_edge_usd,
+  )
   if n < 1:
     return None
 
   legs: list[SportsArbLeg] = []
   total_cost = 0.0
   total_fees = 0.0
-  for m, ask in quotes:
+  for (m, _raw_ask), ask in zip(quotes, exec_asks):
     fee = kalshi_taker_fee_usd(ask, n, fee_rate)
     cost = ask * n
     total_cost += cost
@@ -484,6 +562,49 @@ def scan_dutch_same_opportunities(
   return found
 
 
+def _near_multi_outcome_edge(
+  book: SportsEventBook,
+  *,
+  fee_rate: float,
+  max_outcomes: int = 8,
+) -> dict[str, Any] | None:
+  """Best-effort 2+ outcome cover edge for funnel stats (even when gates reject)."""
+  if is_prop_like_book(book):
+    return None
+  cands: list[SportsMarketQuote] = []
+  for m in book.markets:
+    if m.yes_ask is None or m.yes_ask <= 0 or m.yes_ask >= 1:
+      continue
+    if is_prop_like_market(m, event_title=book.title or ""):
+      continue
+    cands.append(m)
+  if len(cands) < 2 or len(cands) > int(max_outcomes):
+    return None
+  asks = [float(m.yes_ask or 0) for m in cands]
+  exec_asks = [execution_ask_decimal(a) for a in asks]
+  unit_cost = sum(exec_asks)
+  unit_fees = sum(kalshi_taker_fee_usd(a, 1, fee_rate) for a in exec_asks)
+  unit_edge = 1.0 - unit_cost - unit_fees
+  labels = " + ".join(
+    f"{(m.title or m.ticker)[:18]}@{execution_ask_decimal(float(m.yes_ask or 0)):.2f}"
+    for m in cands[:3]
+  )
+  if len(cands) > 3:
+    labels += f" +{len(cands) - 3} more"
+  return {
+    "unit_edge": round(unit_edge, 4),
+    "unit_cost": round(unit_cost, 4),
+    "ask_sum": round(sum(asks), 4),
+    "outcomes": len(cands),
+    "event_ticker": book.event_ticker,
+    "detail": f"sum={unit_cost:.2f} edge={unit_edge:+.3f} · {book.event_ticker} · {labels}",
+    "reject_reason": (
+      "ask_sum_ge_1" if unit_cost >= 1.0
+      else ("edge_lt_min" if unit_edge < 0 else None)
+    ),
+  }
+
+
 def scan_dutch_same_opportunities_with_meta(
   books: Sequence[SportsEventBook],
   *,
@@ -508,6 +629,10 @@ def scan_dutch_same_opportunities_with_meta(
     "multi_hits": 0,
     "best_binary_edge": None,
     "best_binary_detail": None,
+    "best_multi_edge": None,
+    "best_multi_detail": None,
+    "multi_near_miss": 0,
+    "multi_reject_sum_ge_1": 0,
   }
 
   for book in books:
@@ -556,6 +681,20 @@ def scan_dutch_same_opportunities_with_meta(
         max_outcomes=multi_max_outcomes,
         min_ask_sum=multi_min_ask_sum,
       )
+      near = _near_multi_outcome_edge(
+        book,
+        fee_rate=fee_rate,
+        max_outcomes=multi_max_outcomes,
+      )
+      if near:
+        prev_multi = meta["best_multi_edge"]
+        if prev_multi is None or float(near["unit_edge"]) > float(prev_multi):
+          meta["best_multi_edge"] = near["unit_edge"]
+          meta["best_multi_detail"] = near["detail"]
+        if not partition:
+          meta["multi_near_miss"] = int(meta["multi_near_miss"]) + 1
+          if near.get("reject_reason") == "ask_sum_ge_1":
+            meta["multi_reject_sum_ge_1"] = int(meta["multi_reject_sum_ge_1"]) + 1
       if partition:
         meta["multi_partitions"] = int(meta["multi_partitions"]) + 1
       opp = find_multi_outcome_dutch(

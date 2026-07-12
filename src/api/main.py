@@ -1205,6 +1205,20 @@ def pnl_first_manager_status(_: None = Depends(_session_user)):
   }
 
 
+@app.get("/api/pnl-first/four-k-week-plan/revision")
+def pnl_first_four_k_week_plan_revision(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.four_k_week_plan import four_k_week_plan_revision
+
+  try:
+    return four_k_week_plan_revision(_loop, _cfg)
+  except sqlite3.OperationalError as exc:
+    if "locked" in str(exc).lower():
+      raise HTTPException(503, "Bot databases busy — retry in a few seconds") from exc
+    raise
+
+
 @app.get("/api/pnl-first/four-k-week-plan")
 def pnl_first_four_k_week_plan(_: None = Depends(_session_user)):
   if _loop is None:

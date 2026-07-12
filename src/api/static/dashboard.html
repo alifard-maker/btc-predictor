@@ -4903,22 +4903,38 @@
     }
 
     let fourKPlanInFlight = false;
-    let fourKPlanLastAt = 0;
+    let fourKPlanRevisionInFlight = false;
     let fourKPlanLastData = null;
-    const FOUR_K_PLAN_INTERVAL_MS = 60000;
+    let fourKPlanRevision = null;
+    const fourKPlanBotClosed = {};
+
+    function fourKPlanLaneKey(kind, asset) {
+      if (asset !== 'eth') return null;
+      if (kind === 'hourly_live') return 'track_a_live';
+      if (kind === 'hourly_trial') return 'track_a_trial';
+      if (kind === 'slot15') return 'slot15';
+      return null;
+    }
+
+    function noteFourKPlanBotClosed(bot, kind, asset) {
+      const lane = fourKPlanLaneKey(kind, asset);
+      if (!lane || !bot?.ok) return;
+      const closed = Number(bot.experiment_performance?.summary?.closed_trades ?? 0);
+      const prev = fourKPlanBotClosed[lane];
+      fourKPlanBotClosed[lane] = closed;
+      if (prev !== undefined && closed > prev) {
+        checkFourKWeekPlanRevision(true);
+      }
+    }
 
     async function loadFourKWeekPlan(force = false) {
-      if (!force && fourKPlanInFlight) return;
-      const now = Date.now();
-      if (!force && now - fourKPlanLastAt < FOUR_K_PLAN_INTERVAL_MS) return;
+      if (fourKPlanInFlight) return;
       fourKPlanInFlight = true;
       try {
         const data = await getWithTimeout('/api/pnl-first/four-k-week-plan', 25000);
-        fourKPlanLastAt = Date.now();
         fourKPlanLastData = data;
         renderFourKWeekPlan(data);
       } catch (e) {
-        fourKPlanLastAt = Date.now();
         if (fourKPlanLastData && fourKPlanLastData.ok) {
           renderFourKWeekPlan({ ...fourKPlanLastData, stale: true, stale_error: e.message });
         } else {
@@ -4926,6 +4942,25 @@
         }
       } finally {
         fourKPlanInFlight = false;
+      }
+    }
+
+    async function checkFourKWeekPlanRevision(forceFull = false) {
+      if (fourKPlanRevisionInFlight) return;
+      fourKPlanRevisionInFlight = true;
+      try {
+        const rev = await getWithTimeout('/api/pnl-first/four-k-week-plan/revision', 8000);
+        if (!rev?.ok) {
+          if (fourKPlanLastData == null) await loadFourKWeekPlan(true);
+          return;
+        }
+        const changed = forceFull || fourKPlanRevision === null || rev.revision !== fourKPlanRevision;
+        fourKPlanRevision = rev.revision;
+        if (changed) await loadFourKWeekPlan(true);
+      } catch (_) {
+        if (fourKPlanLastData == null) await loadFourKWeekPlan(true).catch(() => {});
+      } finally {
+        fourKPlanRevisionInFlight = false;
       }
     }
 
@@ -5369,6 +5404,7 @@
         ${tradeLogHtml}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
+      noteFourKPlanBotClosed(bot, 'slot15', asset);
     }
 
     function onSlot15BotModeToggle(asset, ev) {
@@ -5715,6 +5751,7 @@
         ${tradeLogHtml}
       `;
       restoreBotTradesScroll(statusWrap, tradesScroll);
+      noteFourKPlanBotClosed(bot, kind, asset);
     }
 
     function onBotModeToggle(asset, ev, kind = 'hourly') {
@@ -6195,7 +6232,7 @@
       const polyMeta = valueMeta.poly || {};
       const rows = [];
 
-      if (dutchMeta.best_binary_edge != null) {
+      if dutchMeta.best_binary_edge != null) {
         const edgeC = Number(dutchMeta.best_binary_edge) * 100;
         rows.push({
           label: 'Goal 2 Dutch',
@@ -6203,6 +6240,16 @@
           need: `+${dutchMinC.toFixed(0)}¢`,
           gap: edgeC - dutchMinC,
           detail: shortSportsEdgeDetail(dutchMeta.best_binary_detail),
+        });
+      }
+      if (dutchMeta.best_multi_edge != null) {
+        const edgeC = Number(dutchMeta.best_multi_edge) * 100;
+        rows.push({
+          label: 'Goal 2 multi-ML',
+          edge: formatSportsEdgeCents(dutchMeta.best_multi_edge),
+          need: `+${dutchMinC.toFixed(0)}¢`,
+          gap: edgeC - dutchMinC,
+          detail: shortSportsEdgeDetail(dutchMeta.best_multi_detail),
         });
       }
       const kalshiEdge = kalshiMeta.best_edge_prob ?? valueMeta.best_edge_prob;
@@ -6354,8 +6401,8 @@
           ? `sharp ${valueMeta.sharp_events} · event-match ${valueMeta.event_matches ?? 0} · team-hits ${valueMeta.team_market_hits ?? 0} · below-edge ${valueMeta.below_min_edge ?? 0} · opps ${valueMeta.matched ?? 0}`
           : (valueMeta.skipped ? String(valueMeta.skipped) : ''));
       const dutchMeta = meta.dutch || {};
-      const dutchNote = dutchMeta.best_binary_edge != null
-        ? `dutch checked ${dutchMeta.binary_checked ?? 0} · partitions ${dutchMeta.multi_partitions ?? 0}`
+      const dutchNote = dutchMeta.best_binary_edge != null || dutchMeta.best_multi_edge != null
+        ? `dutch checked ${dutchMeta.binary_checked ?? 0} · partitions ${dutchMeta.multi_partitions ?? 0}${dutchMeta.multi_reject_sum_ge_1 ? ` · ${dutchMeta.multi_reject_sum_ge_1} books sum≥$1` : ''}`
         : (dutchMeta.binary_checked != null ? `dutch checked ${dutchMeta.binary_checked}` : '');
       const closestMissHtml = renderSportsClosestMiss(data);
       statusEl.innerHTML = `
@@ -6560,7 +6607,7 @@
       ];
       loadBotPerformanceReport();
       loadEpochReconcile();
-      loadFourKWeekPlan();
+      checkFourKWeekPlanRevision();
       syncGlobalComparePanel();
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();

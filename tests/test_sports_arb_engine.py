@@ -4,12 +4,15 @@ from datetime import datetime, timezone
 
 from src.data.sports_markets import SportsEventBook, SportsMarketQuote
 from src.trading.sports_arb_engine import (
+  _size_equal_cover_contracts,
+  execution_ask_decimal,
   find_binary_yes_no_arb,
   find_multi_outcome_dutch,
   is_prop_like_market,
   kalshi_taker_fee_usd,
   scan_dutch_same_opportunities,
   select_exclusive_outcome_markets,
+  validate_dutch_cover_opportunity,
 )
 
 
@@ -186,3 +189,64 @@ def test_scan_sorts_by_edge():
   )
   assert len(opps) >= 2
   assert opps[0].edge_usd >= opps[1].edge_usd
+
+
+def test_equal_contracts_on_multi_outcome_legs():
+  markets = [
+    _m(ticker="EVT1-A", yes_ask=0.48, title="Cleveland"),
+    _m(ticker="EVT1-B", yes_ask=0.47, title="Miami"),
+  ]
+  book = SportsEventBook("EVT1", "KXMLBGAME", "Cleveland vs Miami", markets[0].close_time, markets)
+  opp = find_multi_outcome_dutch(book, fee_rate=0.0, min_edge_usd=0.01, max_stake_usd=5.0)
+  assert opp is not None
+  counts = [leg.contracts for leg in opp.legs]
+  assert len(set(counts)) == 1
+  assert opp.payout_usd >= opp.total_cost_usd + opp.total_fees_usd
+
+
+def test_unequal_per_leg_sizing_would_lose_on_favorite():
+  """Per-leg $2 caps (3 vs 6) lose when the cheaper side wins — equal n must not."""
+  favorite_ask = 0.587
+  dog_ask = 0.315
+  bad_counts = (3, 6)
+  cost = bad_counts[0] * favorite_ask + bad_counts[1] * dog_ask
+  assert bad_counts[0] < cost  # favorite win pays $3, cost ~$3.65
+
+  markets = [
+    _m(ticker="EVT1-A", yes_ask=favorite_ask, title="Chicago C"),
+    _m(ticker="EVT1-B", yes_ask=dog_ask, title="Cincinnati"),
+  ]
+  book = SportsEventBook("EVT1", "KXMLBGAME", "Chicago C vs Cincinnati", markets[0].close_time, markets)
+  opp = find_multi_outcome_dutch(book, fee_rate=0.0, min_edge_usd=0.01, max_stake_usd=2.0)
+  if opp:
+    assert len({leg.contracts for leg in opp.legs}) == 1
+    assert opp.payout_usd >= opp.total_cost_usd
+
+
+def test_validate_rejects_unequal_leg_contracts():
+  opp = {
+    "payout_usd": 4.0,
+    "total_cost_usd": 3.5,
+    "total_fees_usd": 0.0,
+    "legs": [
+      {"contracts": 3},
+      {"contracts": 4},
+    ],
+  }
+  ok, reason = validate_dutch_cover_opportunity(opp, min_edge_usd=0.01)
+  assert not ok
+  assert reason == "unequal_leg_contracts"
+
+
+def test_size_uses_execution_ask_ceiling():
+  assert execution_ask_decimal(0.401) == 0.41
+  n = _size_equal_cover_contracts(
+    [0.401, 0.401],
+    fee_rate=0.0,
+    max_stake_usd=5.0,
+    min_edge_usd=0.01,
+  )
+  assert n >= 1
+  cost = 0.41 * 2 * n
+  assert float(n) >= cost
+
