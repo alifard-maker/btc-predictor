@@ -9,6 +9,7 @@ from src.trading.pnl_first_gates import (
   pnl_first_live_ev_block_reason,
   pnl_first_regime_block_reason,
   pnl_first_s1_only_active,
+  trial_mech_pause_when_live_regime_blocked,
 )
 
 
@@ -90,3 +91,30 @@ def test_eth_paper_experiment_s1_only():
     rng[1], "yes", cfg, kind="hourly", mode="paper", asset="eth",
   )
   assert reason == "pnl_first_s2_blocked"
+
+
+def test_trial_mech_pause_when_live_regime_blocked():
+  tab = {"live": {"regime": {"allow_trade": False, "reasons": ["Expected move low"]}}}
+  cfg = {
+    "pnl_first": {"probe_24h": {"enabled": True}},
+    "hourly": {"bot": {"trial_mech": {"pause_when_live_regime_blocked": True}}},
+  }
+  reason = trial_mech_pause_when_live_regime_blocked(
+    tab, cfg, kind="hourly_trial_mech", asset="btc",
+  )
+  assert reason and reason.startswith("trial_mech_regime_sync:")
+  assert trial_mech_pause_when_live_regime_blocked(
+    tab, cfg, kind="hourly_trial", asset="btc",
+  ) is None
+
+
+def test_eth_trial_pause_when_live_regime_blocked():
+  tab = {"live": {"regime": {"allow_trade": False, "reasons": ["Expected move low"]}}}
+  cfg = {
+    "pnl_first": {"probe_24h": {"enabled": True}},
+    "eth": {"hourly": {"bot": {"trial": {"pause_when_live_regime_blocked": True}}}},
+  }
+  reason = trial_mech_pause_when_live_regime_blocked(
+    tab, cfg, kind="hourly_trial", asset="eth",
+  )
+  assert reason and reason.startswith("trial_regime_sync:")

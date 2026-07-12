@@ -18,7 +18,7 @@ def pnl_first_active(
   kind: str,
   mode: str,
 ) -> bool:
-  if kind != "hourly" or str(mode).lower() != "live":
+  if kind not in ("hourly", "hourly_live") or str(mode).lower() != "live":
     return False
   return live_mechanics_profile_for_cfg(cfg) == "pnl_first"
 
@@ -33,7 +33,7 @@ def pnl_first_s1_only_active(
   """True when S2 range picks must be dropped (BTC live pnl_first or ETH paper experiment)."""
   if pnl_first_active(cfg, kind=kind, mode=mode):
     return True
-  if kind != "hourly" or str(mode).lower() != "paper":
+  if kind not in ("hourly", "hourly_live") or str(mode).lower() != "paper":
     return False
   label = str(asset or (cfg or {}).get("_asset") or "").lower()
   if label != "eth":
@@ -114,6 +114,16 @@ def pnl_first_entry_block_reason(
   return None
 
 
+def _regime_block_hint(tab: dict[str, Any]) -> str | None:
+  live = tab.get("live") or tab
+  regime = live.get("regime") or tab.get("regime") or {}
+  if regime.get("blocked") is True or regime.get("allow_trade") is False:
+    reasons = list(regime.get("reasons") or regime.get("block_reasons") or [])
+    hint = str(reasons[0])[:96] if reasons else "regime"
+    return hint
+  return None
+
+
 def pnl_first_regime_block_reason(
   tab: dict[str, Any],
   cfg: dict[str, Any] | None,
@@ -124,13 +134,25 @@ def pnl_first_regime_block_reason(
   """Enforce hourly regime even in FREE mode when P&L-first live is active."""
   if not pnl_first_active(cfg, kind=kind, mode=mode):
     return None
-  live = tab.get("live") or tab
-  regime = live.get("regime") or tab.get("regime") or {}
-  if regime.get("blocked") is True or regime.get("allow_trade") is False:
-    reasons = list(regime.get("reasons") or regime.get("block_reasons") or [])
-    hint = str(reasons[0])[:96] if reasons else "regime"
+  hint = _regime_block_hint(tab)
+  if hint:
     return f"pnl_first_regime_blocked:{hint}"
   return None
+
+
+def trial_mech_pause_when_live_regime_blocked(
+  tab: dict[str, Any],
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str,
+  asset: str,
+) -> str | None:
+  """Pause paper twins when live would be regime-blocked (BTC mech + ETH trial)."""
+  from src.trading.probe_24h import trial_regime_sync_pause_when_live_blocked
+
+  return trial_regime_sync_pause_when_live_blocked(
+    tab, cfg, kind=kind, asset=asset,
+  )
 
 
 def filter_pnl_first_candidates(

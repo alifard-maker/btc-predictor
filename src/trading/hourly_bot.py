@@ -123,6 +123,11 @@ from src.trading.pnl_first_gates import (
   pnl_first_active,
   pnl_first_entry_block_reason,
   pnl_first_regime_block_reason,
+  trial_mech_pause_when_live_regime_blocked,
+)
+from src.trading.probe_24h import (
+  apply_probe_entry_estrat_overlay,
+  probe_entry_churn_block_reason,
 )
 from src.trading.hour_momentum import (
   HourMomentumContext,
@@ -1308,11 +1313,29 @@ class HourlyBot:
 
     candidates = _entry_candidates(tab, cfg)
 
+    trial_regime_sync = trial_mech_pause_when_live_regime_blocked(
+      tab, cfg, kind=self.kind, asset=self.asset,
+    )
+    if trial_regime_sync:
+      self.store.set_last_skip_reason(trial_regime_sync)
+      return results
+
     regime_block = pnl_first_regime_block_reason(
       tab, cfg, kind=self.kind, mode=settings.mode,
     )
     if regime_block:
       self.store.set_last_skip_reason(regime_block)
+      return results
+
+    churn_block = probe_entry_churn_block_reason(
+      self.store,
+      event_ticker,
+      cfg,
+      kind=self.kind,
+      mode=settings.mode,
+    )
+    if churn_block:
+      self.store.set_last_skip_reason(churn_block)
       return results
 
     candidates = filter_pnl_first_candidates(
@@ -1379,6 +1402,9 @@ class HourlyBot:
 
     estrat = apply_hour_momentum_policy(estrat, momentum_policy)
     estrat = apply_mirror_trial_entry_estrat(
+      estrat, cfg, kind=self.kind, mode=settings.mode,
+    )
+    estrat = apply_probe_entry_estrat_overlay(
       estrat, cfg, kind=self.kind, mode=settings.mode,
     )
     estrat = apply_whipsaw_momentum_contract_cap(estrat, momentum_policy, wcfg)

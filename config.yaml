@@ -476,7 +476,7 @@ hourly:
         mirror_trial_entry_execution: true
         block_reentry_while_resting: false
         mirror_trial_stake_sizing: true
-        mirror_trial_scale_in: true
+        mirror_trial_scale_in: false
         prefer_passive_below_edge_cents: 12
         block_scale_in_after_quick_exit_cut: true
       whipsaw:
@@ -538,6 +538,8 @@ hourly:
       entry_strategy:
         max_contracts_per_entry: 2
         max_stake_per_entry_usd: 2.50
+        max_entries_per_cycle: 1
+        allow_scale_in: false
 
 # Hourly V2 — path-memory predictor + paper bot (fully isolated from v1 hourly above)
 hourly_v2:
@@ -640,13 +642,15 @@ pnl_first:
   defer_leg_stop_minutes_to_settle: 30
   # Paper + live: avoid mid-hour panic stops when ≥30m remain (live previously never deferred)
   defer_leg_stop_modes: [paper, live]
-  # 24h Tier 1+2 probe (stake mirror, 18¢ edge, trial regime sync) — started 2026-07-11
+  # 24h probe v2 — entry churn cap + fair twin compare (reset 2026-07-12)
   probe_24h:
     enabled: true
-    started_at: "2026-07-11T17:45:00+00:00"
+    started_at: "2026-07-12T10:51:00+00:00"
+    stats_epoch_at: "2026-07-12T10:51:00+00:00"
     min_ask_edge_cents: 18
     max_contracts_per_entry: 2
     max_stake_per_entry_usd: 2.50
+    max_filled_enters_per_hour: 2
   # Kalshi timing research: 15–45m-to-settle window — on for BTC+ETH twin live
   mid_hour_entry:
     enabled: true
@@ -1012,6 +1016,7 @@ eth:
         continuous_enabled: true
         poll_seconds: 10
         compare_twin: true  # paper twin for ETH live↔trial compare card
+        pause_when_live_regime_blocked: true
         max_spend_per_hour_usd: 15
         take_profit_enabled: true
         take_profit_mode: hybrid

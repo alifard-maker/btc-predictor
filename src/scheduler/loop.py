@@ -3646,10 +3646,14 @@ class PredictionLoop:
       log.warning("ETH hourly settings mirror skipped: %s", e)
     try:
       from src.trading.compare_paper_twins import ensure_compare_paper_twins
+      from src.trading.probe_24h import ensure_probe_stats_epoch
 
       twin_stats = ensure_compare_paper_twins(self)
       if twin_stats.get("active"):
         log.info("Compare paper twins: %s", twin_stats)
+      probe_epoch = ensure_probe_stats_epoch(self, self.cfg)
+      if probe_epoch.get("probe_stats_epoch_at"):
+        log.info("Probe 24h stats epoch: %s", probe_epoch)
     except Exception as e:
       log.warning("Compare paper twins ensure skipped: %s", e)
     log.info("Scheduler started: 15m slots at :00/:15/:30/:45 ET (%s)", self.tz)

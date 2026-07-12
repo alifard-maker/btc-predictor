@@ -1282,12 +1282,14 @@ def bots_hourly_live_trial_compare(
   from src.trading.hourly_live_trial_compare import build_hourly_live_trial_compare
   from src.trading.hourly_live_trial_align import HourlyLiveTrialAlignConfig
   from src.trading.compare_paper_twins import compare_store_kinds, ensure_compare_paper_twins
+  from src.trading.probe_24h import effective_compare_stats_epoch_at, ensure_probe_stats_epoch
   from src.assets import asset_cfg
 
   # Keep fair paper twins armed so matched hours can populate.
   if asset in ("btc", "eth"):
     try:
       ensure_compare_paper_twins(_loop, _cfg)
+      ensure_probe_stats_epoch(_loop, _cfg)
     except Exception:
       log.exception("compare_paper_twins ensure failed for %s", asset)
 
@@ -1296,6 +1298,7 @@ def bots_hourly_live_trial_compare(
   trial_store = _loop.hourly_bot_store(asset, kind=trial_kind)
   cfg = asset_cfg(_cfg, asset)
   align = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
+  stats_epoch_at = effective_compare_stats_epoch_at(live_store, _cfg)
   try:
     out = build_hourly_live_trial_compare(
       live_store,
@@ -1305,6 +1308,7 @@ def bots_hourly_live_trial_compare(
       live_kind=live_kind,
       trial_kind=trial_kind,
       pair_window_seconds=align.compare_pair_window_seconds,
+      stats_epoch_at=stats_epoch_at,
     )
     trial_settings = trial_store.get_settings()
     out["paper_twin"] = {

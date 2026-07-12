@@ -101,7 +101,8 @@ class HourlyLiveTrialAlignConfig:
 def _live_hourly_align_enabled(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
   if is_hourly_trial_kind(kind):
     return False
-  if kind not in ("hourly", "slot15"):
+  # hourly_live = ETH (and future) live mirror — same trial-leg exits as BTC hourly live
+  if kind not in ("hourly", "hourly_live", "slot15"):
     return False
   if str(mode).lower() != "live":
     return False
@@ -122,11 +123,20 @@ def live_mech_paper_mirror_active(cfg: dict[str, Any] | None, *, kind: str, mode
   return live_mechanics_profile_for_cfg(cfg) == "mechanical_fixes"
 
 
+def live_pnl_first_stake_mirror_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
+  """P&L-first live mirrors trial mech paper contract sizing (not full entry align)."""
+  if not _live_hourly_align_enabled(cfg, kind=kind, mode=mode):
+    return False
+  return live_mechanics_profile_for_cfg(cfg) == "pnl_first"
+
+
 def live_entry_stake_mirror_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
   """Stake / scale-in / entry_strategy mirror — standard trial align or Mech paper mirror."""
   if live_trial_align_active(cfg, kind=kind, mode=mode):
     return True
-  return live_mech_paper_mirror_active(cfg, kind=kind, mode=mode)
+  if live_mech_paper_mirror_active(cfg, kind=kind, mode=mode):
+    return True
+  return live_pnl_first_stake_mirror_active(cfg, kind=kind, mode=mode)
 
 
 def live_entry_execution_mirror_active(cfg: dict[str, Any] | None, *, kind: str, mode: str) -> bool:
@@ -358,11 +368,16 @@ def apply_mirror_trial_entry_estrat(
 
   if not live_entry_stake_mirror_active(cfg, kind=kind, mode=mode):
     return estrat
+  from src.trading.probe_24h import probe_24h_active
+
   acfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind=kind)
   bot = _bot_block(cfg, kind=kind)
   es = dict(bot.get("entry_strategy") or {})
   kw: dict[str, Any] = {}
-  if acfg.mirror_trial_scale_in:
+  mirror_scale_in = acfg.mirror_trial_scale_in and not (
+    probe_24h_active(cfg) and str(mode).lower() == "live"
+  )
+  if mirror_scale_in:
     kw["allow_scale_in"] = bool(es.get("allow_scale_in", True))
     kw["scale_in_max_legs_per_ticker"] = int(es.get("scale_in_max_legs_per_ticker", 4))
     kw["scale_in_min_unrealized_pnl_usd"] = float(
