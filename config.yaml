@@ -1230,7 +1230,7 @@ paths:
 # Sports arb module — Phase 0: Goal 2 Kalshi same-venue Dutch/cover paper scanner
 sports:
   enabled: true
-  poll_seconds: 10
+  poll_seconds: 15
   # Empty series_tickers → discover via /series?category=Sports (cached)
   # Prefer GAME/MATCH moneylines; first-N API order is mostly props/futures.
   series_tickers: []
@@ -1249,12 +1249,12 @@ sports:
   max_series: 40                   # pull many Kalshi sports series
   max_series_discover: 500         # scan pool before GAME/MATCH ranking
   max_events_per_series: 12        # per-series candidate pool
-  max_total_events: 150            # global cap (soonest-close first across series)
+  max_total_events: 80             # global cap (soonest-close first across series)
   max_markets_per_event: 40
   discovery_cache_sec: 300
-  quote_cache_sec: 90              # full book refresh ~every 90s (scans still every 10s)
-  stale_books_keep_sec: 300        # if refresh returns empty, keep last good books
-  request_pause_ms: 100
+  quote_cache_sec: 180             # full book refresh ~every 3m (scans every 15s)
+  stale_books_keep_sec: 600        # if refresh returns empty/partial, keep last good books
+  request_pause_ms: 150
   # Goal 2: same-venue Dutch / complementary cover
   strategies:
     dutch_same:

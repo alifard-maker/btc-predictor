@@ -67,6 +67,7 @@ def schedule_sports_jobs(loop: Any, scheduler) -> None:
     id="sports_arb_scan",
     max_instances=1,
     coalesce=True,
+    misfire_grace_time=45,
     replace_existing=True,
   )
   log.info("scheduled sports_arb_scan every %ss", max(10, poll))

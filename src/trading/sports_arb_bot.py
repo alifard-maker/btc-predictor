@@ -162,12 +162,12 @@ class SportsArbBot:
           assessment_counts[tier] += 1
       scan_meta = {
         "events_scanned": events_scanned,
+        "books_stale": bool(getattr(self.discovery, "_last_books_stale", False)),
         "dutch_opportunities": sum(1 for p in payloads if p.get("strategy") == "dutch_same"),
         "value_opportunities": sum(1 for p in payloads if p.get("strategy") == "value_sharp"),
         "bet_assessment": assessment_counts,
         "dutch": dutch_meta,
         "value": value_meta,
-        "books_stale": bool(getattr(self.discovery, "_last_books_stale", False)),
       }
       self.store.record_scan(payloads, ok=True, meta=scan_meta)
 

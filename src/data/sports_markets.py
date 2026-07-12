@@ -424,6 +424,16 @@ class SportsMarketDiscovery:
       )
 
     if books:
+      prev = list(self._books_cache[0]) if self._books_cache else []
+      if prev and len(books) < max(10, int(len(prev) * 0.6)):
+        self._last_books_stale = True
+        log.warning(
+          "sports books refresh partial (%s<%s) — keeping stale cache age=%.0fs",
+          len(books),
+          len(prev),
+          time.monotonic() - self._books_cache[1],
+        )
+        return prev
       self._books_cache = (books, time.monotonic())
       return books
 
