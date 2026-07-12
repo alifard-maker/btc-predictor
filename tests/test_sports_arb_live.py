@@ -267,6 +267,69 @@ def test_strong_bets_only_skips_non_strong_value(tmp_path: Path):
   assert any(a.get("ok") for a in actions)
 
 
+def test_live_failed_fingerprint_blocks_retry(tmp_path: Path):
+  store = SportsArbStore(tmp_path / "s.db")
+  store.save_settings(SportsArbSettings(
+    enabled=True,
+    value_live=True,
+    value_max_open_usd=40,
+    value_max_stake_usd=5,
+  ))
+  opp = {
+    "strategy": "value_sharp",
+    "kind": "kalshi_value",
+    "venue": "kalshi",
+    "event_ticker": "KXMLBGAME-26JUL121610TORSD",
+    "selection": "TOR",
+    "edge_usd": 0.52,
+    "total_cost_usd": 1.93,
+    "legs": [{"ticker": "KX-TOR", "side": "yes", "ask": 0.39, "contracts": 5}],
+  }
+  store.log_trade(
+    opp,
+    mode="live",
+    status="live_failed",
+    extra={"error": "409 Client Error: Conflict"},
+  )
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  cfg = {
+    "sports": {
+      "enabled": True,
+      "bot": {"allow_live": True},
+      "strategies": {"value_sharp": {"enabled": True, "allow_kalshi_live": True}},
+    },
+    "paths": {"logs": str(tmp_path)},
+  }
+  bot = SportsArbBot(cfg, store, kalshi=kalshi)
+  actions = bot._act_on_opportunities([opp], store.get_settings(), {"allow_kalshi_live": True})
+  assert not kalshi.create_order.called
+  assert any(a.get("reason") == "already_seen" for a in actions)
+
+
+def test_live_value_skips_when_already_positioned(tmp_path: Path):
+  store = SportsArbStore(tmp_path / "s.db")
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.get_market_position.return_value = 5.0
+  cfg = {"sports": {"bot": {"allow_live": True}}, "paths": {"logs": str(tmp_path)}}
+  bot = SportsArbBot(cfg, store, kalshi=kalshi)
+  opp = {
+    "strategy": "value_sharp",
+    "kind": "kalshi_value",
+    "venue": "kalshi",
+    "event_ticker": "EVT-POS",
+    "selection": "HOME",
+    "edge_usd": 0.4,
+    "total_cost_usd": 1.5,
+    "legs": [{"ticker": "KX-HOME", "side": "yes", "ask": 0.30, "contracts": 5}],
+  }
+  result = bot._execute_live_value(opp)
+  assert result["action"] == "live_skip"
+  assert result["reason"] == "already_positioned"
+  assert not kalshi.create_order.called
+
+
 def test_live_execute_cancels_on_second_leg_fail(tmp_path: Path):
   store = SportsArbStore(tmp_path / "s.db")
   kalshi = MagicMock()
