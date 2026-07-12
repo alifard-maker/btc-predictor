@@ -928,6 +928,9 @@
           <label class="bot-label" title="Goal 3 max $ per opportunity (0 = unlimited)">$/opp
             <input type="number" id="sports-value-stake" min="0" step="1" value="5" style="width:3.5rem;margin-left:.35rem" onchange="saveSportsSettings()">
           </label>
+          <label class="bot-label" title="Goal 3: only trade value picks with STRONG bet_assessment (≥6¢ edge, high match, coherence)">Strong Bets
+            <label class="switch"><input type="checkbox" id="sports-value-strong-bets" onchange="saveSportsSettings()"><span class="slider"></span></label>
+          </label>
           <span class="muted" style="font-size:.68rem" id="sports-value-spend">spent —</span>
         </div>
       </div>
@@ -6114,6 +6117,7 @@
       const dutchStake = $('sports-dutch-stake');
       const valueBudget = $('sports-value-budget');
       const valueStake = $('sports-value-stake');
+      const valueStrongBets = $('sports-value-strong-bets');
       if (en) en.checked = !!s.enabled;
       if (maxScan) maxScan.value = s.max_live_per_scan ?? 0;
       if (maxDay) maxDay.value = s.max_live_trades_per_day ?? 0;
@@ -6123,6 +6127,7 @@
       if (dutchStake) dutchStake.value = s.dutch_max_stake_usd ?? 5;
       if (valueBudget) valueBudget.value = s.value_max_open_usd ?? 40;
       if (valueStake) valueStake.value = s.value_max_stake_usd ?? 5;
+      if (valueStrongBets) valueStrongBets.checked = !!s.value_strong_bets_only;
       const dutchSpendEl = $('sports-dutch-spend');
       const valueSpendEl = $('sports-value-spend');
       if (dutchSpendEl) {
@@ -6275,6 +6280,7 @@
         dutch_max_stake_usd: Number($('sports-dutch-stake')?.value || 0),
         value_max_open_usd: Number($('sports-value-budget')?.value || 0),
         value_max_stake_usd: Number($('sports-value-stake')?.value || 0),
+        value_strong_bets_only: !!$('sports-value-strong-bets')?.checked,
         max_live_per_scan: Number($('sports-max-scan')?.value || 0),
         max_live_trades_per_day: Number($('sports-max-day')?.value || 0),
       };

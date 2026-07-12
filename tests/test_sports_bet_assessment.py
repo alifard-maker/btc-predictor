@@ -122,3 +122,27 @@ def test_assess_batch_attaches_bet_assessment():
   )
   assert "bet_assessment" in opps[0]
   assert opps[0]["bet_assessment"]["edge_tier"] in ("MODERATE", "STRONG", "WEAK")
+
+
+def test_passes_value_strong_bets_gate():
+  from src.trading.sports_bet_assessment import passes_value_strong_bets_gate
+
+  strong = {
+    "strategy": "value_sharp",
+    "bet_assessment": {"actionable_bet": True, "edge_tier": "STRONG"},
+  }
+  moderate = {
+    "strategy": "value_sharp",
+    "bet_assessment": {"actionable_bet": True, "edge_tier": "MODERATE"},
+  }
+  weak = {
+    "strategy": "value_sharp",
+    "bet_assessment": {"actionable_bet": False, "edge_tier": "WEAK"},
+  }
+  dutch = {"strategy": "dutch_same"}
+
+  assert passes_value_strong_bets_gate(strong)
+  assert not passes_value_strong_bets_gate(moderate)
+  assert not passes_value_strong_bets_gate(weak)
+  assert not passes_value_strong_bets_gate({"strategy": "value_sharp"})
+  assert passes_value_strong_bets_gate(dutch)

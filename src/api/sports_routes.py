@@ -84,6 +84,7 @@ def register_sports_routes(app, loop_getter, cfg_getter, session_dep) -> None:
       "dutch_max_stake_usd": float(body.get("dutch_max_stake_usd", cur.dutch_max_stake_usd)),
       "value_max_open_usd": float(body.get("value_max_open_usd", cur.value_max_open_usd)),
       "value_max_stake_usd": float(body.get("value_max_stake_usd", cur.value_max_stake_usd)),
+      "value_strong_bets_only": bool(body.get("value_strong_bets_only", cur.value_strong_bets_only)),
       "max_live_per_scan": int(body.get("max_live_per_scan", cur.max_live_per_scan)),
       "max_live_trades_per_day": int(body.get("max_live_trades_per_day", cur.max_live_trades_per_day)),
       "paper_bankroll_usd": float(body.get("paper_bankroll_usd", cur.paper_bankroll_usd)),

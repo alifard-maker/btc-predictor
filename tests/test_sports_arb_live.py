@@ -219,6 +219,54 @@ def test_paper_signal_does_not_block_live_value(tmp_path: Path):
   assert kalshi.create_order.called
 
 
+def test_strong_bets_only_skips_non_strong_value(tmp_path: Path):
+  store = SportsArbStore(tmp_path / "s.db")
+  store.save_settings(SportsArbSettings(
+    enabled=True,
+    value_live=True,
+    value_strong_bets_only=True,
+    value_max_open_usd=40,
+    value_max_stake_usd=5,
+  ))
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  cfg = {
+    "sports": {
+      "enabled": True,
+      "bot": {"allow_live": True},
+      "strategies": {"value_sharp": {"enabled": True, "allow_kalshi_live": True}},
+    },
+    "paths": {"logs": str(tmp_path)},
+  }
+  bot = SportsArbBot(cfg, store, kalshi=kalshi)
+  moderate = {
+    "strategy": "value_sharp",
+    "kind": "kalshi_value",
+    "venue": "kalshi",
+    "event_ticker": "EVT-MOD",
+    "edge_usd": 0.2,
+    "total_cost_usd": 1.0,
+    "legs": [{"ticker": "KX-MOD", "side": "yes", "ask": 0.35, "contracts": 2}],
+    "bet_assessment": {"actionable_bet": True, "edge_tier": "MODERATE"},
+  }
+  actions = bot._act_on_opportunities([moderate], store.get_settings(), {"allow_kalshi_live": True})
+  assert not kalshi.create_order.called
+  assert not store.list_trades()
+
+  strong = {
+    **moderate,
+    "event_ticker": "EVT-STR",
+    "legs": [{"ticker": "KX-STR", "side": "yes", "ask": 0.35, "contracts": 2}],
+    "bet_assessment": {"actionable_bet": True, "edge_tier": "STRONG"},
+  }
+  kalshi.create_order.return_value = {
+    "order": {"order_id": "ov4", "status": "executed", "fill_count": 2},
+  }
+  actions = bot._act_on_opportunities([strong], store.get_settings(), {"allow_kalshi_live": True})
+  assert kalshi.create_order.called
+  assert any(a.get("ok") for a in actions)
+
+
 def test_live_execute_cancels_on_second_leg_fail(tmp_path: Path):
   store = SportsArbStore(tmp_path / "s.db")
   kalshi = MagicMock()

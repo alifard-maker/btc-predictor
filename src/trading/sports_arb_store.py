@@ -33,6 +33,8 @@ class SportsArbSettings:
   value_live: bool = False
   value_max_open_usd: float = 40.0
   value_max_stake_usd: float = 5.0
+  # Goal 3: only paper/live value_sharp when bet_assessment edge_tier is STRONG
+  value_strong_bets_only: bool = False
 
   def to_dict(self) -> dict[str, Any]:
     mode = "live" if (self.dutch_live or self.value_live) else "paper"
@@ -50,6 +52,7 @@ class SportsArbSettings:
       "value_live": self.value_live,
       "value_max_open_usd": self.value_max_open_usd,
       "value_max_stake_usd": self.value_max_stake_usd,
+      "value_strong_bets_only": self.value_strong_bets_only,
     }
 
   @classmethod
@@ -89,6 +92,7 @@ class SportsArbSettings:
       value_live=value_live,
       value_max_open_usd=value_open,
       value_max_stake_usd=value_stake,
+      value_strong_bets_only=bool(d.get("value_strong_bets_only", False)),
     )
 
 

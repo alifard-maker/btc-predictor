@@ -16,7 +16,7 @@ from src.trading.sports_arb_engine import (
   strategy_params_from_cfg,
 )
 from src.trading.sports_arb_store import SportsArbSettings, SportsArbStore
-from src.trading.sports_bet_assessment import assess_sports_opportunities
+from src.trading.sports_bet_assessment import assess_sports_opportunities, passes_value_strong_bets_gate
 from src.trading.sports_value_engine import (
   scan_value_opportunities_with_meta,
   value_params_from_cfg,
@@ -270,10 +270,13 @@ class SportsArbBot:
 
     paper_candidates: list[dict[str, Any]] = []
     live_candidates: list[dict[str, Any]] = []
+    value_strong_only = bool(settings.value_strong_bets_only)
     for opp in payloads:
       strat = str(opp.get("strategy") or "")
       venue = str(opp.get("venue") or "kalshi")
       if strat == "value_sharp":
+        if value_strong_only and not passes_value_strong_bets_gate(opp):
+          continue
         if venue == "polymarket":
           poly_live = (
             bool(value_live)
@@ -619,6 +622,7 @@ class SportsArbBot:
         "value_sharp": {
           "enabled": value.get("enabled"),
           "live": settings.value_live,
+          "strong_bets_only": settings.value_strong_bets_only,
           "max_open_usd": settings.value_max_open_usd,
           "max_stake_usd": settings.value_max_stake_usd,
           "spend_today_usd": round(self.store.live_spend_today_usd(strategy="value_sharp"), 2),

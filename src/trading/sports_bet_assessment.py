@@ -280,3 +280,13 @@ def assess_sports_opportunities(
     )
     out.append(enriched)
   return out
+
+
+def passes_value_strong_bets_gate(opp: dict[str, Any]) -> bool:
+  """True when Goal 3 opportunity qualifies as a STRONG assessed bet."""
+  if str(opp.get("strategy") or "") != "value_sharp":
+    return True
+  ba = opp.get("bet_assessment")
+  if not isinstance(ba, dict):
+    return False
+  return bool(ba.get("actionable_bet")) and str(ba.get("edge_tier") or "").upper() == "STRONG"
