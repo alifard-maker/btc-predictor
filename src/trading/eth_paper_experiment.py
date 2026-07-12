@@ -12,12 +12,96 @@ def eth_bot_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
   return dict((((cfg or {}).get("eth") or {}).get("hourly") or {}).get("bot") or {})
 
 
+def eth_experiment_start_at(cfg: dict[str, Any] | None) -> datetime | None:
+  """ETH paper experiment epoch from yaml (not bot store stats_epoch_at)."""
+  raw = eth_bot_cfg(cfg).get("experiment_start_at")
+  if not raw:
+    return None
+  try:
+    return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+  except ValueError:
+    return None
+
+
 def eth_paper_experiment_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
   return dict(eth_bot_cfg(cfg).get("paper_experiment") or {})
 
 
 def eth_paper_experiment_active(cfg: dict[str, Any] | None) -> bool:
   return bool(eth_paper_experiment_cfg(cfg).get("enabled"))
+
+
+def eth_live_mirror_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
+  return dict(eth_bot_cfg(cfg).get("live_mirror") or {})
+
+
+def eth_live_mirror_active(cfg: dict[str, Any] | None) -> bool:
+  return bool(eth_live_mirror_cfg(cfg).get("enabled"))
+
+
+def _apply_stats_epoch(store: HourlyBotStore, epoch_raw: str | None) -> None:
+  if not epoch_raw:
+    return
+  try:
+    epoch = datetime.fromisoformat(str(epoch_raw).replace("Z", "+00:00"))
+    with store._connect() as conn:
+      from src.trading.bot_runtime import set_stats_epoch_at
+
+      set_stats_epoch_at(conn, epoch.isoformat())
+  except (ValueError, TypeError):
+    pass
+
+
+def seed_eth_live_mirror_from_cfg(
+  store: HourlyBotStore,
+  cfg: dict[str, Any] | None,
+  *,
+  source: str = "eth_live_mirror",
+) -> dict[str, Any]:
+  """Apply yaml defaults to ETH hourly_live mirror store (parallel live arm)."""
+  mirror = eth_live_mirror_cfg(cfg)
+  if not mirror.get("enabled"):
+    return {"ok": True, "skipped": True, "reason": "live_mirror_disabled"}
+
+  eth_bot = eth_bot_cfg(cfg)
+  patch = settings_patch_from_eth_bot_yaml(eth_bot)
+  patch.update({
+    "enabled": True,
+    "mode": "live",
+    "continuous": bool(mirror.get("continuous_enabled", eth_bot.get("continuous_enabled", True))),
+    "paper_auto_refill": False,
+    "max_spend_per_hour_usd": float(
+      mirror.get("max_spend_per_hour_usd", eth_bot.get("max_spend_per_hour_usd", 15.0))
+    ),
+  })
+  cur = store.get_settings()
+  merged = {**cur.to_dict(), **patch}
+  changed = [k for k, v in patch.items() if cur.to_dict().get(k) != v]
+  epoch_raw = mirror.get("experiment_start_at") or eth_bot.get("experiment_start_at")
+
+  if not changed and not epoch_raw:
+    return {
+      "ok": True,
+      "synced": True,
+      "changed_fields": [],
+      "unchanged": True,
+      "enabled": cur.enabled,
+      "mode": cur.mode,
+      "continuous": cur.continuous,
+    }
+
+  if changed:
+    store.save_settings(HourlyBotSettings.from_dict(merged), source=source)
+  _apply_stats_epoch(store, str(epoch_raw) if epoch_raw else None)
+
+  return {
+    "ok": True,
+    "synced": True,
+    "changed_fields": changed,
+    "enabled": merged.get("enabled"),
+    "mode": merged.get("mode"),
+    "continuous": merged.get("continuous"),
+  }
 
 
 def settings_patch_from_eth_bot_yaml(eth_bot: dict[str, Any]) -> dict[str, Any]:
@@ -66,6 +150,8 @@ def seed_eth_paper_settings_from_cfg(
   cur = store.get_settings()
   merged = {**cur.to_dict(), **patch}
   changed = [k for k, v in patch.items() if cur.to_dict().get(k) != v]
+  epoch_raw = eth_bot.get("experiment_start_at")
+
   if not changed and not epoch_raw:
     return {
       "ok": True,
@@ -77,18 +163,10 @@ def seed_eth_paper_settings_from_cfg(
       "continuous": cur.continuous,
     }
 
-  store.save_settings(HourlyBotSettings.from_dict(merged), source=source)
+  if changed:
+    store.save_settings(HourlyBotSettings.from_dict(merged), source=source)
 
-  epoch_raw = eth_bot.get("experiment_start_at")
-  if epoch_raw:
-    try:
-      epoch = datetime.fromisoformat(str(epoch_raw).replace("Z", "+00:00"))
-      with store._connect() as conn:
-        from src.trading.bot_runtime import set_stats_epoch_at
-
-        set_stats_epoch_at(conn, epoch.isoformat())
-    except (ValueError, TypeError):
-      pass
+  _apply_stats_epoch(store, str(epoch_raw) if epoch_raw else None)
 
   return {
     "ok": True,
@@ -101,58 +179,102 @@ def seed_eth_paper_settings_from_cfg(
 
 
 def check_eth_paper_harness(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
-  """Health snapshot for ETH paper mid-hour experiment."""
-  if not eth_paper_experiment_active(cfg):
+  """Health snapshot for ETH paper + optional live mirror arms."""
+  paper_active = eth_paper_experiment_active(cfg)
+  live_active = eth_live_mirror_active(cfg)
+  if not paper_active and not live_active:
     return {"ok": True, "skipped": True}
 
   issues: list[str] = []
+  arms: dict[str, Any] = {}
   try:
-    store = loop.hourly_bot_store("eth", kind="hourly")
-    settings = store.get_settings()
-    skip = store.last_skip_reason()
-
-    if not settings.enabled:
-      issues.append("eth_paper_disabled")
-    if not settings.continuous:
-      issues.append("eth_paper_continuous_off")
-    if str(settings.mode).lower() != "paper":
-      issues.append(f"eth_paper_wrong_mode:{settings.mode}")
-    if skip in ("auto_bet_off", "continuous_mode_off"):
-      issues.append(f"eth_fatal_skip:{skip}")
-
-    exp_cfg = eth_paper_experiment_cfg(cfg)
     eth_bot = eth_bot_cfg(cfg)
+    mid_hour = bool(
+      ((cfg or {}).get("pnl_first") or {}).get("mid_hour_entry", {}).get("eth_enabled")
+      or ((cfg or {}).get("pnl_first") or {}).get("mid_hour_entry", {}).get("eth_paper_enabled")
+    )
+    guards = {
+      "soft_rally_enabled": bool((eth_bot.get("soft_rally") or {}).get("enabled")),
+      "whipsaw_regime_block": bool(
+        (eth_bot.get("whipsaw_guard") or {}).get("block_entries_when_regime_blocked")
+      ),
+      "mid_hour_eth": mid_hour,
+      "s1_only": bool(
+        ((eth_bot.get("live_inventory") or {}).get("max_same_side_range_legs", 1) == 0)
+      ),
+    }
+
+    if paper_active:
+      store = loop.hourly_bot_store("eth", kind="hourly")
+      settings = store.get_settings()
+      skip = store.last_skip_reason()
+      paper_issues: list[str] = []
+      if not settings.enabled:
+        paper_issues.append("eth_paper_disabled")
+      if not settings.continuous:
+        paper_issues.append("eth_paper_continuous_off")
+      if str(settings.mode).lower() != "paper":
+        paper_issues.append(f"eth_paper_wrong_mode:{settings.mode}")
+      if skip in ("auto_bet_off", "continuous_mode_off"):
+        paper_issues.append(f"eth_fatal_skip:{skip}")
+      issues.extend(paper_issues)
+      arms["paper"] = {
+        "ok": not paper_issues,
+        "issues": paper_issues,
+        "settings": {
+          "enabled": settings.enabled,
+          "mode": settings.mode,
+          "continuous": settings.continuous,
+          "max_spend_per_hour_usd": settings.max_spend_per_hour_usd,
+        },
+        "last_skip_reason": skip,
+        "recent_exit_count": sum(
+          1
+          for t in store.list_trades(limit=500)
+          if str(t.get("action") or "") == "exit"
+          and str(t.get("status") or "") in ("filled", "reconciled")
+        ),
+      }
+
+    if live_active:
+      live_store = loop.hourly_bot_store("eth", kind="hourly_live")
+      live_settings = live_store.get_settings()
+      live_skip = live_store.last_skip_reason()
+      live_issues: list[str] = []
+      if not live_settings.enabled:
+        live_issues.append("eth_live_disabled")
+      if not live_settings.continuous:
+        live_issues.append("eth_live_continuous_off")
+      if str(live_settings.mode).lower() != "live":
+        live_issues.append(f"eth_live_wrong_mode:{live_settings.mode}")
+      if live_skip in ("auto_bet_off", "continuous_mode_off"):
+        live_issues.append(f"eth_live_fatal_skip:{live_skip}")
+      issues.extend(live_issues)
+      arms["live_mirror"] = {
+        "ok": not live_issues,
+        "issues": live_issues,
+        "settings": {
+          "enabled": live_settings.enabled,
+          "mode": live_settings.mode,
+          "continuous": live_settings.continuous,
+          "max_spend_per_hour_usd": live_settings.max_spend_per_hour_usd,
+        },
+        "last_skip_reason": live_skip,
+        "recent_exit_count": sum(
+          1
+          for t in live_store.list_trades(limit=500)
+          if str(t.get("action") or "") == "exit"
+          and str(t.get("status") or "") in ("filled", "reconciled")
+        ),
+      }
+
     return {
       "ok": not issues,
       "issues": issues,
-      "settings": {
-        "enabled": settings.enabled,
-        "mode": settings.mode,
-        "continuous": settings.continuous,
-        "max_spend_per_hour_usd": settings.max_spend_per_hour_usd,
-        "paper_auto_refill": settings.paper_auto_refill,
-        "profit_use_pct": settings.profit_use_pct,
-      },
-      "last_skip_reason": skip,
-      "recent_exit_count": sum(
-        1
-        for t in store.list_trades(limit=500)
-        if str(t.get("action") or "") == "exit"
-        and str(t.get("status") or "") in ("filled", "reconciled")
-      ),
-      "guards": {
-        "soft_rally_enabled": bool((eth_bot.get("soft_rally") or {}).get("enabled")),
-        "whipsaw_regime_block": bool(
-          (eth_bot.get("whipsaw_guard") or {}).get("block_entries_when_regime_blocked")
-        ),
-        "mid_hour_eth_paper": bool(
-          ((cfg or {}).get("pnl_first") or {}).get("mid_hour_entry", {}).get("eth_paper_enabled")
-        ),
-        "s1_only": bool(
-          ((eth_bot.get("live_inventory") or {}).get("max_same_side_range_legs", 1) == 0)
-        ),
-      },
-      "experiment": exp_cfg,
+      "arms": arms,
+      "guards": guards,
+      "experiment": eth_paper_experiment_cfg(cfg),
+      "live_mirror": eth_live_mirror_cfg(cfg),
       "checked_at": datetime.now(timezone.utc).isoformat(),
     }
   except Exception as exc:

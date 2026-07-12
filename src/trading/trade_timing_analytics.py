@@ -8,6 +8,8 @@ from typing import Any
 
 from src.trading.hourly_event_time import hourly_event_settle_utc
 
+REALIZED_EXIT_STATUSES: frozenset[str] = frozenset({"filled", "reconciled"})
+
 MINUTES_TO_SETTLE_BUCKETS: tuple[tuple[float, float, str], ...] = (
   (0, 5, "0–5m left"),
   (5, 10, "5–10m left"),
@@ -17,6 +19,16 @@ MINUTES_TO_SETTLE_BUCKETS: tuple[tuple[float, float, str], ...] = (
   (45, 60, "45–60m left"),
   (60, 9999, "60m+ left"),
 )
+
+
+def _normalize_trade_mode(trade: dict[str, Any]) -> str:
+  return str(trade.get("mode") or "paper").lower()
+
+
+def _trade_matches_mode(trade: dict[str, Any], mode: str | None) -> bool:
+  if not mode:
+    return True
+  return _normalize_trade_mode(trade) == str(mode).lower()
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -123,7 +135,9 @@ def closed_legs_with_timing(trades: list[dict[str, Any]]) -> list[dict[str, Any]
 
   out: list[dict[str, Any]] = []
   for t in trades:
-    if t.get("action") != "exit" or t.get("status") != "filled":
+    if t.get("action") != "exit":
+      continue
+    if str(t.get("status") or "") not in REALIZED_EXIT_STATUSES:
       continue
     pid = str(t.get("position_id") or "")
     ent = enters_by_pid.get(pid, {})
@@ -184,21 +198,24 @@ def build_trade_timing_report(
   *,
   mode: str | None = "live",
   since: datetime | None = None,
+  since_field: str = "trade",
 ) -> dict[str, Any]:
   """Summarize closed-leg PnL by minutes remaining in the hour at entry (and exit)."""
-  filtered = list(trades)
-  if since is not None:
-    filtered = [
-      t for t in filtered
-      if (_parse_ts(t.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)) >= since
+  mode_filtered = [t for t in trades if _trade_matches_mode(t, mode)]
+  if since is not None and str(since_field).lower() == "exit":
+    closed = closed_legs_with_timing(mode_filtered)
+    closed = [
+      leg for leg in closed
+      if (_parse_ts(leg.get("exited_at")) or datetime.min.replace(tzinfo=timezone.utc)) >= since
     ]
-  if mode:
-    filtered = [
-      t for t in filtered
-      if str(t.get("mode") or "").lower() == str(mode).lower()
-    ]
-
-  closed = closed_legs_with_timing(filtered)
+  else:
+    filtered = list(mode_filtered)
+    if since is not None:
+      filtered = [
+        t for t in filtered
+        if (_parse_ts(t.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)) >= since
+      ]
+    closed = closed_legs_with_timing(filtered)
   by_entry = _aggregate_timing_buckets(closed, field="entry_bucket")
   by_exit = _aggregate_timing_buckets(closed, field="exit_bucket")
 

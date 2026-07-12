@@ -1015,7 +1015,7 @@ class HourlyBotStore:
       "event_ticker": canonical_hourly_event_ticker(str(trade["event_ticker"])),
       "trigger": trade.get("trigger", "continuous"),
       "action": action,
-      "mode": trade.get("mode", "paper"),
+      "mode": trade.get("mode") or "paper",
       "market_ticker": trade.get("market_ticker"),
       "side": trade.get("side"),
       "contracts": trade.get("contracts"),

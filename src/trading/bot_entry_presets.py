@@ -97,7 +97,7 @@ def effective_bot_entry_strategy(
   from src.backtest.mechanics_profiles import entry_kind_for_bot
 
   entry_kind = entry_kind_for_bot(kind)
-  base = entry_strategy_from_cfg(cfg, kind=entry_kind)
+  base = entry_strategy_from_cfg(cfg, kind=kind if kind == "hourly_trial_mech" else entry_kind)
   # If the config explicitly sets fields under entry_strategy, preserve them.
   raw_entry = (((cfg or {}).get("hourly") or {}).get("bot") or {}).get("entry_strategy") if entry_kind == "hourly" else (
     (((cfg or {}).get("intra_slot") or {}).get("bot") or {}).get("entry_strategy")

@@ -1657,7 +1657,10 @@ def try_live_position_exit(
     return None
 
   cancel_resting_orders_for_ticker(kalshi, ticker)
-  sell_cents = aggressive_exit_limit_cents(int(exit_price), haircut=4)
+  from src.trading.live_bracket_orders import live_exit_haircut_cents
+
+  haircut = live_exit_haircut_cents(cfg)
+  sell_cents = aggressive_exit_limit_cents(int(exit_price), haircut=haircut)
   sell_int = max(1, int(sell_count)) if sell_count >= 0.99 else 0
   if sell_int <= 0:
     return None

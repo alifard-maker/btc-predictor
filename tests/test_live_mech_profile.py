@@ -9,10 +9,12 @@ from src.backtest.mechanics_profiles import (
 from src.trading.hourly_live_trial_align import (
   live_entry_stake_mirror_active,
   live_mech_paper_mirror_active,
+  live_pnl_first_stake_mirror_active,
   live_resting_entry_guards_active,
   live_trial_align_active,
   live_trial_exit_align_active,
   should_mirror_trial_entry_execution,
+  should_mirror_trial_stake_sizing,
   should_use_trial_leg_exits,
 )
 from src.trading.entry_strategy import EntryStrategyConfig
@@ -79,3 +81,22 @@ def test_entry_align_on_without_mech_profile():
   assert live_trial_align_active(cfg, kind="hourly", mode="live")
   assert not live_mech_paper_mirror_active(cfg, kind="hourly", mode="live")
   assert live_trial_exit_align_active(cfg, kind="hourly", mode="live")
+
+
+def test_pnl_first_stake_mirror_active():
+  cfg = {
+    "hourly": {
+      "bot": {
+        "live_trial_align": {"enabled": True, "live_exit_mode": "trial_legs"},
+        "live_mechanics_profile": "pnl_first",
+      }
+    }
+  }
+  assert live_pnl_first_stake_mirror_active(cfg, kind="hourly", mode="live")
+  assert should_mirror_trial_stake_sizing(cfg, kind="hourly", mode="live")
+  assert not live_trial_align_active(cfg, kind="hourly", mode="live")
+  out = apply_live_production_mechanics(cfg, kind="hourly", mode="live")
+  es = out["hourly"]["bot"]["entry_strategy"]
+  assert es["min_ask_edge_cents"] == 18
+  assert es["max_contracts_per_entry"] == 2
+  assert es["max_stake_per_entry_usd"] == 2.50

@@ -18,6 +18,7 @@ HOURLY_TRIAL_KINDS = frozenset({
 })
 
 HOURLY_V2_KIND = "hourly_v2"
+HOURLY_LIVE_MIRROR_KIND = "hourly_live"
 
 _KIND_MECHANICS_PROFILE: dict[str, MechanicsProfile] = {
   "hourly_trial": "current",
@@ -40,13 +41,17 @@ def is_hourly_trial_kind(kind: str) -> bool:
   return kind in HOURLY_TRIAL_KINDS
 
 
+def is_hourly_live_mirror_kind(kind: str) -> bool:
+  return kind == HOURLY_LIVE_MIRROR_KIND
+
+
 def mechanics_profile_for_kind(kind: str) -> MechanicsProfile | None:
   return _KIND_MECHANICS_PROFILE.get(kind)
 
 
 def entry_kind_for_bot(kind: str) -> str:
   """Entry strategy / live guards use hourly mechanics for trial and v2 bot kinds."""
-  if is_hourly_trial_kind(kind) or is_hourly_v2_kind(kind):
+  if is_hourly_trial_kind(kind) or is_hourly_v2_kind(kind) or is_hourly_live_mirror_kind(kind):
     return "hourly"
   return kind
 
@@ -60,6 +65,11 @@ def cfg_with_profile_for_kind(cfg: dict[str, Any], kind: str) -> dict[str, Any]:
     from src.assets import asset_v2_runtime_cfg
 
     return asset_v2_runtime_cfg(cfg)
+  if is_hourly_live_mirror_kind(kind):
+    profile = live_mechanics_profile_for_cfg(cfg)
+    if profile:
+      return apply_mechanics_profile(cfg, profile)
+    return cfg
   profile = mechanics_profile_for_kind(kind)
   if profile:
     return apply_mechanics_profile(cfg, profile)
@@ -147,18 +157,24 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     live_inventory["enabled"] = True
     live_adaptive["enabled"] = False
     live_entry["cross_spread_enabled"] = True
-    live_entry["cross_spread_min_edge_cents"] = 15.0
+    live_entry["cross_spread_min_edge_cents"] = 18.0
     live_entry["taker_only"] = True
     live_exit["block_tail_entries"] = True
     live_exit["tail_block_max_cents"] = 20
     live_exit.setdefault("max_resting_enters_per_hour", 6)
     es = bot.setdefault("entry_strategy", {})
-    es["min_ask_edge_cents"] = 15
+    es["min_ask_edge_cents"] = 18
     es["tail_entry_block"] = True
     es["max_entries_per_cycle"] = 1
     es["max_concurrent_positions"] = 2
+    es["max_contracts_per_entry"] = 2
+    es["max_stake_per_entry_usd"] = 2.50
     es["allow_scale_in"] = False
     es["kelly_fraction"] = 0.12
+    align = bot.setdefault("live_trial_align", {})
+    stake = align.setdefault("stake", {})
+    stake["max_stake_per_entry_usd"] = 2.50
+    stake["max_contracts_per_entry"] = 2
     live_inventory["max_concurrent_positions"] = 2
     live_inventory["max_entries_per_cycle"] = 1
     live_inventory["max_same_side_threshold_legs"] = 1

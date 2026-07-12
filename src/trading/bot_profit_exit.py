@@ -676,7 +676,15 @@ def evaluate_slot15_leg_stop_loss(
   delta = mark_vs_entry_cents(pos, mark_cents)
   if delta is None or leg_cfg.leg_stop_loss_cents <= 0:
     return None, ""
-  if delta <= -leg_cfg.leg_stop_loss_cents:
+  # Live IOC sells haircut through the bid — require mark drawdown to cover
+  # threshold + expected haircut so we don't stop at −4¢ then fill at −8¢.
+  haircut = 0
+  if str(trading_mode or "").lower() == "live":
+    from src.trading.live_bracket_orders import live_exit_haircut_cents
+
+    haircut = int(live_exit_haircut_cents(bot_cfg))
+  stop_threshold = int(leg_cfg.leg_stop_loss_cents) + haircut
+  if delta <= -stop_threshold:
     defer_ctx = AdaptiveExitContext(
       seconds_remaining=seconds_remaining,
       period_seconds=3600.0,
@@ -699,9 +707,11 @@ def evaluate_slot15_leg_stop_loss(
     ):
       return None, ""
     entry_c = int(pos["entry_price_cents"])
+    haircut_note = f" +{haircut}¢ live exit haircut" if haircut else ""
     return (
       "LEG STOP",
-      f"Mark {int(mark_cents)}¢ vs entry {entry_c}¢ ({delta:+d}¢) — leg stop −{leg_cfg.leg_stop_loss_cents}¢",
+      f"Mark {int(mark_cents)}¢ vs entry {entry_c}¢ ({delta:+d}¢) — "
+      f"leg stop −{leg_cfg.leg_stop_loss_cents}¢{haircut_note}",
     )
   return None, ""
 

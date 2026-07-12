@@ -57,6 +57,35 @@ def test_reconcile_flags_bot_only_and_orphan_sell():
   assert len(report["orphan_resting_sells"]) == 1
 
 
+def test_reconcile_ignores_sports_when_asset_scoped():
+  """Sports inventory on the shared Kalshi account must not flag ETH/BTC mismatch."""
+  kalshi = MagicMock()
+  kalshi.authenticated = True
+  kalshi.list_market_positions.return_value = [
+    {"ticker": "KXETHD-26JUL1016-T1800", "position_fp": "2.00", "market_exposure_dollars": "1.00"},
+    {"ticker": "KXLIGAMXSPREAD-26JUL18CDGTOL-CDG2", "position_fp": "6.00", "market_exposure_dollars": "2.00"},
+    {"ticker": "KXLEADERMLBHR-26-JSOT", "position_fp": "10.00", "market_exposure_dollars": "0.30"},
+  ]
+  kalshi.list_resting_orders.return_value = []
+  report = build_live_reconcile_report(
+    bot_positions=[],
+    kalshi=kalshi,
+    asset="eth",
+  )
+  assert report["kalshi_legs"] == 1
+  assert report["kalshi_only"][0]["ticker"].startswith("KXETH")
+  assert all("LIGA" not in r["ticker"] and "LEADER" not in r["ticker"] for r in report["kalshi_only"])
+
+
+def test_hourly_fill_belongs_rejects_sports():
+  from src.trading.hourly_event_time import hourly_fill_belongs_to_asset
+
+  assert hourly_fill_belongs_to_asset("KXETHD-26JUL1016-T1800", "eth")
+  assert not hourly_fill_belongs_to_asset("KXLIGAMXSPREAD-26JUL18CDGTOL-CDG2", "eth")
+  assert not hourly_fill_belongs_to_asset("KXLEADERMLBHR-26-JSOT", "btc")
+  assert hourly_fill_belongs_to_asset("KXBTC15M-26JUL101200-T1", "btc")
+
+
 def test_reconcile_filters_kalshi_positions_to_event():
   bot_positions = [
     {

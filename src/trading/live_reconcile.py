@@ -124,10 +124,22 @@ def build_live_reconcile_report(
   kalshi: Any,
   event_ticker: str | None = None,
   market_tickers: set[str] | None = None,
+  asset: str | None = None,
 ) -> dict[str, Any]:
-  """Summarize bot vs exchange alignment for live hourly debugging."""
+  """Summarize bot vs exchange alignment for live hourly debugging.
+
+  Always scopes Kalshi inventory to the bot asset when provided so sports
+  (and other account positions) never appear as ETH/BTC mismatches.
+  """
   bot = _aggregate_bot_legs(bot_positions, live_only=True)
   kalshi_rows = kalshi.list_market_positions() if kalshi else []
+  if asset:
+    from src.trading.hourly_event_time import hourly_fill_belongs_to_asset
+
+    kalshi_rows = [
+      row for row in kalshi_rows
+      if hourly_fill_belongs_to_asset(str(row.get("ticker") or ""), asset)
+    ]
   if market_tickers and event_ticker:
     allowed = {str(t) for t in market_tickers}
     kalshi_rows = [
@@ -146,6 +158,8 @@ def build_live_reconcile_report(
       row for row in kalshi_rows
       if _ticker_belongs_to_event(str(row.get("ticker") or ""), event_ticker)
     ]
+  # If we know the asset but have no event/markets yet, asset filter above is enough.
+  # Never fall through to unscoped account-wide inventory for crypto bots.
   kalshi_legs = _aggregate_kalshi_positions(kalshi_rows)
   resting_sells = _resting_sells_by_ticker(kalshi)
 
@@ -180,8 +194,16 @@ def build_live_reconcile_report(
   bot_tickers = {b["ticker"] for b in bot.values()}
   allowed_tickers = {str(t) for t in market_tickers} if market_tickers else None
   for ticker, orders in resting_sells.items():
+    if asset:
+      from src.trading.hourly_event_time import hourly_fill_belongs_to_asset
+
+      if not hourly_fill_belongs_to_asset(ticker, asset):
+        continue
     if allowed_tickers is not None and ticker not in allowed_tickers:
       continue
+    if event_ticker and allowed_tickers is None:
+      if not _ticker_belongs_to_event(ticker, event_ticker):
+        continue
     if ticker in bot_tickers:
       continue
     for o in orders:
@@ -202,6 +224,7 @@ def build_live_reconcile_report(
   return {
     "ok": aligned,
     "event_ticker": event_ticker,
+    "asset": asset,
     "bot_live_legs": len(bot),
     "kalshi_legs": len(kalshi_legs),
     "bot_live_contracts": sum(int(v["contracts"]) for v in bot.values()),

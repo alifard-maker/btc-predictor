@@ -163,7 +163,20 @@ def entry_strategy_from_cfg(cfg: dict[str, Any] | None, *, kind: str = "hourly")
     bot_cfg = (cfg.get("intra_slot") or {}).get("bot") or {}
   else:
     bot_cfg = (cfg.get("hourly") or {}).get("bot") or {}
-  return EntryStrategyConfig.from_bot_cfg(bot_cfg)
+  estrat = EntryStrategyConfig.from_bot_cfg(bot_cfg)
+  if kind == "hourly_trial_mech":
+    trial_es = dict((bot_cfg.get("trial_mech") or {}).get("entry_strategy") or {})
+    if trial_es:
+      from dataclasses import replace
+
+      kw = {
+        field: trial_es[field]
+        for field in EntryStrategyConfig.__dataclass_fields__
+        if field in trial_es
+      }
+      if kw:
+        estrat = replace(estrat, **kw)
+  return estrat
 
 
 def threshold_strike(pick: dict[str, Any] | None) -> float | None:
