@@ -6577,6 +6577,31 @@
       }
     }
 
+    function kalshiPnlSportsFootnote(block) {
+      const cats = block?.by_category || [];
+      const mlb = cats.find((c) => c.category === 'MLB sports');
+      const wc = cats.find((c) => c.category === 'Other sports (WC tie)');
+      const otherSports = cats.find((c) => c.category === 'Other sports');
+      const sportsPnl = [mlb, wc, otherSports].filter(Boolean)
+        .reduce((s, c) => s + Number(c.total_pnl_usd || 0), 0);
+      const sportsLegs = [mlb, wc, otherSports].filter(Boolean)
+        .reduce((s, c) => s + Number(c.closed_legs || 0), 0);
+      if (!sportsLegs) return '';
+      return `<p class="muted" style="font-size:.7rem;margin:.45rem 0 0">Sports net (MLB + other sports): <strong class="${sportsPnl >= 0 ? 'up' : 'down'}">${signedPrice(sportsPnl)}</strong> on ${sportsLegs} closed legs.</p>`;
+    }
+
+    function renderKalshiPnlTotalRow(block) {
+      const pnl = Number(block?.total_pnl_usd || 0);
+      const legs = block?.closed_legs ?? 0;
+      const wr = block?.win_rate != null ? pct(block.win_rate) : '—';
+      return `<tr style="border-top:2px solid rgba(255,255,255,.15);font-weight:600">
+        <td>Total</td>
+        <td class="${pnl >= 0 ? 'up' : 'down'}">${signedPrice(pnl)}</td>
+        <td>${legs}</td>
+        <td>${wr}</td>
+      </tr>`;
+    }
+
     function renderKalshiPnlTable(block) {
       if (!block || !block.by_category?.length) {
         return '<p class="muted">No activity in this window.</p>';
@@ -6585,26 +6610,48 @@
         const pnl = Number(row.total_pnl_usd || 0);
         const cls = pnl >= 0 ? 'up' : 'down';
         const wr = row.win_rate != null ? pct(row.win_rate) : '—';
-        const roi = row.roi_pct != null ? `${row.roi_pct}%` : '—';
-        const perLeg = row.pnl_per_leg_usd != null ? signedPrice(row.pnl_per_leg_usd) : '—';
         return `<tr>
           <td>${row.category}</td>
-          <td>${price(row.invested_usd || 0)}</td>
           <td class="${cls}">${signedPrice(pnl)}</td>
           <td>${row.closed_legs}</td>
-          <td>${row.entries ?? 0}</td>
-          <td>${row.wins}/${row.losses}</td>
           <td>${wr}</td>
-          <td>${roi}</td>
-          <td>${perLeg}</td>
         </tr>`;
       }).join('');
       return `<table class="data-table" style="width:100%;font-size:.78rem">
         <thead><tr>
-          <th>Category</th><th>Invested</th><th>P&amp;L</th><th>Legs</th><th>Buys</th><th>W/L</th><th>WR</th><th>ROI</th><th>$/leg</th>
+          <th>Category</th><th>P&amp;L</th><th>Legs</th><th>Win rate</th>
         </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
+        <tbody>${rows}${renderKalshiPnlTotalRow(block)}</tbody>
+      </table>${kalshiPnlSportsFootnote(block)}`;
+    }
+
+    function renderKalshiPnlHistoryTotalRow(rows) {
+      if (!rows?.length) return '';
+      let pnl = 0;
+      let legs = 0;
+      let invested = 0;
+      let wins = 0;
+      for (const row of rows) {
+        pnl += Number(row.total_pnl_usd || 0);
+        legs += Number(row.closed_legs || 0);
+        invested += Number(row.invested_usd || 0);
+        wins += Number(row.wins || 0);
+      }
+      const wr = legs ? pct(wins / legs) : '—';
+      const perLeg = legs ? signedPrice(pnl / legs) : '—';
+      const hours = rows.reduce((s, r) => s + Number(r.active_hours || 0), 0);
+      const perHr = hours > 0 ? signedPrice(pnl / hours) : '—';
+      const roi = invested > 0 ? `${Math.round((100 * pnl / invested) * 10) / 10}%` : '—';
+      return `<tr style="border-top:2px solid rgba(255,255,255,.15);font-weight:600">
+        <td>Total</td>
+        <td>${price(invested)}</td>
+        <td class="${pnl >= 0 ? 'up' : 'down'}">${signedPrice(pnl)}</td>
+        <td>${legs}</td>
+        <td>${perLeg}</td>
+        <td>${perHr}</td>
+        <td>${roi}</td>
+        <td>${wr}</td>
+      </tr>`;
     }
 
     function renderKalshiPnlHistoryTable(rows, kind) {
@@ -6618,22 +6665,23 @@
         const perHr = row.pnl_per_hour_usd != null ? signedPrice(row.pnl_per_hour_usd) : '—';
         const perLeg = row.pnl_per_leg_usd != null ? signedPrice(row.pnl_per_leg_usd) : '—';
         const roi = row.roi_pct != null ? `${row.roi_pct}%` : '—';
+        const wr = row.win_rate != null ? pct(row.win_rate) : '—';
         return `<tr>
           <td>${row.label || row.day || row.week_start}${tag}</td>
           <td>${price(row.invested_usd || 0)}</td>
           <td class="${cls}">${signedPrice(pnl)}</td>
           <td>${row.closed_legs ?? 0}</td>
-          <td>${row.entries ?? 0}</td>
           <td>${perLeg}</td>
           <td>${perHr}</td>
           <td>${roi}</td>
+          <td>${wr}</td>
         </tr>`;
       }).join('');
       return `<table class="data-table" style="width:100%;font-size:.78rem">
         <thead><tr>
-          <th>${kind === 'day' ? 'Day' : 'Week'}</th><th>Invested</th><th>P&amp;L</th><th>Legs</th><th>Buys</th><th>$/leg</th><th>$/h</th><th>ROI</th>
+          <th>${kind === 'day' ? 'Day' : 'Week'}</th><th>Invested</th><th>P&amp;L</th><th>Legs</th><th>$/leg</th><th>$/h</th><th>ROI</th><th>Win rate</th>
         </tr></thead>
-        <tbody>${body}</tbody>
+        <tbody>${body}${renderKalshiPnlHistoryTotalRow(rows)}</tbody>
       </table>`;
     }
 

@@ -62,6 +62,8 @@ def categorize_ticker(ticker: str) -> str:
     return "NFL sports"
   if "NHL" in base or base.startswith("KXNHL"):
     return "NHL sports"
+  if "KXWCGAME" in base or "WCGAME" in base:
+    return "Other sports (WC tie)"
   if "GAME" in base or "MATCH" in base:
     return "Other sports"
   return "Other"
@@ -390,6 +392,8 @@ def _derive_stats(
   total_invested = round(sum(float(r.get("cost_usd") or 0) for r in window_entries), 2)
   closed_legs = len(window_closed)
   entry_count = len(window_entries)
+  wins = sum(1 for r in window_closed if float(r.get("pnl_usd") or 0) > 0)
+  losses = sum(1 for r in window_closed if float(r.get("pnl_usd") or 0) < 0)
   hours = _window_hours(start_et, end_et, now_et=now_et)
 
   return {
@@ -398,6 +402,9 @@ def _derive_stats(
     "window_end_et": end_et.isoformat(),
     "closed_legs": closed_legs,
     "entries": entry_count,
+    "wins": wins,
+    "losses": losses,
+    "win_rate": round(wins / closed_legs, 3) if closed_legs else None,
     "total_pnl_usd": total_pnl,
     "invested_usd": total_invested,
     "pnl_per_leg_usd": round(total_pnl / closed_legs, 2) if closed_legs else None,

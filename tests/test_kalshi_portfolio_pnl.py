@@ -24,6 +24,7 @@ def test_categorize_ticker():
   assert categorize_ticker("KXETHD-26JUL1316-T1800") == "ETH hourly"
   assert categorize_ticker("KXMLBGAME-26JUL13BOSNYY") == "MLB sports"
   assert categorize_ticker("KXATP-FOO") == "Tennis (ATP)"
+  assert categorize_ticker("KXWCGAME-26JUL13ARGSWIT-TIE") == "Other sports (WC tie)"
 
 
 def test_day_window_et_boundaries():

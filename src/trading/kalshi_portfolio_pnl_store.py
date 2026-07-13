@@ -224,13 +224,19 @@ class KalshiPortfolioPnlStore:
     return [self._entry_row_to_dict(r) for r in rows]
 
   @staticmethod
+  def _category_for_ticker(ticker: str) -> str:
+    from src.trading.kalshi_portfolio_pnl import categorize_ticker
+
+    return categorize_ticker(ticker)
+
+  @staticmethod
   def _closed_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     buy_at = datetime.fromisoformat(str(row["buy_at"]).replace("Z", "+00:00"))
     exit_at = datetime.fromisoformat(str(row["exit_at"]).replace("Z", "+00:00"))
     return {
       "ticker": row["ticker"],
       "side": row["side"],
-      "category": row["category"],
+      "category": KalshiPortfolioPnlStore._category_for_ticker(str(row["ticker"])),
       "contracts": int(row["contracts"]),
       "entry_cents": int(row["entry_cents"]),
       "exit_cents": int(row["exit_cents"]),
@@ -248,7 +254,7 @@ class KalshiPortfolioPnlStore:
       "order_id": row["order_id"],
       "ticker": row["ticker"],
       "side": row["side"],
-      "category": row["category"],
+      "category": KalshiPortfolioPnlStore._category_for_ticker(str(row["ticker"])),
       "contracts": int(row["contracts"]),
       "price_cents": int(row["price_cents"]),
       "cost_usd": float(row["cost_usd"]),
