@@ -263,6 +263,7 @@
       <button type="button" class="tab" id="tab-trials" data-panel="panel-trials" onclick="switchTab('trials')">Trials</button>
       <button type="button" class="tab" id="tab-hourly-v2" data-panel="panel-hourly-v2" onclick="switchTab('hourly-v2')">Hourly V2</button>
       <button type="button" class="tab" id="tab-sports" data-panel="panel-sports" onclick="switchTab('sports')">Sports</button>
+      <button type="button" class="tab" id="tab-kalshi-pnl" data-panel="panel-kalshi-pnl" onclick="switchTab('kalshi-pnl')">Kalshi P&amp;L</button>
     </nav>
 
     <div id="bot-risk-banner" class="card" style="display:none;margin-bottom:.75rem;border-color:var(--warn);background:rgba(255,180,0,.08)"></div>
@@ -948,6 +949,40 @@
         <h2>Trade log</h2>
         <p class="muted" style="font-size:.72rem;margin:0 0 .5rem">Live fills stay pinned for <strong>24h</strong>; paper signals append below and can be cleared without wiping live history.</p>
         <div id="sports-trades"><p class="muted">Loading…</p></div>
+      </div>
+    </div>
+
+    <div id="panel-kalshi-pnl" style="display:none">
+      <div class="card">
+        <h2>Kalshi realized P&amp;L</h2>
+        <p class="muted" style="font-size:.78rem;margin:0 0 .65rem">
+          Persistent ledger from Kalshi fills + settlements. Realized P&amp;L counts on <strong>close</strong> (sell/settlement).
+          <strong>Invested</strong> = buy notional in window. History is kept until you <strong>Clean sheet</strong>.
+          <strong>Today</strong> = <strong>00:01–23:59 ET</strong> · <strong>Week</strong> = <strong>Sun 00:01 – Sat 23:59 ET</strong>.
+        </p>
+        <div class="bot-row" style="margin-bottom:.55rem;gap:.55rem;flex-wrap:wrap;align-items:center">
+          <button type="button" class="btn-secondary" style="font-size:.72rem" onclick="kalshiPortfolioCleanSheet()">Clean sheet</button>
+          <span class="muted" style="font-size:.68rem" id="kalshi-pnl-epoch-note">Epoch —</span>
+        </div>
+        <div id="kalshi-pnl-summary"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Today by category</h2>
+        <div id="kalshi-pnl-today"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Current week by category</h2>
+        <div id="kalshi-pnl-week"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Daily history</h2>
+        <p class="muted" style="font-size:.72rem;margin:0 0 .5rem">Completed ET days since your last clean sheet (today at top).</p>
+        <div id="kalshi-pnl-daily-history"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Weekly history</h2>
+        <p class="muted" style="font-size:.72rem;margin:0 0 .5rem">Sunday–Saturday weeks since your last clean sheet.</p>
+        <div id="kalshi-pnl-weekly-history"><p class="muted">Loading…</p></div>
       </div>
     </div>
   </div>
@@ -2241,6 +2276,7 @@
       $('panel-trials').style.display = name === 'trials' ? '' : 'none';
       $('panel-hourly-v2').style.display = name === 'hourly-v2' ? '' : 'none';
       $('panel-sports').style.display = name === 'sports' ? '' : 'none';
+      $('panel-kalshi-pnl').style.display = name === 'kalshi-pnl' ? '' : 'none';
       $('tab-15m').classList.toggle('active', name === '15m');
       $('tab-eth-15m').classList.toggle('active', name === 'eth-15m');
       $('tab-daily').classList.toggle('active', name === 'daily');
@@ -2250,6 +2286,11 @@
       $('tab-trials').classList.toggle('active', name === 'trials');
       $('tab-hourly-v2').classList.toggle('active', name === 'hourly-v2');
       $('tab-sports').classList.toggle('active', name === 'sports');
+      $('tab-kalshi-pnl').classList.toggle('active', name === 'kalshi-pnl');
+      if (name === 'kalshi-pnl') {
+        loadKalshiPortfolioPnl();
+        return;
+      }
       if (name === 'sports') {
         loadSports();
         return;
@@ -6536,6 +6577,168 @@
       }
     }
 
+    function renderKalshiPnlTable(block) {
+      if (!block || !block.by_category?.length) {
+        return '<p class="muted">No activity in this window.</p>';
+      }
+      const rows = block.by_category.map((row) => {
+        const pnl = Number(row.total_pnl_usd || 0);
+        const cls = pnl >= 0 ? 'up' : 'down';
+        const wr = row.win_rate != null ? pct(row.win_rate) : '—';
+        const roi = row.roi_pct != null ? `${row.roi_pct}%` : '—';
+        const perLeg = row.pnl_per_leg_usd != null ? signedPrice(row.pnl_per_leg_usd) : '—';
+        return `<tr>
+          <td>${row.category}</td>
+          <td>${price(row.invested_usd || 0)}</td>
+          <td class="${cls}">${signedPrice(pnl)}</td>
+          <td>${row.closed_legs}</td>
+          <td>${row.entries ?? 0}</td>
+          <td>${row.wins}/${row.losses}</td>
+          <td>${wr}</td>
+          <td>${roi}</td>
+          <td>${perLeg}</td>
+        </tr>`;
+      }).join('');
+      return `<table class="data-table" style="width:100%;font-size:.78rem">
+        <thead><tr>
+          <th>Category</th><th>Invested</th><th>P&amp;L</th><th>Legs</th><th>Buys</th><th>W/L</th><th>WR</th><th>ROI</th><th>$/leg</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+
+    function renderKalshiPnlHistoryTable(rows, kind) {
+      if (!rows?.length) return '<p class="muted">No history yet.</p>';
+      const body = rows.map((row) => {
+        const pnl = Number(row.total_pnl_usd || 0);
+        const cls = pnl >= 0 ? 'up' : 'down';
+        const tag = kind === 'day'
+          ? (row.is_today ? ' <span class="muted">(today)</span>' : '')
+          : (row.is_current_week ? ' <span class="muted">(current)</span>' : '');
+        const perHr = row.pnl_per_hour_usd != null ? signedPrice(row.pnl_per_hour_usd) : '—';
+        const perLeg = row.pnl_per_leg_usd != null ? signedPrice(row.pnl_per_leg_usd) : '—';
+        const roi = row.roi_pct != null ? `${row.roi_pct}%` : '—';
+        return `<tr>
+          <td>${row.label || row.day || row.week_start}${tag}</td>
+          <td>${price(row.invested_usd || 0)}</td>
+          <td class="${cls}">${signedPrice(pnl)}</td>
+          <td>${row.closed_legs ?? 0}</td>
+          <td>${row.entries ?? 0}</td>
+          <td>${perLeg}</td>
+          <td>${perHr}</td>
+          <td>${roi}</td>
+        </tr>`;
+      }).join('');
+      return `<table class="data-table" style="width:100%;font-size:.78rem">
+        <thead><tr>
+          <th>${kind === 'day' ? 'Day' : 'Week'}</th><th>Invested</th><th>P&amp;L</th><th>Legs</th><th>Buys</th><th>$/leg</th><th>$/h</th><th>ROI</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table>`;
+    }
+
+    function renderKalshiWindowStats(block) {
+      const pnl = Number(block?.total_pnl_usd || 0);
+      const invested = Number(block?.invested_usd || 0);
+      const perLeg = block?.pnl_per_leg_usd != null ? signedPrice(block.pnl_per_leg_usd) : '—';
+      const perHr = block?.pnl_per_hour_usd != null ? signedPrice(block.pnl_per_hour_usd) : '—';
+      const roi = block?.roi_pct != null ? `${block.roi_pct}%` : '—';
+      return `
+        <strong class="${pnl >= 0 ? 'up' : 'down'}">${signedPrice(pnl)}</strong>
+        <div class="muted" style="font-size:.62rem;margin-top:.15rem">
+          invested ${price(invested)} · ${block?.closed_legs ?? 0} legs · ${block?.entries ?? 0} buys
+        </div>
+        <div class="muted" style="font-size:.62rem;margin-top:.1rem">${perLeg}/leg · ${perHr}/h · ROI ${roi}</div>`;
+    }
+
+    function renderKalshiPortfolioPnl(data) {
+      const summaryEl = $('kalshi-pnl-summary');
+      const todayEl = $('kalshi-pnl-today');
+      const weekEl = $('kalshi-pnl-week');
+      const dailyHistEl = $('kalshi-pnl-daily-history');
+      const weeklyHistEl = $('kalshi-pnl-weekly-history');
+      const epochNote = $('kalshi-pnl-epoch-note');
+      if (!summaryEl || !todayEl || !weekEl) return;
+      if (!data || !data.ok) {
+        const msg = `<p class="muted">Kalshi P&amp;L unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
+        summaryEl.innerHTML = msg;
+        todayEl.innerHTML = msg;
+        weekEl.innerHTML = msg;
+        if (dailyHistEl) dailyHistEl.innerHTML = msg;
+        if (weeklyHistEl) weeklyHistEl.innerHTML = msg;
+        return;
+      }
+      const today = data.today || {};
+      const week = data.current_week || {};
+      const since = data.since_epoch || {};
+      const cash = data.balance_usd != null ? price(data.balance_usd) : '—';
+      const openN = data.open_positions_count ?? '—';
+      const openExp = data.open_positions_exposure_usd != null ? price(data.open_positions_exposure_usd) : '—';
+      const cacheNote = data.cached ? ` · cache ${Number(data.cache_age_sec || 0).toFixed(0)}s` : '';
+      const ledger = data.ledger || {};
+      if (epochNote) {
+        const epochLbl = data.stats_epoch_at
+          ? `Since clean sheet #${data.clean_sheets || 0}: ${time(data.stats_epoch_at)}`
+          : `Tracking ${data.stats_epoch_label || 'all recorded history'}`;
+        epochNote.textContent = epochLbl;
+      }
+      summaryEl.innerHTML = `
+        <div class="bot-row" style="flex-wrap:wrap;gap:.65rem;margin-bottom:.35rem">
+          <div class="bot-stat" style="min-width:9rem">
+            <span class="muted" style="font-size:.62rem">Since epoch</span>
+            ${renderKalshiWindowStats(since)}
+          </div>
+          <div class="bot-stat" style="min-width:8rem">
+            <span class="muted" style="font-size:.62rem">Today (${today.label || 'ET'})</span>
+            ${renderKalshiWindowStats(today)}
+          </div>
+          <div class="bot-stat" style="min-width:10rem">
+            <span class="muted" style="font-size:.62rem">Week (${week.label || 'Sun–Sat ET'})</span>
+            ${renderKalshiWindowStats(week)}
+          </div>
+          <div class="bot-stat" style="min-width:7rem">
+            <span class="muted" style="font-size:.62rem">Cash balance</span>
+            <strong>${cash}</strong>
+          </div>
+          <div class="bot-stat" style="min-width:8rem">
+            <span class="muted" style="font-size:.62rem">Open positions</span>
+            <strong>${openN}</strong>
+            <div class="muted" style="font-size:.62rem;margin-top:.15rem">exposure ${openExp}</div>
+          </div>
+        </div>
+        <p class="muted" style="font-size:.65rem;margin:.25rem 0 0">
+          Ledger: ${ledger.closed_legs_stored ?? 0} closed legs · ${ledger.entries_stored ?? 0} buys stored
+          · Generated ${data.generated_at ? time(data.generated_at) : '—'}${cacheNote}
+        </p>`;
+      todayEl.innerHTML = renderKalshiPnlTable(today);
+      weekEl.innerHTML = renderKalshiPnlTable(week);
+      if (dailyHistEl) dailyHistEl.innerHTML = renderKalshiPnlHistoryTable(data.daily_history, 'day');
+      if (weeklyHistEl) weeklyHistEl.innerHTML = renderKalshiPnlHistoryTable(data.weekly_history, 'week');
+    }
+
+    async function loadKalshiPortfolioPnl() {
+      if (activeTab !== 'kalshi-pnl') return;
+      try {
+        const data = await getWithTimeout('/api/kalshi/portfolio-pnl', 30000);
+        if (activeTab !== 'kalshi-pnl') return;
+        renderKalshiPortfolioPnl(data);
+      } catch (e) {
+        if (activeTab !== 'kalshi-pnl') return;
+        renderKalshiPortfolioPnl({ ok: false, error: e.message });
+      }
+    }
+
+    async function kalshiPortfolioCleanSheet() {
+      if (!confirm('Start a clean sheet? Today/week/history counters reset from now. Stored Kalshi fills stay in the ledger but only activity after this moment counts.')) return;
+      try {
+        const res = await fetch('/api/kalshi/portfolio-pnl/clean-sheet', { method: 'POST', credentials: 'same-origin' });
+        if (!res.ok) throw new Error(await res.text());
+        renderKalshiPortfolioPnl(await res.json());
+      } catch (e) {
+        showError('Kalshi clean sheet: ' + e.message);
+      }
+    }
+
     async function loadSports() {
       if (activeTab !== 'sports') return;
       try {
@@ -6671,6 +6874,8 @@
         tasks.push(loadHourlyV2());
       } else if (activeTab === 'sports') {
         tasks.push(loadSports());
+      } else if (activeTab === 'kalshi-pnl') {
+        tasks.push(loadKalshiPortfolioPnl());
       }
       await Promise.all(tasks);
       } finally {
