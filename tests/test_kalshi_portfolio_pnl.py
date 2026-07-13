@@ -176,6 +176,23 @@ def test_settlement_net_pnl_matches_kalshi_ui():
   assert _settlement_net_pnl_usd(row) == -2.21
 
 
+def test_wallet_runway_kpi():
+  from src.trading.kalshi_portfolio_pnl import TARGET_WEEKLY_USD, wallet_runway_kpi
+
+  block = {
+    "label": "Sun Jul 12 – Sat Jul 18",
+    "total_pnl_usd": 100.0,
+    "closed_legs": 10,
+    "pnl_per_hour_usd": 4.0,
+    "pnl_per_leg_usd": 10.0,
+    "win_rate": 0.5,
+  }
+  kpi = wallet_runway_kpi(block)
+  assert kpi["week_pnl_usd"] == 100.0
+  assert kpi["gap_usd"] == TARGET_WEEKLY_USD - 100.0
+  assert kpi["pnl_source"] == "kalshi_wallet"
+
+
 def test_build_report_without_kalshi_auth(tmp_path):
   store = KalshiPortfolioPnlStore(tmp_path / "k.db")
 

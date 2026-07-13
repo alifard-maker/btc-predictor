@@ -829,16 +829,12 @@ class PredictionLoop:
         and kalshi.authenticated
       ):
         from src.trading.bot_performance_report import experiment_start_at
-        from src.trading.kalshi_fill_sync import summarize_kalshi_experiment_fills
+        from src.trading.kalshi_portfolio_pnl import kalshi_hourly_pnl_by_event_since
 
         start = experiment_start_at(acfg)
         if start:
-          exp["kalshi_summary"] = summarize_kalshi_experiment_fills(
-            kalshi,
-            since=start,
-            critical=True,
-            asset=asset,
-          )
+          batch = kalshi_hourly_pnl_by_event_since(kalshi, start, asset=asset)
+          exp["kalshi_summary"] = batch.get("summary")
       status["experiment_performance"] = exp
     return status
 

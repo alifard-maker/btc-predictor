@@ -30,6 +30,11 @@ ET = ZoneInfo("America/New_York")
 _REPORT_CACHE: dict[str, Any] = {"mono_at": 0.0, "payload": None, "cfg_key": None}
 _REPORT_CACHE_TTL_SEC = 110.0
 
+PNL_SOURCE_KALSHI_WALLET = "kalshi_wallet"
+PNL_SOURCE_BOT_LOG = "bot_log"
+PNL_SOURCE_KALSHI_FILLS = "kalshi_fills"
+TARGET_WEEKLY_USD = 4000.0
+
 
 def categorize_ticker(ticker: str) -> str:
   t = (ticker or "").upper()
@@ -188,6 +193,127 @@ def _settlement_entry_cost_usd(row: dict[str, Any]) -> float:
   except (TypeError, ValueError):
     return 0.0
   return round(yes_cost + no_cost, 2)
+
+
+def wallet_runway_kpi(
+  week_block: dict[str, Any],
+  *,
+  target_usd: float = TARGET_WEEKLY_USD,
+) -> dict[str, Any]:
+  """Progress vs $4k/week target from a current_week summarize block."""
+  pnl = round(float(week_block.get("total_pnl_usd") or 0), 2)
+  legs = int(week_block.get("closed_legs") or 0)
+  gap = round(float(target_usd) - pnl, 2)
+  progress = round(100.0 * pnl / float(target_usd), 1) if target_usd else None
+  return {
+    "ok": True,
+    "pnl_source": PNL_SOURCE_KALSHI_WALLET,
+    "target_weekly_usd": float(target_usd),
+    "week_pnl_usd": pnl,
+    "closed_legs": legs,
+    "pnl_per_hour_usd": week_block.get("pnl_per_hour_usd"),
+    "pnl_per_leg_usd": week_block.get("pnl_per_leg_usd"),
+    "win_rate": week_block.get("win_rate"),
+    "gap_usd": gap,
+    "progress_pct": progress,
+    "on_pace": pnl >= float(target_usd) if legs > 0 else None,
+    "label": week_block.get("label"),
+    "window_start_et": week_block.get("window_start_et"),
+    "window_end_et": week_block.get("window_end_et"),
+  }
+
+
+def closed_legs_since_epoch(
+  kalshi: KalshiClient,
+  since: datetime,
+  *,
+  asset: str | None = None,
+  fill_limit: int = 2000,
+) -> list[dict[str, Any]]:
+  """Closed wallet legs with exit on/after since (optional hourly asset filter)."""
+  from src.trading.hourly_event_time import hourly_fill_belongs_to_asset
+
+  activity = portfolio_activity_from_kalshi(kalshi, fill_limit=fill_limit)
+  since_u = _to_utc(since)
+  out: list[dict[str, Any]] = []
+  for leg in activity["closed"]:
+    exit_at = leg.get("exit_at")
+    if exit_at is None:
+      continue
+    if _to_utc(exit_at) < since_u:
+      continue
+    ticker = str(leg.get("ticker") or "")
+    if asset and not hourly_fill_belongs_to_asset(ticker, asset):
+      continue
+    out.append(leg)
+  return out
+
+
+def kalshi_hourly_pnl_by_event_since(
+  kalshi: KalshiClient,
+  since: datetime,
+  *,
+  asset: str,
+  fill_limit: int = 2000,
+) -> dict[str, Any]:
+  """Per hourly event Kalshi wallet P&L since an instant (shared with epoch reconcile)."""
+  from src.trading.hourly_event_time import canonical_hourly_event_ticker
+
+  legs = closed_legs_since_epoch(kalshi, since, asset=asset, fill_limit=fill_limit)
+  by_event: dict[str, dict[str, Any]] = {}
+  closed_pnls: list[float] = []
+  wins = 0
+  losses = 0
+  for leg in legs:
+    event = canonical_hourly_event_ticker(market_ticker_event_ticker(str(leg["ticker"])))
+    if not event:
+      continue
+    pnl = float(leg.get("pnl_usd") or 0)
+    row = by_event.setdefault(event, {"kalshi_pnl": 0.0, "kalshi_closed": 0})
+    row["kalshi_pnl"] = round(float(row["kalshi_pnl"]) + pnl, 2)
+    row["kalshi_closed"] = int(row["kalshi_closed"]) + 1
+    closed_pnls.append(pnl)
+    if pnl > 0:
+      wins += 1
+    elif pnl < 0:
+      losses += 1
+  total = round(sum(closed_pnls), 2)
+  return {
+    "ok": True,
+    "by_event": by_event,
+    "summary": {
+      "ok": True,
+      "pnl_source": PNL_SOURCE_KALSHI_WALLET,
+      "closed_trades": len(closed_pnls),
+      "total_pnl_usd": total,
+      "wins": wins,
+      "losses": losses,
+      "win_rate": round(wins / len(closed_pnls), 3) if closed_pnls else None,
+    },
+  }
+
+
+def kalshi_wallet_snapshot(
+  kalshi: KalshiClient | None,
+  cfg: dict[str, Any] | None,
+  *,
+  store: KalshiPortfolioPnlStore | None = None,
+) -> dict[str, Any]:
+  """Lightweight Kalshi wallet week KPI for embedding in other reports."""
+  if not kalshi or not kalshi.authenticated:
+    return {"ok": False, "pnl_source": PNL_SOURCE_KALSHI_WALLET, "error": "Kalshi not authenticated"}
+  report = build_kalshi_portfolio_pnl_report_cached(kalshi, cfg, store=store)
+  if not report.get("ok"):
+    return {"ok": False, "pnl_source": PNL_SOURCE_KALSHI_WALLET, "error": report.get("error")}
+  week = report.get("current_week") or {}
+  runway = wallet_runway_kpi(week)
+  return {
+    **runway,
+    "today_pnl_usd": round(float((report.get("today") or {}).get("total_pnl_usd") or 0), 2),
+    "balance_usd": report.get("balance_usd"),
+    "generated_at": report.get("generated_at"),
+    "cached": report.get("cached"),
+  }
 
 
 def portfolio_activity_from_kalshi(
@@ -390,6 +516,7 @@ def _derive_stats(
 
   return {
     "label": label,
+    "pnl_source": PNL_SOURCE_KALSHI_WALLET,
     "window_start_et": start_et.isoformat(),
     "window_end_et": end_et.isoformat(),
     "closed_legs": closed_legs,
@@ -557,8 +684,18 @@ def build_kalshi_portfolio_pnl_report(
     else "all recorded history"
   )
 
+  week_block = summarize_window(
+    closed,
+    entries,
+    start_et=week_start,
+    end_et=week_end,
+    label=week_label,
+    now_et=now_et,
+  )
+
   return {
     "ok": True,
+    "pnl_source": PNL_SOURCE_KALSHI_WALLET,
     "generated_at": now_utc.isoformat(),
     "timezone": str(ET),
     "balance_usd": kalshi.balance_usd_from_cents(balance_cents),
@@ -599,14 +736,8 @@ def build_kalshi_portfolio_pnl_report(
       label=day_label,
       now_et=now_et,
     ),
-    "current_week": summarize_window(
-      closed,
-      entries,
-      start_et=week_start,
-      end_et=week_end,
-      label=week_label,
-      now_et=now_et,
-    ),
+    "current_week": week_block,
+    "week_runway": wallet_runway_kpi(week_block),
     "daily_history": build_daily_history(closed, entries, now_et=now_et),
     "weekly_history": build_weekly_history(closed, entries, now_et=now_et),
   }

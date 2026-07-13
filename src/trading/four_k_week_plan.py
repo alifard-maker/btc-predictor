@@ -161,8 +161,12 @@ def _slot15_eth_lane(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def build_four_k_week_plan_report(loop: Any, cfg: dict[str, Any] | None) -> dict[str, Any]:
+  from src.trading.kalshi_portfolio_pnl import kalshi_wallet_snapshot, kalshi_portfolio_pnl_store
+
   plan = four_k_week_plan_cfg(cfg)
   week = int(plan.get("week", 1))
+  kalshi = getattr(loop, "kalshi", None)
+  kalshi_wallet = kalshi_wallet_snapshot(kalshi, cfg, store=kalshi_portfolio_pnl_store(cfg))
   try:
     track_b = summarize_track_b_shadow(cfg, asset="eth")
     lanes = {
@@ -207,6 +211,7 @@ def build_four_k_week_plan_report(loop: Any, cfg: dict[str, Any] | None) -> dict
     "started_at": plan_started_at_iso(cfg),
     "week_config": week_targets.get(week, week_targets[1]),
     "gates": gates_week_1 if week == 1 else None,
+    "kalshi_wallet": kalshi_wallet,
     "lanes": lanes,
     "track_b_epoch_at": track_b_epoch_iso(cfg),
     "probe_stats_epoch_at": probe_stats_epoch_iso(cfg),

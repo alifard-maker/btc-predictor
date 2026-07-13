@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from src.trading.kalshi_portfolio_pnl import PNL_SOURCE_BOT_LOG
+
 from src.trading.entry_strategy import EntryStrategyConfig
 from src.trading.stake_cap_utilization import compute_stake_cap_utilization
 
@@ -475,6 +477,7 @@ def _summary(rows: list[dict[str, Any]], enters: list[dict[str, Any]]) -> dict[s
       "avg_pnl_usd": None,
       "total_entered_usd": round(sum(float(e.get("cost_usd") or 0) for e in enters), 2),
       "roi_on_deployed_pct": None,
+      "pnl_source": PNL_SOURCE_BOT_LOG,
     }
   pnls = [float(r["pnl_usd"]) for r in rows]
   wins = sum(1 for p in pnls if p > 0)
@@ -490,6 +493,7 @@ def _summary(rows: list[dict[str, Any]], enters: list[dict[str, Any]]) -> dict[s
     "avg_pnl_usd": round(total_pnl / n, 2),
     "total_entered_usd": round(sum(float(e.get("cost_usd") or 0) for e in enters), 2),
     "roi_on_closed_cost_pct": round(total_pnl / deployed * 100, 2) if deployed > 0 else None,
+    "pnl_source": PNL_SOURCE_BOT_LOG,
   }
 
 
@@ -608,6 +612,7 @@ def build_combined_report(bot_reports: list[dict[str, Any]]) -> dict[str, Any]:
     "closed_trades": closed,
     "total_pnl_usd": pnl,
     "win_rate": round(wins / closed, 3) if closed else None,
+    "pnl_source": PNL_SOURCE_BOT_LOG,
   }
 
 
@@ -807,8 +812,30 @@ def _build_all_bots_performance_report_uncached(loop: Any) -> dict[str, Any]:
   combined_rolling = _combined_rolling_all(main_reports)
   combined_rolling_trial = _combined_rolling_all(trial_reports) if trial_reports else {}
 
+  kalshi_wallet: dict[str, Any] = {"ok": False}
+  try:
+    from src.trading.kalshi_portfolio_pnl import kalshi_wallet_snapshot, kalshi_portfolio_pnl_store
+
+    kalshi_wallet = kalshi_wallet_snapshot(
+      getattr(loop, "kalshi", None),
+      loop.cfg,
+      store=kalshi_portfolio_pnl_store(loop.cfg),
+    )
+  except Exception:
+    pass
+
+  from src.trading.bot_auto_tuning import audit_all_auto_tuning
+
+  tuning_audit = audit_all_auto_tuning(reports, kalshi_wallet)
+
   return {
     "ok": True,
+    "pnl_sources": {
+      "bot": PNL_SOURCE_BOT_LOG,
+      "kalshi_wallet": "kalshi_wallet",
+    },
+    "kalshi_wallet": kalshi_wallet,
+    "tuning_audit": tuning_audit,
     "generated_at": datetime.now(timezone.utc).isoformat(),
     "bots": reports,
     "main_bots": main_reports,

@@ -210,6 +210,38 @@
       min-height:1.05rem;
       line-height:1.25;
     }
+    .pnl-src {
+      display:inline-block;
+      font-size:.58rem;
+      font-weight:600;
+      letter-spacing:.03em;
+      text-transform:uppercase;
+      padding:.08rem .35rem;
+      border-radius:4px;
+      margin-left:.25rem;
+      vertical-align:middle;
+      white-space:nowrap;
+    }
+    .pnl-src-kalshi { background:rgba(34,197,94,.18); color:#86efac; border:1px solid rgba(34,197,94,.35); }
+    .pnl-src-kalshi-fills { background:rgba(59,130,246,.15); color:#93c5fd; border:1px solid rgba(59,130,246,.3); }
+    .pnl-src-bot { background:rgba(148,163,184,.12); color:#cbd5e1; border:1px solid rgba(148,163,184,.25); }
+    .pnl-with-src { display:inline-flex; align-items:center; flex-wrap:wrap; gap:.15rem; }
+    .kalshi-runway-card {
+      margin:.5rem 0 .65rem;
+      padding:.55rem .65rem;
+      border:1px solid rgba(34,197,94,.35);
+      border-radius:8px;
+      background:rgba(34,197,94,.08);
+    }
+    .tuning-audit-warn {
+      margin:.45rem 0;
+      padding:.45rem .55rem;
+      border-radius:6px;
+      background:rgba(251,191,36,.12);
+      border:1px solid rgba(251,191,36,.35);
+      color:#fde68a;
+      font-size:.72rem;
+    }
     .switch { position:relative; display:inline-block; width:44px; height:24px; vertical-align:middle; }
     .switch input { opacity:0; width:0; height:0; }
     .switch .slider { position:absolute; cursor:pointer; inset:0; background:#334155; border-radius:24px; transition:.2s; }
@@ -3548,17 +3580,18 @@
         const kpnl = Number(ks.total_pnl_usd ?? 0);
         const kCls = kpnl > 0 ? 'up' : kpnl < 0 ? 'down' : 'muted';
         const kwr = ks.win_rate != null ? `${(ks.win_rate * 100).toFixed(0)}%` : '—';
-        kalshiRow = `<div class="bot-stat"><span class="muted" title="Paired buy+sell fills from Kalshi API since experiment start">Kalshi fills P&amp;L</span><strong class="${kCls}">${kpnl >= 0 ? '+' : ''}$${kpnl.toFixed(2)}</strong><span class="muted" style="font-size:.6rem;display:block">${ks.closed_trades ?? 0} closed · ${kwr} WR</span></div>`;
+        const kSrc = ks.pnl_source || 'kalshi_wallet';
+        kalshiRow = `<div class="bot-stat"><span class="muted" title="Kalshi wallet P&amp;L since experiment start (settlement-net)">Kalshi wallet P&amp;L ${pnlSourceBadge(kSrc)}</span><strong class="${kCls}">${kpnl >= 0 ? '+' : ''}$${kpnl.toFixed(2)}</strong><span class="muted" style="font-size:.6rem;display:block">${ks.closed_trades ?? 0} closed · ${kwr} WR</span></div>`;
       }
       return `
         <div class="bot-row" style="margin:.35rem 0;padding:.45rem .55rem;background:rgba(99,102,241,.12);border:1px solid rgba(99,102,241,.28);border-radius:8px">
           <p class="muted" style="font-size:.64rem;margin:0 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Experiment since ${start} EDT</p>
-          <div class="bot-stat"><span class="muted" title="Bot DB closed round-trips since experiment anchor">Bot log P&amp;L</span><strong class="${pnlCls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</strong></div>
+          <div class="bot-stat"><span class="muted" title="Bot DB closed round-trips since experiment anchor">Bot log P&amp;L ${pnlSourceBadge(sm.pnl_source || 'bot_log')}</span><strong class="${pnlCls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</strong></div>
           ${kalshiRow}
           <div class="bot-stat"><span class="muted">Bot log closed</span><strong>${sm.closed_trades ?? 0}</strong></div>
           <div class="bot-stat"><span class="muted">Bot log win rate</span><strong>${wr}</strong></div>
           <div class="bot-stat"><span class="muted">W / L</span><strong>${sm.wins ?? 0} / ${sm.losses ?? 0}</strong></div>
-          <p class="muted" style="font-size:.6rem;margin:.35rem 0 0;line-height:1.4">${modeNote} Kalshi row is exchange fill history — use it when the bot log lags.</p>
+          <p class="muted" style="font-size:.6rem;margin:.35rem 0 0;line-height:1.4">${modeNote} <strong>Kalshi wallet</strong> = exchange truth; <strong>Bot log</strong> = strategy DB (can drift).</p>
         </div>`;
     }
 
@@ -3705,11 +3738,24 @@
       return botCents(bid != null ? bid : ask);
     }
 
-    function botPnlUsd(v) {
+    function pnlSourceBadge(source) {
+      const s = String(source || 'bot_log');
+      if (s === 'kalshi_wallet') {
+        return '<span class="pnl-src pnl-src-kalshi" title="Kalshi API fills + settlements (wallet truth)">Kalshi wallet</span>';
+      }
+      if (s === 'kalshi_fills') {
+        return '<span class="pnl-src pnl-src-kalshi-fills" title="Kalshi fill pairing since experiment epoch">Kalshi fills</span>';
+      }
+      return '<span class="pnl-src pnl-src-bot" title="Bot SQLite trade log">Bot log</span>';
+    }
+
+    function botPnlUsd(v, source) {
       if (v == null || v === '') return '—';
       const n = Number(v);
       const cls = n > 0 ? 'up' : n < 0 ? 'down' : 'muted';
-      return `<span class="${cls}">${n >= 0 ? '+' : ''}$${n.toFixed(2)}</span>`;
+      const amt = `<span class="${cls}">${n >= 0 ? '+' : ''}$${n.toFixed(2)}</span>`;
+      if (!source) return amt;
+      return `<span class="pnl-with-src">${amt}${pnlSourceBadge(source)}</span>`;
     }
 
     function botModeBadge(mode) {
@@ -4534,17 +4580,31 @@
         ['last_48h', 'Last 48h'],
       ];
       const combWr = combined.win_rate != null ? `${(combined.win_rate * 100).toFixed(0)}%` : '—';
-      const combPnl = combined.total_pnl_usd != null ? botPnlUsd(combined.total_pnl_usd) : '—';
+      const combPnl = combined.total_pnl_usd != null ? botPnlUsd(combined.total_pnl_usd, combined.pnl_source || 'bot_log') : '—';
       const comb60Wr = combined60.win_rate != null ? `${(combined60.win_rate * 100).toFixed(0)}%` : '—';
-      const comb60Pnl = combined60.total_pnl_usd != null ? botPnlUsd(combined60.total_pnl_usd) : '—';
+      const comb60Pnl = combined60.total_pnl_usd != null ? botPnlUsd(combined60.total_pnl_usd, combined60.pnl_source || 'bot_log') : '—';
       const trialWr = combinedTrial.win_rate != null ? `${(combinedTrial.win_rate * 100).toFixed(0)}%` : '—';
-      const trialPnl = combinedTrial.total_pnl_usd != null ? botPnlUsd(combinedTrial.total_pnl_usd) : '—';
+      const trialPnl = combinedTrial.total_pnl_usd != null ? botPnlUsd(combinedTrial.total_pnl_usd, combinedTrial.pnl_source || 'bot_log') : '—';
+      const kw = report.kalshi_wallet || {};
+      const tuningAudit = report.tuning_audit || {};
+      const kwHeader = kw.ok ? `<div class="kalshi-runway-card" style="margin-bottom:.55rem">
+        <p class="muted" style="font-size:.64rem;margin:0 0 .35rem">Kalshi wallet (truth) ${pnlSourceBadge('kalshi_wallet')} · ${kw.label || 'current week'}</p>
+        <div class="bot-row" style="flex-wrap:wrap;gap:.5rem;margin:0">
+          <div class="bot-stat"><span class="muted">Week P&amp;L</span><strong>${botPnlUsd(kw.week_pnl_usd)}</strong></div>
+          <div class="bot-stat"><span class="muted">Legs</span><strong>${kw.closed_legs ?? 0}</strong></div>
+          <div class="bot-stat"><span class="muted">$/h</span><strong>${kw.pnl_per_hour_usd != null ? botPnlUsd(kw.pnl_per_hour_usd) : '—'}</strong></div>
+          <div class="bot-stat"><span class="muted">$4k runway</span><strong>${kw.progress_pct != null ? `${kw.progress_pct}%` : '—'}</strong></div>
+        </div>
+      </div>` : '';
+      const tuneWarn = (tuningAudit.warnings || []).length
+        ? `<div class="tuning-audit-warn"><strong>Auto-tune vs wallet:</strong> ${tuningAudit.warnings.join(' · ')}</div>`
+        : '';
       const rollLine = (label, block) => {
         const sm = block || {};
         const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
         const losses = sm.loss_count != null ? sm.loss_count : '—';
         const lossUsd = sm.loss_pnl_usd != null ? botPnlUsd(sm.loss_pnl_usd) : '—';
-        return `<div class="perf-stat muted">${label}<strong>${sm.closed_trades ?? 0} exits</strong><span style="display:block;font-size:.62rem;margin-top:.15rem">WR ${wr} · net ${botPnlUsd(sm.total_pnl_usd)} · ${losses} losses ${lossUsd}</span></div>`;
+        return `<div class="perf-stat muted">${label}<strong>${sm.closed_trades ?? 0} exits</strong><span style="display:block;font-size:.62rem;margin-top:.15rem">WR ${wr} · net ${botPnlUsd(sm.total_pnl_usd, sm.pnl_source || 'bot_log')} · ${losses} losses ${lossUsd}</span></div>`;
       };
       const rollingGrid = (blocks) => rollingKeys.map(([key, label]) => rollLine(label, blocks[key])).join('');
       const experimentBots = report.experiment_bots || [];
@@ -4553,7 +4613,7 @@
         const rows = experimentBots.map((b) => {
           const sm = b.summary || {};
           const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
-          return `<tr><td>${b.label || b.kind}</td><td>${sm.closed_trades ?? 0}</td><td>${wr}</td><td>${botPnlUsd(sm.total_pnl_usd)}</td></tr>`;
+          return `<tr><td>${b.label || b.kind}</td><td>${sm.closed_trades ?? 0}</td><td>${wr}</td><td>${botPnlUsd(sm.total_pnl_usd, sm.pnl_source || 'bot_log')}</td></tr>`;
         }).join('');
         const startLabel = report.experiment_start_at
           ? new Date(report.experiment_start_at).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -4565,16 +4625,16 @@
       const scopeNote = scope
         ? `<p class="muted" style="font-size:.68rem;margin:0 0 .5rem">Showing <strong>${scope.label}</strong> only (matches active tab). Rolling windows use the <strong>full trade log</strong> — use the experiment table or Fresh start on the bot card to focus on the current code era.</p>`
         : `<p class="muted" style="font-size:.68rem;margin:0 0 .5rem">All paper bots. Switch to a product tab (BTC Hourly, ETH Hourly, 15m) to filter this report.</p>`;
-      let html = `${scopeNote}${experimentHtml}<div class="perf-grid">
+      let html = `${kwHeader}${tuneWarn}${scopeNote}${experimentHtml}<div class="perf-grid">
         <div class="perf-stat muted">Main bots closed trades<strong>${combined.closed_trades ?? 0}</strong></div>
         <div class="perf-stat muted">Main win rate<strong>${combWr}</strong></div>
-        <div class="perf-stat muted">Main realized P&amp;L<strong>${combPnl}</strong></div>
+        <div class="perf-stat muted">Main realized P&amp;L ${pnlSourceBadge('bot_log')}<strong>${combPnl}</strong></div>
       </div>
       <p class="muted" style="font-size:.68rem;margin:.5rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Rolling windows — main bots (ending now)</p>
       <div class="perf-grid">
         ${rollingGrid(combinedRolling)}
       </div>
-      <p class="muted" style="font-size:.62rem;margin:.15rem 0 .35rem">Prior 4h (shifted: ended 1h ago, excludes last hour): ${combined4h.closed_trades ?? 0} exits · ${combined4h.win_rate != null ? `${(combined4h.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(combined4h.total_pnl_usd)}</p>
+      <p class="muted" style="font-size:.62rem;margin:.15rem 0 .35rem">Prior 4h (shifted: ended 1h ago, excludes last hour): ${combined4h.closed_trades ?? 0} exits · ${combined4h.win_rate != null ? `${(combined4h.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(combined4h.total_pnl_usd, 'bot_log')}</p>
       <p class="muted" style="font-size:.68rem;margin:.5rem 0 .35rem;text-transform:uppercase;letter-spacing:.04em">Last 60 days — main bots</p>
       <div class="perf-grid">
         <div class="perf-stat muted">60d closed<strong>${combined60.closed_trades ?? 0}</strong></div>
@@ -4591,14 +4651,14 @@
         <div class="perf-grid" style="margin-top:.35rem">
           ${rollingGrid(combinedTrialRolling)}
         </div>
-        <p class="muted" style="font-size:.62rem;margin:.2rem 0 .35rem">Trial 60d: ${combinedTrial60.closed_trades ?? 0} closed · ${combinedTrial60.win_rate != null ? `${(combinedTrial60.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(combinedTrial60.total_pnl_usd)}</p>`;
+        <p class="muted" style="font-size:.62rem;margin:.2rem 0 .35rem">Trial 60d: ${combinedTrial60.closed_trades ?? 0} closed · ${combinedTrial60.win_rate != null ? `${(combinedTrial60.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(combinedTrial60.total_pnl_usd, 'bot_log')}</p>`;
       }
 
       const modeTable = (title, byMode) => {
         if (!byMode || !Object.keys(byMode).length) return '';
         const body = Object.entries(byMode).map(([mode, sm]) => {
           const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
-          return `<tr><td>${mode}</td><td>${sm.closed_trades ?? 0}</td><td>${wr}</td><td>${botPnlUsd(sm.total_pnl_usd)}</td><td>${sm.max_drawdown_usd != null ? botPnlUsd(sm.max_drawdown_usd) : '—'}</td></tr>`;
+          return `<tr><td>${mode}</td><td>${sm.closed_trades ?? 0}</td><td>${wr}</td><td>${botPnlUsd(sm.total_pnl_usd, 'bot_log')}</td><td>${sm.max_drawdown_usd != null ? botPnlUsd(sm.max_drawdown_usd, 'bot_log') : '—'}</td></tr>`;
         }).join('');
         return `<p class="muted" style="font-size:.68rem;margin:.45rem 0 .25rem;text-transform:uppercase;letter-spacing:.04em">${title}</p>
           <table style="width:100%;font-size:.72rem;margin-bottom:.5rem"><thead><tr><th>Mode</th><th>n</th><th>Win%</th><th>P&amp;L</th><th>Max DD</th></tr></thead><tbody>${body}</tbody></table>`;
@@ -4608,8 +4668,8 @@
         if (!rows || !rows.length) return '';
         const body = rows.map((r) => {
           const wr = r.win_rate != null ? `${(r.win_rate * 100).toFixed(0)}%` : '—';
-          const avg = r.avg_pnl_usd != null ? botPnlUsd(r.avg_pnl_usd) : '—';
-          return `<tr><td>${r.bucket}</td><td>${r.trades}</td><td>${wr}</td><td>${avg}</td><td>${botPnlUsd(r.total_pnl_usd)}</td></tr>`;
+          const avg = r.avg_pnl_usd != null ? botPnlUsd(r.avg_pnl_usd, 'bot_log') : '—';
+          return `<tr><td>${r.bucket}</td><td>${r.trades}</td><td>${wr}</td><td>${avg}</td><td>${botPnlUsd(r.total_pnl_usd, 'bot_log')}</td></tr>`;
         }).join('');
         return `<p class="muted" style="font-size:.68rem;margin:.45rem 0 .25rem;text-transform:uppercase;letter-spacing:.04em">${title}</p>
           <table style="width:100%;font-size:.72rem;margin-bottom:.5rem"><thead><tr><th>Bucket</th><th>n</th><th>Win%</th><th>Avg P&amp;L</th><th>Total</th></tr></thead><tbody>${body}</tbody></table>`;
@@ -4631,12 +4691,12 @@
           const sm = (rw[key] || (key === 'last_1h' ? bot.last_60_min : null))?.summary;
           if (!sm || !sm.closed_trades) return `${label}: —`;
           const wr = sm.win_rate != null ? `${(sm.win_rate * 100).toFixed(0)}%` : '—';
-          return `${label}: ${sm.closed_trades} exits · ${wr} WR · ${botPnlUsd(sm.total_pnl_usd)}`;
+          return `${label}: ${sm.closed_trades} exits · ${wr} WR · ${botPnlUsd(sm.total_pnl_usd, 'bot_log')}`;
         };
         const rollLine = rollingKeys.map(([key, label]) => rollBot(key, label)).join(' · ');
         const r4h = bot.prior_4h?.summary || {};
         const prior4h = r4h.closed_trades
-          ? `Prior 4h (shifted): ${r4h.closed_trades} exits · ${r4h.win_rate != null ? `${(r4h.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(r4h.total_pnl_usd)}`
+          ? `Prior 4h (shifted): ${r4h.closed_trades} exits · ${r4h.win_rate != null ? `${(r4h.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(r4h.total_pnl_usd, 'bot_log')}`
           : '';
         const isTrial = isHourlyTrialKind(bot.kind);
         html += `<div class="perf-bot-block"${isTrial ? ' style="opacity:.92;border-left:2px solid var(--muted,#888)"' : ''}>
@@ -4646,10 +4706,10 @@
           <div class="perf-grid">
             <div class="perf-stat muted">Closed<strong>${sm.closed_trades ?? 0}</strong></div>
             <div class="perf-stat muted">Win rate<strong>${wr}</strong></div>
-            <div class="perf-stat muted">Realized P&amp;L<strong>${botPnlUsd(sm.total_pnl_usd)}</strong></div>
-            <div class="perf-stat muted">Avg / trade<strong>${sm.avg_pnl_usd != null ? botPnlUsd(sm.avg_pnl_usd) : '—'}</strong></div>
+            <div class="perf-stat muted">Realized P&amp;L ${pnlSourceBadge('bot_log')}<strong>${botPnlUsd(sm.total_pnl_usd, 'bot_log')}</strong></div>
+            <div class="perf-stat muted">Avg / trade<strong>${sm.avg_pnl_usd != null ? botPnlUsd(sm.avg_pnl_usd, 'bot_log') : '—'}</strong></div>
           </div>
-          <p class="muted" style="font-size:.68rem;margin:.35rem 0 .2rem"><strong>60d:</strong> ${sm60.closed_trades ?? 0} closed · ${sm60.win_rate != null ? `${(sm60.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(sm60.total_pnl_usd)}${sm60.max_drawdown_usd != null ? ` · max DD ${botPnlUsd(sm60.max_drawdown_usd)}` : ''}</p>
+          <p class="muted" style="font-size:.68rem;margin:.35rem 0 .2rem"><strong>60d:</strong> ${sm60.closed_trades ?? 0} closed · ${sm60.win_rate != null ? `${(sm60.win_rate * 100).toFixed(0)}%` : '—'} WR · ${botPnlUsd(sm60.total_pnl_usd, 'bot_log')}${sm60.max_drawdown_usd != null ? ` · max DD ${botPnlUsd(sm60.max_drawdown_usd, 'bot_log')}` : ''}</p>
           <p class="muted" style="font-size:.68rem;margin:.2rem 0 .35rem;line-height:1.45"><strong>Rolling:</strong> ${rollLine}${prior4h ? ` · ${prior4h}` : ''}</p>
           ${modeTable('60d by entry mode (free vs filtered)', w60.by_free_mode)}
           ${bucketTable('By entry price', bot.by_entry_price)}
@@ -4735,8 +4795,8 @@
         const driftCls = (r.drift || 0) > 0.01 ? 'pos' : ((r.drift || 0) < -0.01 ? 'neg' : 'muted');
         return `<tr>
           <td><code style="font-size:.68rem">${r.event_ticker}</code></td>
-          <td>${botPnlUsd(r.bot_pnl)}</td>
-          <td>${botPnlUsd(r.kalshi_pnl)}</td>
+          <td>${botPnlUsd(r.bot_pnl, 'bot_log')}</td>
+          <td>${botPnlUsd(r.kalshi_pnl, 'kalshi_wallet')}</td>
           <td class="${driftCls}">${botPnlUsd(r.drift)}</td>
           <td class="muted">${r.bot_trades ?? 0}</td>
           <td class="muted">${r.kalshi_closed ?? 0}</td>
@@ -4744,8 +4804,8 @@
       }).join('');
       el.innerHTML = `<p class="muted" style="font-size:.68rem;margin:0 0 .45rem">Since ${startLabel} EDT · ${String(data.asset || '').toUpperCase()}</p>
         <div class="perf-grid" style="margin-bottom:.55rem">
-          <div class="perf-stat muted">Bot total<strong>${botPnlUsd(totals.bot_pnl)}</strong></div>
-          <div class="perf-stat muted">Kalshi total<strong>${botPnlUsd(totals.kalshi_pnl)}</strong></div>
+          <div class="perf-stat muted">Bot total ${pnlSourceBadge(totals.bot_pnl_source || 'bot_log')}<strong>${botPnlUsd(totals.bot_pnl)}</strong></div>
+          <div class="perf-stat muted">Kalshi total ${pnlSourceBadge(totals.kalshi_pnl_source || 'kalshi_wallet')}<strong>${botPnlUsd(totals.kalshi_pnl)}</strong></div>
           <div class="perf-stat muted">Drift<strong>${botPnlUsd(totals.drift)}</strong></div>
         </div>
         <table class="compare-mini-table" style="width:100%">
@@ -4753,7 +4813,8 @@
             <th>Event</th><th>Bot P&amp;L</th><th>Kalshi P&amp;L</th><th>Drift</th><th>Bot exits</th><th>Kalshi closed</th>
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="6" class="muted">No closed trades since epoch.</td></tr>'}</tbody>
-        </table>`;
+        </table>
+        <p class="muted" style="font-size:.62rem;margin:.35rem 0 0">${totals.note || ''}</p>`;
       renderEpochReconcileReport._lastHtml = el.innerHTML;
     }
 
@@ -4968,12 +5029,13 @@
       const tb = lanes.track_b_shadow || {};
       const s15 = lanes.slot15_eth || {};
       const wc = data.week_config || {};
+      const kw = data.kalshi_wallet || {};
       const fmtPnl = (v) => v == null ? '—' : `${Number(v) >= 0 ? '+' : ''}$${Number(v).toFixed(2)}`;
       const fmtEpoch = (iso) => iso ? time(iso) : '—';
 
-      const laneRow = (label, pnl, detail, cls) => `
+      const laneRow = (label, pnl, detail, cls, source) => `
         <div class="bot-stat" style="min-width:9rem">
-          <span class="muted" style="font-size:.62rem">${label}</span>
+          <span class="muted" style="font-size:.62rem">${label} ${source ? pnlSourceBadge(source) : ''}</span>
           <strong class="${cls || (Number(pnl) >= 0 ? 'up' : 'down')}">${fmtPnl(pnl)}</strong>
           <div class="muted" style="font-size:.62rem;margin-top:.15rem">${detail}</div>
         </div>`;
@@ -4982,12 +5044,30 @@
         ? '<span class="up">promotion gate met (shadow)</span>'
         : `<span class="muted">shadow collecting · need ${tb.promotion?.min_events ?? 50} events / ${tb.promotion?.min_median_edge_cents_final_10m ?? 8}¢ median</span>`;
 
+      const runwayHtml = kw.ok ? (() => {
+        const gap = Number(kw.gap_usd ?? 0);
+        const prog = kw.progress_pct != null ? `${kw.progress_pct}%` : '—';
+        const perHr = kw.pnl_per_hour_usd != null ? `${Number(kw.pnl_per_hour_usd) >= 0 ? '+' : ''}$${Number(kw.pnl_per_hour_usd).toFixed(2)}/h` : '—';
+        const gapCls = gap <= 0 ? 'up' : 'down';
+        return `<div class="kalshi-runway-card">
+          <p class="muted" style="font-size:.64rem;margin:0 0 .35rem;text-transform:uppercase;letter-spacing:.04em">$4k/week runway · Kalshi wallet ${pnlSourceBadge('kalshi_wallet')}</p>
+          <div class="bot-row" style="flex-wrap:wrap;gap:.65rem;margin:0">
+            <div class="bot-stat"><span class="muted" style="font-size:.62rem">Week P&amp;L</span><strong class="${Number(kw.week_pnl_usd) >= 0 ? 'up' : 'down'}">${fmtPnl(kw.week_pnl_usd)}</strong></div>
+            <div class="bot-stat"><span class="muted" style="font-size:.62rem">Legs</span><strong>${kw.closed_legs ?? 0}</strong></div>
+            <div class="bot-stat"><span class="muted" style="font-size:.62rem">$/h</span><strong>${perHr}</strong></div>
+            <div class="bot-stat"><span class="muted" style="font-size:.62rem">vs $${Number(kw.target_weekly_usd || 4000).toLocaleString()} target</span><strong class="${gapCls}">${prog} · ${gap <= 0 ? 'ahead' : 'behind'} $${Math.abs(gap).toFixed(0)}</strong></div>
+          </div>
+          <p class="muted" style="font-size:.62rem;margin:.35rem 0 0">${kw.label || 'Current ET week'} · today ${fmtPnl(kw.today_pnl_usd)}</p>
+        </div>`;
+      })() : '<p class="muted" style="font-size:.68rem">Kalshi wallet week KPI unavailable.</p>';
+
       el.innerHTML = `
+        ${runwayHtml}
         <div class="bot-row" style="flex-wrap:wrap;gap:.5rem;margin-bottom:.45rem">
-          ${laneRow('Track A · ETH live', ta.live?.net_pnl_usd, `epoch ${fmtEpoch(ta.stats_epoch_at)} · matched ${ta.live?.matched_hours ?? 0}h`, '')}
-          ${laneRow('Track A · ETH trial', ta.trial?.net_pnl_usd, `probe ${ta.probe_24h?.min_ask_edge_cents ?? 18}¢ · ≤${ta.probe_24h?.max_filled_enters_per_hour ?? 2}/h`, '')}
-          ${laneRow('Track B · shadow', tb.shadow_would_pnl_usd, `events ${tb.events_logged ?? 0} · median ${tb.median_edge_cents != null ? tb.median_edge_cents + '¢' : '—'} · ${promo}`, Number(tb.shadow_would_pnl_usd) >= 0 ? 'up' : 'down')}
-          ${laneRow('Slot15 · ETH paper', s15.net_pnl_usd, `epoch ${fmtEpoch(s15.stats_epoch_at)} · slots ${s15.periods_with_entries ?? 0} · ${s15.enabled ? 'ON' : 'OFF'}`, '')}
+          ${laneRow('Track A · ETH live', ta.live?.net_pnl_usd, `epoch ${fmtEpoch(ta.stats_epoch_at)} · matched ${ta.live?.matched_hours ?? 0}h`, '', 'bot_log')}
+          ${laneRow('Track A · ETH trial', ta.trial?.net_pnl_usd, `probe ${ta.probe_24h?.min_ask_edge_cents ?? 18}¢ · ≤${ta.probe_24h?.max_filled_enters_per_hour ?? 2}/h`, '', 'bot_log')}
+          ${laneRow('Track B · shadow', tb.shadow_would_pnl_usd, `events ${tb.events_logged ?? 0} · median ${tb.median_edge_cents != null ? tb.median_edge_cents + '¢' : '—'} · ${promo}`, Number(tb.shadow_would_pnl_usd) >= 0 ? 'up' : 'down', 'bot_log')}
+          ${laneRow('Slot15 · ETH paper', s15.net_pnl_usd, `epoch ${fmtEpoch(s15.stats_epoch_at)} · slots ${s15.periods_with_entries ?? 0} · ${s15.enabled ? 'ON' : 'OFF'}`, '', 'bot_log')}
         </div>
         <p class="muted" style="font-size:.68rem;margin:.25rem 0 0">
           Week ${data.week} targets: $${wc.hour_cap_usd ?? 15}/h cap · $${wc.stake_usd ?? 2.5} stake · ${wc.max_enters_per_hour ?? 2} enters/h · ${wc.min_edge_cents ?? 18}¢ edge · capital ${wc.capital_usd || '200–500'} · target ${wc.target_weekly_usd || '25–75'}/wk.
@@ -6674,7 +6754,7 @@
       }).join('');
       return `<table class="data-table" style="width:100%;font-size:.78rem">
         <thead><tr>
-          <th>Category</th><th>P&amp;L</th><th>Legs</th><th>Win rate</th>
+          <th>Category</th><th>P&amp;L ${pnlSourceBadge('kalshi_wallet')}</th><th>Legs</th><th>Win rate</th>
         </tr></thead>
         <tbody>${rows}${renderKalshiPnlTotalRow(block)}</tbody>
       </table>${kalshiPnlSportsFootnote(block)}`;
@@ -6734,7 +6814,7 @@
       }).join('');
       return `<table class="data-table" style="width:100%;font-size:.78rem">
         <thead><tr>
-          <th>${kind === 'day' ? 'Day' : 'Week'}</th><th title="Entry stake on legs closed in this period">Entry $</th><th>P&amp;L</th><th>Legs</th><th>$/leg</th><th>$/h</th><th>ROI</th><th>Win rate</th>
+          <th>${kind === 'day' ? 'Day' : 'Week'}</th><th title="Entry stake on legs closed in this period">Entry $</th><th>P&amp;L ${pnlSourceBadge('kalshi_wallet')}</th><th>Legs</th><th>$/leg</th><th>$/h</th><th>ROI</th><th>Win rate</th>
         </tr></thead>
         <tbody>${body}${renderKalshiPnlHistoryTotalRow(rows)}</tbody>
       </table>`;
@@ -6746,8 +6826,9 @@
       const perLeg = block?.pnl_per_leg_usd != null ? signedPrice(block.pnl_per_leg_usd) : '—';
       const perHr = block?.pnl_per_hour_usd != null ? signedPrice(block.pnl_per_hour_usd) : '—';
       const roi = block?.roi_pct != null ? `${block.roi_pct}%` : '—';
+      const src = block?.pnl_source || 'kalshi_wallet';
       return `
-        <strong class="${pnl >= 0 ? 'up' : 'down'}">${signedPrice(pnl)}</strong>
+        <strong class="${pnl >= 0 ? 'up' : 'down'}">${signedPrice(pnl)}</strong> ${pnlSourceBadge(src)}
         <div class="muted kalshi-pnl-sub">entry ${price(invested)} on closed legs · ${block?.closed_legs ?? 0} legs</div>
         <div class="muted kalshi-pnl-sub">${perLeg}/leg · ${perHr}/h · ROI ${roi}</div>`;
     }
@@ -6789,7 +6870,24 @@
           : `Tracking ${data.stats_epoch_label || 'all recorded history'}`;
         epochNote.textContent = epochLbl;
       }
+      const weekRunway = data.week_runway || {};
+      const runwayRow = weekRunway.ok ? (() => {
+        const gap = Number(weekRunway.gap_usd ?? 0);
+        const prog = weekRunway.progress_pct != null ? `${weekRunway.progress_pct}%` : '—';
+        const perHr = weekRunway.pnl_per_hour_usd != null ? signedPrice(weekRunway.pnl_per_hour_usd) : '—';
+        const gapCls = gap <= 0 ? 'up' : 'down';
+        return `<div class="kalshi-runway-card" style="margin-bottom:.5rem">
+          <p class="muted" style="font-size:.64rem;margin:0 0 .35rem;text-transform:uppercase;letter-spacing:.04em">$4k/week runway ${pnlSourceBadge('kalshi_wallet')}</p>
+          <div class="bot-row" style="flex-wrap:wrap;gap:.5rem;margin:0">
+            <div class="bot-stat"><span class="muted" style="font-size:.62rem">Week P&amp;L</span><strong class="${Number(weekRunway.week_pnl_usd) >= 0 ? 'up' : 'down'}">${signedPrice(weekRunway.week_pnl_usd)}</strong></div>
+            <div class="bot-stat"><span class="muted" style="font-size:.62rem">Legs</span><strong>${weekRunway.closed_legs ?? 0}</strong></div>
+            <div class="bot-stat"><span class="muted" style="font-size:.62rem">$/h</span><strong>${perHr}</strong></div>
+            <div class="bot-stat"><span class="muted" style="font-size:.62rem">vs $4k target</span><strong class="${gapCls}">${prog} · ${gap <= 0 ? 'ahead' : 'behind'} $${Math.abs(gap).toFixed(0)}</strong></div>
+          </div>
+        </div>`;
+      })() : '';
       summaryEl.innerHTML = `
+        ${runwayRow}
         <div class="kalshi-pnl-summary-row" style="margin-bottom:.35rem">
           <div class="bot-stat kalshi-pnl-stat" style="min-width:9rem">
             <span class="muted" style="font-size:.62rem">Since epoch</span>

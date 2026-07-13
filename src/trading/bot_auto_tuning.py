@@ -213,3 +213,71 @@ def base_out_keys() -> tuple[str, ...]:
     "message",
     "reason",
   )
+
+
+def audit_tuning_vs_kalshi_wallet(
+  proposal: dict[str, Any],
+  kalshi_wallet: dict[str, Any] | None,
+) -> dict[str, Any]:
+  """Flag when auto-tune moves opposite to Kalshi wallet week P&L."""
+  week_pnl = None
+  if kalshi_wallet and kalshi_wallet.get("ok"):
+    week_pnl = float(kalshi_wallet.get("week_pnl_usd") or 0)
+  changes = list(proposal.get("changes") or [])
+  tightening = any(
+    "Raised min_ask_edge" in c or "Reduced Kelly" in c or "Tightened ask-edge" in c
+    for c in changes
+  )
+  loosening = any("Lowered min_ask_edge" in c for c in changes)
+  warning: str | None = None
+  if week_pnl is not None:
+    bot_total = float(proposal.get("total_pnl_usd") or 0)
+    if loosening and week_pnl < 0:
+      warning = (
+        "Auto-tune is loosening gates while Kalshi wallet week is "
+        f"${week_pnl:+.2f} — likely wrong direction; trust Kalshi P&L tab."
+      )
+    elif tightening and week_pnl > 0 and bot_total < -1.0:
+      warning = (
+        "Auto-tune is tightening on negative bot log "
+        f"(${bot_total:+.2f}) while Kalshi wallet week is "
+        f"${week_pnl:+.2f} — bot log may be stale; verify before applying."
+      )
+  return {
+    "pnl_source": "bot_log",
+    "kalshi_week_pnl_usd": week_pnl,
+    "tightening": tightening,
+    "loosening": loosening,
+    "aligned": warning is None,
+    "warning": warning,
+  }
+
+
+def audit_all_auto_tuning(
+  bot_reports: list[dict[str, Any]],
+  kalshi_wallet: dict[str, Any] | None,
+) -> dict[str, Any]:
+  """Summarize auto-tune direction vs Kalshi wallet for all bots with tuning."""
+  rows: list[dict[str, Any]] = []
+  warnings: list[str] = []
+  for report in bot_reports:
+    tuning = report.get("auto_tuning") or {}
+    if not tuning or tuning.get("reason") in ("auto_tune_disabled",):
+      continue
+    audit = audit_tuning_vs_kalshi_wallet(tuning, kalshi_wallet)
+    label = report.get("label") or f"{report.get('asset')}-{report.get('kind')}"
+    if audit.get("warning"):
+      warnings.append(f"{label}: {audit['warning']}")
+    rows.append({
+      "label": label,
+      "kind": report.get("kind"),
+      "asset": report.get("asset"),
+      **audit,
+    })
+  return {
+    "ok": True,
+    "kalshi_week_pnl_usd": (kalshi_wallet or {}).get("week_pnl_usd") if kalshi_wallet else None,
+    "warnings": warnings,
+    "bots": rows,
+    "any_misaligned": bool(warnings),
+  }

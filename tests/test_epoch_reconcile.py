@@ -98,7 +98,7 @@ def test_build_epoch_reconcile_report_includes_kalshi_per_event(monkeypatch):
     }
 
   monkeypatch.setattr(
-    "src.trading.epoch_reconcile._kalshi_hourly_closed_batched",
+    "src.trading.epoch_reconcile.kalshi_hourly_pnl_by_event_since",
     _batch,
   )
 
