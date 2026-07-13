@@ -6649,7 +6649,7 @@
       for (const row of rows) {
         pnl += Number(row.total_pnl_usd || 0);
         legs += Number(row.closed_legs || 0);
-        invested += Number(row.entry_cost_usd ?? row.invested_usd || 0);
+        invested += Number((row.entry_cost_usd ?? row.invested_usd) || 0);
         wins += Number(row.wins || 0);
       }
       const wr = legs ? pct(wins / legs) : '—';
@@ -6683,7 +6683,7 @@
         const wr = row.win_rate != null ? pct(row.win_rate) : '—';
         return `<tr>
           <td>${row.label || row.day || row.week_start}${tag}</td>
-          <td>${price(row.entry_cost_usd ?? row.invested_usd || 0)}</td>
+          <td>${price((row.entry_cost_usd ?? row.invested_usd) || 0)}</td>
           <td class="${cls}">${signedPrice(pnl)}</td>
           <td>${row.closed_legs ?? 0}</td>
           <td>${perLeg}</td>
@@ -6702,7 +6702,7 @@
 
     function renderKalshiWindowStats(block) {
       const pnl = Number(block?.total_pnl_usd || 0);
-      const invested = Number(block?.entry_cost_usd ?? block?.invested_usd || 0);
+      const invested = Number((block?.entry_cost_usd ?? block?.invested_usd) || 0);
       const perLeg = block?.pnl_per_leg_usd != null ? signedPrice(block.pnl_per_leg_usd) : '—';
       const perHr = block?.pnl_per_hour_usd != null ? signedPrice(block.pnl_per_hour_usd) : '—';
       const roi = block?.roi_pct != null ? `${block.roi_pct}%` : '—';
