@@ -35,6 +35,14 @@ PNL_SOURCE_BOT_LOG = "bot_log"
 PNL_SOURCE_KALSHI_FILLS = "kalshi_fills"
 TARGET_WEEKLY_USD = 4000.0
 
+# Hourly / 15m bot lanes — exclude sports & manual Kalshi markets from bot Buys $ KPIs.
+BOT_TRADE_CATEGORIES = frozenset({
+  "BTC hourly",
+  "ETH hourly",
+  "BTC 15m",
+  "ETH 15m",
+})
+
 
 def categorize_ticker(ticker: str) -> str:
   t = (ticker or "").upper()
@@ -323,7 +331,9 @@ def portfolio_activity_from_kalshi(
   settlement_limit: int = 2000,
 ) -> dict[str, list[dict[str, Any]]]:
   order_cache = _build_order_direction_cache(kalshi)
-  raw_fills = kalshi.list_fills(limit=fill_limit, critical=True)
+  from src.trading.kalshi_fill_sync import dedupe_kalshi_fills
+
+  raw_fills = dedupe_kalshi_fills(kalshi.list_fills(limit=fill_limit, critical=True))
   raw_settlements = kalshi.list_settlements(limit=settlement_limit, critical=True)
   orders = _aggregate_fills_to_orders(raw_fills, order_cache=order_cache)
 
@@ -437,6 +447,27 @@ def sync_kalshi_portfolio_ledger(
   }
 
 
+def _sum_entry_buy_volume(
+  entries: list[dict[str, Any]],
+  *,
+  categories: frozenset[str] | None = None,
+) -> float:
+  """Sum buy spend, deduped by entry fingerprint, optional category filter."""
+  total = 0.0
+  seen: set[str] = set()
+  for row in entries:
+    cat = str(row.get("category") or "Other")
+    if categories is not None and cat not in categories:
+      continue
+    fp = str(row.get("fingerprint") or "")
+    if fp:
+      if fp in seen:
+        continue
+      seen.add(fp)
+    total += float(row.get("cost_usd") or 0)
+  return round(total, 2)
+
+
 def _filter_since_epoch(
   closed: list[dict[str, Any]],
   entries: list[dict[str, Any]],
@@ -508,7 +539,16 @@ def _derive_stats(
 
   total_pnl = round(sum(float(r.get("pnl_usd") or 0) for r in window_closed), 2)
   total_entry_cost = round(sum(float(r.get("cost_usd") or 0) for r in window_closed), 2)
-  total_buy_volume = round(sum(float(r.get("cost_usd") or 0) for r in window_entries), 2)
+  total_buy_volume = _sum_entry_buy_volume(window_entries)
+  bot_buy_volume = _sum_entry_buy_volume(window_entries, categories=BOT_TRADE_CATEGORIES)
+  bot_pnl = round(
+    sum(
+      float(r.get("pnl_usd") or 0)
+      for r in window_closed
+      if str(r.get("category") or "Other") in BOT_TRADE_CATEGORIES
+    ),
+    2,
+  )
   closed_legs = len(window_closed)
   entry_count = len(window_entries)
   wins = sum(1 for r in window_closed if float(r.get("pnl_usd") or 0) > 0)
@@ -529,9 +569,13 @@ def _derive_stats(
     "invested_usd": total_entry_cost,
     "entry_cost_usd": total_entry_cost,
     "buy_volume_usd": total_buy_volume,
+    "bot_buy_volume_usd": bot_buy_volume,
+    "other_buy_volume_usd": round(max(0.0, total_buy_volume - bot_buy_volume), 2),
+    "bot_pnl_usd": bot_pnl,
     "pnl_per_leg_usd": round(total_pnl / closed_legs, 2) if closed_legs else None,
     "pnl_per_hour_usd": round(total_pnl / hours, 2),
     "roi_pct": round(100.0 * total_pnl / total_entry_cost, 1) if total_entry_cost > 0 else None,
+    "bot_roi_pct": round(100.0 * bot_pnl / bot_buy_volume, 1) if bot_buy_volume > 0 else None,
     "active_hours": round(hours, 2),
     "by_category": by_category,
   }

@@ -148,6 +148,20 @@ def _fill_action_side(
   return None
 
 
+def dedupe_kalshi_fills(fills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  """Drop duplicate Kalshi fill rows (same fill_id / trade_id) before aggregation."""
+  seen: set[str] = set()
+  out: list[dict[str, Any]] = []
+  for fill in fills:
+    fid = str(fill.get("fill_id") or fill.get("trade_id") or "").strip()
+    if fid:
+      if fid in seen:
+        continue
+      seen.add(fid)
+    out.append(fill)
+  return out
+
+
 def _aggregate_fills_to_orders(
   fills: list[dict[str, Any]],
   *,
@@ -155,6 +169,12 @@ def _aggregate_fills_to_orders(
 ) -> list[dict[str, Any]]:
   """Merge partial fills per Kalshi order_id."""
   order_cache = order_cache or {}
+  trade_to_order: dict[str, str] = {}
+  for fill in fills:
+    oid = str(fill.get("order_id") or "").strip()
+    tid = str(fill.get("trade_id") or "").strip()
+    if oid and tid:
+      trade_to_order[tid] = oid
   buckets: dict[str, dict[str, Any]] = {}
   skipped = 0
   for fill in fills:
@@ -163,7 +183,12 @@ def _aggregate_fills_to_orders(
       skipped += 1
       continue
     ticker, action, side = leg
-    oid = str(fill.get("order_id") or fill.get("trade_id") or fill.get("fill_id") or "")
+    oid = str(fill.get("order_id") or "").strip()
+    if not oid:
+      tid = str(fill.get("trade_id") or "").strip()
+      oid = trade_to_order.get(tid) or tid
+    if not oid:
+      oid = str(fill.get("fill_id") or "").strip()
     if not oid:
       ts = _fill_created_at(fill)
       oid = f"anon:{ticker}:{action}:{side}:{ts.isoformat() if ts else 'unknown'}"

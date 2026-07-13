@@ -1022,7 +1022,7 @@
       </div>
       <div class="card">
         <h2>Daily history</h2>
-        <p class="muted" style="font-size:.72rem;margin:0 0 .5rem">Completed ET days since your last clean sheet (today at top).</p>
+        <p class="muted" style="font-size:.72rem;margin:0 0 .5rem">Completed ET days since your last clean sheet (today at top). <strong>Buys $</strong> = hourly/15m bot markets only.</p>
         <div id="kalshi-pnl-daily-history"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
@@ -6760,7 +6760,8 @@
       </table>${kalshiPnlSportsFootnote(block)}`;
     }
 
-    function kalshiHistoryEntryUsd(row, kind) {
+    function kalshiHistoryEntryUsd(row) {
+      if (row.bot_buy_volume_usd != null) return Number(row.bot_buy_volume_usd);
       const buys = row.buy_volume_usd;
       if (buys != null && buys > 0) return Number(buys);
       return Number((row.entry_cost_usd ?? row.invested_usd) || 0);
@@ -6775,7 +6776,7 @@
       for (const row of rows) {
         pnl += Number(row.total_pnl_usd || 0);
         legs += Number(row.closed_legs || 0);
-        invested += kalshiHistoryEntryUsd(row, kind);
+        invested += kalshiHistoryEntryUsd(row);
         wins += Number(row.wins || 0);
       }
       const wr = legs ? pct(wins / legs) : '—';
@@ -6797,7 +6798,7 @@
 
     function renderKalshiPnlHistoryTable(rows, kind) {
       if (!rows?.length) return '<p class="muted">No history yet.</p>';
-      const entryHdr = '<span title="New buy spend this ET period (not cost basis of legs closed)">Buys $</span>';
+      const entryHdr = '<span title="BTC/ETH hourly &amp; 15m bot buy spend only (sports/other excluded)">Buys $</span>';
       const body = rows.map((row) => {
         const pnl = Number(row.total_pnl_usd || 0);
         const cls = pnl >= 0 ? 'up' : 'down';
@@ -6806,12 +6807,18 @@
           : (row.is_current_week ? ' <span class="muted">(current)</span>' : '');
         const perHr = row.pnl_per_hour_usd != null ? signedPrice(row.pnl_per_hour_usd) : '—';
         const perLeg = row.pnl_per_leg_usd != null ? signedPrice(row.pnl_per_leg_usd) : '—';
-        const entryUsd = kalshiHistoryEntryUsd(row, kind);
-        const roi = entryUsd > 0 ? `${Math.round((100 * pnl / entryUsd) * 10) / 10}%` : (row.roi_pct != null ? `${row.roi_pct}%` : '—');
+        const entryUsd = kalshiHistoryEntryUsd(row);
+        const roi = row.bot_roi_pct != null && entryUsd > 0
+          ? `${row.bot_roi_pct}%`
+          : (entryUsd > 0 ? `${Math.round((100 * pnl / entryUsd) * 10) / 10}%` : (row.roi_pct != null ? `${row.roi_pct}%` : '—'));
+        const otherBuys = Number(row.other_buy_volume_usd || 0);
+        const otherNote = otherBuys > 0.5
+          ? ` <span class="muted" style="font-size:.62rem" title="Sports/other Kalshi buys excluded from Buys $">+${price(otherBuys)} other</span>`
+          : '';
         const wr = row.win_rate != null ? pct(row.win_rate) : '—';
         return `<tr>
           <td>${row.label || row.day || row.week_start}${tag}</td>
-          <td>${price(entryUsd)}</td>
+          <td>${price(entryUsd)}${otherNote}</td>
           <td class="${cls}">${signedPrice(pnl)}</td>
           <td>${row.closed_legs ?? 0}</td>
           <td>${perLeg}</td>
@@ -6825,7 +6832,8 @@
           <th>${kind === 'day' ? 'Day' : 'Week'}</th><th>${entryHdr}</th><th>P&amp;L ${pnlSourceBadge('kalshi_wallet')}</th><th>Legs</th><th>$/leg</th><th>$/h</th><th>ROI</th><th>Win rate</th>
         </tr></thead>
         <tbody>${body}${renderKalshiPnlHistoryTotalRow(rows, kind)}</tbody>
-      </table>`;
+      </table>
+      <p class="muted" style="font-size:.65rem;margin:.35rem 0 0">Buys $ counts <strong>hourly/15m bot markets</strong> only. Sports and other Kalshi activity shows as muted “+other” when present; P&amp;L is full wallet.</p>`;
     }
 
     function renderKalshiWindowStats(block) {

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 from src.trading.hourly_bot_store import HourlyBotStore
 from src.trading.kalshi_fill_sync import (
   _aggregate_fills_to_orders,
+  dedupe_kalshi_fills,
   _aggregate_settlements_to_exits,
   _build_order_direction_cache,
   backfill_kalshi_hourly_fills,
@@ -64,6 +65,14 @@ def test_backfill_closed_round_trip_from_kalshi_fills():
     assert enters[0]["kalshi_order_id"] == "buy-1"
     assert exits[0]["kalshi_order_id"] == "sell-1"
     assert float(exits[0]["pnl_usd"]) == 0.18
+
+
+def test_dedupe_kalshi_fills_by_fill_id():
+  fills = [
+    {"fill_id": "f1", "order_id": "o1", "count_fp": "2.00"},
+    {"fill_id": "f1", "order_id": "o1", "count_fp": "2.00"},
+  ]
+  assert len(dedupe_kalshi_fills(fills)) == 1
 
 
 def test_aggregate_v2_fills_with_order_cache():

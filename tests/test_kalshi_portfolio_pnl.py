@@ -141,6 +141,26 @@ def test_store_persists_and_epoch_filters(tmp_path):
   assert store.runtime()["clean_sheets"] == 1
 
 
+def test_bot_buy_volume_excludes_sports():
+  day_start = datetime(2026, 6, 28, 0, 1, 0, tzinfo=ET)
+  day_end = datetime(2026, 6, 28, 23, 59, 59, tzinfo=ET)
+  inside = datetime(2026, 6, 28, 12, 0, tzinfo=ET).astimezone(timezone.utc)
+  entries = [
+    {"category": "BTC hourly", "cost_usd": 12.0, "bought_at": inside, "fingerprint": "bot1"},
+    {"category": "Other sports (WC tie)", "cost_usd": 4266.0, "bought_at": inside, "fingerprint": "wc1"},
+  ]
+  block = summarize_window(
+    closed=[],
+    entries=entries,
+    start_et=day_start,
+    end_et=day_end,
+    label="Jun 28",
+  )
+  assert block["buy_volume_usd"] == 4278.0
+  assert block["bot_buy_volume_usd"] == 12.0
+  assert block["other_buy_volume_usd"] == 4266.0
+
+
 def test_daily_history_uses_buy_volume_not_closed_stake():
   """Daily buys $ should reflect new spend that day, not cost basis of legs closed."""
   now_et = datetime(2026, 7, 13, 15, 0, tzinfo=ET)
