@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config.yaml pyproject.toml start.sh VERSION ./
+COPY config.yaml eth_aligned_index_hourly_bot.yaml pyproject.toml start.sh VERSION ./
 COPY data/calibration ./data/calibration
 COPY src ./src
 COPY scripts ./scripts

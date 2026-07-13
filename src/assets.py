@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import copy
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+log = logging.getLogger(__name__)
 
 SUPPORTED_ASSETS = ("btc", "eth", "spx", "ndx")
 DEFAULT_ASSET = "btc"
@@ -23,6 +26,10 @@ def _eth_aligned_index_hourly_bot_overlay() -> dict[str, Any]:
   """ETH hourly live execution profile for SPX/NDX (see eth_aligned_index_hourly_bot.yaml)."""
   path = Path(__file__).resolve().parents[1] / "eth_aligned_index_hourly_bot.yaml"
   if not path.is_file():
+    log.warning(
+      "eth_aligned_index_hourly_bot.yaml missing — SPX/NDX paper trials will not arm (expected at %s)",
+      path,
+    )
     return {}
   raw = yaml.safe_load(path.read_text()) or {}
   if not isinstance(raw, dict):
