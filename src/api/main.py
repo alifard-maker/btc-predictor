@@ -379,6 +379,32 @@ def kalshi_status():
   return _loop.kalshi.status()
 
 
+@app.get("/api/kalshi/portfolio-pnl")
+def kalshi_portfolio_pnl(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.kalshi_portfolio_pnl import (
+    build_kalshi_portfolio_pnl_report_cached,
+    kalshi_portfolio_pnl_store,
+  )
+
+  store = kalshi_portfolio_pnl_store(_cfg)
+  return build_kalshi_portfolio_pnl_report_cached(_loop.kalshi, _cfg, store=store)
+
+
+@app.post("/api/kalshi/portfolio-pnl/clean-sheet")
+def kalshi_portfolio_pnl_clean_sheet(_: None = Depends(_session_user)):
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  from src.trading.kalshi_portfolio_pnl import (
+    clean_sheet_kalshi_portfolio_pnl,
+    kalshi_portfolio_pnl_store,
+  )
+
+  store = kalshi_portfolio_pnl_store(_cfg)
+  return clean_sheet_kalshi_portfolio_pnl(store, _loop.kalshi, cfg=_cfg)
+
+
 @app.get("/api/slot/monitor")
 def slot_monitor(reference_override: float | None = Query(default=None, gt=0)):
   if _loop is None:
