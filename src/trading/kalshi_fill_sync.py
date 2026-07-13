@@ -121,6 +121,12 @@ def _fill_action_side(
   ticker = _fill_market_ticker(fill)
   if not ticker:
     return None
+  # Authoritative when present: list_orders direction beats V2 fill book notation
+  # (e.g. sell YES exits often appear as action=sell side=no on the fill row).
+  oid = str(fill.get("order_id") or "")
+  if oid and oid in order_cache:
+    act, sd = order_cache[oid]
+    return ticker, act, sd
   action = str(fill.get("action") or "").lower()
   side = str(fill.get("side") or fill.get("outcome_side") or "").lower()
   book = str(fill.get("book_side") or "").lower()
@@ -131,18 +137,14 @@ def _fill_action_side(
       side = "yes"
     elif book == "ask":
       side = "no"
-  if action in ("buy", "sell") and side in ("yes", "no"):
-    return ticker, action, side
   if not action and book in ("bid", "ask") and side in ("yes", "no"):
     from src.data.kalshi import v2_action_side_from_book
 
     pair = v2_action_side_from_book(book_side=book, outcome_side=side)
     if pair:
       return ticker, pair[0], pair[1]
-  oid = str(fill.get("order_id") or "")
-  if oid and oid in order_cache:
-    act, sd = order_cache[oid]
-    return ticker, act, sd
+  if action in ("buy", "sell") and side in ("yes", "no"):
+    return ticker, action, side
   return None
 
 
@@ -200,6 +202,72 @@ def _aggregate_fills_to_orders(
   if skipped and not out:
     log.warning("Kalshi fill aggregate: skipped %s fill row(s) — missing direction or price", skipped)
   return out
+
+
+def pair_fifo_closed_legs(
+  buys: list[dict[str, Any]],
+  exits: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+  """
+  FIFO match buys to sells/settlements on one (ticker, side) leg.
+
+  Exits without inventory (e.g. settlement rows after an early sell) are skipped so
+  Kalshi portfolio P&L matches exchange history.
+  """
+  min_ts = datetime.min.replace(tzinfo=timezone.utc)
+  sorted_buys = sorted(buys, key=lambda o: o.get("created_at") or min_ts)
+  sorted_exits = sorted(exits, key=lambda o: o.get("created_at") or min_ts)
+  buy_queue: list[tuple[dict[str, Any], float]] = [
+    (buy, float(buy["contracts"])) for buy in sorted_buys
+  ]
+  closed: list[dict[str, Any]] = []
+  for exit_row in sorted_exits:
+    exit_left = float(exit_row["contracts"])
+    exit_time = exit_row.get("created_at") or min_ts
+    if exit_left < 0.05:
+      continue
+    while exit_left > 0.05 and buy_queue:
+      buy, buy_left = buy_queue[0]
+      buy_time = buy.get("created_at") or min_ts
+      if buy_time > exit_time:
+        break
+      matched = min(buy_left, exit_left)
+      if matched < 0.05:
+        break
+      contracts = max(1, int(round(matched)))
+      entry_c = int(buy["price_cents"])
+      exit_c = int(exit_row["price_cents"])
+      cost_usd = round(contracts * entry_c / 100.0, 2)
+      pnl = round(
+        float(
+          leg_pnl_usd(
+            entry_price_cents=entry_c,
+            mark_or_exit_cents=exit_c,
+            contracts=contracts,
+          )
+          or 0.0,
+        ),
+        2,
+      )
+      closed.append({
+        "buy": buy,
+        "exit": exit_row,
+        "contracts": contracts,
+        "entry_cents": entry_c,
+        "exit_cents": exit_c,
+        "cost_usd": cost_usd,
+        "pnl_usd": pnl,
+        "buy_at": buy_time,
+        "exit_at": exit_time,
+        "exit_type": "SETTLEMENT" if exit_row.get("exit_source") == "settlement" else "SELL",
+      })
+      exit_left -= matched
+      buy_left -= matched
+      if buy_left < 0.05:
+        buy_queue.pop(0)
+      else:
+        buy_queue[0] = (buy, buy_left)
+  return closed
 
 
 def _kalshi_fill_action_to_bot(action: str) -> str:

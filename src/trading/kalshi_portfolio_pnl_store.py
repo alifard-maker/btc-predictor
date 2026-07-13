@@ -128,11 +128,13 @@ class KalshiPortfolioPnlStore:
       )
 
   def upsert_closed_legs(self, rows: list[dict[str, Any]]) -> int:
-    if not rows:
-      return 0
+    return self.replace_closed_legs(rows)
+
+  def replace_closed_legs(self, rows: list[dict[str, Any]]) -> int:
+    """Replace ledger with a fresh Kalshi recompute (avoids stale mis-paired legs)."""
     now = _utc_now()
-    inserted = 0
     with self._connect() as conn:
+      conn.execute("DELETE FROM kalshi_portfolio_closed_legs")
       for row in rows:
         buy_at = row["buy_at"]
         exit_at = row["exit_at"]
@@ -140,9 +142,9 @@ class KalshiPortfolioPnlStore:
           buy_at = buy_at.astimezone(timezone.utc).isoformat()
         if isinstance(exit_at, datetime):
           exit_at = exit_at.astimezone(timezone.utc).isoformat()
-        cur = conn.execute(
+        conn.execute(
           """
-          INSERT OR IGNORE INTO kalshi_portfolio_closed_legs (
+          INSERT INTO kalshi_portfolio_closed_legs (
             fingerprint, ticker, side, category, contracts, entry_cents, exit_cents,
             cost_usd, pnl_usd, buy_at, exit_at, exit_type, recorded_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -163,22 +165,23 @@ class KalshiPortfolioPnlStore:
             now,
           ),
         )
-        inserted += int(cur.rowcount or 0)
-    return inserted
+    return len(rows)
 
   def upsert_entries(self, rows: list[dict[str, Any]]) -> int:
-    if not rows:
-      return 0
+    return self.replace_entries(rows)
+
+  def replace_entries(self, rows: list[dict[str, Any]]) -> int:
+    """Replace buy-entry ledger from a fresh Kalshi recompute."""
     now = _utc_now()
-    inserted = 0
     with self._connect() as conn:
+      conn.execute("DELETE FROM kalshi_portfolio_entries")
       for row in rows:
         bought_at = row["bought_at"]
         if isinstance(bought_at, datetime):
           bought_at = bought_at.astimezone(timezone.utc).isoformat()
-        cur = conn.execute(
+        conn.execute(
           """
-          INSERT OR IGNORE INTO kalshi_portfolio_entries (
+          INSERT INTO kalshi_portfolio_entries (
             fingerprint, order_id, ticker, side, category, contracts,
             price_cents, cost_usd, bought_at, recorded_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -196,8 +199,7 @@ class KalshiPortfolioPnlStore:
             now,
           ),
         )
-        inserted += int(cur.rowcount or 0)
-    return inserted
+    return len(rows)
 
   def list_closed_legs(self) -> list[dict[str, Any]]:
     with self._connect() as conn:
