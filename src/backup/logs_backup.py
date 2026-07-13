@@ -255,16 +255,10 @@ def _append_audit_jsonl(
     f.write(json.dumps(record, default=str) + "\n")
 
 
-def _optional_kalshi_client() -> Any | None:
-  try:
-    from src.api import main as api_main
+def _optional_kalshi_client(cfg: dict[str, Any] | None = None) -> Any | None:
+  from src.backup.kalshi_tax_export import kalshi_client_for_backup
 
-    loop = api_main._loop
-    if loop is not None:
-      return getattr(loop, "kalshi", None)
-  except Exception:
-    pass
-  return None
+  return kalshi_client_for_backup(cfg)
 
 
 def _export_bot_log_trades(
@@ -300,6 +294,9 @@ def _export_mode_trades(
 ) -> dict[str, Any]:
   """Refresh per-bot CSVs and consolidated CSV for one mode."""
   if mode == "live":
+    from src.backup.kalshi_tax_export import export_kalshi_wallet_live_trades, write_tax_readme
+
+    write_tax_readme(dest)
     bot_log_stats = _export_bot_log_trades(
       cfg,
       mode="live",
@@ -307,14 +304,12 @@ def _export_mode_trades(
       csv_name="bot_log_trades.csv",
       all_csv_name="all_bot_log_trades.csv",
     )
-    client = kalshi or _optional_kalshi_client()
-    if client is not None:
-      from src.backup.kalshi_tax_export import export_kalshi_wallet_live_trades
-
-      kalshi_stats = export_kalshi_wallet_live_trades(cfg, client, dest)
-      if kalshi_stats.get("ok"):
-        return {**kalshi_stats, "bot_log": bot_log_stats}
-    return _export_bot_log_trades(cfg, mode="live", dest=dest)
+    kalshi_stats = export_kalshi_wallet_live_trades(
+      cfg,
+      kalshi or _optional_kalshi_client(cfg),
+      dest,
+    )
+    return {**kalshi_stats, "bot_log": bot_log_stats}
 
   return _export_bot_log_trades(cfg, mode=mode, dest=dest)
 
@@ -368,7 +363,7 @@ def run_full_backup(cfg: dict[str, Any], *, reason: str = "scheduled", kalshi: A
       paper_dir = root / "paper"
       live_dir = root / "live"
       paper_stats = _export_mode_trades(cfg, mode="paper", dest=paper_dir)
-      live_stats = _export_mode_trades(cfg, mode="live", dest=live_dir, kalshi=kalshi or _optional_kalshi_client())
+      live_stats = _export_mode_trades(cfg, mode="live", dest=live_dir, kalshi=kalshi or _optional_kalshi_client(cfg))
 
       full_dir = snap_dir / "full"
       for asset, kind, db_path in bot_db_specs(cfg):
@@ -496,7 +491,7 @@ def on_trade_logged(
   try:
     _append_audit_jsonl(audit_path, record, dedupe_key=dedupe or None)
     if mode == "live":
-      _export_mode_trades(cfg, mode="live", dest=mode_dir, kalshi=_optional_kalshi_client())
+      stats = _export_mode_trades(cfg, mode="live", dest=mode_dir, kalshi=_optional_kalshi_client(cfg))
       live_manifest = mode_dir / "manifest.json"
       live_manifest.write_text(
         json.dumps(
@@ -506,7 +501,8 @@ def on_trade_logged(
             "last_trade_id": dedupe,
             "scope": "live",
             "pnl_source": "kalshi_wallet",
-            "note": "Tax CSVs use Kalshi wallet (trades.csv); bot_log_trades.csv is strategy DB only",
+            "tax_export": stats,
+            "note": "Per-bot trades.csv in subfolders — see TAX_README.txt",
           },
           indent=2,
         ),

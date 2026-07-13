@@ -162,10 +162,11 @@ def test_full_backup_exports_index_live_trades():
       "log_backup": {"enabled": True, "backup_dir": str(root / "backups")},
     }
     manifest = run_full_backup(cfg, reason="test")
-    live_csv = root / "backups" / "live" / "spx_hourly" / "trades.csv"
+    live_csv = root / "backups" / "live" / "spx_hourly" / "bot_log_trades.csv"
     assert live_csv.exists()
     assert "kalshi-spx-1" in live_csv.read_text(encoding="utf-8")
-    assert manifest.get("live", {}).get("total_trades", 0) >= 1
+    assert (root / "backups" / "live" / "spx_hourly" / "trades.csv").exists()
+    assert manifest.get("live", {}).get("bot_log", {}).get("total_trades", 0) >= 1
 
 
 def test_full_backup_separates_paper_and_live():
@@ -181,9 +182,9 @@ def test_full_backup_separates_paper_and_live():
     }
     manifest = run_full_backup(cfg, reason="test")
     assert manifest.get("paper", {}).get("total_trades") == 1
-    assert manifest.get("live", {}).get("total_trades") == 1
+    assert manifest.get("live", {}).get("bot_log", {}).get("total_trades") == 1
     paper_csv = root / "backups" / "paper" / "all_trades.csv"
-    live_csv = root / "backups" / "live" / "all_trades.csv"
+    live_csv = root / "backups" / "live" / "all_bot_log_trades.csv"
     assert paper_csv.exists()
     assert live_csv.exists()
     paper_text = paper_csv.read_text(encoding="utf-8")

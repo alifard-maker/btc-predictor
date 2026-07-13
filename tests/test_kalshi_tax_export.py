@@ -62,6 +62,40 @@ def test_attribute_settlement_splits_by_bot_entry_cost():
   assert by_bot["eth_hourly"]["pnl_usd"] == 1.4
 
 
+def test_attribute_category_fallback_to_primary_bot():
+  leg = {
+    "ticker": "KXETHD-1",
+    "side": "yes",
+    "category": "ETH hourly",
+    "contracts": 5,
+    "entry_cents": 40,
+    "exit_cents": 55,
+    "cost_usd": 2.0,
+    "pnl_usd": 0.5,
+    "buy_at": datetime(2026, 7, 13, 10, 0, tzinfo=timezone.utc),
+    "exit_at": datetime(2026, 7, 13, 11, 0, tzinfo=timezone.utc),
+    "exit_type": "SELL",
+    "buy_order_id": "",
+  }
+  rows = attribute_closed_leg_to_bots(leg, [], {})
+  assert len(rows) == 1
+  assert rows[0][0] == "eth_hourly"
+
+
+def test_export_scaffold_writes_per_bot_csv(tmp_path):
+  from src.backup.kalshi_tax_export import export_kalshi_wallet_live_trades
+
+  cfg = {"paths": {"logs": str(tmp_path / "data" / "logs")}}
+  dest = tmp_path / "live"
+  stats = export_kalshi_wallet_live_trades(cfg, None, dest)
+  assert (dest / "btc_hourly" / "trades.csv").exists()
+  assert (dest / "eth_hourly" / "trades.csv").exists()
+  assert (dest / "kalshi_other" / "trades.csv").exists()
+  assert (dest / "TAX_README.txt").exists()
+  assert stats.get("ok") is False
+  assert stats.get("reason") == "kalshi_not_authenticated"
+
+
 def test_build_live_kalshi_order_bot_map(tmp_path):
   import sqlite3
 
