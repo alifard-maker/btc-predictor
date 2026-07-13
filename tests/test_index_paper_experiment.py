@@ -37,15 +37,16 @@ def test_seed_index_paper_settings_enables_store(tmp_path: Path, base_cfg):
   store = HourlyBotStore(logs / "hourly_bot_spx.db")
   store.save_settings(
     store.get_settings().__class__(
-      **{**store.get_settings().to_dict(), "enabled": False, "mode": "live"}
+      **{**store.get_settings().to_dict(), "enabled": False, "mode": "live", "auto_stopped": True}
     )
   )
-  result = seed_index_paper_settings_from_cfg(store, acfg, "spx")
+  result = seed_index_paper_settings_from_cfg(store, base_cfg, "spx")
   assert result["synced"] is True
   settings = store.get_settings()
   assert settings.enabled is True
   assert settings.mode == "paper"
   assert settings.continuous is True
+  assert settings.auto_stopped is False
 
 
 def test_ensure_index_paper_experiments_arms_both(tmp_path: Path, base_cfg, monkeypatch):

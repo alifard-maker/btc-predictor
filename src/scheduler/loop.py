@@ -3639,6 +3639,18 @@ class PredictionLoop:
     except Exception as e:
       log.warning("Paper bot bootstrap skipped: %s", e)
     try:
+      from src.trading.index_paper_experiment import ensure_index_paper_experiments
+
+      index_boot = ensure_index_paper_experiments(self)
+      armed = [
+        a for a, r in (index_boot.get("assets") or {}).items()
+        if r.get("synced") and r.get("enabled")
+      ]
+      if armed:
+        log.info("Index paper trials armed on scheduler start: %s", ", ".join(armed))
+    except Exception as e:
+      log.warning("Index paper experiment boot skipped: %s", e)
+    try:
       from src.trading.bot_hourly_settings_align import align_eth_hourly_settings_from_btc
 
       mirror_stats = align_eth_hourly_settings_from_btc(self)

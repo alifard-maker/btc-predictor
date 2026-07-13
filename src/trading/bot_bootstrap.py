@@ -20,11 +20,17 @@ _TARGET_ALIASES: dict[str, tuple[str, str]] = {
   "slot15": ("slot15", "btc"),
   "btc-slot15": ("slot15", "btc"),
   "eth-slot15": ("slot15", "eth"),
+  "spx": ("hourly", "spx"),
+  "spx-hourly": ("hourly", "spx"),
+  "ndx": ("hourly", "ndx"),
+  "ndx-hourly": ("hourly", "ndx"),
 }
 
 _ALL_TARGETS: list[tuple[str, str]] = [
   ("hourly", "btc"),
   ("hourly", "eth"),
+  ("hourly", "spx"),
+  ("hourly", "ndx"),
   ("slot15", "btc"),
   ("slot15", "eth"),
 ]
@@ -86,6 +92,11 @@ def bootstrap_paper_bots(loop: PredictionLoop) -> list[str]:
       continue
     if asset == "eth" and kind == "hourly" and not _eth_available(loop, asset):
       continue
+    if asset in ("spx", "ndx") and kind == "hourly":
+      from src.assets import asset_enabled
+
+      if not asset_enabled(loop.cfg, asset):
+        continue
 
     store = _store_for(loop, kind, asset)
     if not _should_auto_enable(store):

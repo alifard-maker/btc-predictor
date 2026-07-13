@@ -10,7 +10,11 @@ from src.trading.eth_paper_experiment import settings_patch_from_eth_bot_yaml
 
 
 def index_bot_cfg(cfg: dict[str, Any] | None, asset: str) -> dict[str, Any]:
-  return dict(asset_cfg(cfg or {}, asset.lower()).get("hourly", {}).get("bot") or {})
+  cfg = cfg or {}
+  asset = asset.lower()
+  if str(cfg.get("_asset") or "").lower() == asset:
+    return dict(cfg.get("hourly", {}).get("bot") or {})
+  return dict(asset_cfg(cfg, asset).get("hourly", {}).get("bot") or {})
 
 
 def index_paper_experiment_cfg(cfg: dict[str, Any] | None, asset: str) -> dict[str, Any]:
@@ -52,12 +56,18 @@ def seed_index_paper_settings_from_cfg(
     return {"ok": False, "skipped": True, "reason": "index_bot_not_paper_in_yaml", "asset": asset}
 
   patch = settings_patch_from_eth_bot_yaml(bot)
+  patch["enabled"] = True
+  patch["mode"] = "paper"
+  patch["continuous"] = bool(bot.get("continuous_enabled", True))
+  patch["auto_stopped"] = False
+  patch["auto_stop_reason"] = None
   cur = store.get_settings()
   merged = {**cur.to_dict(), **patch}
   changed = [k for k, v in patch.items() if cur.to_dict().get(k) != v]
   epoch_raw = bot.get("experiment_start_at")
+  needs_arm = not cur.enabled or not cur.continuous or cur.auto_stopped
 
-  if not changed and not epoch_raw:
+  if not changed and not needs_arm and not epoch_raw:
     return {
       "ok": True,
       "synced": True,
@@ -69,10 +79,9 @@ def seed_index_paper_settings_from_cfg(
       "continuous": cur.continuous,
     }
 
-  if changed:
-    from src.trading.hourly_bot_store import HourlyBotSettings
+  from src.trading.hourly_bot_store import HourlyBotSettings
 
-    store.save_settings(HourlyBotSettings.from_dict(merged), source=source)
+  store.save_settings(HourlyBotSettings.from_dict(merged), source=source)
   _apply_stats_epoch(store, str(epoch_raw) if epoch_raw else None)
 
   return {
@@ -101,7 +110,7 @@ def ensure_index_paper_experiments(loop: Any) -> dict[str, Any]:
     store = loop.hourly_bot_store(asset)
     results[asset] = seed_index_paper_settings_from_cfg(
       store,
-      acfg,
+      loop.cfg,
       asset,
       source="index_paper_experiment_boot",
     )

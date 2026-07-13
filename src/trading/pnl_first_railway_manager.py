@@ -156,6 +156,12 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
         ("eth", "slot15", "slot15_bot_store"),
         ("eth", "slot15_trial", "slot15_trial_bot_store"),
       ])
+  if mgr.allow_index_paper:
+    from src.assets import asset_enabled as _asset_enabled
+
+    for index_asset in ("spx", "ndx"):
+      if _asset_enabled(cfg, index_asset):
+        targets.append((index_asset, "hourly", "hourly_bot_store"))
 
   for asset, kind, store_fn in targets:
     # POA live session: do not re-disable BTC hourly — unless twin live is managing it
@@ -173,6 +179,7 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
     eth_live_exempt = False
     eth_slot15_paper_exempt = False
     btc_live_exempt = False
+    index_paper_exempt = False
     eth_bot_cfg_yaml = dict(
       (((cfg or {}).get("eth") or {}).get("hourly") or {}).get("bot") or {}
     )
@@ -202,6 +209,16 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
         and str(slot15_cfg.get("mode") or "paper").lower() == "paper"
       ):
         eth_slot15_paper_exempt = True
+    if asset in ("spx", "ndx") and kind == "hourly" and mgr.allow_index_paper:
+      from src.trading.index_paper_experiment import index_bot_cfg, index_paper_experiment_active
+
+      if index_paper_experiment_active(cfg, asset):
+        index_yaml = index_bot_cfg(cfg, asset)
+        if (
+          bool(index_yaml.get("enabled", True))
+          and str(index_yaml.get("mode") or "paper").lower() == "paper"
+        ):
+          index_paper_exempt = True
     if eth_paper_exempt:
       if not settings.enabled:
         updates["enabled"] = True
@@ -251,6 +268,23 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
       if str(settings.mode or "").lower() != "paper":
         updates["mode"] = "paper"
         changed = True
+    elif index_paper_exempt:
+      from src.trading.index_paper_experiment import index_bot_cfg
+
+      index_yaml = index_bot_cfg(cfg, asset)
+      if not settings.enabled:
+        updates["enabled"] = True
+        changed = True
+      if not settings.continuous and bool(index_yaml.get("continuous_enabled", True)):
+        updates["continuous"] = True
+        changed = True
+      if str(settings.mode or "").lower() != "paper":
+        updates["mode"] = "paper"
+        changed = True
+      if settings.auto_stopped:
+        updates["auto_stopped"] = False
+        updates["auto_stop_reason"] = None
+        changed = True
     elif settings.enabled:
       updates["enabled"] = False
       changed = True
@@ -287,6 +321,8 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
           if eth_slot15_paper_exempt
           else "btc_live_arm"
           if btc_live_exempt
+          else "index_paper_arm"
+          if index_paper_exempt
           else "sleep_lock"
         ),
         "asset": asset,
@@ -329,6 +365,18 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
       )
       if seed_result.get("synced"):
         actions.append({"action": "btc_live_settings_sync", **seed_result})
+
+    if index_paper_exempt and asset in ("spx", "ndx") and kind == "hourly":
+      from src.trading.index_paper_experiment import seed_index_paper_settings_from_cfg
+
+      seed_result = seed_index_paper_settings_from_cfg(
+        store,
+        cfg,
+        asset,
+        source="pnl_first_manager_index_paper_arm",
+      )
+      if seed_result.get("synced"):
+        actions.append({"action": "index_paper_settings_sync", **seed_result})
   return actions
 
 
@@ -546,7 +594,7 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
 
       index_boot = ensure_index_paper_experiments(loop)
       for asset, result in (index_boot.get("assets") or {}).items():
-        if result.get("synced") and result.get("changed_fields"):
+        if result.get("synced"):
           actions.append({"action": "index_paper_settings_sync", "asset": asset, **result})
     except Exception as exc:
       log.warning("index paper experiment ensure failed: %s", exc)
