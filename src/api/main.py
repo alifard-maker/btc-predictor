@@ -1320,9 +1320,9 @@ def pnl_first_epoch_reconcile(
 ):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  from src.trading.epoch_reconcile import build_epoch_reconcile_report
+  from src.trading.epoch_reconcile import build_epoch_reconcile_report_cached
 
-  return build_epoch_reconcile_report(_loop, _cfg, asset=asset)
+  return build_epoch_reconcile_report_cached(_loop, _cfg, asset=asset)
 
 
 @app.get("/api/bots/hourly-live-trial-compare")
@@ -1333,19 +1333,11 @@ def bots_hourly_live_trial_compare(
 ):
   if _loop is None:
     raise HTTPException(503, "Service starting")
-  from src.trading.hourly_live_trial_compare import build_hourly_live_trial_compare
+  from src.trading.hourly_live_trial_compare import build_hourly_live_trial_compare_cached
   from src.trading.hourly_live_trial_align import HourlyLiveTrialAlignConfig
-  from src.trading.compare_paper_twins import compare_store_kinds, ensure_compare_paper_twins
-  from src.trading.probe_24h import effective_compare_stats_epoch_at, ensure_probe_stats_epoch
+  from src.trading.compare_paper_twins import compare_store_kinds
+  from src.trading.probe_24h import effective_compare_stats_epoch_at
   from src.assets import asset_cfg
-
-  # Keep fair paper twins armed so matched hours can populate.
-  if asset in ("btc", "eth"):
-    try:
-      ensure_compare_paper_twins(_loop, _cfg)
-      ensure_probe_stats_epoch(_loop, _cfg)
-    except Exception:
-      log.exception("compare_paper_twins ensure failed for %s", asset)
 
   live_kind, trial_kind = compare_store_kinds(asset)
   live_store = _loop.hourly_bot_store(asset, kind=live_kind)
@@ -1354,7 +1346,7 @@ def bots_hourly_live_trial_compare(
   align = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
   stats_epoch_at = effective_compare_stats_epoch_at(live_store, _cfg)
   try:
-    out = build_hourly_live_trial_compare(
+    out = build_hourly_live_trial_compare_cached(
       live_store,
       trial_store,
       asset=asset,

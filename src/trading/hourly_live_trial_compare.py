@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -356,6 +357,62 @@ def build_hourly_live_trial_compare(
     "hours": hours,
     "generated_at": datetime.now(timezone.utc).isoformat(),
   }
+
+
+_COMPARE_CACHE: dict[str, Any] = {"mono_at": 0.0, "payload": None, "key": None}
+_COMPARE_CACHE_TTL_SEC = 90.0
+
+
+def build_hourly_live_trial_compare_cached(
+  live_store: BotStore,
+  trial_store: BotStore,
+  *,
+  asset: str,
+  limit_hours: int = 24,
+  live_kind: str = "hourly",
+  trial_kind: str = "hourly_trial",
+  pair_window_seconds: int = 180,
+  stats_epoch_at: str | None = None,
+  ttl_sec: float = _COMPARE_CACHE_TTL_SEC,
+) -> dict[str, Any]:
+  if stats_epoch_at is None:
+    from src.trading.bot_runtime import stats_epoch_at as read_stats_epoch_at
+
+    with live_store._connect() as conn:
+      stats_epoch_at = read_stats_epoch_at(conn)
+  cache_key = f"{asset}:{limit_hours}:{live_kind}:{trial_kind}:{stats_epoch_at or ''}"
+  now = time.monotonic()
+  if (
+    _COMPARE_CACHE.get("key") == cache_key
+    and _COMPARE_CACHE.get("payload")
+    and (now - float(_COMPARE_CACHE.get("mono_at") or 0)) < ttl_sec
+  ):
+    return {
+      **(_COMPARE_CACHE["payload"]),
+      "cached": True,
+      "cache_age_sec": round(now - float(_COMPARE_CACHE["mono_at"]), 1),
+    }
+
+  payload = build_hourly_live_trial_compare(
+    live_store,
+    trial_store,
+    asset=asset,
+    limit_hours=limit_hours,
+    live_kind=live_kind,
+    trial_kind=trial_kind,
+    pair_window_seconds=pair_window_seconds,
+    stats_epoch_at=stats_epoch_at,
+  )
+  _COMPARE_CACHE["key"] = cache_key
+  _COMPARE_CACHE["mono_at"] = now
+  _COMPARE_CACHE["payload"] = payload
+  return {**payload, "cached": False, "cache_age_sec": 0.0}
+
+
+def invalidate_hourly_live_trial_compare_cache() -> None:
+  _COMPARE_CACHE["mono_at"] = 0.0
+  _COMPARE_CACHE["payload"] = None
+  _COMPARE_CACHE["key"] = None
 
 
 def build_slot15_live_trial_compare(
