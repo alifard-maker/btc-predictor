@@ -197,6 +197,19 @@
     .bot-row { display:flex; flex-wrap:wrap; align-items:center; gap:1rem; margin:.5rem 0; }
     .bot-stat { font-size:.8rem; }
     .bot-stat strong { display:block; font-size:1rem; }
+    .kalshi-pnl-summary-row { display:flex; flex-wrap:wrap; gap:.65rem; align-items:flex-start; }
+    .kalshi-pnl-stat {
+      min-width:8rem;
+      display:flex;
+      flex-direction:column;
+      min-height:4.75rem;
+    }
+    .kalshi-pnl-stat .kalshi-pnl-sub {
+      font-size:.62rem;
+      margin-top:.15rem;
+      min-height:1.05rem;
+      line-height:1.25;
+    }
     .switch { position:relative; display:inline-block; width:44px; height:24px; vertical-align:middle; }
     .switch input { opacity:0; width:0; height:0; }
     .switch .slider { position:absolute; cursor:pointer; inset:0; background:#334155; border-radius:24px; transition:.2s; }
@@ -268,13 +281,13 @@
 
     <div id="bot-risk-banner" class="card" style="display:none;margin-bottom:.75rem;border-color:var(--warn);background:rgba(255,180,0,.08)"></div>
 
-    <details class="card" id="bot-performance-card" open>
+    <details class="card" id="bot-performance-card">
       <summary style="cursor:pointer;font-weight:600">Paper bot performance · calibration report</summary>
       <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Win rate and avg P&amp;L from closed paper round-trips. After <strong>7+ days</strong> and <strong>15+ closed trades</strong>, bots auto-tune ask-edge and Kelly from this log (daily ~3 AM ET). Entries gate on <strong>ask-edge</strong> (model prob − ask implied).</p>
       <div id="bot-performance-report"><p class="muted">Loading…</p></div>
     </details>
 
-    <details class="card" id="epoch-reconcile-card" open>
+    <details class="card" id="epoch-reconcile-card">
       <summary style="cursor:pointer;font-weight:600">Epoch reconcile · bot vs Kalshi P&amp;L</summary>
       <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Per-hour realized P&amp;L since <code>phase_started_at</code> / stats epoch. Compares bot trade log exits to Kalshi fill pairing. Drift highlights reconciliation gaps.</p>
       <div class="compare-toolbar">
@@ -285,7 +298,7 @@
       <div id="epoch-reconcile-report"><p class="muted">Loading…</p></div>
     </details>
 
-    <details class="card" id="hourly-live-trial-compare-card" open>
+    <details class="card" id="hourly-live-trial-compare-card">
       <summary style="cursor:pointer;font-weight:600">Live hourly vs paper trial · hour-by-hour</summary>
       <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Side-by-side for the <strong>same Kalshi hour</strong> (<code>event_ticker</code>). <strong>BTC</strong> live hourly vs paper <strong>Trial Mech</strong>. <strong>ETH</strong> live hourly vs paper <strong>standard trial</strong>. Entries, exit reasons, and realized net P&amp;L per hour.</p>
       <div class="compare-toolbar">
@@ -296,7 +309,7 @@
       <div id="hourly-live-trial-compare"><p class="muted">Loading…</p></div>
     </details>
 
-    <details class="card" id="four-k-week-plan-card" open>
+    <details class="card" id="four-k-week-plan-card">
       <summary style="cursor:pointer;font-weight:600">$4k/week plan · Week 1</summary>
       <p class="muted" style="font-size:.75rem;margin:.35rem 0 .65rem">Separate P&amp;L lanes: <strong>Track A</strong> ETH hourly probe, <strong>Track B shadow</strong> (terminal 15m on hourly strikes, no orders), <strong>Slot15 ETH</strong> paper (KXETH15M — separate product).</p>
       <div id="four-k-week-plan"><p class="muted">Loading…</p></div>
@@ -957,7 +970,8 @@
         <h2>Kalshi realized P&amp;L</h2>
         <p class="muted" style="font-size:.78rem;margin:0 0 .65rem">
           Persistent ledger from Kalshi fills + settlements. Realized P&amp;L counts on <strong>close</strong> (sell/settlement).
-          <strong>Invested</strong> = buy notional in window. History is kept until you <strong>Clean sheet</strong>.
+          <strong>Entry $</strong> = stake on closed legs in the window (not gross buy turnover — recycling the same cash won’t inflate this).
+          History is kept until you <strong>Clean sheet</strong>.
           <strong>Today</strong> = <strong>00:01–23:59 ET</strong> · <strong>Week</strong> = <strong>Sun 00:01 – Sat 23:59 ET</strong>.
         </p>
         <div class="bot-row" style="margin-bottom:.55rem;gap:.55rem;flex-wrap:wrap;align-items:center">
@@ -1082,6 +1096,7 @@
     let liveMonitorLastAt = 0;
     const LIVE_MONITOR_INTERVAL_MS = 3000;
     const LOAD_ALL_INTERVAL_MS = 10000;
+    const KALSHI_PNL_INTERVAL_MS = 120000;
     let slot15CompareLastAt = 0;
     let slot15CompareInFlight = false;
     const SLOT15_COMPARE_INTERVAL_MS = 30000;
@@ -6634,7 +6649,7 @@
       for (const row of rows) {
         pnl += Number(row.total_pnl_usd || 0);
         legs += Number(row.closed_legs || 0);
-        invested += Number(row.invested_usd || 0);
+        invested += Number(row.entry_cost_usd ?? row.invested_usd || 0);
         wins += Number(row.wins || 0);
       }
       const wr = legs ? pct(wins / legs) : '—';
@@ -6668,7 +6683,7 @@
         const wr = row.win_rate != null ? pct(row.win_rate) : '—';
         return `<tr>
           <td>${row.label || row.day || row.week_start}${tag}</td>
-          <td>${price(row.invested_usd || 0)}</td>
+          <td>${price(row.entry_cost_usd ?? row.invested_usd || 0)}</td>
           <td class="${cls}">${signedPrice(pnl)}</td>
           <td>${row.closed_legs ?? 0}</td>
           <td>${perLeg}</td>
@@ -6679,7 +6694,7 @@
       }).join('');
       return `<table class="data-table" style="width:100%;font-size:.78rem">
         <thead><tr>
-          <th>${kind === 'day' ? 'Day' : 'Week'}</th><th>Invested</th><th>P&amp;L</th><th>Legs</th><th>$/leg</th><th>$/h</th><th>ROI</th><th>Win rate</th>
+          <th>${kind === 'day' ? 'Day' : 'Week'}</th><th title="Entry stake on legs closed in this period">Entry $</th><th>P&amp;L</th><th>Legs</th><th>$/leg</th><th>$/h</th><th>ROI</th><th>Win rate</th>
         </tr></thead>
         <tbody>${body}${renderKalshiPnlHistoryTotalRow(rows)}</tbody>
       </table>`;
@@ -6687,16 +6702,20 @@
 
     function renderKalshiWindowStats(block) {
       const pnl = Number(block?.total_pnl_usd || 0);
-      const invested = Number(block?.invested_usd || 0);
+      const invested = Number(block?.entry_cost_usd ?? block?.invested_usd || 0);
       const perLeg = block?.pnl_per_leg_usd != null ? signedPrice(block.pnl_per_leg_usd) : '—';
       const perHr = block?.pnl_per_hour_usd != null ? signedPrice(block.pnl_per_hour_usd) : '—';
       const roi = block?.roi_pct != null ? `${block.roi_pct}%` : '—';
       return `
         <strong class="${pnl >= 0 ? 'up' : 'down'}">${signedPrice(pnl)}</strong>
-        <div class="muted" style="font-size:.62rem;margin-top:.15rem">
-          invested ${price(invested)} · ${block?.closed_legs ?? 0} legs · ${block?.entries ?? 0} buys
-        </div>
-        <div class="muted" style="font-size:.62rem;margin-top:.1rem">${perLeg}/leg · ${perHr}/h · ROI ${roi}</div>`;
+        <div class="muted kalshi-pnl-sub">entry ${price(invested)} on closed legs · ${block?.closed_legs ?? 0} legs</div>
+        <div class="muted kalshi-pnl-sub">${perLeg}/leg · ${perHr}/h · ROI ${roi}</div>`;
+    }
+
+    function renderKalshiSimpleStat(mainHtml, line2, line3) {
+      const l2 = line2 ? `<div class="muted kalshi-pnl-sub">${line2}</div>` : '<div class="muted kalshi-pnl-sub">&nbsp;</div>';
+      const l3 = line3 ? `<div class="muted kalshi-pnl-sub">${line3}</div>` : '<div class="muted kalshi-pnl-sub">&nbsp;</div>';
+      return `<strong>${mainHtml}</strong>${l2}${l3}`;
     }
 
     function renderKalshiPortfolioPnl(data) {
@@ -6731,27 +6750,26 @@
         epochNote.textContent = epochLbl;
       }
       summaryEl.innerHTML = `
-        <div class="bot-row" style="flex-wrap:wrap;gap:.65rem;margin-bottom:.35rem">
-          <div class="bot-stat" style="min-width:9rem">
+        <div class="kalshi-pnl-summary-row" style="margin-bottom:.35rem">
+          <div class="bot-stat kalshi-pnl-stat" style="min-width:9rem">
             <span class="muted" style="font-size:.62rem">Since epoch</span>
             ${renderKalshiWindowStats(since)}
           </div>
-          <div class="bot-stat" style="min-width:8rem">
+          <div class="bot-stat kalshi-pnl-stat" style="min-width:8rem">
             <span class="muted" style="font-size:.62rem">Today (${today.label || 'ET'})</span>
             ${renderKalshiWindowStats(today)}
           </div>
-          <div class="bot-stat" style="min-width:10rem">
+          <div class="bot-stat kalshi-pnl-stat" style="min-width:10rem">
             <span class="muted" style="font-size:.62rem">Week (${week.label || 'Sun–Sat ET'})</span>
             ${renderKalshiWindowStats(week)}
           </div>
-          <div class="bot-stat" style="min-width:7rem">
+          <div class="bot-stat kalshi-pnl-stat" style="min-width:7rem">
             <span class="muted" style="font-size:.62rem">Cash balance</span>
-            <strong>${cash}</strong>
+            ${renderKalshiSimpleStat(cash, 'Kalshi wallet', '&nbsp;')}
           </div>
-          <div class="bot-stat" style="min-width:8rem">
+          <div class="bot-stat kalshi-pnl-stat" style="min-width:8rem">
             <span class="muted" style="font-size:.62rem">Open positions</span>
-            <strong>${openN}</strong>
-            <div class="muted" style="font-size:.62rem;margin-top:.15rem">exposure ${openExp}</div>
+            ${renderKalshiSimpleStat(openN, `exposure ${openExp}`, 'at risk now')}
           </div>
         </div>
         <p class="muted" style="font-size:.65rem;margin:.25rem 0 0">
@@ -6922,8 +6940,6 @@
         tasks.push(loadHourlyV2());
       } else if (activeTab === 'sports') {
         tasks.push(loadSports());
-      } else if (activeTab === 'kalshi-pnl') {
-        tasks.push(loadKalshiPortfolioPnl());
       }
       await Promise.all(tasks);
       } finally {
@@ -6935,6 +6951,9 @@
     loadAll();
     updateEdtClock();
     setInterval(loadAll, LOAD_ALL_INTERVAL_MS);
+    setInterval(() => {
+      if (activeTab === 'kalshi-pnl') loadKalshiPortfolioPnl();
+    }, KALSHI_PNL_INTERVAL_MS);
     setInterval(loadLiveMonitor, LIVE_MONITOR_INTERVAL_MS);
     setInterval(updateEdtClock, 1000);
 

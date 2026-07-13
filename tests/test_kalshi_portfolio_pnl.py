@@ -80,9 +80,11 @@ def test_summarize_window_investment_and_rates():
   assert block["closed_legs"] == 1
   assert block["entries"] == 2
   assert block["total_pnl_usd"] == 2.0
-  assert block["invested_usd"] == 7.0
+  assert block["invested_usd"] == 5.0
+  assert block["entry_cost_usd"] == 5.0
+  assert block["buy_volume_usd"] == 7.0
   assert block["pnl_per_leg_usd"] == 2.0
-  assert block["roi_pct"] == round(100 * 2 / 7, 1)
+  assert block["roi_pct"] == round(100 * 2 / 5, 1)
   assert block["pnl_per_hour_usd"] is not None
 
 
