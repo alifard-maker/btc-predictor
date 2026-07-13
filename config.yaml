@@ -302,7 +302,7 @@ hourly:
       min_hours: 0.12
       min_ask_edge_cents: 15
       max_stake_usd: 2.50
-    experiment_start_at: "2026-07-04T16:59:00+00:00"  # historical Kalshi reference epoch
+    experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET — experiment / Kalshi wallet anchor
     twin_live:
       enabled: true
       continuous_enabled: true
@@ -576,7 +576,7 @@ hourly_v2:
     max_spend_per_hour_usd: 15
     continuous_enabled: true
     poll_seconds: 10
-    experiment_start_at: "2026-07-04T16:59:00+00:00"
+    experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET
     entry_strategy:
       enabled: true
       min_ask_edge_cents: 9
@@ -1079,7 +1079,7 @@ eth:
     sigma_calibration: true
   hourly_v2:
     enabled: true
-    experiment_start_at: "2026-07-04T16:59:00+00:00"
+    experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET
     bot:
       enabled: true
       mode: paper
@@ -1148,7 +1148,7 @@ spx:
       min_edge_override_regime: 0.10
     bot:
       # Live + paper trial execution merged from eth_aligned_index_hourly_bot.yaml (ETH hourly live parity)
-      experiment_start_at: "2026-07-04T16:59:00+00:00"
+      experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET
       live_inventory:
         range_band_spot_entry_guard:
           min_buffer_usd: 25
@@ -1220,7 +1220,7 @@ ndx:
       min_edge_override_regime: 0.10
     bot:
       # Live + paper trial execution merged from eth_aligned_index_hourly_bot.yaml (ETH hourly live parity)
-      experiment_start_at: "2026-07-04T16:59:00+00:00"
+      experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET
       live_inventory:
         range_band_spot_entry_guard:
           min_buffer_usd: 90
