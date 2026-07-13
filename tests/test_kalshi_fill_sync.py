@@ -618,3 +618,56 @@ def test_summarize_prefers_sell_fill_over_settlement():
   sm = summarize_kalshi_experiment_fills(kalshi, since=since, asset="btc")
   assert sm["closed_trades"] == 1
   assert sm["total_pnl_usd"] == 0.26
+
+
+def test_fill_action_side_prefers_order_cache_over_v2_sell_no():
+  """V2 fills may show sell/no when the order was sell/yes (YES exit)."""
+  from src.trading.kalshi_fill_sync import _fill_action_side
+
+  fill = {
+    "order_id": "exit-yes",
+    "ticker": "KXETHD-26JUL1304-T1779.99",
+    "action": "sell",
+    "side": "no",
+    "no_price": 36,
+    "count_fp": "2.00",
+  }
+  cache = {"exit-yes": ("sell", "yes")}
+  leg = _fill_action_side(fill, cache)
+  assert leg == ("KXETHD-26JUL1304-T1779.99", "sell", "yes")
+
+
+def test_pair_fifo_skips_settlement_after_early_sell():
+  """Do not double-count settlement when inventory was already sold."""
+  from datetime import timezone
+
+  from src.trading.kalshi_fill_sync import pair_fifo_closed_legs
+
+  t0 = datetime(2026, 7, 13, 3, 19, 22, tzinfo=timezone.utc)
+  t1 = datetime(2026, 7, 13, 3, 25, 33, tzinfo=timezone.utc)
+  t2 = datetime(2026, 7, 13, 4, 2, 19, tzinfo=timezone.utc)
+  buys = [{
+    "order_id": "buy",
+    "contracts": 2.0,
+    "price_cents": 80,
+    "created_at": t0,
+  }]
+  exits = [
+    {
+      "order_id": "sell",
+      "contracts": 2.0,
+      "price_cents": 92,
+      "created_at": t1,
+    },
+    {
+      "order_id": "settle",
+      "contracts": 2.0,
+      "price_cents": 0,
+      "created_at": t2,
+      "exit_source": "settlement",
+    },
+  ]
+  closed = pair_fifo_closed_legs(buys, exits)
+  assert len(closed) == 1
+  assert closed[0]["exit_type"] == "SELL"
+  assert closed[0]["pnl_usd"] == 0.24

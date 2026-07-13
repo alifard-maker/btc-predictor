@@ -15,9 +15,8 @@ from src.trading.hourly_event_time import market_ticker_event_ticker
 from src.trading.kalshi_fill_sync import (
   _aggregate_fills_to_orders,
   _build_order_direction_cache,
-  _exit_cents_from_settlement,
-  _settlement_contract_count,
   _settlement_created_at,
+  pair_fifo_closed_legs,
 )
 from src.trading.kalshi_portfolio_pnl_store import (
   KalshiPortfolioPnlStore,
@@ -161,33 +160,34 @@ def _entry_fingerprint(order_id: str, ticker: str, side: str, bought_at: datetim
   return hashlib.sha1(raw.encode()).hexdigest()
 
 
-def _aggregate_all_settlements(settlements: list[dict[str, Any]]) -> list[dict[str, Any]]:
-  out: list[dict[str, Any]] = []
-  for row in settlements:
-    ticker = str(row.get("ticker") or row.get("market_ticker") or "").strip()
-    if not ticker:
-      continue
-    ts = _settlement_created_at(row)
-    for side in ("yes", "no"):
-      contracts = _settlement_contract_count(row, side)
-      if contracts < 0.05:
-        continue
-      exit_c = _exit_cents_from_settlement(row, side=side)
-      if exit_c is None:
-        continue
-      settle_key = ts.isoformat() if isinstance(ts, datetime) else "unknown"
-      out.append({
-        "order_id": f"settle:{ticker}:{side}:{settle_key}",
-        "ticker": ticker,
-        "action": "sell",
-        "side": side,
-        "contracts": contracts,
-        "price_cents": exit_c,
-        "created_at": ts,
-        "exit_source": "settlement",
-      })
-  out.sort(key=lambda r: r.get("created_at") or datetime.min.replace(tzinfo=timezone.utc))
-  return out
+def _settlement_net_pnl_usd(row: dict[str, Any]) -> float | None:
+  """Per-market net realized P&L from a Kalshi /portfolio/settlements row (matches Kalshi UI)."""
+  result = str(row.get("market_result") or "").lower()
+  if result in ("void", "scalar", ""):
+    return None
+  try:
+    value = int(row.get("value") if row.get("value") not in (None, "") else 0)
+    yes_count = float(row.get("yes_count_fp") or row.get("yes_count") or 0)
+    no_count = float(row.get("no_count_fp") or row.get("no_count") or 0)
+    yes_cost = float(row.get("yes_total_cost_dollars") or 0)
+    no_cost = float(row.get("no_total_cost_dollars") or 0)
+    fee = float(row.get("fee_cost") or 0)
+  except (TypeError, ValueError):
+    return None
+  if yes_count < 0.05 and no_count < 0.05:
+    return None
+  yes_payout = yes_count * (value / 100.0)
+  no_payout = no_count * ((100 - value) / 100.0)
+  return round(yes_payout + no_payout - yes_cost - no_cost - fee, 2)
+
+
+def _settlement_entry_cost_usd(row: dict[str, Any]) -> float:
+  try:
+    yes_cost = float(row.get("yes_total_cost_dollars") or 0)
+    no_cost = float(row.get("no_total_cost_dollars") or 0)
+  except (TypeError, ValueError):
+    return 0.0
+  return round(yes_cost + no_cost, 2)
 
 
 def portfolio_activity_from_kalshi(
@@ -200,7 +200,6 @@ def portfolio_activity_from_kalshi(
   raw_fills = kalshi.list_fills(limit=fill_limit, critical=True)
   raw_settlements = kalshi.list_settlements(limit=settlement_limit, critical=True)
   orders = _aggregate_fills_to_orders(raw_fills, order_cache=order_cache)
-  settlement_exits = _aggregate_all_settlements(raw_settlements)
 
   entries: list[dict[str, Any]] = []
   for order in orders:
@@ -229,65 +228,56 @@ def portfolio_activity_from_kalshi(
   for order in orders:
     legs[(str(order["ticker"]), str(order["side"]))].append(order)
 
-  settlement_by_leg: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-  for exit_row in settlement_exits:
-    settlement_by_leg[(str(exit_row["ticker"]), str(exit_row["side"]))].append(exit_row)
-
   closed: list[dict[str, Any]] = []
+  settled_tickers: set[str] = set()
+  for row in raw_settlements:
+    ticker = str(row.get("ticker") or row.get("market_ticker") or "").strip()
+    if not ticker:
+      continue
+    pnl = _settlement_net_pnl_usd(row)
+    if pnl is None:
+      continue
+    exit_at = _settlement_created_at(row) or datetime.min.replace(tzinfo=timezone.utc)
+    cost_usd = _settlement_entry_cost_usd(row)
+    settled_tickers.add(ticker)
+    closed.append({
+      "fingerprint": _leg_fingerprint(ticker, "market", exit_at, exit_at, 0),
+      "ticker": ticker,
+      "side": "market",
+      "category": categorize_ticker(ticker),
+      "contracts": 0,
+      "entry_cents": 0,
+      "exit_cents": 0,
+      "cost_usd": cost_usd,
+      "pnl_usd": pnl,
+      "exit_at": exit_at,
+      "exit_type": "SETTLEMENT",
+      "buy_at": exit_at,
+    })
+
   for (ticker, side), leg_orders in legs.items():
-    buys = sorted(
-      [o for o in leg_orders if o["action"] == "buy"],
-      key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
-    )
-    sells = sorted(
-      [o for o in leg_orders if o["action"] == "sell"],
-      key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
-    )
-    leg_settlements = settlement_by_leg.get((ticker, side), [])
-    exits = sorted(
-      sells + leg_settlements,
-      key=lambda o: o.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
-    )
-    sell_i = 0
-    for buy in buys:
-      buy_time = buy.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
-      while sell_i < len(exits):
-        sell = exits[sell_i]
-        sell_time = sell.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
-        if sell_time < buy_time:
-          sell_i += 1
-          continue
-        contracts = max(1, int(round(min(float(buy["contracts"]), float(sell["contracts"])))))
-        entry_c = int(buy["price_cents"])
-        exit_c = int(sell["price_cents"])
-        sell_i += 1
-        cost_usd = round(contracts * entry_c / 100.0, 2)
-        pnl = round(
-          float(
-            leg_pnl_usd(
-              entry_price_cents=entry_c,
-              mark_or_exit_cents=exit_c,
-              contracts=contracts,
-            )
-            or 0.0,
-          ),
-          2,
-        )
-        closed.append({
-          "fingerprint": _leg_fingerprint(ticker, side, buy_time, sell_time, contracts),
-          "ticker": ticker,
-          "side": side,
-          "category": categorize_ticker(ticker),
-          "contracts": contracts,
-          "entry_cents": entry_c,
-          "exit_cents": exit_c,
-          "cost_usd": cost_usd,
-          "pnl_usd": pnl,
-          "exit_at": sell_time,
-          "exit_type": "SETTLEMENT" if sell.get("exit_source") == "settlement" else "SELL",
-          "buy_at": buy_time,
-        })
-        break
+    if ticker in settled_tickers:
+      continue
+    buys = [o for o in leg_orders if o["action"] == "buy"]
+    sells = [o for o in leg_orders if o["action"] == "sell"]
+    for leg in pair_fifo_closed_legs(buys, sells):
+      buy_time = leg["buy_at"]
+      sell_time = leg["exit_at"]
+      contracts = leg["contracts"]
+      closed.append({
+        "fingerprint": _leg_fingerprint(ticker, side, buy_time, sell_time, contracts),
+        "ticker": ticker,
+        "side": side,
+        "category": categorize_ticker(ticker),
+        "contracts": contracts,
+        "entry_cents": leg["entry_cents"],
+        "exit_cents": leg["exit_cents"],
+        "cost_usd": leg["cost_usd"],
+        "pnl_usd": leg["pnl_usd"],
+        "exit_at": sell_time,
+        "exit_type": leg["exit_type"],
+        "buy_at": buy_time,
+      })
   return {"closed": closed, "entries": entries}
 
 

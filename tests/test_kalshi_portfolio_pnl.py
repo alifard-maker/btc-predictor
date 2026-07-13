@@ -161,6 +161,21 @@ def test_daily_and_weekly_history():
   assert weeks[0]["is_current_week"] is True
 
 
+def test_settlement_net_pnl_matches_kalshi_ui():
+  from src.trading.kalshi_portfolio_pnl import _settlement_net_pnl_usd
+
+  row = {
+    "market_result": "yes",
+    "value": 100,
+    "yes_count_fp": "4.00",
+    "no_count_fp": "4.00",
+    "yes_total_cost_dollars": "3.560000",
+    "no_total_cost_dollars": "2.560000",
+    "fee_cost": "0.092100",
+  }
+  assert _settlement_net_pnl_usd(row) == -2.21
+
+
 def test_build_report_without_kalshi_auth(tmp_path):
   store = KalshiPortfolioPnlStore(tmp_path / "k.db")
 
