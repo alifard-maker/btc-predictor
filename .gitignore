@@ -6,6 +6,7 @@ data/candles/
 data/logs/
 data/*.log
 data/backups/
+data/.persistent_volume
 *.db
 .env
 .DS_Store

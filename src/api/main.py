@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from fastapi import Depends, FastAPI, Form, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from src.api.auth import (
   add_session_middleware,
@@ -2596,6 +2596,46 @@ def admin_backup_logs(_: None = Depends(_verify_admin)):
   if _loop is None:
     raise HTTPException(503, "Service starting")
   return {"status": "ok", **_loop.run_log_backup(reason="manual")}
+
+
+@app.get("/api/admin/backup-status")
+def admin_backup_status(_: None = Depends(_verify_admin)):
+  """Infra + Kalshi tax export status (volume, creds, per-bot CSV row counts)."""
+  from src.backup.logs_backup import backup_summary, tax_export_status, volume_is_persistent
+
+  if _loop is None:
+    raise HTTPException(503, "Service starting")
+  kalshi = getattr(_loop, "kalshi", None)
+  data_dir = os.getenv("DATA_DIR", "/data")
+  return {
+    "status": "ok",
+    "data_dir": data_dir,
+    "volume_mounted_at_data": volume_is_persistent(data_dir),
+    "railway_volume_mount_path": os.getenv("RAILWAY_VOLUME_MOUNT_PATH"),
+    "kalshi_authenticated": bool(kalshi and getattr(kalshi, "authenticated", False)),
+    "log_backup": backup_summary(_cfg),
+    "tax_export": tax_export_status(_cfg),
+  }
+
+
+@app.get("/api/admin/backup-archive")
+def admin_backup_archive(
+  mode: str = Query("live", pattern="^(paper|live)$"),
+  _: None = Depends(_verify_admin),
+):
+  """Download paper/ or live/ backup folder as zip (tax CSVs live under live/)."""
+  from src.backup.logs_backup import build_backup_archive
+
+  try:
+    payload = build_backup_archive(_cfg, mode)
+  except FileNotFoundError as e:
+    raise HTTPException(404, str(e)) from e
+  stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+  return Response(
+    content=payload,
+    media_type="application/zip",
+    headers={"Content-Disposition": f'attachment; filename="btc-predictor-{mode}-backup-{stamp}.zip"'},
+  )
 
 
 from src.api.index_hourly_routes import register_index_hourly_routes

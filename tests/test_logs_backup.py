@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sqlite3
 import tempfile
@@ -13,8 +14,10 @@ from src.backup.logs_backup import (
   BACKUP_ASSETS,
   HOURLY_BOT_KINDS_BY_ASSET,
   bot_db_specs,
+  build_backup_archive,
   on_trade_logged,
   run_full_backup,
+  tax_export_status,
   volume_is_persistent,
 )
 from src.backup.trade_hook import notify_trade_logged, parse_bot_db_meta, should_skip_audit_trade
@@ -281,3 +284,38 @@ def test_volume_is_persistent_requires_railway_env(monkeypatch):
   assert volume_is_persistent("/data") is False
   monkeypatch.setenv("RAILWAY_VOLUME_MOUNT_PATH", "/data")
   assert volume_is_persistent("/data") is True
+
+
+def test_build_backup_archive_zips_live_tree():
+  import zipfile
+
+  with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    live = root / "backups" / "live" / "btc_hourly"
+    live.mkdir(parents=True)
+    (live / "trades.csv").write_text("id,side\n1,yes\n", encoding="utf-8")
+    (root / "backups" / "live" / "TAX_README.txt").write_text("tax", encoding="utf-8")
+    cfg = {
+      "paths": {"logs": str(root / "data" / "logs")},
+      "log_backup": {"backup_dir": str(root / "backups")},
+    }
+    payload = build_backup_archive(cfg, "live")
+    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+      names = set(zf.namelist())
+    assert "live/btc_hourly/trades.csv" in names
+    assert "live/TAX_README.txt" in names
+
+
+def test_tax_export_status_lists_per_bot_scaffolds():
+  with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    live = root / "backups" / "live" / "eth_hourly"
+    live.mkdir(parents=True)
+    (live / "trades.csv").write_text("h\nrow\n", encoding="utf-8")
+    cfg = {
+      "paths": {"logs": str(root / "data" / "logs")},
+      "log_backup": {"backup_dir": str(root / "backups")},
+    }
+    status = tax_export_status(cfg)
+    assert status["pnl_source"] == "kalshi_wallet"
+    assert status["per_bot"]["eth_hourly"]["kalshi_wallet_rows"] == 1

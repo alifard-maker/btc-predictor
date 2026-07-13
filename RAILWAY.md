@@ -62,6 +62,36 @@ curl -X POST -H "X-Api-Key: YOUR_ADMIN_KEY" https://YOUR-DOMAIN/api/admin/backup
 
 Local CLI: `PYTHONPATH=. python scripts/backup_logs.py`
 
+### 2b. Sync Railway backups to your Mac (tax CSVs)
+
+Production tax files live on the **Railway volume** at `/data/backups/live/`, not on your laptop unless you pull them.
+
+**Check volume + Kalshi + tax export:**
+
+```bash
+./scripts/railway-status.sh
+```
+
+**Download live tax folder to `data/backups/live/`:**
+
+```bash
+# ADMIN_API_KEY in .env (same as Railway)
+./scripts/sync-railway-tax-docs.sh
+```
+
+Under the hood this calls `GET /api/admin/backup-archive?mode=live` (zip of `live/`). Paper backups: `?mode=paper`.
+
+Manual curl:
+
+```bash
+curl -fsS -H "X-Api-Key: $ADMIN_API_KEY" \
+  "https://YOUR-DOMAIN/api/admin/backup-archive?mode=live" \
+  -o live-backup.zip
+unzip -o live-backup.zip -d data/backups
+```
+
+Detailed status (per-bot row counts): `GET /api/admin/backup-status` with `X-Api-Key`.
+
 ### 3. Required env vars
 
 | Variable | Value |

@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import logging
 import os
 import shutil
 import sqlite3
 import threading
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -516,6 +518,79 @@ def last_backup_status() -> dict[str, Any]:
   return dict(_LAST_RUN)
 
 
+def tax_export_status(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+  """Summarize Kalshi-wallet tax CSVs on disk (for admin status + sync UI)."""
+  bcfg = backup_cfg(cfg or {})
+  live_dir = bcfg["root"] / "live"
+  full_cfg = cfg or {"paths": {"logs": str(bcfg["data_dir"] / "logs")}}
+  if "paths" not in full_cfg:
+    full_cfg = {**full_cfg, "paths": {"logs": str(bcfg["data_dir"] / "logs")}}
+  per_bot: dict[str, Any] = {}
+  if live_dir.is_dir():
+    for asset, kind, _db_path in bot_db_specs(full_cfg):
+      label = f"{asset}_{kind}"
+      tax_csv = live_dir / label / "trades.csv"
+      bot_log = live_dir / label / "bot_log_trades.csv"
+      row_count = 0
+      if tax_csv.exists():
+        try:
+          with open(tax_csv, encoding="utf-8") as f:
+            row_count = max(0, sum(1 for _ in f) - 1)
+        except OSError:
+          pass
+      per_bot[label] = {
+        "trades_csv": tax_csv.exists(),
+        "bot_log_csv": bot_log.exists(),
+        "kalshi_wallet_rows": row_count,
+      }
+    other = live_dir / "kalshi_other" / "trades.csv"
+    other_rows = 0
+    if other.exists():
+      try:
+        with open(other, encoding="utf-8") as f:
+          other_rows = max(0, sum(1 for _ in f) - 1)
+      except OSError:
+        pass
+    per_bot["kalshi_other"] = {
+      "trades_csv": other.exists(),
+      "kalshi_wallet_rows": other_rows,
+    }
+  tax_manifest = live_dir / "tax_manifest.json"
+  manifest_payload: dict[str, Any] | None = None
+  if tax_manifest.exists():
+    try:
+      manifest_payload = json.loads(tax_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+      manifest_payload = None
+  return {
+    "backup_root": str(live_dir.parent),
+    "live_dir": str(live_dir),
+    "tax_readme": (live_dir / "TAX_README.txt").exists(),
+    "tax_manifest": manifest_payload,
+    "all_trades_csv": (live_dir / "all_trades.csv").exists(),
+    "per_bot": per_bot,
+    "pnl_source": "kalshi_wallet",
+  }
+
+
+def build_backup_archive(cfg: dict[str, Any] | None, mode: str) -> bytes:
+  """Zip paper/ or live/ backup tree for download to local Mac."""
+  if mode not in ("paper", "live"):
+    raise ValueError("mode must be paper or live")
+  bcfg = backup_cfg(cfg or {})
+  mode_dir = bcfg["root"] / mode
+  if not mode_dir.is_dir():
+    raise FileNotFoundError(f"Backup directory missing: {mode_dir}")
+  buf = io.BytesIO()
+  with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for path in sorted(mode_dir.rglob("*")):
+      if not path.is_file():
+        continue
+      arcname = str(path.relative_to(bcfg["root"]))
+      zf.write(path, arcname=arcname)
+  return buf.getvalue()
+
+
 def backup_summary(cfg: dict[str, Any]) -> dict[str, Any]:
   bcfg = backup_cfg(cfg)
   root = bcfg["root"]
@@ -534,6 +609,8 @@ def backup_summary(cfg: dict[str, Any]) -> dict[str, Any]:
       "all_trades_csv": all_csv.exists(),
       "manifest": (mode_dir / "manifest.json").exists(),
     }
+  if (root / "live").is_dir():
+    out["tax_export"] = tax_export_status(cfg)
   snap_root = root / "snapshots"
   out["snapshot_count"] = len(list(snap_root.iterdir())) if snap_root.exists() else 0
   return out
