@@ -79,7 +79,7 @@ Production tax files live on the **Railway volume** at `/data/backups/live/`, no
 ./scripts/sync-railway-tax-docs.sh
 ```
 
-Under the hood this calls `GET /api/admin/backup-archive?mode=live` (zip of `live/`). Paper backups: `?mode=paper`.
+Under the hood this calls `GET /api/admin/backup-archive?mode=live` (zip of `live/`), or falls back to `railway ssh` + tar on the **deployed container** (not `railway run`, which is local and has no `/data` volume). Paper backups: `?mode=paper`.
 
 Manual curl:
 

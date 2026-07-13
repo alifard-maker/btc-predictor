@@ -13,6 +13,10 @@ if [ -f .env ]; then
   set +a
 fi
 
+if [ -z "${ADMIN_API_KEY:-}" ] && command -v railway >/dev/null 2>&1 && railway whoami >/dev/null 2>&1; then
+  ADMIN_API_KEY="$(railway variable list --kv 2>/dev/null | sed -n 's/^ADMIN_API_KEY=//p' | head -1 || true)"
+fi
+
 echo "=== Railway production status ==="
 echo "Health: $HEALTH_URL"
 echo ""
