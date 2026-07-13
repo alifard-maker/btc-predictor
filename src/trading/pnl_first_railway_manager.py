@@ -411,8 +411,16 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
         actions.append({"action": "index_paper_settings_sync", **seed_result})
 
     if index_live_exempt and asset in ("spx", "ndx") and kind == "hourly_live":
-      from src.trading.index_live_experiment import seed_index_live_mirror_from_cfg
+      from src.trading.index_live_experiment import seed_index_live_mirror_from_cfg, sync_index_live_store_if_armed
 
+      sync_result = sync_index_live_store_if_armed(
+        loop,
+        cfg,
+        asset,
+        source="pnl_first_manager_index_live_sync",
+      )
+      if sync_result.get("synced"):
+        actions.append({"action": "index_live_store_sync", **sync_result})
       seed_result = seed_index_live_mirror_from_cfg(
         store,
         cfg,

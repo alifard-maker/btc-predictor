@@ -118,11 +118,16 @@ def register_index_hourly_routes(app, loop_getter, cfg_getter, session_dep, appl
 
     live_prefix = f"/api/{asset}/hourly-live"
 
-    def _live_preflight(_user=Depends(session_dep), *, _asset=asset):
+    def _live_preflight(
+      lite: bool = Query(default=True),
+      _user=Depends(session_dep),
+      *,
+      _asset=asset,
+    ):
       from src.trading.index_live_experiment import run_index_live_preflight
 
       loop = _loop()
-      return run_index_live_preflight(loop, _cfg(), _asset)
+      return run_index_live_preflight(loop, _cfg(), _asset, lite=lite)
 
     def _live_bot_status(lightweight: bool = Query(default=True), _user=Depends(session_dep), *, _asset=asset):
       loop = _loop()

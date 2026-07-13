@@ -1167,6 +1167,8 @@
     const lastBotStatus = { btc: null, eth: null, spx: null, ndx: null };
     const lastHourlyLiveBotStatus = { eth: null, spx: null, ndx: null };
     const lastIndexLivePreflight = { spx: null, ndx: null };
+    const indexLivePreflightInFlight = { spx: false, ndx: false };
+    let indexLivePreflightTimer = null;
     const lastV2BotStatus = { btc: null, eth: null };
     const lastHourlyTrialBotStatusByKey = {};
     const HOURLY_TRIAL_KINDS = new Set(['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft', 'hourly_trial_mech']);
@@ -1306,7 +1308,7 @@
     }
 
     function indexLivePreflightUrl(asset) {
-      return `/api/${asset}/hourly-live/preflight`;
+      return `/api/${asset}/hourly-live/preflight?lite=true`;
     }
 
     function indexLiveArmUrl(asset) {
@@ -3604,14 +3606,22 @@
       return code;
     }
 
-    function renderIndexLivePreflight(asset, preflight) {
+    function renderIndexLivePreflight(asset, preflight, { stickyOnError = true } = {}) {
       const el = $(`${asset}-hourly-live-preflight`);
       if (!el) return;
       if (!preflight) {
         el.innerHTML = '<p class="muted">Loading preflight…</p>';
         return;
       }
-      lastIndexLivePreflight[asset] = preflight;
+      const isFetchError = (preflight.issues || []).some((i) => String(i).startsWith('preflight_fetch_error:'));
+      if (isFetchError && stickyOnError && lastIndexLivePreflight[asset] && !lastIndexLivePreflight[asset].issues?.some((i) => String(i).startsWith('preflight_fetch_error:'))) {
+        preflight = {
+          ...lastIndexLivePreflight[asset],
+          warnings: [...(lastIndexLivePreflight[asset].warnings || []), 'preflight_refresh_slow'],
+        };
+      } else {
+        lastIndexLivePreflight[asset] = preflight;
+      }
       const ok = !!preflight.ok;
       const issues = preflight.issues || [];
       const warnings = preflight.warnings || [];
@@ -3622,7 +3632,7 @@
         ? `<ul style="margin:.35rem 0 0 1rem;padding:0;font-size:.72rem">${issues.map((i) => `<li class="down">${indexLivePreflightIssueLabel(i)}</li>`).join('')}</ul>`
         : '<p class="muted" style="font-size:.72rem;margin:.35rem 0 0">No blocking issues.</p>';
       const warnHtml = warnings.length
-        ? `<p class="muted" style="font-size:.68rem;margin:.45rem 0 0"><strong>Warnings:</strong> ${warnings.join(' · ')}</p>`
+        ? `<p class="muted" style="font-size:.68rem;margin:.45rem 0 0"><strong>Warnings:</strong> ${warnings.map((w) => w === 'preflight_refresh_slow' ? 'preflight refresh slow (showing last good)' : w).join(' · ')}</p>`
         : '';
       const checks = [
         ['Kalshi auth', detail.kalshi_authenticated ? 'Yes' : 'No'],
@@ -3644,29 +3654,59 @@
         </div>`;
     }
 
+    function updateIndexLiveMirrorDom(asset, s, preflight) {
+      const pre = preflight || lastIndexLivePreflight[asset] || {};
+      const runtimeArmed = !!(pre.detail?.runtime_armed ?? pre.armed);
+      const enabled = !!s.enabled;
+      const enabledCls = enabled ? 'up' : 'down';
+      const enabledEl = $(`index-live-enabled-${asset}`);
+      if (enabledEl) {
+        enabledEl.textContent = enabled ? 'ON' : 'OFF';
+        enabledEl.className = enabledCls;
+      }
+      const armEl = $(`index-live-arm-${asset}`);
+      if (armEl && document.activeElement !== armEl) {
+        const canArm = !!pre.ok;
+        armEl.disabled = !canArm && !runtimeArmed;
+        armEl.checked = runtimeArmed;
+      }
+      const hintEl = $(`index-live-arm-hint-${asset}`);
+      if (hintEl) {
+        hintEl.textContent = runtimeArmed && !enabled
+          ? 'Armed — enabling auto-bet on server…'
+          : (canArmHint(pre) || 'Flip only when preflight is green.');
+      }
+      function canArmHint(p) {
+        return p.ok ? 'Preflight green — safe to arm.' : 'Preflight must be green before arming live.';
+      }
+    }
+
     function indexLiveMirrorSettingsHtml(asset, s, preflight) {
       const enabled = !!s.enabled;
       const enabledCls = enabled ? 'up' : 'down';
       const maxSpend = Number(s.max_spend_per_hour_usd ?? 15);
       const freeMode = !s.allow_strong && !s.allow_actionable;
       const pre = preflight || lastIndexLivePreflight[asset] || {};
+      const runtimeArmed = !!(pre.detail?.runtime_armed ?? pre.armed);
       const canArm = !!pre.ok;
-      const armed = !!s.enabled || !!pre.armed;
-      const toggleDisabled = !canArm && !armed;
+      const toggleDisabled = !canArm && !runtimeArmed;
       const toggleTitle = canArm
-        ? (armed ? 'Disarm live mirror' : 'Arm live mirror on Kalshi')
+        ? (runtimeArmed ? 'Disarm live mirror' : 'Arm live mirror on Kalshi')
         : 'Preflight must be green before arming live';
+      const armHint = runtimeArmed && !enabled
+        ? 'Armed — enabling auto-bet on server…'
+        : (canArm ? 'Preflight green — safe to arm.' : 'Preflight must be green before arming live.');
       return `
         <div class="bot-row" style="padding:.35rem .15rem .45rem;border-bottom:1px solid rgba(148,163,184,.12);margin-bottom:.35rem">
-          <p class="muted" style="font-size:.72rem;margin:0 0 .55rem"><strong>Preflight-gated arm</strong> — flip live only when checks above are green. Disarm stops new entries; open legs still managed.</p>
+          <p class="muted" style="font-size:.72rem;margin:0 0 .55rem"><strong>Preflight-gated arm</strong> — <span id="index-live-arm-hint-${asset}">${armHint}</span></p>
           <div class="bot-row" style="margin:0;align-items:center">
             <label class="bot-label" title="${toggleTitle}" style="margin-right:1rem">Live on Kalshi
               <label class="switch" style="margin-left:.35rem;opacity:${toggleDisabled ? '.45' : '1'}">
-                <input type="checkbox" id="index-live-arm-${asset}" ${armed ? 'checked' : ''} ${toggleDisabled ? 'disabled' : ''} onchange="onIndexLiveArmToggle('${asset}', this)">
+                <input type="checkbox" id="index-live-arm-${asset}" ${runtimeArmed ? 'checked' : ''} ${toggleDisabled ? 'disabled' : ''} onchange="onIndexLiveArmToggle('${asset}', this)">
                 <span class="slider"></span>
               </label>
             </label>
-            <div class="bot-stat"><span class="muted">Auto-bet</span><strong class="${enabledCls}">${enabled ? 'ON' : 'OFF'}</strong></div>
+            <div class="bot-stat"><span class="muted">Auto-bet</span><strong id="index-live-enabled-${asset}" class="${enabledCls}">${enabled ? 'ON' : 'OFF'}</strong></div>
             <div class="bot-stat"><span class="muted">Mode</span><strong class="bot-mode-live">LIVE</strong></div>
             <div class="bot-stat"><span class="muted">Max at-risk $ / hour</span><strong>$${maxSpend.toFixed(0)}</strong></div>
             <div class="bot-stat"><span class="muted">Filters</span><strong>${freeMode ? 'FREE' : 'guarded'}</strong></div>
@@ -3703,7 +3743,8 @@
           const data = await res.json();
           if (data.preflight) renderIndexLivePreflight(asset, data.preflight);
           if (data.bot?.ok) renderHourlyBot(data.bot, asset, HOURLY_LIVE_KIND);
-          loadIndexLivePreflight(asset);
+          loadIndexLivePreflight(asset, { force: true });
+        scheduleIndexLivePreflightPoll(asset);
         } catch (e) {
           el.checked = false;
           showError(`${asset.toUpperCase()} live arm: ` + e.message);
@@ -3724,28 +3765,41 @@
         }
         const data = await res.json();
         if (data.bot?.ok) renderHourlyBot(data.bot, asset, HOURLY_LIVE_KIND);
-        loadIndexLivePreflight(asset);
+        loadIndexLivePreflight(asset, { force: true });
+        scheduleIndexLivePreflightPoll(asset);
       } catch (e) {
         el.checked = true;
         showError(`${asset.toUpperCase()} live disarm: ` + e.message);
       }
     }
 
-    async function loadIndexLivePreflight(asset) {
+    async function loadIndexLivePreflight(asset, { force = false } = {}) {
+      if (indexLivePreflightInFlight[asset]) return;
+      const prev = lastIndexLivePreflight[asset];
+      const prevTs = prev?.ts ? Date.parse(prev.ts) : 0;
+      if (!force && prev && Date.now() - prevTs < 45000) return;
+      indexLivePreflightInFlight[asset] = true;
       try {
-        const pre = await getWithTimeout(indexLivePreflightUrl(asset), 12000);
+        const pre = await getWithTimeout(indexLivePreflightUrl(asset), 25000);
         renderIndexLivePreflight(asset, pre);
-        const p = botDomPrefix(HOURLY_LIVE_KIND, asset);
-        const armEl = $(`index-live-arm-${asset}`);
-        if (armEl) {
-          const canArm = !!pre.ok;
-          const armed = !!pre.armed;
-          armEl.disabled = !canArm && !armed;
-          armEl.checked = armed;
-        }
+        updateIndexLiveMirrorDom(asset, lastHourlyLiveBotStatus[asset]?.settings || {}, pre);
       } catch (e) {
-        renderIndexLivePreflight(asset, { ok: false, issues: [`preflight_fetch_error:${e.message}`], warnings: [] });
+        renderIndexLivePreflight(asset, {
+          ok: false,
+          issues: [`preflight_fetch_error:${e.message}`],
+          warnings: [],
+        }, { stickyOnError: true });
+      } finally {
+        indexLivePreflightInFlight[asset] = false;
       }
+    }
+
+    function scheduleIndexLivePreflightPoll(asset) {
+      if (indexLivePreflightTimer) clearInterval(indexLivePreflightTimer);
+      indexLivePreflightTimer = setInterval(() => {
+        if (activeTab === 'spx-hourly') loadIndexLivePreflight('spx');
+        else if (activeTab === 'ndx-hourly') loadIndexLivePreflight('ndx');
+      }, 60000);
     }
 
     function refreshIndexLiveBotDirect(asset, tabAtStart, gen) {
@@ -4611,12 +4665,21 @@
       if (!settingsWrap) return normalizeBotSettings(serverSettings, maxKey) || serverSettings || {};
 
       if (isHourlyLiveKind(kind)) {
+        const forceKey = botForceKey(kind, asset);
+        const needStructure = !botSettingsDomReady[key] || forceFlags[forceKey];
         if (asset === 'eth') {
-          settingsWrap.innerHTML = ethLiveMirrorSettingsHtml(asset, serverSettings);
-        } else {
+          if (needStructure) {
+            settingsWrap.innerHTML = ethLiveMirrorSettingsHtml(asset, serverSettings);
+            forceFlags[forceKey] = false;
+            botSettingsDomReady[key] = true;
+          }
+        } else if (needStructure) {
           settingsWrap.innerHTML = indexLiveMirrorSettingsHtml(asset, serverSettings, lastIndexLivePreflight[asset]);
+          forceFlags[forceKey] = false;
+          botSettingsDomReady[key] = true;
+        } else {
+          updateIndexLiveMirrorDom(asset, serverSettings, lastIndexLivePreflight[asset]);
         }
-        botSettingsDomReady[key] = true;
         const norm = normalizeBotSettings(serverSettings, maxKey);
         lastKnownBotSettings[key] = norm;
         return norm || serverSettings;
@@ -6637,7 +6700,8 @@
         const liveCached = lastHourlyLiveBotStatus[asset];
         if (liveCached) renderHourlyBot(liveCached, asset, HOURLY_LIVE_KIND);
         else renderHourlyBot({ ok: false, error: 'Loading live mirror…' }, asset, HOURLY_LIVE_KIND);
-        loadIndexLivePreflight(asset);
+        loadIndexLivePreflight(asset, { force: true });
+        scheduleIndexLivePreflightPoll(asset);
       }
       get(api.calibration).catch(() => ({ summary: {} })).then((cal) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
@@ -6656,7 +6720,8 @@
         if (asset === 'spx' || asset === 'ndx') {
           refreshIndexTrialBot(asset, tabAtStart, gen);
           refreshIndexLiveBotDirect(asset, tabAtStart, gen);
-          loadIndexLivePreflight(asset);
+          loadIndexLivePreflight(asset, { force: true });
+        scheduleIndexLivePreflightPoll(asset);
           loadIndexHourlyLiveTrialCompare(asset);
         }
       } catch (e) {

@@ -139,9 +139,8 @@ def ensure_index_live_experiments(loop: Any) -> dict[str, Any]:
     if not index_live_mirror_active(loop.cfg, asset):
       results[asset] = {"ok": True, "skipped": True, "reason": "live_mirror_disabled"}
       continue
-    store = loop.hourly_bot_store(asset, kind="hourly_live")
-    results[asset] = seed_index_live_mirror_from_cfg(
-      store,
+    results[asset] = sync_index_live_store_if_armed(
+      loop,
       loop.cfg,
       asset,
       source="index_live_experiment_boot",
@@ -153,12 +152,55 @@ def ensure_index_live_experiments(loop: Any) -> dict[str, Any]:
   }
 
 
-def run_index_live_preflight(loop: Any, cfg: dict[str, Any] | None, asset: str) -> dict[str, Any]:
+def _cached_index_hourly_tab(loop: Any, asset: str) -> dict[str, Any] | None:
+  """Fast tab for preflight — reuse bot-status cache, avoid full prediction rebuild."""
+  try:
+    tab = loop._hourly_tab_for_bot_status(asset)
+    if tab and tab.get("ok"):
+      return tab
+  except Exception:
+    pass
+  try:
+    return loop.index_hourly_prediction(asset, include_bot=False)
+  except Exception:
+    return None
+
+
+def sync_index_live_store_if_armed(
+  loop: Any,
+  cfg: dict[str, Any] | None,
+  asset: str,
+  *,
+  source: str = "index_live_sync",
+) -> dict[str, Any]:
+  """Keep hourly_live store enabled when runtime live arm is on."""
+  asset = asset.lower()
+  if not index_live_runtime_armed(cfg, asset):
+    return {"ok": True, "skipped": True, "reason": "not_runtime_armed", "asset": asset}
+  store = loop.hourly_bot_store(asset, kind="hourly_live")
+  settings = store.get_settings()
+  needs = (
+    not settings.enabled
+    or str(settings.mode or "").lower() != "live"
+    or not settings.continuous
+  )
+  if not needs:
+    return {"ok": True, "synced": True, "unchanged": True, "asset": asset, "enabled": settings.enabled}
+  return seed_index_live_mirror_from_cfg(store, cfg, asset, source=source)
+
+
+def run_index_live_preflight(
+  loop: Any,
+  cfg: dict[str, Any] | None,
+  asset: str,
+  *,
+  lite: bool = False,
+) -> dict[str, Any]:
   """Preflight checks before arming SPX/NDX live mirror."""
   asset = asset.lower()
   issues: list[str] = []
   warnings: list[str] = []
-  detail: dict[str, Any] = {"asset": asset}
+  detail: dict[str, Any] = {"asset": asset, "lite": lite}
 
   from src.trading.pnl_first_railway_manager import PnlFirstManagerConfig
 
@@ -188,13 +230,17 @@ def run_index_live_preflight(loop: Any, cfg: dict[str, Any] | None, asset: str) 
   if not paper_exp.get("enabled"):
     issues.append("index_paper_experiment_off")
 
+  runtime_armed = index_live_runtime_armed(cfg, asset)
+  detail["runtime_armed"] = runtime_armed
+  detail["yaml_live_mirror_enabled"] = bool(index_live_mirror_cfg(cfg, asset).get("enabled"))
+
   tab: dict[str, Any] | None = None
   try:
-    tab = loop.index_hourly_prediction(asset, include_bot=False)
-    detail["hourly_tab_ok"] = bool(tab.get("ok"))
-    event = (tab.get("event") or {}).get("event_ticker")
+    tab = _cached_index_hourly_tab(loop, asset)
+    detail["hourly_tab_ok"] = bool(tab and tab.get("ok"))
+    event = (tab.get("event") or {}).get("event_ticker") if tab else None
     detail["event_ticker"] = event
-    if not tab.get("ok") or not event:
+    if not tab or not tab.get("ok") or not event:
       issues.append("hourly_tab_unavailable")
   except Exception as exc:
     issues.append(f"hourly_tab_error:{type(exc).__name__}")
@@ -210,10 +256,7 @@ def run_index_live_preflight(loop: Any, cfg: dict[str, Any] | None, asset: str) 
   detail["live_settlement_index"] = si_cfg
   if si_cfg.get("enabled") and si_cfg.get("require_for_live_entries"):
     try:
-      tab_for_si = tab
-      if tab_for_si is None:
-        tab_for_si = loop.index_hourly_prediction(asset, include_bot=False)
-      si = build_settlement_index_status(tab_for_si, cfg=asset_cfg(cfg, asset))
+      si = build_settlement_index_status(tab, cfg=asset_cfg(cfg, asset))
       detail["settlement_index"] = si
       if not si.get("ok"):
         issues.append("settlement_index_not_live")
@@ -227,6 +270,7 @@ def run_index_live_preflight(loop: Any, cfg: dict[str, Any] | None, asset: str) 
   if not detail["market_hours_open"]:
     warnings.append("outside_market_hours")
 
+  live_enabled = False
   try:
     paper_store = loop.hourly_bot_store(asset, kind="hourly")
     paper_settings = paper_store.get_settings()
@@ -245,36 +289,47 @@ def run_index_live_preflight(loop: Any, cfg: dict[str, Any] | None, asset: str) 
     issues.append(f"paper_store_error:{type(exc).__name__}")
 
   try:
+    if runtime_armed:
+      sync_index_live_store_if_armed(loop, cfg, asset, source="index_live_preflight_sync")
     live_store = loop.hourly_bot_store(asset, kind="hourly_live")
     live_settings = live_store.get_settings()
-    open_pos = (
-      live_store.all_open_live_positions()
-      if live_settings.mode == "live" and hasattr(live_store, "all_open_live_positions")
-      else []
-    )
-    detail["live_open_legs"] = len(open_pos or [])
-    detail["live_open_exposure_usd"] = sum(float(p.get("cost_usd") or 0) for p in (open_pos or []))
-    if detail["live_open_legs"] or float(detail["live_open_exposure_usd"] or 0) > 0.01:
-      issues.append("live_mirror_has_open_legs")
+    live_enabled = bool(live_settings.enabled)
+    detail["live_settings"] = {
+      "enabled": live_settings.enabled,
+      "mode": live_settings.mode,
+      "continuous": live_settings.continuous,
+    }
+    if runtime_armed and not live_settings.enabled:
+      warnings.append("live_mirror_auto_bet_off")
+    if runtime_armed and not live_settings.continuous:
+      warnings.append("live_mirror_continuous_off")
+    if not lite:
+      open_pos = (
+        live_store.all_open_live_positions()
+        if live_settings.mode == "live" and hasattr(live_store, "all_open_live_positions")
+        else []
+      )
+      detail["live_open_legs"] = len(open_pos or [])
+      detail["live_open_exposure_usd"] = sum(float(p.get("cost_usd") or 0) for p in (open_pos or []))
+      if detail["live_open_legs"] or float(detail["live_open_exposure_usd"] or 0) > 0.01:
+        issues.append("live_mirror_has_open_legs")
   except Exception as exc:
     issues.append(f"live_store_error:{type(exc).__name__}")
 
-  try:
-    recon = loop.hourly_live_reconcile(asset, kind="hourly_live")
-    detail["reconcile"] = {
-      "event_ticker": recon.get("event_ticker"),
-      "kalshi_only": len(recon.get("kalshi_only") or []),
-      "bot_only": len(recon.get("bot_only") or []),
-    }
-    if detail["reconcile"]["bot_only"]:
-      issues.append("reconcile_bot_only")
-    if detail["reconcile"]["kalshi_only"]:
-      issues.append(f"reconcile_kalshi_only:{detail['reconcile']['kalshi_only']}")
-  except Exception as exc:
-    issues.append(f"reconcile_error:{type(exc).__name__}")
-
-  detail["runtime_armed"] = index_live_runtime_armed(cfg, asset)
-  detail["yaml_live_mirror_enabled"] = bool(index_live_mirror_cfg(cfg, asset).get("enabled"))
+  if not lite:
+    try:
+      recon = loop.hourly_live_reconcile(asset, kind="hourly_live")
+      detail["reconcile"] = {
+        "event_ticker": recon.get("event_ticker"),
+        "kalshi_only": len(recon.get("kalshi_only") or []),
+        "bot_only": len(recon.get("bot_only") or []),
+      }
+      if detail["reconcile"]["bot_only"]:
+        issues.append("reconcile_bot_only")
+      if detail["reconcile"]["kalshi_only"]:
+        issues.append(f"reconcile_kalshi_only:{detail['reconcile']['kalshi_only']}")
+    except Exception as exc:
+      issues.append(f"reconcile_error:{type(exc).__name__}")
 
   return {
     "ok": not issues,
@@ -282,6 +337,7 @@ def run_index_live_preflight(loop: Any, cfg: dict[str, Any] | None, asset: str) 
     "warnings": warnings,
     "detail": detail,
     "armed": index_live_mirror_active(cfg, asset),
+    "live_enabled": live_enabled,
     "ts": datetime.now(timezone.utc).isoformat(),
   }
 
@@ -289,7 +345,7 @@ def run_index_live_preflight(loop: Any, cfg: dict[str, Any] | None, asset: str) 
 def arm_index_live_mirror(loop: Any, cfg: dict[str, Any] | None, asset: str) -> dict[str, Any]:
   """Arm live mirror after preflight passes (runtime toggle — yaml stays disabled)."""
   asset = asset.lower()
-  preflight = run_index_live_preflight(loop, cfg, asset)
+  preflight = run_index_live_preflight(loop, cfg, asset, lite=False)
   if not preflight.get("ok"):
     return {
       "ok": False,
@@ -298,7 +354,7 @@ def arm_index_live_mirror(loop: Any, cfg: dict[str, Any] | None, asset: str) -> 
     }
   set_index_live_runtime_armed(cfg, asset, True)
   store = loop.hourly_bot_store(asset, kind="hourly_live")
-  seed = seed_index_live_mirror_from_cfg(store, cfg, asset, source="index_live_arm")
+  seed = sync_index_live_store_if_armed(loop, cfg, asset, source="index_live_arm")
   return {
     "ok": True,
     "armed": True,
