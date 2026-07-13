@@ -1100,11 +1100,12 @@
     let slot15CompareLastAt = 0;
     let slot15CompareInFlight = false;
     const SLOT15_COMPARE_INTERVAL_MS = 30000;
-    const HOURLY_COMPARE_INTERVAL_MS = 30000;
+    const HOURLY_COMPARE_INTERVAL_MS = 120000;
     const PERF_REPORT_INTERVAL_MS = 60000;
     const FOUR_K_REVISION_INTERVAL_MS = 60000;
     let hourlyCompareLastAt = 0;
     let hourlyCompareInFlight = false;
+    let lastHourlyCompareData = null;
     let perfReportLastAt = 0;
     let lastPerfReport = null;
     let perfReportInFlight = false;
@@ -1924,7 +1925,8 @@
         return;
       }
       if (isHourlyTab(activeTab)) {
-        loadHourlyLiveTrialCompare();
+        const card = $('hourly-live-trial-compare-card');
+        if (card?.open) loadHourlyLiveTrialCompare();
       }
     }
 
@@ -4691,7 +4693,18 @@
     let epochReconcileAsset = 'btc';
     let epochReconcileInFlight = false;
     let epochReconcileLastAt = 0;
-    const EPOCH_RECONCILE_INTERVAL_MS = 60000;
+    let lastEpochReconcileData = null;
+    const EPOCH_RECONCILE_INTERVAL_MS = 120000;
+    const PANEL_API_TIMEOUT_MS = 45000;
+
+    function bindLazyPanelLoad(cardId, loadFn) {
+      const card = $(cardId);
+      if (!card || card.dataset.lazyBound) return;
+      card.dataset.lazyBound = '1';
+      card.addEventListener('toggle', () => {
+        if (card.open) loadFn(true);
+      });
+    }
 
     function setEpochReconcileAsset(asset) {
       epochReconcileAsset = asset;
@@ -4705,9 +4718,15 @@
       const el = $('epoch-reconcile-report');
       if (!el) return;
       if (!data || !data.ok) {
+        if (lastEpochReconcileData?.ok) {
+          const stale = data?.error ? ` <span class="muted">(stale — ${data.error})</span>` : '';
+          el.innerHTML = renderEpochReconcileReport._lastHtml + stale;
+          return;
+        }
         el.innerHTML = `<p class="muted">Epoch reconcile unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
         return;
       }
+      lastEpochReconcileData = data;
       const totals = data.totals || {};
       const startLabel = data.epoch_start_at
         ? new Date(data.epoch_start_at).toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -4735,17 +4754,24 @@
           </tr></thead>
           <tbody>${rows || '<tr><td colspan="6" class="muted">No closed trades since epoch.</td></tr>'}</tbody>
         </table>`;
+      renderEpochReconcileReport._lastHtml = el.innerHTML;
     }
 
     async function loadEpochReconcile(force = false) {
+      const card = $('epoch-reconcile-card');
+      if (!force && card && !card.open) return;
       if (!force && epochReconcileInFlight) return;
       const now = Date.now();
       if (!force && now - epochReconcileLastAt < EPOCH_RECONCILE_INTERVAL_MS) return;
       epochReconcileInFlight = true;
+      const reportEl = $('epoch-reconcile-report');
+      if (force && reportEl && !lastEpochReconcileData) {
+        reportEl.innerHTML = '<p class="muted">Loading…</p>';
+      }
       try {
         const data = await getWithTimeout(
           `/api/pnl-first/epoch-reconcile?asset=${encodeURIComponent(epochReconcileAsset)}`,
-          20000,
+          PANEL_API_TIMEOUT_MS,
         );
         epochReconcileLastAt = Date.now();
         renderEpochReconcileReport(data);
@@ -4859,9 +4885,15 @@
       const el = $(targetId);
       if (!el) return;
       if (!data || !data.ok) {
+        if (targetId === 'hourly-live-trial-compare' && lastHourlyCompareData?.ok) {
+          const stale = data?.error ? ` <span class="muted">(stale — ${data.error})</span>` : '';
+          el.innerHTML = (renderHourlyLiveTrialCompare._lastHtml || '') + stale;
+          return;
+        }
         el.innerHTML = `<p class="muted">Comparison unavailable${data?.error ? `: ${data.error}` : ''}.</p>`;
         return;
       }
+      if (targetId === 'hourly-live-trial-compare') lastHourlyCompareData = data;
       const hours = data.hours || [];
       if (!hours.length) {
         const trialLabel = data.trial_kind === 'hourly_trial_mech' ? 'Trial Mech' : (data.trial_kind === 'slot15_trial' ? '15m trial' : 'standard trial');
@@ -4911,7 +4943,11 @@
         </div>`;
       }).join('');
       const gen = data.generated_at ? time(data.generated_at) : '—';
-      el.innerHTML = `${meta}${blocks}<p class="muted" style="font-size:.65rem;margin:.35rem 0 0">Generated ${gen}</p>`;
+      const cacheNote = data.cached ? ` · cache ${Number(data.cache_age_sec || 0).toFixed(0)}s` : '';
+      el.innerHTML = `${meta}${blocks}<p class="muted" style="font-size:.65rem;margin:.35rem 0 0">Generated ${gen}${cacheNote}</p>`;
+      if (targetId === 'hourly-live-trial-compare') {
+        renderHourlyLiveTrialCompare._lastHtml = el.innerHTML;
+      }
     }
 
     function renderFourKWeekPlan(data) {
@@ -5028,14 +5064,18 @@
     }
 
     async function loadHourlyLiveTrialCompare(force = false) {
+      const card = $('hourly-live-trial-compare-card');
+      if (!force && card && !card.open) return;
       if (!force && hourlyCompareInFlight) return;
       const now = Date.now();
       if (!force && now - hourlyCompareLastAt < HOURLY_COMPARE_INTERVAL_MS) return;
       hourlyCompareInFlight = true;
+      const el = $('hourly-live-trial-compare');
+      if (force && el && !lastHourlyCompareData) el.innerHTML = '<p class="muted">Loading…</p>';
       try {
         const data = await getWithTimeout(
           `/api/bots/hourly-live-trial-compare?asset=${encodeURIComponent(compareAsset)}&limit_hours=24`,
-          15000,
+          PANEL_API_TIMEOUT_MS,
         );
         hourlyCompareLastAt = Date.now();
         renderHourlyLiveTrialCompare(data);
@@ -6895,7 +6935,7 @@
         getWithTimeout('/health?lite=1', 12000).then(renderStatus).catch(e => showError('Health: ' + e.message)),
       ];
       loadBotPerformanceReport();
-      loadEpochReconcile();
+      if ($('epoch-reconcile-card')?.open) loadEpochReconcile();
       checkFourKWeekPlanRevision();
       syncGlobalComparePanel();
       if (activeTab === '15m' || activeTab === 'eth-15m') {
@@ -6948,6 +6988,8 @@
     }
 
     syncGlobalComparePanel();
+    bindLazyPanelLoad('epoch-reconcile-card', () => loadEpochReconcile(true));
+    bindLazyPanelLoad('hourly-live-trial-compare-card', () => loadHourlyLiveTrialCompare(true));
     loadAll();
     updateEdtClock();
     setInterval(loadAll, LOAD_ALL_INTERVAL_MS);

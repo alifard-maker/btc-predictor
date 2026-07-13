@@ -24,7 +24,7 @@ def test_build_epoch_reconcile_report_groups_bot_exits(tmp_path):
     "event_ticker": "KXBTCD-26JUL0413",
     "trigger": "test",
     "action": "exit",
-    "mode": "paper",
+    "mode": "live",
     "status": "filled",
     "pnl_usd": 1.25,
     "created_at": "2026-07-04T23:45:00+00:00",
@@ -33,7 +33,7 @@ def test_build_epoch_reconcile_report_groups_bot_exits(tmp_path):
     "event_ticker": "KXBTCD-26JUL0414",
     "trigger": "test",
     "action": "exit",
-    "mode": "paper",
+    "mode": "live",
     "status": "filled",
     "pnl_usd": -0.50,
     "created_at": "2026-07-05T00:45:00+00:00",
@@ -42,7 +42,7 @@ def test_build_epoch_reconcile_report_groups_bot_exits(tmp_path):
     "event_ticker": "KXBTCD-26JUL0413",
     "trigger": "test",
     "action": "exit",
-    "mode": "paper",
+    "mode": "live",
     "status": "filled",
     "pnl_usd": 0.75,
     "created_at": "2026-07-05T00:15:00+00:00",
@@ -51,7 +51,7 @@ def test_build_epoch_reconcile_report_groups_bot_exits(tmp_path):
     "event_ticker": "KXBTCD-26JUL0312",
     "trigger": "test",
     "action": "exit",
-    "mode": "paper",
+    "mode": "live",
     "status": "filled",
     "pnl_usd": 9.99,
     "created_at": "2026-07-03T12:00:00+00:00",
@@ -88,18 +88,18 @@ def test_build_epoch_reconcile_report_includes_kalshi_per_event(monkeypatch):
   kalshi = MagicMock(authenticated=True)
   kalshi.list_fills.return_value = []
 
-  def _summarize(_kalshi, *, since, asset=None, event_ticker=None, **kwargs):
-    if event_ticker == "KXBTCD-26JUL0413":
-      return {"ok": True, "total_pnl_usd": 1.75, "closed_trades": 2}
-    return {"ok": True, "total_pnl_usd": 0.0, "closed_trades": 0}
+  def _batch(_kalshi, since, *, asset):
+    return {
+      "ok": True,
+      "by_event": {
+        "KXBTCD-26JUL0413": {"kalshi_pnl": 1.75, "kalshi_closed": 2},
+      },
+      "summary": {"ok": True, "total_pnl_usd": 1.75, "closed_trades": 2},
+    }
 
   monkeypatch.setattr(
-    "src.trading.kalshi_fill_sync.summarize_kalshi_experiment_fills",
-    _summarize,
-  )
-  monkeypatch.setattr(
-    "src.trading.epoch_reconcile._kalshi_events_since_epoch",
-    lambda *_a, **_k: {"KXBTCD-26JUL0413"},
+    "src.trading.epoch_reconcile._kalshi_hourly_closed_batched",
+    _batch,
   )
 
   loop = MagicMock()
