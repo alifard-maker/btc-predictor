@@ -235,15 +235,22 @@ def run_index_live_preflight(
   detail["yaml_live_mirror_enabled"] = bool(index_live_mirror_cfg(cfg, asset).get("enabled"))
 
   tab: dict[str, Any] | None = None
+  hourly_tab_issue = False
   try:
     tab = _cached_index_hourly_tab(loop, asset)
     detail["hourly_tab_ok"] = bool(tab and tab.get("ok"))
     event = (tab.get("event") or {}).get("event_ticker") if tab else None
     detail["event_ticker"] = event
     if not tab or not tab.get("ok") or not event:
-      issues.append("hourly_tab_unavailable")
+      hourly_tab_issue = True
   except Exception as exc:
+    hourly_tab_issue = True
     issues.append(f"hourly_tab_error:{type(exc).__name__}")
+  if hourly_tab_issue:
+    if runtime_armed and lite:
+      warnings.append("hourly_tab_unavailable")
+    else:
+      issues.append("hourly_tab_unavailable")
 
   kalshi = loop._kalshi_for(asset)
   detail["kalshi_authenticated"] = bool(kalshi and getattr(kalshi, "authenticated", False))
@@ -257,9 +264,21 @@ def run_index_live_preflight(
   if si_cfg.get("enabled") and si_cfg.get("require_for_live_entries"):
     try:
       si = build_settlement_index_status(tab, cfg=asset_cfg(cfg, asset))
+      if not si.get("ok"):
+        quote = loop.live_price_quote(fresh=False, asset=asset)
+        if quote and quote.price is not None:
+          si = build_settlement_index_status(
+            None,
+            cfg=asset_cfg(cfg, asset),
+            price=quote.price,
+            source=quote.source,
+          )
       detail["settlement_index"] = si
       if not si.get("ok"):
-        issues.append("settlement_index_not_live")
+        if runtime_armed and lite:
+          warnings.append("settlement_index_not_live")
+        else:
+          issues.append("settlement_index_not_live")
     except Exception as exc:
       issues.append(f"settlement_index_error:{type(exc).__name__}")
 

@@ -612,7 +612,7 @@ class PredictionLoop:
     asset: str,
   ) -> None:
     """Expose live settlement index (BRTI / ERTI) for open-position mark-to-market UI."""
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    acfg = self._acfg(asset.lower())
     status["index_label"] = index_id_for_cfg(acfg)
     if not tab or not tab.get("ok"):
       return
@@ -637,7 +637,7 @@ class PredictionLoop:
   ) -> None:
     from src.trading.bot_settlement_index_gate import build_settlement_index_status
 
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    acfg = self._acfg(asset.lower())
     if tab and tab.get("ok"):
       status["settlement_index"] = build_settlement_index_status(tab, cfg=acfg)
       return
@@ -660,6 +660,7 @@ class PredictionLoop:
     asset = asset.lower()
     if asset == "eth" and not asset_enabled(self.cfg, "eth"):
       return {"ok": False, "error": "ETH disabled"}
+    acfg = self._acfg(asset)
     event_ticker = None
     if tab:
       event_ticker = (tab.get("event") or {}).get("event_ticker")
@@ -670,7 +671,7 @@ class PredictionLoop:
     status["ok"] = True
     status["asset"] = asset
     status["bot_kind"] = kind
-    label_asset = "ETH" if asset == "eth" else "BTC"
+    label_asset = asset.upper() if is_index_asset(asset) else ("ETH" if asset == "eth" else "BTC")
     status["bot_label"] = self._hourly_bot_label(kind, label_asset)
     from src.backtest.mechanics_profiles import PROFILE_LABELS, mechanics_profile_for_kind
 
@@ -708,7 +709,6 @@ class PredictionLoop:
     if tab and tab.get("ok"):
       from src.trading.hourly_bot import enrich_open_positions_live
 
-      acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
       open_pos = enrich_open_positions_live(
         open_pos,
         tab,
@@ -752,7 +752,6 @@ class PredictionLoop:
       }
     from src.trading.bot_auto_tuning import effective_entry_strategy
 
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
     estrat = effective_entry_strategy(acfg, kind="hourly", tuning=store.get_auto_tuning())
     status["max_concurrent_positions"] = estrat.max_concurrent_positions
     status["auto_tuning"] = store.get_auto_tuning()
@@ -1039,7 +1038,7 @@ class PredictionLoop:
     store = self.hourly_bot_store(asset, kind=kind)
     settings = store.get_settings()
     kalshi = self._kalshi_for(asset)
-    acfg = self.cfg if asset == "btc" else (self._eth_cfg or asset_cfg(self.cfg, asset))
+    acfg = self._acfg(asset)
     if settings.mode != "live":
       return {"ok": True, "skipped": "not_live"}
     if not kalshi or not getattr(kalshi, "authenticated", False):
