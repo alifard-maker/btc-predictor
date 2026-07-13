@@ -39,6 +39,16 @@ def init_index_assets(loop: Any) -> None:
     log.info("Initialized %s index hourly asset", asset.upper())
 
   try:
+    from src.trading.index_paper_experiment import ensure_index_paper_experiments
+
+    boot = ensure_index_paper_experiments(loop)
+    armed = [a for a, r in (boot.get("assets") or {}).items() if r.get("synced")]
+    if armed:
+      log.info("Index paper trials armed from yaml: %s", ", ".join(armed))
+  except Exception:
+    log.exception("Index paper experiment boot failed")
+
+  try:
     from src.data.index_candle_bootstrap import bootstrap_index_candles_if_missing
 
     queued = bootstrap_index_candles_if_missing(loop.cfg, background=True)

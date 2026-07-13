@@ -93,13 +93,19 @@ def apply_live_production_mechanics(
   kind: str,
   mode: str,
 ) -> dict[str, Any]:
-  """Apply hourly.bot.live_mechanics_profile for production live bots (not trials)."""
-  if kind != "hourly" or str(mode).lower() != "live":
+  """Apply hourly.bot.live_mechanics_profile for production bots (not trial kinds)."""
+  if kind != "hourly":
     return cfg
   profile = live_mechanics_profile_for_cfg(cfg)
   if not profile:
     return cfg
-  return apply_mechanics_profile(cfg, profile)
+  mode_l = str(mode).lower()
+  if mode_l == "live":
+    return apply_mechanics_profile(cfg, profile)
+  # Paper trials that mirror live pnl_first (SPX/NDX/ETH paper harness).
+  if mode_l == "paper" and profile == "pnl_first":
+    return apply_mechanics_profile(cfg, profile)
+  return cfg
 
 
 def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> dict[str, Any]:

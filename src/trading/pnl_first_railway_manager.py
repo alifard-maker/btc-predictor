@@ -34,6 +34,7 @@ class PnlFirstManagerConfig:
   allow_eth_live: bool = False
   allow_eth_slot15_paper: bool = False
   allow_btc_live: bool = False
+  allow_index_paper: bool = False
 
   @classmethod
   def from_cfg(cls, cfg: dict[str, Any] | None) -> PnlFirstManagerConfig:
@@ -56,6 +57,7 @@ class PnlFirstManagerConfig:
       allow_eth_live=bool(raw.get("allow_eth_live", False)),
       allow_eth_slot15_paper=bool(raw.get("allow_eth_slot15_paper", False)),
       allow_btc_live=bool(raw.get("allow_btc_live", False)),
+      allow_index_paper=bool(raw.get("allow_index_paper", False)),
     )
 
 
@@ -537,6 +539,17 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
 
   actions: list[dict[str, Any]] = []
   actions.extend(enforce_sleep_lock(loop, mgr))
+
+  if mgr.allow_index_paper:
+    try:
+      from src.trading.index_paper_experiment import ensure_index_paper_experiments
+
+      index_boot = ensure_index_paper_experiments(loop)
+      for asset, result in (index_boot.get("assets") or {}).items():
+        if result.get("synced") and result.get("changed_fields"):
+          actions.append({"action": "index_paper_settings_sync", "asset": asset, **result})
+    except Exception as exc:
+      log.warning("index paper experiment ensure failed: %s", exc)
 
   try:
     from src.trading.compare_paper_twins import ensure_compare_paper_twins

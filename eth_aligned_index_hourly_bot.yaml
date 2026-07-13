@@ -1,6 +1,6 @@
-# ETH hourly live execution profile for SPX/NDX live + paper trial parity
+# ETH hourly live execution profile for SPX/NDX paper trials (pnl_first mirror)
 enabled: true
-mode: live
+mode: paper
 max_spend_per_hour_usd: 15
 allow_strong: false
 allow_actionable: false
@@ -20,13 +20,17 @@ min_take_profit_pct: 0.1
 max_take_profit_pct: 0.4
 min_hold_seconds: 90
 min_hours_to_settle_for_entry: 0.25
-max_hours_to_settle_for_entry: 1.25
+max_hours_to_settle_for_entry: 0.75
 late_entry:
-  enabled: true
+  enabled: false
   min_hours: 0.08
   min_ask_edge_cents: 15
   max_stake_usd: 2.5
 experiment_start_at: '2026-07-11T04:00:00+00:00'  # Sat Jul 11 00:00 ET
+paper_experiment:
+  enabled: true
+  sync_settings_on_arm: true
+live_mechanics_profile: pnl_first
 profit_exit_cooldown_seconds: 60
 cheap_leg_max_entry_cents: 20
 cheap_leg_cut_loss_cents: 10
@@ -66,7 +70,7 @@ live_inventory:
   force_correlation_guard: true
   correlation_min_strike_gap_pct: 0.18
   max_same_side_threshold_legs: 1
-  max_same_side_range_legs: 1
+  max_same_side_range_legs: 0
   max_concurrent_positions: 4
   max_entries_per_cycle: 4
   allow_scale_in: false
@@ -94,6 +98,7 @@ live_exit:
   max_resting_adopted_range_contracts: 4
   resting_fill_adopt_full_size: true
   max_resting_enters_per_hour: 6
+  aggressive_exit_haircut_cents: 4
 live_adaptive:
   enabled: true
   profit_lock_usd: 1.25
@@ -136,21 +141,15 @@ rally_only:
   rally_block_range_bands: false
   defense_block_range_bands: true
 soft_rally:
-  enabled: true
+  enabled: false
   defense_skip_all_entries: false
-  defense_threshold_only: true
-  defense_min_ask_edge_cents: 15.0
-  defense_yes_mid_min_cents: 40
-  defense_yes_mid_max_cents: 80
-  profit_lock_usd: 1.25
-  rally_block_range_bands: false
-  defense_block_range_bands: true
+  defense_threshold_only: false
 whipsaw_guard:
   enabled: true
   max_quick_exit_cuts_per_hour: 3
   pause_all_entries_after_cut_streak: true
-  block_entries_when_regime_blocked: true
-  block_scale_in_when_regime_blocked: true
+  block_entries_when_regime_blocked: false
+  block_scale_in_when_regime_blocked: false
   require_signal_refresh_after_spot_against_cut: true
   conservative_max_contracts_per_entry: 2
   event_cut_cooldown_seconds: 600
@@ -187,7 +186,7 @@ live_trial_align:
   compare:
     pair_window_seconds: 180
 trial:
-  continuous_enabled: true
+  continuous_enabled: false
   poll_seconds: 10
   take_profit_enabled: true
   take_profit_mode: hybrid
@@ -210,4 +209,3 @@ trial:
   reassess_neutral_take_profit: true
   reassess_neutral_band: 0.07
   reassess_neutral_min_unrealized_usd: 0.05
-live_mechanics_profile: ''

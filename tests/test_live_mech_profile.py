@@ -42,6 +42,12 @@ def test_live_mech_profile_not_applied_to_paper_or_trial():
   assert apply_live_production_mechanics(cfg, kind="hourly_trial_mech", mode="live") is cfg
 
 
+def test_pnl_first_applied_to_paper_hourly():
+  cfg = {"hourly": {"bot": {"live_mechanics_profile": "pnl_first"}}}
+  out = apply_live_production_mechanics(cfg, kind="hourly", mode="paper")
+  assert out["hourly"]["bot"]["entry_strategy"]["min_ask_edge_cents"] == 18
+
+
 def test_live_mech_profile_not_applied_to_eth_without_key():
   cfg = {"hourly": {"bot": {"live_trial_align": {"enabled": True}}}}
   assert live_mechanics_profile_for_cfg(cfg) is None

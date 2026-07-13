@@ -705,6 +705,7 @@ pnl_first_manager:
   allow_eth_live: true       # ETH hourly_live mirror (parallel live arm)
   allow_eth_slot15_paper: true  # $4k/week plan — ETH KXETH15M paper lane (separate epoch)
   allow_btc_live: true       # BTC hourly twin live (same mid-hour / pnl_first mechanics)
+  allow_index_paper: true    # SPX/NDX hourly paper trials (ETH live rules)
 
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
 live_resting_exits:
@@ -1147,7 +1148,7 @@ spx:
       min_edge_for_highlight: 0.08
       min_edge_override_regime: 0.10
     bot:
-      # Live + paper trial execution merged from eth_aligned_index_hourly_bot.yaml (ETH hourly live parity)
+      # Paper trial — ETH hourly live rules (pnl_first); armed via paper_experiment in overlay
       experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET
       live_inventory:
         range_band_spot_entry_guard:
@@ -1219,7 +1220,7 @@ ndx:
       min_edge_for_highlight: 0.08
       min_edge_override_regime: 0.10
     bot:
-      # Live + paper trial execution merged from eth_aligned_index_hourly_bot.yaml (ETH hourly live parity)
+      # Paper trial — ETH hourly live rules (pnl_first); armed via paper_experiment in overlay
       experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET
       live_inventory:
         range_band_spot_entry_guard:

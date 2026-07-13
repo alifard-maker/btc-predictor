@@ -37,7 +37,8 @@ def test_asset_cfg_spx_overrides(base_cfg):
   assert spx["daily"]["threshold_series"] == ["KXINXU"]
   assert spx["daily"]["range_series"] == ["KXINX"]
   assert spx["price_feed"]["yfinance_ticker"] == "^GSPC"
-  assert spx["hourly"]["bot"]["mode"] == "live"
+  assert spx["hourly"]["bot"]["mode"] == "paper"
+  assert spx["hourly"]["bot"]["live_mechanics_profile"] == "pnl_first"
   assert spx["hourly"]["bot"]["max_spend_per_hour_usd"] == 15
   assert index_id_for_cfg(spx) == "SPX"
   assert "spx" in spx["paths"]["candles"]
@@ -164,7 +165,7 @@ def test_schedule_index_hourly_continuous_jobs(base_cfg):
   job_ids = {job.id for job in scheduler.get_jobs()}
   assert "spx_hourly_bot_continuous" in job_ids
   assert "ndx_hourly_bot_continuous" in job_ids
-  assert "spx_hourly_trial_bot_continuous" in job_ids
-  assert "ndx_hourly_trial_bot_continuous" in job_ids
+  assert "spx_hourly_trial_bot_continuous" not in job_ids
+  assert "ndx_hourly_trial_bot_continuous" not in job_ids
   assert "spx_hourly_predict" in job_ids
   assert "ndx_hourly_predict" in job_ids
