@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 _REPORT_CACHE: dict[str, Any] = {"mono_at": 0.0, "payload": None, "cfg_key": None}
-_REPORT_CACHE_TTL_SEC = 45.0
+_REPORT_CACHE_TTL_SEC = 110.0
 
 
 def categorize_ticker(ticker: str) -> str:
@@ -351,21 +351,21 @@ def _derive_stats(
   ]
 
   by_cat_pnl: dict[str, list[float]] = defaultdict(list)
-  by_cat_invest: dict[str, float] = defaultdict(float)
+  by_cat_entry_cost: dict[str, float] = defaultdict(float)
   by_cat_legs: dict[str, int] = defaultdict(int)
-  by_cat_entries: dict[str, int] = defaultdict(int)
+  by_cat_buys: dict[str, int] = defaultdict(int)
 
   for row in window_closed:
     cat = str(row.get("category") or "Other")
     by_cat_pnl[cat].append(float(row.get("pnl_usd") or 0))
+    by_cat_entry_cost[cat] += float(row.get("cost_usd") or 0)
     by_cat_legs[cat] += 1
   for row in window_entries:
     cat = str(row.get("category") or "Other")
-    by_cat_invest[cat] += float(row.get("cost_usd") or 0)
-    by_cat_entries[cat] += 1
+    by_cat_buys[cat] += 1
 
   cats = sorted(
-    set(by_cat_pnl) | set(by_cat_invest),
+    set(by_cat_pnl) | set(by_cat_entry_cost),
     key=lambda c: (-abs(sum(by_cat_pnl.get(c, []))), c),
   )
   by_category = []
@@ -373,23 +373,25 @@ def _derive_stats(
     pnls = by_cat_pnl.get(cat, [])
     n = len(pnls)
     total_pnl = round(sum(pnls), 2)
-    invested = round(by_cat_invest.get(cat, 0.0), 2)
+    entry_cost = round(by_cat_entry_cost.get(cat, 0.0), 2)
     wins = sum(1 for p in pnls if p > 0)
     by_category.append({
       "category": cat,
       "closed_legs": n,
-      "entries": by_cat_entries.get(cat, 0),
+      "entries": by_cat_buys.get(cat, 0),
       "total_pnl_usd": total_pnl,
-      "invested_usd": invested,
+      "invested_usd": entry_cost,
+      "entry_cost_usd": entry_cost,
       "wins": wins,
       "losses": sum(1 for p in pnls if p < 0),
       "win_rate": round(wins / n, 3) if n else None,
       "pnl_per_leg_usd": round(total_pnl / n, 2) if n else None,
-      "roi_pct": round(100.0 * total_pnl / invested, 1) if invested > 0 else None,
+      "roi_pct": round(100.0 * total_pnl / entry_cost, 1) if entry_cost > 0 else None,
     })
 
   total_pnl = round(sum(float(r.get("pnl_usd") or 0) for r in window_closed), 2)
-  total_invested = round(sum(float(r.get("cost_usd") or 0) for r in window_entries), 2)
+  total_entry_cost = round(sum(float(r.get("cost_usd") or 0) for r in window_closed), 2)
+  total_buy_volume = round(sum(float(r.get("cost_usd") or 0) for r in window_entries), 2)
   closed_legs = len(window_closed)
   entry_count = len(window_entries)
   wins = sum(1 for r in window_closed if float(r.get("pnl_usd") or 0) > 0)
@@ -406,10 +408,12 @@ def _derive_stats(
     "losses": losses,
     "win_rate": round(wins / closed_legs, 3) if closed_legs else None,
     "total_pnl_usd": total_pnl,
-    "invested_usd": total_invested,
+    "invested_usd": total_entry_cost,
+    "entry_cost_usd": total_entry_cost,
+    "buy_volume_usd": total_buy_volume,
     "pnl_per_leg_usd": round(total_pnl / closed_legs, 2) if closed_legs else None,
     "pnl_per_hour_usd": round(total_pnl / hours, 2),
-    "roi_pct": round(100.0 * total_pnl / total_invested, 1) if total_invested > 0 else None,
+    "roi_pct": round(100.0 * total_pnl / total_entry_cost, 1) if total_entry_cost > 0 else None,
     "active_hours": round(hours, 2),
     "by_category": by_category,
   }
