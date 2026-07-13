@@ -775,9 +775,19 @@
 
     <div id="panel-spx-hourly" style="display:none">
       <div class="card" id="spx-hourly-bot-card">
-        <h2>SPX hourly auto-bet (KXINXU)</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live S&amp;P 500 hourly — same entry/exit mechanics as <strong>ETH Hourly Live</strong> (standard trial align). US RTH only (9:30–16:00 ET). Price via ^GSPC.</p>
+        <h2>SPX hourly auto-bet (paper trial)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial — same P&amp;L-first hourly mechanics as <strong>ETH Hourly Live</strong>. US RTH only (9:30–16:00 ET). Price via ^GSPC. Live Kalshi arm is the panel below (gated by preflight).</p>
         <div id="spx-hourly-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="spx-hourly-live-preflight-card" style="border-color:rgba(34,197,94,.35)">
+        <h2>SPX live preflight</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">All checks must pass before arming live on Kalshi. Paper trial above keeps running independently.</p>
+        <div id="spx-hourly-live-preflight"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="spx-hourly-live-bot-card" style="border-color:rgba(239,68,68,.35)">
+        <h2>SPX hourly live mirror</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same mechanics as the paper trial, executed <strong>live on Kalshi</strong>. Separate trade log from paper. Arm only when preflight is green.</p>
+        <div id="spx-hourly-live-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="spx-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
         <h2>SPX Hourly Trial (paper)</h2>
@@ -826,9 +836,19 @@
 
     <div id="panel-ndx-hourly" style="display:none">
       <div class="card" id="ndx-hourly-bot-card">
-        <h2>NDX hourly auto-bet (KXNASDAQ100U)</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Live Nasdaq-100 hourly — same entry/exit mechanics as <strong>ETH Hourly Live</strong> (standard trial align). US RTH only (9:30–16:00 ET). Price via ^NDX.</p>
+        <h2>NDX hourly auto-bet (paper trial)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial — same P&amp;L-first hourly mechanics as <strong>ETH Hourly Live</strong>. US RTH only (9:30–16:00 ET). Price via ^NDX. Live Kalshi arm is the panel below (gated by preflight).</p>
         <div id="ndx-hourly-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="ndx-hourly-live-preflight-card" style="border-color:rgba(34,197,94,.35)">
+        <h2>NDX live preflight</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">All checks must pass before arming live on Kalshi. Paper trial above keeps running independently.</p>
+        <div id="ndx-hourly-live-preflight"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="ndx-hourly-live-bot-card" style="border-color:rgba(239,68,68,.35)">
+        <h2>NDX hourly live mirror</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same mechanics as the paper trial, executed <strong>live on Kalshi</strong>. Separate trade log from paper. Arm only when preflight is green.</p>
+        <div id="ndx-hourly-live-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="ndx-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
         <h2>NDX Hourly Trial (paper)</h2>
@@ -1145,7 +1165,8 @@
     function isSlot15TrialKind(kind) { return kind === SLOT15_TRIAL_KIND; }
     let hourlyGuideCheatOpen = false;
     const lastBotStatus = { btc: null, eth: null, spx: null, ndx: null };
-    const lastHourlyLiveBotStatus = { eth: null };
+    const lastHourlyLiveBotStatus = { eth: null, spx: null, ndx: null };
+    const lastIndexLivePreflight = { spx: null, ndx: null };
     const lastV2BotStatus = { btc: null, eth: null };
     const lastHourlyTrialBotStatusByKey = {};
     const HOURLY_TRIAL_KINDS = new Set(['hourly_trial', 'hourly_trial_rally', 'hourly_trial_soft', 'hourly_trial_mech']);
@@ -1279,7 +1300,17 @@
 
     function hourlyLiveBotApiBase(asset) {
       if (asset === 'eth') return '/api/eth/hourly-live/bot';
+      if (asset === 'spx') return '/api/spx/hourly-live/bot';
+      if (asset === 'ndx') return '/api/ndx/hourly-live/bot';
       return null;
+    }
+
+    function indexLivePreflightUrl(asset) {
+      return `/api/${asset}/hourly-live/preflight`;
+    }
+
+    function indexLiveArmUrl(asset) {
+      return `/api/${asset}/hourly-live/arm`;
     }
 
     function hourlyApiFor(tab) {
@@ -3382,7 +3413,12 @@
 
     function shouldRenderHourlyBot(asset, kind = 'hourly') {
       if (isHourlyV2Kind(kind)) return activeTab === 'hourly-v2';
-      if (isHourlyLiveKind(kind)) return asset === 'eth' && activeTab === 'eth-hourly';
+      if (isHourlyLiveKind(kind)) {
+        if (asset === 'eth') return activeTab === 'eth-hourly';
+        if (asset === 'spx') return activeTab === 'spx-hourly';
+        if (asset === 'ndx') return activeTab === 'ndx-hourly';
+        return false;
+      }
       if (isHourlyTrialKind(kind)) {
         if (activeTab === 'trials') return true;
         if (asset === 'spx' && activeTab === 'spx-hourly') return true;
@@ -3409,7 +3445,9 @@
       const p = botDomPrefix(kind, asset);
       const enabledEl = $(`bot-enabled-${p}`);
       if (!enabledEl) return null;
-      const mode = $(`bot-live-${p}`)?.checked ? 'live' : 'paper';
+      const mode = isIndexPaperHourly(asset, kind)
+        ? 'paper'
+        : ($(`bot-live-${p}`)?.checked ? 'live' : 'paper');
       const refillOn = !!$(`bot-auto-refill-${p}`)?.checked;
       const key = botUiKey(kind, asset);
       const prev = lastKnownBotSettings[key] || {};
@@ -3433,7 +3471,49 @@
           </label>`;
     }
 
+    function isIndexPaperHourly(asset, kind = 'hourly') {
+      return (asset === 'spx' || asset === 'ndx') && kind === 'hourly';
+    }
+
+    function indexPaperTrialSettingsHtml(asset, s, kind = 'hourly') {
+      const p = botDomPrefix(kind, asset);
+      const saveFn = `saveHourlyBotSettings('${asset}')`;
+      const profitsFn = `onBotUseProfitsToggle('${asset}', 'hourly')`;
+      return `
+        <div class="bot-row">
+          <p class="muted" style="font-size:.72rem;margin:0 0 .55rem;width:100%"><strong>Paper trial only</strong> — manager locks this lane to PAPER. For Kalshi live, use <strong>Live preflight</strong> + <strong>Live mirror</strong> below (not this toggle).</p>
+          <label class="bot-label">Auto-bet
+            <label class="switch"><input type="checkbox" id="bot-enabled-${p}" ${s.enabled ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
+          </label>
+          <div class="bot-stat" style="margin-left:.5rem"><span class="muted">Mode</span><strong class="bot-mode-paper">PAPER</strong></div>
+        </div>
+        <div class="bot-row">
+          <label class="bot-label" title="Max open exposure at once this hour — not cumulative spend">Max at-risk $ / hour
+            <input type="number" id="bot-max-spend-${p}" min="0" step="1" value="${s.max_spend_per_hour_usd ?? 10}" style="width:5rem;margin-left:.35rem" oninput="${botCapSaveFn(asset, kind)}" onchange="${saveFn}" onblur="${saveFn}">
+          </label>
+          <label class="bot-label">STRONG bets
+            <label class="switch"><input type="checkbox" id="bot-strong-${p}" ${s.allow_strong ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label">ACTIONABLE bets
+            <label class="switch"><input type="checkbox" id="bot-actionable-${p}" ${s.allow_actionable ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="When ON, wins increase deployable capital and cumulative $ entered per hour can exceed max at-risk. When OFF, capped at max at-risk $ for this hour only.">Use profits
+            <label class="switch"><input type="checkbox" id="bot-use-profits-${p}" ${s.use_accumulated_profit ? 'checked' : ''} onchange="${profitsFn}"><span class="slider"></span></label>
+          </label>
+          <label class="bot-label" title="% of interval profit deployable when Use profits is ON (0–100).">Profit use %
+            <input type="number" id="bot-profit-use-pct-${p}" min="0" max="100" step="5" value="${s.profit_use_pct ?? 100}" style="width:3.5rem;margin-left:.35rem" ${s.use_accumulated_profit ? '' : 'disabled'} onchange="${saveFn}">
+          </label>
+          <label class="bot-label" title="${botAutoRefillTooltip('paper')}">Auto-refill
+            <label class="switch"><input type="checkbox" id="bot-auto-refill-${p}" ${botAutoRefillChecked(s) ? 'checked' : ''} onchange="${saveFn}"><span class="slider"></span></label>
+          </label>
+          ${botAggressiveToggleHtml(p, s, saveFn)}
+        </div>`;
+    }
+
     function botSettingsHtml(asset, s, kind = 'hourly') {
+      if (isIndexPaperHourly(asset, kind)) {
+        return indexPaperTrialSettingsHtml(asset, s, kind);
+      }
       const p = botDomPrefix(kind, asset);
       const saveFn = isHourlyTrialKind(kind)
         ? `saveHourlyTrialBotSettings('${asset}', undefined, '${kind}')`
@@ -3500,6 +3580,189 @@
             <div class="bot-stat"><span class="muted">Filters</span><strong>${freeMode ? 'FREE' : 'guarded'}</strong></div>
           </div>
         </div>`;
+    }
+
+    function indexLivePreflightIssueLabel(code) {
+      const labels = {
+        allow_index_live_off: 'Manager allow_index_live is OFF',
+        spx_disabled_in_config: 'SPX disabled in config',
+        ndx_disabled_in_config: 'NDX disabled in config',
+        eth_aligned_overlay_missing: 'eth_aligned_index_hourly_bot.yaml missing from deploy',
+        index_paper_experiment_off: 'Paper experiment not enabled',
+        hourly_tab_unavailable: 'Hourly prediction tab unavailable',
+        kalshi_not_authenticated: 'Kalshi not authenticated',
+        settlement_index_not_live: 'Settlement index feed not live',
+        index_paper_disabled: 'Paper trial auto-bet OFF',
+        index_paper_continuous_off: 'Paper trial continuous mode OFF',
+        live_mirror_has_open_legs: 'Live mirror has open legs',
+        reconcile_bot_only: 'Reconcile: bot-only positions',
+      };
+      if (labels[code]) return labels[code];
+      if (code.startsWith('profile_not_pnl_first:')) return `Mechanics profile not pnl_first (${code.split(':')[1]})`;
+      if (code.startsWith('index_paper_wrong_mode:')) return `Paper trial wrong mode (${code.split(':')[1]})`;
+      if (code.startsWith('reconcile_kalshi_only:')) return `Reconcile: ${code.split(':')[1]} Kalshi-only leg(s)`;
+      return code;
+    }
+
+    function renderIndexLivePreflight(asset, preflight) {
+      const el = $(`${asset}-hourly-live-preflight`);
+      if (!el) return;
+      if (!preflight) {
+        el.innerHTML = '<p class="muted">Loading preflight…</p>';
+        return;
+      }
+      lastIndexLivePreflight[asset] = preflight;
+      const ok = !!preflight.ok;
+      const issues = preflight.issues || [];
+      const warnings = preflight.warnings || [];
+      const detail = preflight.detail || {};
+      const statusCls = ok ? 'up' : 'down';
+      const statusLabel = ok ? 'GREEN — safe to arm live' : 'RED — fix issues before arming';
+      const issueHtml = issues.length
+        ? `<ul style="margin:.35rem 0 0 1rem;padding:0;font-size:.72rem">${issues.map((i) => `<li class="down">${indexLivePreflightIssueLabel(i)}</li>`).join('')}</ul>`
+        : '<p class="muted" style="font-size:.72rem;margin:.35rem 0 0">No blocking issues.</p>';
+      const warnHtml = warnings.length
+        ? `<p class="muted" style="font-size:.68rem;margin:.45rem 0 0"><strong>Warnings:</strong> ${warnings.join(' · ')}</p>`
+        : '';
+      const checks = [
+        ['Kalshi auth', detail.kalshi_authenticated ? 'Yes' : 'No'],
+        ['Hourly tab', detail.hourly_tab_ok ? 'OK' : '—'],
+        ['Overlay', detail.overlay_present ? 'present' : 'missing'],
+        ['Profile', detail.live_mechanics_profile || '—'],
+        ['Market hours', detail.market_hours_open ? 'open' : 'closed'],
+        ['Runtime armed', preflight.armed ? 'yes' : 'no'],
+      ];
+      el.innerHTML = `
+        <div class="bot-row" style="margin-bottom:.35rem">
+          <div class="bot-stat"><span class="muted">Preflight</span><strong class="${statusCls}">${statusLabel}</strong></div>
+          <div class="bot-stat"><span class="muted">Issues</span><strong>${issues.length}</strong></div>
+        </div>
+        ${issueHtml}
+        ${warnHtml}
+        <div class="bot-row" style="margin-top:.45rem;padding-top:.35rem;border-top:1px solid rgba(148,163,184,.12)">
+          ${checks.map(([k, v]) => `<div class="bot-stat"><span class="muted">${k}</span><strong>${v}</strong></div>`).join('')}
+        </div>`;
+    }
+
+    function indexLiveMirrorSettingsHtml(asset, s, preflight) {
+      const enabled = !!s.enabled;
+      const enabledCls = enabled ? 'up' : 'down';
+      const maxSpend = Number(s.max_spend_per_hour_usd ?? 15);
+      const freeMode = !s.allow_strong && !s.allow_actionable;
+      const pre = preflight || lastIndexLivePreflight[asset] || {};
+      const canArm = !!pre.ok;
+      const armed = !!s.enabled || !!pre.armed;
+      const toggleDisabled = !canArm && !armed;
+      const toggleTitle = canArm
+        ? (armed ? 'Disarm live mirror' : 'Arm live mirror on Kalshi')
+        : 'Preflight must be green before arming live';
+      return `
+        <div class="bot-row" style="padding:.35rem .15rem .45rem;border-bottom:1px solid rgba(148,163,184,.12);margin-bottom:.35rem">
+          <p class="muted" style="font-size:.72rem;margin:0 0 .55rem"><strong>Preflight-gated arm</strong> — flip live only when checks above are green. Disarm stops new entries; open legs still managed.</p>
+          <div class="bot-row" style="margin:0;align-items:center">
+            <label class="bot-label" title="${toggleTitle}" style="margin-right:1rem">Live on Kalshi
+              <label class="switch" style="margin-left:.35rem;opacity:${toggleDisabled ? '.45' : '1'}">
+                <input type="checkbox" id="index-live-arm-${asset}" ${armed ? 'checked' : ''} ${toggleDisabled ? 'disabled' : ''} onchange="onIndexLiveArmToggle('${asset}', this)">
+                <span class="slider"></span>
+              </label>
+            </label>
+            <div class="bot-stat"><span class="muted">Auto-bet</span><strong class="${enabledCls}">${enabled ? 'ON' : 'OFF'}</strong></div>
+            <div class="bot-stat"><span class="muted">Mode</span><strong class="bot-mode-live">LIVE</strong></div>
+            <div class="bot-stat"><span class="muted">Max at-risk $ / hour</span><strong>$${maxSpend.toFixed(0)}</strong></div>
+            <div class="bot-stat"><span class="muted">Filters</span><strong>${freeMode ? 'FREE' : 'guarded'}</strong></div>
+          </div>
+        </div>`;
+    }
+
+    async function onIndexLiveArmToggle(asset, el) {
+      const wantArm = !!el.checked;
+      const pre = lastIndexLivePreflight[asset];
+      if (wantArm && (!pre || !pre.ok)) {
+        el.checked = false;
+        showError(`${asset.toUpperCase()} live preflight not green — fix issues first.`);
+        return;
+      }
+      if (wantArm) {
+        const pwd = promptLivePassword();
+        if (!pwd) {
+          el.checked = false;
+          return;
+        }
+        try {
+          const res = await fetch(indexLiveArmUrl(asset), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ armed: true, live_password: pwd }),
+          });
+          if (!res.ok) {
+            const msg = await parseSettingsError(res);
+            el.checked = false;
+            showError(`${asset.toUpperCase()} live arm: ` + msg);
+            return;
+          }
+          const data = await res.json();
+          if (data.preflight) renderIndexLivePreflight(asset, data.preflight);
+          if (data.bot?.ok) renderHourlyBot(data.bot, asset, HOURLY_LIVE_KIND);
+          loadIndexLivePreflight(asset);
+        } catch (e) {
+          el.checked = false;
+          showError(`${asset.toUpperCase()} live arm: ` + e.message);
+        }
+        return;
+      }
+      try {
+        const res = await fetch(indexLiveArmUrl(asset), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ armed: false }),
+        });
+        if (!res.ok) {
+          const msg = await parseSettingsError(res);
+          el.checked = true;
+          showError(`${asset.toUpperCase()} live disarm: ` + msg);
+          return;
+        }
+        const data = await res.json();
+        if (data.bot?.ok) renderHourlyBot(data.bot, asset, HOURLY_LIVE_KIND);
+        loadIndexLivePreflight(asset);
+      } catch (e) {
+        el.checked = true;
+        showError(`${asset.toUpperCase()} live disarm: ` + e.message);
+      }
+    }
+
+    async function loadIndexLivePreflight(asset) {
+      try {
+        const pre = await getWithTimeout(indexLivePreflightUrl(asset), 12000);
+        renderIndexLivePreflight(asset, pre);
+        const p = botDomPrefix(HOURLY_LIVE_KIND, asset);
+        const armEl = $(`index-live-arm-${asset}`);
+        if (armEl) {
+          const canArm = !!pre.ok;
+          const armed = !!pre.armed;
+          armEl.disabled = !canArm && !armed;
+          armEl.checked = armed;
+        }
+      } catch (e) {
+        renderIndexLivePreflight(asset, { ok: false, issues: [`preflight_fetch_error:${e.message}`], warnings: [] });
+      }
+    }
+
+    function refreshIndexLiveBotDirect(asset, tabAtStart, gen) {
+      getWithTimeout(hourlyBotStatusUrl(asset, HOURLY_LIVE_KIND, true), 15000).then((botDirect) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        if (!botDirect?.ok) {
+          const cached = lastHourlyLiveBotStatus[asset];
+          if (cached?.ok) renderHourlyBot(cached, asset, HOURLY_LIVE_KIND);
+          return;
+        }
+        const bot = mergeHourlyLiveBotStatus(asset, botDirect);
+        if (bot?.ok && activeTab === tabAtStart) renderHourlyBot(bot, asset, HOURLY_LIVE_KIND);
+      }).catch(() => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        const cached = lastHourlyLiveBotStatus[asset];
+        if (cached) renderHourlyBot(cached, asset, HOURLY_LIVE_KIND);
+      });
     }
 
     function botIntervalPerformanceHtml(bot, s, periodLabel) {
@@ -4348,7 +4611,11 @@
       if (!settingsWrap) return normalizeBotSettings(serverSettings, maxKey) || serverSettings || {};
 
       if (isHourlyLiveKind(kind)) {
-        settingsWrap.innerHTML = ethLiveMirrorSettingsHtml(asset, serverSettings);
+        if (asset === 'eth') {
+          settingsWrap.innerHTML = ethLiveMirrorSettingsHtml(asset, serverSettings);
+        } else {
+          settingsWrap.innerHTML = indexLiveMirrorSettingsHtml(asset, serverSettings, lastIndexLivePreflight[asset]);
+        }
         botSettingsDomReady[key] = true;
         const norm = normalizeBotSettings(serverSettings, maxKey);
         lastKnownBotSettings[key] = norm;
@@ -5996,6 +6263,12 @@
       const p = botDomPrefix(kind, asset);
       const domSettings = readBotSettingsFromDom(asset, kind);
       if (!domSettings) return false;
+      if (isIndexPaperHourly(asset, kind) && domSettings.mode === 'live') {
+        showError(`${asset.toUpperCase()} paper trial is locked to PAPER — arm live via the Live mirror panel below.`);
+        const forceKey = botForceKey(kind, asset);
+        botForceSettingsRender[forceKey] = true;
+        return false;
+      }
       const body = {
         ...domSettings,
         aggressive_entries: !!$(`bot-aggressive-${p}`)?.checked,
@@ -6361,6 +6634,10 @@
         const trialCached = getTrialBotCache('hourly_trial', asset);
         if (trialCached) renderHourlyBot(trialCached, asset, 'hourly_trial');
         else renderHourlyBot({ ok: false, error: 'Loading trial bot…' }, asset, 'hourly_trial');
+        const liveCached = lastHourlyLiveBotStatus[asset];
+        if (liveCached) renderHourlyBot(liveCached, asset, HOURLY_LIVE_KIND);
+        else renderHourlyBot({ ok: false, error: 'Loading live mirror…' }, asset, HOURLY_LIVE_KIND);
+        loadIndexLivePreflight(asset);
       }
       get(api.calibration).catch(() => ({ summary: {} })).then((cal) => {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
@@ -6378,6 +6655,8 @@
         if (asset === 'eth') refreshHourlyLiveBotDirect(tabAtStart, gen);
         if (asset === 'spx' || asset === 'ndx') {
           refreshIndexTrialBot(asset, tabAtStart, gen);
+          refreshIndexLiveBotDirect(asset, tabAtStart, gen);
+          loadIndexLivePreflight(asset);
           loadIndexHourlyLiveTrialCompare(asset);
         }
       } catch (e) {

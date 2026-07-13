@@ -38,6 +38,8 @@ PRIMARY_BOT_BY_CATEGORY: dict[str, str] = {
   "ETH hourly": "eth_hourly",
   "BTC 15m": "btc_slot15",
   "ETH 15m": "eth_slot15",
+  "SPX hourly": "spx_hourly",
+  "NDX hourly": "ndx_hourly",
 }
 
 

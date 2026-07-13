@@ -35,6 +35,7 @@ class PnlFirstManagerConfig:
   allow_eth_slot15_paper: bool = False
   allow_btc_live: bool = False
   allow_index_paper: bool = False
+  allow_index_live: bool = False
 
   @classmethod
   def from_cfg(cls, cfg: dict[str, Any] | None) -> PnlFirstManagerConfig:
@@ -58,6 +59,7 @@ class PnlFirstManagerConfig:
       allow_eth_slot15_paper=bool(raw.get("allow_eth_slot15_paper", False)),
       allow_btc_live=bool(raw.get("allow_btc_live", False)),
       allow_index_paper=bool(raw.get("allow_index_paper", False)),
+      allow_index_live=bool(raw.get("allow_index_live", False)),
     )
 
 
@@ -156,12 +158,18 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
         ("eth", "slot15", "slot15_bot_store"),
         ("eth", "slot15_trial", "slot15_trial_bot_store"),
       ])
-  if mgr.allow_index_paper:
+  if mgr.allow_index_paper or mgr.allow_index_live:
     from src.assets import asset_enabled as _asset_enabled
 
     for index_asset in ("spx", "ndx"):
       if _asset_enabled(cfg, index_asset):
-        targets.append((index_asset, "hourly", "hourly_bot_store"))
+        if mgr.allow_index_paper:
+          targets.append((index_asset, "hourly", "hourly_bot_store"))
+        if mgr.allow_index_live:
+          from src.trading.index_live_experiment import index_live_mirror_active
+
+          if index_live_mirror_active(cfg, index_asset):
+            targets.append((index_asset, "hourly_live", "hourly_bot_store"))
 
   for asset, kind, store_fn in targets:
     # POA live session: do not re-disable BTC hourly — unless twin live is managing it
@@ -180,6 +188,7 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
     eth_slot15_paper_exempt = False
     btc_live_exempt = False
     index_paper_exempt = False
+    index_live_exempt = False
     eth_bot_cfg_yaml = dict(
       (((cfg or {}).get("eth") or {}).get("hourly") or {}).get("bot") or {}
     )
@@ -219,6 +228,11 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
           and str(index_yaml.get("mode") or "paper").lower() == "paper"
         ):
           index_paper_exempt = True
+    if asset in ("spx", "ndx") and kind == "hourly_live" and mgr.allow_index_live:
+      from src.trading.index_live_experiment import index_live_mirror_active
+
+      if index_live_mirror_active(cfg, asset):
+        index_live_exempt = True
     if eth_paper_exempt:
       if not settings.enabled:
         updates["enabled"] = True
@@ -285,6 +299,22 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
         updates["auto_stopped"] = False
         updates["auto_stop_reason"] = None
         changed = True
+    elif index_live_exempt:
+      from src.trading.index_live_experiment import index_bot_cfg, index_live_mirror_cfg
+
+      index_yaml = index_bot_cfg(cfg, asset)
+      mirror = index_live_mirror_cfg(cfg, asset)
+      if not settings.enabled:
+        updates["enabled"] = True
+        changed = True
+      if not settings.continuous and bool(
+        mirror.get("continuous_enabled", index_yaml.get("continuous_enabled", True))
+      ):
+        updates["continuous"] = True
+        changed = True
+      if str(settings.mode or "").lower() != "live":
+        updates["mode"] = "live"
+        changed = True
     elif settings.enabled:
       updates["enabled"] = False
       changed = True
@@ -323,6 +353,8 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
           if btc_live_exempt
           else "index_paper_arm"
           if index_paper_exempt
+          else "index_live_arm"
+          if index_live_exempt
           else "sleep_lock"
         ),
         "asset": asset,
@@ -377,6 +409,18 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
       )
       if seed_result.get("synced"):
         actions.append({"action": "index_paper_settings_sync", **seed_result})
+
+    if index_live_exempt and asset in ("spx", "ndx") and kind == "hourly_live":
+      from src.trading.index_live_experiment import seed_index_live_mirror_from_cfg
+
+      seed_result = seed_index_live_mirror_from_cfg(
+        store,
+        cfg,
+        asset,
+        source="pnl_first_manager_index_live_arm",
+      )
+      if seed_result.get("synced"):
+        actions.append({"action": "index_live_settings_sync", **seed_result})
   return actions
 
 
@@ -598,6 +642,17 @@ def run_manager_tick(loop: Any) -> dict[str, Any]:
           actions.append({"action": "index_paper_settings_sync", "asset": asset, **result})
     except Exception as exc:
       log.warning("index paper experiment ensure failed: %s", exc)
+
+  if mgr.allow_index_live:
+    try:
+      from src.trading.index_live_experiment import ensure_index_live_experiments
+
+      index_live_boot = ensure_index_live_experiments(loop)
+      for asset, result in (index_live_boot.get("assets") or {}).items():
+        if result.get("synced"):
+          actions.append({"action": "index_live_settings_sync", "asset": asset, **result})
+    except Exception as exc:
+      log.warning("index live experiment ensure failed: %s", exc)
 
   try:
     from src.trading.compare_paper_twins import ensure_compare_paper_twins

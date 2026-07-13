@@ -49,6 +49,16 @@ def init_index_assets(loop: Any) -> None:
     log.exception("Index paper experiment boot failed")
 
   try:
+    from src.trading.index_live_experiment import ensure_index_live_experiments
+
+    live_boot = ensure_index_live_experiments(loop)
+    live_armed = [a for a, r in (live_boot.get("assets") or {}).items() if r.get("synced")]
+    if live_armed:
+      log.info("Index live mirrors armed: %s", ", ".join(live_armed))
+  except Exception:
+    log.exception("Index live experiment boot failed")
+
+  try:
     from src.data.index_candle_bootstrap import bootstrap_index_candles_if_missing
 
     queued = bootstrap_index_candles_if_missing(loop.cfg, background=True)
@@ -172,6 +182,18 @@ def run_index_hourly_late_call(loop: Any, asset: str, *, force: bool = False):
   return loop._run_hourly_late_call_for_asset(asset, force=force)
 
 
+def run_index_hourly_live_bot_continuous(loop: Any, asset: str) -> None:
+  asset = asset.lower()
+  if not asset_enabled(loop.cfg, asset):
+    return
+  acfg = acfg_for(loop, asset)
+  if not index_trading_allowed(acfg):
+    store = loop.hourly_bot_store(asset, kind="hourly_live")
+    store.set_last_skip_reason("outside_market_hours")
+    return
+  loop._run_hourly_bot_continuous(asset, kind="hourly_live")
+
+
 def run_index_hourly_trial_bot_continuous(loop: Any, asset: str) -> None:
   asset = asset.lower()
   if not asset_enabled(loop.cfg, asset):
@@ -223,6 +245,19 @@ def schedule_index_hourly_jobs(loop: Any, scheduler) -> None:
         "interval",
         seconds=poll_sec,
         id=f"{prefix}_hourly_bot_continuous",
+        max_instances=1,
+      )
+    from src.trading.pnl_first_railway_manager import PnlFirstManagerConfig
+
+    mgr = PnlFirstManagerConfig.from_cfg(loop.cfg)
+    if mgr.allow_index_live:
+      mirror = bot_cfg.get("live_mirror") or {}
+      poll_live = int(mirror.get("poll_seconds", bot_cfg.get("poll_seconds", 12)))
+      scheduler.add_job(
+        lambda a=asset: run_index_hourly_live_bot_continuous(loop, a),
+        "interval",
+        seconds=poll_live,
+        id=f"{prefix}_hourly_live_bot_continuous",
         max_instances=1,
       )
     trial_cfg = bot_cfg.get("trial") or {}

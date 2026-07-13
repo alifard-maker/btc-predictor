@@ -10,6 +10,8 @@ INDEX_PREFIXES = ("spx", "ndx")
 
 REQUIRED_SUFFIXES = (
   "hourly-bot",
+  "hourly-live-preflight",
+  "hourly-live-bot",
   "hourly-trial-bot",
   "hourly-live-trial-compare",
   "hourly-guide",
@@ -38,9 +40,14 @@ def test_index_hourly_panels_have_prefixed_dom_ids():
 
 def test_dashboard_wires_index_hourly_api_paths():
   html = DASHBOARD.read_text(encoding="utf-8")
+  assert "function indexLivePreflightUrl(asset)" in html
+  assert "function indexLiveArmUrl(asset)" in html
+  assert "/hourly-live/preflight" in html
+  assert "/hourly-live/arm" in html
   for asset in INDEX_PREFIXES:
     assert f"/api/{asset}/hourly/prediction" in html
     assert f"/api/{asset}/hourly/bot" in html
+    assert f"/api/{asset}/hourly-live/bot" in html
     assert f"/api/{asset}/hourly-trial/bot" in html
 
 

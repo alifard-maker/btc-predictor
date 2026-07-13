@@ -69,6 +69,13 @@ def register_index_hourly_routes(app, loop_getter, cfg_getter, session_dep, appl
     async def _settings(request: Request, _user=Depends(session_dep), *, _asset=asset):
       loop = _loop()
       body = await request.json()
+      from src.trading.index_paper_experiment import index_paper_experiment_active
+
+      if index_paper_experiment_active(_cfg(), _asset) and str(body.get("mode") or "").lower() == "live":
+        raise HTTPException(
+          400,
+          f"{label} hourly paper trial is locked to PAPER — arm live via /api/{_asset}/hourly-live/arm after preflight",
+        )
       store = loop.hourly_bot_store(_asset)
       acfg = loop._index_cfgs.get(_asset) or asset_cfg(_cfg(), _asset)
       apply_settings_fn(store, body, cfg=acfg)
@@ -108,6 +115,94 @@ def register_index_hourly_routes(app, loop_getter, cfg_getter, session_dep, appl
     app.get(f"{prefix}/bot/trades")(_trades)
     app.post(f"{prefix}/bot/fresh-start")(_fresh_start)
     app.post(f"{prefix}/bot/clear-history")(_clear_history)
+
+    live_prefix = f"/api/{asset}/hourly-live"
+
+    def _live_preflight(_user=Depends(session_dep), *, _asset=asset):
+      from src.trading.index_live_experiment import run_index_live_preflight
+
+      loop = _loop()
+      return run_index_live_preflight(loop, _cfg(), _asset)
+
+    def _live_bot_status(lightweight: bool = Query(default=True), _user=Depends(session_dep), *, _asset=asset):
+      loop = _loop()
+      tab = loop._hourly_tab_for_bot_status(_asset)
+      return loop.hourly_live_bot_status(
+        _asset,
+        tab if tab and tab.get("ok") else None,
+        lightweight=lightweight,
+      )
+
+    def _live_sync_fills(_user=Depends(session_dep), *, _asset=asset):
+      loop = _loop()
+      result = loop.sync_hourly_kalshi_fills(_asset, kind="hourly_live", force=True)
+      tab = loop._hourly_tab_for_bot_status(_asset)
+      status = loop.hourly_live_bot_status(_asset, tab if tab and tab.get("ok") else None)
+      return {"sync": result, "bot": status}
+
+    def _live_reconcile(_user=Depends(session_dep), *, _asset=asset):
+      loop = _loop()
+      return loop.hourly_live_reconcile(_asset, kind="hourly_live")
+
+    def _live_trades(
+      limit: int = Query(default=100, le=200),
+      event_ticker: str | None = Query(default=None),
+      _user=Depends(session_dep),
+      *,
+      _asset=asset,
+    ):
+      loop = _loop()
+      store = loop.hourly_live_bot_store(_asset)
+      trades = store.list_trades(limit=limit, event_ticker=event_ticker)
+      out: dict[str, Any] = {"trades": trades}
+      if event_ticker:
+        out["hour_summary"] = store.hour_interval_summary(event_ticker)
+      return out
+
+    def _live_clear_history(_user=Depends(session_dep), *, _asset=asset):
+      from src.api.main import _hourly_bot_clear_history
+
+      loop = _loop()
+      return _hourly_bot_clear_history(
+        loop.hourly_live_bot_store(_asset),
+        lambda: loop.index_hourly_prediction(_asset),
+        _asset,
+        kind="hourly_live",
+      )
+
+    async def _live_arm(request: Request, _user=Depends(session_dep), *, _asset=asset):
+      from src.trading.index_live_experiment import arm_index_live_mirror, disarm_index_live_mirror
+      from src.trading.live_mode_auth import live_bet_password, require_live_password
+
+      loop = _loop()
+      body = await request.json()
+      armed = bool(body.get("armed"))
+      if armed:
+        require_live_password(
+          current_mode="paper",
+          new_mode="live",
+          body=body,
+          password=live_bet_password(_cfg()),
+        )
+        result = arm_index_live_mirror(loop, _cfg(), _asset)
+        if not result.get("ok"):
+          raise HTTPException(400, result.get("error") or "arm_failed", detail=result)
+        tab = loop._hourly_tab_for_bot_status(_asset)
+        result["bot"] = loop.hourly_live_bot_status(_asset, tab if tab and tab.get("ok") else None)
+        return result
+      store = loop.hourly_live_bot_store(_asset)
+      result = disarm_index_live_mirror(store, _cfg(), _asset)
+      tab = loop._hourly_tab_for_bot_status(_asset)
+      result["bot"] = loop.hourly_live_bot_status(_asset, tab if tab and tab.get("ok") else None)
+      return result
+
+    app.get(f"{live_prefix}/preflight")(_live_preflight)
+    app.get(f"{live_prefix}/bot")(_live_bot_status)
+    app.post(f"{live_prefix}/bot/sync-kalshi-fills")(_live_sync_fills)
+    app.get(f"{live_prefix}/bot/live-reconcile")(_live_reconcile)
+    app.get(f"{live_prefix}/bot/trades")(_live_trades)
+    app.post(f"{live_prefix}/bot/clear-history")(_live_clear_history)
+    app.post(f"{live_prefix}/arm")(_live_arm)
 
     trial_prefix = f"/api/{asset}/hourly-trial"
 

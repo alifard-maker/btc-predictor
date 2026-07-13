@@ -706,6 +706,7 @@ pnl_first_manager:
   allow_eth_slot15_paper: true  # $4k/week plan — ETH KXETH15M paper lane (separate epoch)
   allow_btc_live: true       # BTC hourly twin live (same mid-hour / pnl_first mechanics)
   allow_index_paper: true    # SPX/NDX hourly paper trials (ETH live rules)
+  allow_index_live: true     # SPX/NDX hourly_live mirror — arm via dashboard after preflight
 
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
 live_resting_exits:

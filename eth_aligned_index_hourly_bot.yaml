@@ -30,6 +30,12 @@ experiment_start_at: '2026-07-11T04:00:00+00:00'  # Sat Jul 11 00:00 ET
 paper_experiment:
   enabled: true
   sync_settings_on_arm: true
+live_mirror:
+  enabled: false
+  continuous_enabled: true
+  poll_seconds: 10
+  max_spend_per_hour_usd: 15
+  experiment_start_at: '2026-07-11T04:00:00+00:00'  # Sat Jul 11 00:00 ET — separate from paper epoch when armed
 live_mechanics_profile: pnl_first
 profit_exit_cooldown_seconds: 60
 cheap_leg_max_entry_cents: 20
