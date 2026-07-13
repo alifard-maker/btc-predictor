@@ -6760,7 +6760,15 @@
       </table>${kalshiPnlSportsFootnote(block)}`;
     }
 
-    function renderKalshiPnlHistoryTotalRow(rows) {
+    function kalshiHistoryEntryUsd(row, kind) {
+      if (kind === 'day') {
+        const buys = row.buy_volume_usd;
+        if (buys != null && buys > 0) return Number(buys);
+      }
+      return Number((row.entry_cost_usd ?? row.invested_usd) || 0);
+    }
+
+    function renderKalshiPnlHistoryTotalRow(rows, kind) {
       if (!rows?.length) return '';
       let pnl = 0;
       let legs = 0;
@@ -6769,7 +6777,7 @@
       for (const row of rows) {
         pnl += Number(row.total_pnl_usd || 0);
         legs += Number(row.closed_legs || 0);
-        invested += Number((row.entry_cost_usd ?? row.invested_usd) || 0);
+        invested += kalshiHistoryEntryUsd(row, kind);
         wins += Number(row.wins || 0);
       }
       const wr = legs ? pct(wins / legs) : '—';
@@ -6791,6 +6799,9 @@
 
     function renderKalshiPnlHistoryTable(rows, kind) {
       if (!rows?.length) return '<p class="muted">No history yet.</p>';
+      const entryHdr = kind === 'day'
+        ? '<span title="New buy spend this ET day (not cost basis of legs closed)">Buys $</span>'
+        : '<span title="Entry stake on legs closed this ET week">Entry $</span>';
       const body = rows.map((row) => {
         const pnl = Number(row.total_pnl_usd || 0);
         const cls = pnl >= 0 ? 'up' : 'down';
@@ -6799,11 +6810,12 @@
           : (row.is_current_week ? ' <span class="muted">(current)</span>' : '');
         const perHr = row.pnl_per_hour_usd != null ? signedPrice(row.pnl_per_hour_usd) : '—';
         const perLeg = row.pnl_per_leg_usd != null ? signedPrice(row.pnl_per_leg_usd) : '—';
-        const roi = row.roi_pct != null ? `${row.roi_pct}%` : '—';
+        const entryUsd = kalshiHistoryEntryUsd(row, kind);
+        const roi = entryUsd > 0 ? `${Math.round((100 * pnl / entryUsd) * 10) / 10}%` : (row.roi_pct != null ? `${row.roi_pct}%` : '—');
         const wr = row.win_rate != null ? pct(row.win_rate) : '—';
         return `<tr>
           <td>${row.label || row.day || row.week_start}${tag}</td>
-          <td>${price((row.entry_cost_usd ?? row.invested_usd) || 0)}</td>
+          <td>${price(entryUsd)}</td>
           <td class="${cls}">${signedPrice(pnl)}</td>
           <td>${row.closed_legs ?? 0}</td>
           <td>${perLeg}</td>
@@ -6814,9 +6826,9 @@
       }).join('');
       return `<table class="data-table" style="width:100%;font-size:.78rem">
         <thead><tr>
-          <th>${kind === 'day' ? 'Day' : 'Week'}</th><th title="Entry stake on legs closed in this period">Entry $</th><th>P&amp;L ${pnlSourceBadge('kalshi_wallet')}</th><th>Legs</th><th>$/leg</th><th>$/h</th><th>ROI</th><th>Win rate</th>
+          <th>${kind === 'day' ? 'Day' : 'Week'}</th><th>${entryHdr}</th><th>P&amp;L ${pnlSourceBadge('kalshi_wallet')}</th><th>Legs</th><th>$/leg</th><th>$/h</th><th>ROI</th><th>Win rate</th>
         </tr></thead>
-        <tbody>${body}${renderKalshiPnlHistoryTotalRow(rows)}</tbody>
+        <tbody>${body}${renderKalshiPnlHistoryTotalRow(rows, kind)}</tbody>
       </table>`;
     }
 

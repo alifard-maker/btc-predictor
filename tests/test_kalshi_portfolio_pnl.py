@@ -141,6 +141,25 @@ def test_store_persists_and_epoch_filters(tmp_path):
   assert store.runtime()["clean_sheets"] == 1
 
 
+def test_daily_history_uses_buy_volume_not_closed_stake():
+  """Daily buys $ should reflect new spend that day, not cost basis of legs closed."""
+  now_et = datetime(2026, 7, 13, 15, 0, tzinfo=ET)
+  bought_prior = datetime(2026, 7, 12, 10, 0, tzinfo=ET).astimezone(timezone.utc)
+  closed_today = datetime(2026, 7, 13, 10, 0, tzinfo=ET).astimezone(timezone.utc)
+  bought_today = datetime(2026, 7, 13, 9, 0, tzinfo=ET).astimezone(timezone.utc)
+  closed = [
+    {"category": "BTC hourly", "pnl_usd": -0.5, "exit_at": closed_today, "cost_usd": 5.0},
+  ]
+  entries = [
+    {"category": "BTC hourly", "cost_usd": 5.0, "bought_at": bought_prior},
+    {"category": "BTC hourly", "cost_usd": 2.5, "bought_at": bought_today},
+  ]
+  days = build_daily_history(closed, entries, now_et=now_et)
+  today = next(d for d in days if d["is_today"])
+  assert today["entry_cost_usd"] == 5.0
+  assert today["buy_volume_usd"] == 2.5
+
+
 def test_daily_and_weekly_history():
   now_et = datetime(2026, 7, 13, 15, 0, tzinfo=ET)
   d1 = datetime(2026, 7, 13, 10, 0, tzinfo=ET).astimezone(timezone.utc)
