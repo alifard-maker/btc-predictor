@@ -3429,7 +3429,7 @@ class PredictionLoop:
   def run_log_backup(self, *, reason: str = "scheduled") -> dict[str, Any]:
     from src.backup.logs_backup import run_full_backup
 
-    return run_full_backup(self.cfg, reason=reason)
+    return run_full_backup(self.cfg, reason=reason, kalshi=getattr(self, "kalshi", None))
 
   def _schedule_second_chance(self, scheduler) -> None:
     if not self.cfg.get("second_chance", {}).get("enabled", True):

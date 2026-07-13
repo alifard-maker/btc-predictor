@@ -255,13 +255,27 @@ def _append_audit_jsonl(
     f.write(json.dumps(record, default=str) + "\n")
 
 
-def _export_mode_trades(
+def _optional_kalshi_client() -> Any | None:
+  try:
+    from src.api import main as api_main
+
+    loop = api_main._loop
+    if loop is not None:
+      return getattr(loop, "kalshi", None)
+  except Exception:
+    pass
+  return None
+
+
+def _export_bot_log_trades(
   cfg: dict[str, Any],
   *,
   mode: str,
   dest: Path,
+  csv_name: str = "trades.csv",
+  all_csv_name: str | None = None,
 ) -> dict[str, Any]:
-  """Refresh per-bot CSVs and consolidated CSV for one mode."""
+  """Export bot SQLite trade log CSVs for one mode."""
   all_rows: list[dict[str, Any]] = []
   per_bot: dict[str, int] = {}
   for asset, kind, db_path in bot_db_specs(cfg):
@@ -269,12 +283,40 @@ def _export_mode_trades(
     label = f"{asset}_{kind}"
     per_bot[label] = len(rows)
     if rows:
-      _write_csv(rows, dest / label / "trades.csv")
+      _write_csv(rows, dest / label / csv_name)
       all_rows.extend(rows)
   if all_rows:
     all_rows.sort(key=lambda r: str(r.get("created_at") or ""))
-    _write_csv(all_rows, dest / "all_trades.csv")
-  return {"mode": mode, "total_trades": len(all_rows), "per_bot": per_bot}
+    _write_csv(all_rows, dest / (all_csv_name or "all_trades.csv"))
+  return {"mode": mode, "total_trades": len(all_rows), "per_bot": per_bot, "source": "bot_log"}
+
+
+def _export_mode_trades(
+  cfg: dict[str, Any],
+  *,
+  mode: str,
+  dest: Path,
+  kalshi: Any | None = None,
+) -> dict[str, Any]:
+  """Refresh per-bot CSVs and consolidated CSV for one mode."""
+  if mode == "live":
+    bot_log_stats = _export_bot_log_trades(
+      cfg,
+      mode="live",
+      dest=dest,
+      csv_name="bot_log_trades.csv",
+      all_csv_name="all_bot_log_trades.csv",
+    )
+    client = kalshi or _optional_kalshi_client()
+    if client is not None:
+      from src.backup.kalshi_tax_export import export_kalshi_wallet_live_trades
+
+      kalshi_stats = export_kalshi_wallet_live_trades(cfg, client, dest)
+      if kalshi_stats.get("ok"):
+        return {**kalshi_stats, "bot_log": bot_log_stats}
+    return _export_bot_log_trades(cfg, mode="live", dest=dest)
+
+  return _export_bot_log_trades(cfg, mode=mode, dest=dest)
 
 
 def _copy_calibration_files(cfg: dict[str, Any], dest: Path) -> list[str]:
@@ -308,7 +350,7 @@ def _prune_snapshots(root: Path, keep_days: int) -> int:
   return removed
 
 
-def run_full_backup(cfg: dict[str, Any], *, reason: str = "scheduled") -> dict[str, Any]:
+def run_full_backup(cfg: dict[str, Any], *, reason: str = "scheduled", kalshi: Any | None = None) -> dict[str, Any]:
   """Full backup: sqlite snapshots + paper/live CSV exports + calibration files."""
   bcfg = backup_cfg(cfg)
   if not bcfg["enabled"]:
@@ -326,7 +368,7 @@ def run_full_backup(cfg: dict[str, Any], *, reason: str = "scheduled") -> dict[s
       paper_dir = root / "paper"
       live_dir = root / "live"
       paper_stats = _export_mode_trades(cfg, mode="paper", dest=paper_dir)
-      live_stats = _export_mode_trades(cfg, mode="live", dest=live_dir)
+      live_stats = _export_mode_trades(cfg, mode="live", dest=live_dir, kalshi=kalshi or _optional_kalshi_client())
 
       full_dir = snap_dir / "full"
       for asset, kind, db_path in bot_db_specs(cfg):
@@ -454,7 +496,7 @@ def on_trade_logged(
   try:
     _append_audit_jsonl(audit_path, record, dedupe_key=dedupe or None)
     if mode == "live":
-      _export_mode_trades(cfg, mode="live", dest=mode_dir)
+      _export_mode_trades(cfg, mode="live", dest=mode_dir, kalshi=_optional_kalshi_client())
       live_manifest = mode_dir / "manifest.json"
       live_manifest.write_text(
         json.dumps(
@@ -463,7 +505,8 @@ def on_trade_logged(
             "reason": "live_trade",
             "last_trade_id": dedupe,
             "scope": "live",
-            "note": "Tax-relevant live trade log — do not delete",
+            "pnl_source": "kalshi_wallet",
+            "note": "Tax CSVs use Kalshi wallet (trades.csv); bot_log_trades.csv is strategy DB only",
           },
           indent=2,
         ),

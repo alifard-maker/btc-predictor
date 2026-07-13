@@ -403,6 +403,7 @@ def portfolio_activity_from_kalshi(
         "exit_at": sell_time,
         "exit_type": leg["exit_type"],
         "buy_at": buy_time,
+        "buy_order_id": str((leg.get("buy") or {}).get("order_id") or ""),
       })
   return {"closed": closed, "entries": entries}
 

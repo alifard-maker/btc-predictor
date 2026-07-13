@@ -6761,10 +6761,8 @@
     }
 
     function kalshiHistoryEntryUsd(row, kind) {
-      if (kind === 'day') {
-        const buys = row.buy_volume_usd;
-        if (buys != null && buys > 0) return Number(buys);
-      }
+      const buys = row.buy_volume_usd;
+      if (buys != null && buys > 0) return Number(buys);
       return Number((row.entry_cost_usd ?? row.invested_usd) || 0);
     }
 
@@ -6799,9 +6797,7 @@
 
     function renderKalshiPnlHistoryTable(rows, kind) {
       if (!rows?.length) return '<p class="muted">No history yet.</p>';
-      const entryHdr = kind === 'day'
-        ? '<span title="New buy spend this ET day (not cost basis of legs closed)">Buys $</span>'
-        : '<span title="Entry stake on legs closed this ET week">Entry $</span>';
+      const entryHdr = '<span title="New buy spend this ET period (not cost basis of legs closed)">Buys $</span>';
       const body = rows.map((row) => {
         const pnl = Number(row.total_pnl_usd || 0);
         const cls = pnl >= 0 ? 'up' : 'down';
