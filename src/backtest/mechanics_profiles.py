@@ -33,7 +33,7 @@ PROFILE_LABELS: dict[str, str] = {
   "current": "Current deploy (084d7d1 + adaptive passive v1)",
   "rally_only": "Rally-only (adaptive: entries only in rally mode; defense sits out)",
   "soft_rally": "Soft rally (rally mode full; defense: 1 YES threshold 40-80¢, edge≥15¢)",
-  "pnl_first": "P&L-first Phase 0–1 (BTC S1 only, taker 15¢+, max 2 legs, no S2/tail)",
+  "pnl_first": "P&L-first Phase 0–1 (BTC S1 only, taker 18¢+, max 4 enters/h, no S2/tail)",
 }
 
 
@@ -167,12 +167,12 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     live_entry["taker_only"] = True
     live_exit["block_tail_entries"] = True
     live_exit["tail_block_max_cents"] = 20
-    live_exit.setdefault("max_resting_enters_per_hour", 6)
+    live_exit.setdefault("max_resting_enters_per_hour", 8)
     es = bot.setdefault("entry_strategy", {})
     es["min_ask_edge_cents"] = 18
     es["tail_entry_block"] = True
-    es["max_entries_per_cycle"] = 1
-    es["max_concurrent_positions"] = 2
+    es["max_entries_per_cycle"] = 2
+    es["max_concurrent_positions"] = 4
     es["max_contracts_per_entry"] = 2
     es["max_stake_per_entry_usd"] = 2.50
     es["allow_scale_in"] = False
@@ -181,8 +181,8 @@ def apply_mechanics_profile(cfg: dict[str, Any], profile: MechanicsProfile) -> d
     stake = align.setdefault("stake", {})
     stake["max_stake_per_entry_usd"] = 2.50
     stake["max_contracts_per_entry"] = 2
-    live_inventory["max_concurrent_positions"] = 2
-    live_inventory["max_entries_per_cycle"] = 1
+    live_inventory["max_concurrent_positions"] = 4
+    live_inventory["max_entries_per_cycle"] = 2
     live_inventory["max_same_side_threshold_legs"] = 1
     live_inventory["max_same_side_range_legs"] = 0
     live_inventory["allow_scale_in"] = False

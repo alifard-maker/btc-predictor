@@ -5394,7 +5394,7 @@
         ${runwayHtml}
         <div class="bot-row" style="flex-wrap:wrap;gap:.5rem;margin-bottom:.45rem">
           ${laneRow('Track A · ETH live', ta.live?.net_pnl_usd, `epoch ${fmtEpoch(ta.stats_epoch_at)} · matched ${ta.live?.matched_hours ?? 0}h`, '', 'bot_log')}
-          ${laneRow('Track A · ETH trial', ta.trial?.net_pnl_usd, `probe ${ta.probe_24h?.min_ask_edge_cents ?? 18}¢ · ≤${ta.probe_24h?.max_filled_enters_per_hour ?? 2}/h`, '', 'bot_log')}
+          ${laneRow('Track A · ETH trial', ta.trial?.net_pnl_usd, `probe ${ta.probe_24h?.min_ask_edge_cents ?? 18}¢ · ≤${ta.probe_24h?.max_filled_enters_per_hour ?? 4}/h`, '', 'bot_log')}
           ${laneRow('Track B · shadow', tb.shadow_would_pnl_usd, `events ${tb.events_logged ?? 0} · median ${tb.median_edge_cents != null ? tb.median_edge_cents + '¢' : '—'} · ${promo}`, Number(tb.shadow_would_pnl_usd) >= 0 ? 'up' : 'down', 'bot_log')}
           ${laneRow('Slot15 · ETH paper', s15.net_pnl_usd, `epoch ${fmtEpoch(s15.stats_epoch_at)} · slots ${s15.periods_with_entries ?? 0} · ${s15.enabled ? 'ON' : 'OFF'}`, '', 'bot_log')}
         </div>

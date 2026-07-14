@@ -650,7 +650,7 @@ pnl_first:
     min_ask_edge_cents: 18
     max_contracts_per_entry: 2
     max_stake_per_entry_usd: 2.50
-    max_filled_enters_per_hour: 2
+    max_filled_enters_per_hour: 4   # was 2 — more tuning data; keep 18¢ edge + $2.50 stake
   # $4k/week plan — Track B shadow (hourly terminal 15m, no orders)
   track_b_shadow:
     enabled: true

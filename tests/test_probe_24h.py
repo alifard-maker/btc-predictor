@@ -107,6 +107,22 @@ def test_apply_probe_entry_estrat_overlay_disables_scale_in():
   assert out.max_concurrent_positions == 2
 
 
+def test_apply_probe_entry_estrat_overlay_allows_two_per_cycle_at_cap_four():
+  from src.trading.entry_strategy import EntryStrategyConfig
+
+  estrat = EntryStrategyConfig(
+    allow_scale_in=True,
+    max_entries_per_cycle=4,
+    max_concurrent_positions=6,
+  )
+  out = apply_probe_entry_estrat_overlay(
+    estrat, _probe_cfg(max_filled_enters_per_hour=4), kind="hourly", mode="live",
+  )
+  assert out.allow_scale_in is False
+  assert out.max_entries_per_cycle == 2
+  assert out.max_concurrent_positions == 4
+
+
 def test_probe_max_filled_enters_defaults_to_two():
   assert probe_max_filled_enters_per_hour(_probe_cfg()) == 2
   assert probe_max_filled_enters_per_hour({"pnl_first": {}}) is None

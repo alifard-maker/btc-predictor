@@ -131,6 +131,13 @@ def trial_regime_sync_pause_when_live_blocked(
   return None
 
 
+def _probe_entries_per_cycle(cap: int) -> int:
+  """Allow up to 2 entries/cycle when hourly enter budget is ≥4."""
+  if cap <= 0:
+    return 1
+  return min(2, max(1, cap // 2))
+
+
 def apply_probe_entry_estrat_overlay(
   estrat: Any,
   cfg: dict[str, Any] | None,
@@ -147,19 +154,21 @@ def apply_probe_entry_estrat_overlay(
     if kind in _PROBE_TRIAL_KINDS and probe_24h_active(cfg):
       cap = probe_max_filled_enters_per_hour(cfg)
       if cap is not None:
+        per_cycle = _probe_entries_per_cycle(cap)
         kw = {
           "allow_scale_in": False,
-          "max_entries_per_cycle": 1,
+          "max_entries_per_cycle": per_cycle,
           "max_concurrent_positions": min(int(estrat.max_concurrent_positions or 2), cap),
         }
         if isinstance(estrat, EntryStrategyConfig):
           return replace(estrat, **kw)
     return estrat
   cap = probe_max_filled_enters_per_hour(cfg) or 2
+  per_cycle = _probe_entries_per_cycle(cap)
   kw = {
     "allow_scale_in": False,
     "scale_in_max_legs_per_ticker": 1,
-    "max_entries_per_cycle": 1,
+    "max_entries_per_cycle": per_cycle,
     "max_concurrent_positions": min(int(estrat.max_concurrent_positions or 2), cap),
   }
   if isinstance(estrat, EntryStrategyConfig):

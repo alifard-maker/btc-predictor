@@ -183,7 +183,7 @@ def build_four_k_week_plan_report(loop: Any, cfg: dict[str, Any] | None) -> dict
     1: {
       "hour_cap_usd": 15,
       "stake_usd": 2.5,
-      "max_enters_per_hour": 2,
+      "max_enters_per_hour": 4,
       "min_edge_cents": 18,
       "capital_usd": "200–500",
       "target_weekly_usd": "25–75",
@@ -191,7 +191,7 @@ def build_four_k_week_plan_report(loop: Any, cfg: dict[str, Any] | None) -> dict
     2: {
       "hour_cap_usd": 30,
       "stake_usd": 5,
-      "max_enters_per_hour": 2,
+      "max_enters_per_hour": 4,
       "min_edge_cents": 18,
       "capital_usd": "1k–2k",
       "target_weekly_usd": "50–150",
