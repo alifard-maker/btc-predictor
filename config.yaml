@@ -1307,9 +1307,9 @@ sports:
       enabled: false                 # Phase 2 — Kalshi ↔ Polymarket
     value_sharp:
       enabled: true                  # Goal 3 — vs Odds API sharp fair line
-      min_edge_prob: 0.03            # ≥3¢ edge after fees vs fair
+      min_edge_prob: 0.02            # ≥2¢ edge after fees vs fair (probe; was 3¢)
       max_edge_prob: 0.12            # reject absurd edges (almost always mismatches)
-      max_stake_usd: 5.0
+      max_stake_usd: 2.0             # dashboard may override; keep tiny while probing
       assumed_fee_rate: 0.07         # Kalshi taker approx
       poly_fee_rate: 0.0
       allow_kalshi_live: true        # Goal 3 Kalshi live FOK (directional; Poly still paper)
@@ -1342,7 +1342,7 @@ sports:
   # Phase 1 — annotate opportunities (edge tier, coherence, liquidity); no live gates yet
   bet_assessment:
     enabled: true
-    min_edge_prob_moderate: 0.03
+    min_edge_prob_moderate: 0.02     # align MODERATE tier label with Goal 3 floor
     min_edge_prob_strong: 0.06
     min_match_score_strong: 0.70
     min_coherence_moderate: 0.50
