@@ -2671,6 +2671,145 @@
     }
 
     const humanTradesCache = { btc: null, eth: null };
+    const humanPaperLogExpanded = { btc: false, eth: false };
+
+    function humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl) {
+      if (!paperLog.length) {
+        return '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after you Sell.</p>';
+      }
+      return `<details id="human-paper-log-DETAILS_ASSET" style="margin-top:.65rem;font-size:.72rem">
+          <summary id="human-paper-log-summary-DETAILS_ASSET"><strong>Paper P&L log</strong> (${paperPnl.closed_legs || 0} closed)</summary>
+          <table style="width:100%;margin-top:.35rem;font-size:.68rem">
+            <thead><tr><th>Time</th><th>Action</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&L</th></tr></thead>
+            <tbody id="human-paper-log-body-DETAILS_ASSET">${humanPaperLogRowsHtml(paperLog, pnlCls, fmtPnl)}</tbody>
+          </table>
+        </details>`;
+    }
+
+    function humanPaperLogRowsHtml(paperLog, pnlCls, fmtPnl) {
+      return paperLog.map(t => {
+        const pnl = t.action === 'exit' ? t.pnl_usd : null;
+        return `<tr>
+          <td>${t.created_at ? time(t.created_at) : '—'}</td>
+          <td>${t.action || '—'}</td>
+          <td style="font-size:.65rem">${t.label || t.market_ticker || '—'}</td>
+          <td>${t.entry_price_cents != null ? t.entry_price_cents + '¢' : '—'}</td>
+          <td>${t.action === 'exit' && t.exit_price_cents != null ? t.exit_price_cents + '¢' : '—'}</td>
+          <td class="${pnl != null ? pnlCls(Number(pnl)) : 'muted'}">${pnl != null ? fmtPnl(Number(pnl)) : '—'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    function bindHumanPaperLogToggle(asset) {
+      const details = $(`human-paper-log-${asset}`);
+      if (!details || details.dataset.boundToggle === '1') return;
+      details.dataset.boundToggle = '1';
+      details.addEventListener('toggle', () => {
+        humanPaperLogExpanded[asset] = details.open;
+      });
+    }
+
+    function patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl) {
+      const wrap = $(`human-paper-log-wrap-${asset}`);
+      const details = $(`human-paper-log-${asset}`);
+      if (!paperLog.length) {
+        if (wrap && !details) return true;
+        if (wrap) {
+          wrap.innerHTML = '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after you Sell.</p>';
+        }
+        return true;
+      }
+      if (!details && wrap) {
+        wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl).replace(/DETAILS_ASSET/g, asset);
+        const fresh = $(`human-paper-log-${asset}`);
+        if (fresh) {
+          fresh.open = !!humanPaperLogExpanded[asset];
+          bindHumanPaperLogToggle(asset);
+        }
+        return true;
+      }
+      if (!details) return false;
+      const summary = $(`human-paper-log-summary-${asset}`);
+      const tbody = $(`human-paper-log-body-${asset}`);
+      if (summary) {
+        summary.innerHTML = `<strong>Paper P&L log</strong> (${paperPnl.closed_legs || 0} closed)`;
+      }
+      if (tbody && details.open) {
+        tbody.innerHTML = humanPaperLogRowsHtml(paperLog, pnlCls, fmtPnl);
+      }
+      bindHumanPaperLogToggle(asset);
+      return true;
+    }
+
+    function patchHumanTradesPanel(asset, payload) {
+      if (!$(`human-mode-${asset}`)) return false;
+      const st = payload.status || {};
+      const settings = st.settings || {};
+      const pb = st.paper_bankroll || {};
+      const paperPnl = st.paper_pnl || {};
+      const open = st.open_positions || [];
+      const mode = settings.mode || 'paper';
+      const spot = humanLiveSpotInfo(asset);
+      updateHumanLiveSpot(asset);
+      const spotInline = $(`human-spot-inline-${asset}`);
+      if (spotInline) {
+        if (spot) {
+          spotInline.innerHTML = `<strong>${spot.indexLabel}</strong> <strong class="up">${price(spot.price)}</strong>`;
+          spotInline.className = '';
+          spotInline.style.fontSize = '.78rem';
+        } else {
+          spotInline.textContent = asset === 'eth' ? 'ERTI —' : 'BRTI —';
+          spotInline.className = 'muted';
+          spotInline.style.fontSize = '.72rem';
+        }
+      }
+      const modeSel = $(`human-mode-${asset}`);
+      if (modeSel && modeSel.value !== mode) modeSel.value = mode;
+      const pnlCls = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : 'muted');
+      const fmtPnl = (n) => n == null ? '—' : signedPrice(Number(n));
+      const realized = paperPnl.realized_pnl_usd ?? pb.paper_realized_all_time_usd;
+      const today = paperPnl.today_realized_pnl_usd;
+      const ur = paperPnl.open_unrealized_pnl_usd;
+      const setStat = (id, val, cls) => {
+        const el = $(id);
+        if (!el) return;
+        el.textContent = fmtPnl(val);
+        el.className = cls;
+      };
+      setStat(`human-paper-realized-${asset}`, realized, pnlCls(Number(realized || 0)));
+      setStat(`human-paper-today-${asset}`, today, pnlCls(Number(today || 0)));
+      const mtmEl = $(`human-open-mtm-${asset}`);
+      if (mtmEl) {
+        mtmEl.textContent = fmtPnl(ur);
+        mtmEl.className = ur != null ? pnlCls(Number(ur)) : 'muted';
+      }
+      const wrEl = $(`human-paper-wr-${asset}`);
+      if (wrEl) {
+        wrEl.innerHTML = `${paperPnl.win_rate != null ? `${(paperPnl.win_rate * 100).toFixed(0)}%` : '—'} <span class="muted" style="font-weight:400">(${paperPnl.wins || 0}W/${paperPnl.losses || 0}L · ${paperPnl.closed_legs || 0} closed)</span>`;
+      }
+      const openMeta = $(`human-open-meta-${asset}`);
+      if (openMeta) {
+        openMeta.textContent = `Stake ≤ $${Number(settings.max_stake_per_entry_usd || 2.5).toFixed(2)} · Open ${open.length}/${settings.max_open_positions || 20}`;
+      }
+      const bankrollEl = $(`human-paper-bankroll-${asset}`);
+      if (bankrollEl) {
+        if (mode === 'paper' && pb.paper_bankroll_usd != null) {
+          bankrollEl.style.display = '';
+          bankrollEl.innerHTML = `Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong>`;
+        } else {
+          bankrollEl.style.display = 'none';
+        }
+      }
+      const legsEl = $(`human-open-legs-${asset}`);
+      if (legsEl) {
+        legsEl.innerHTML = humanOpenLegsInnerHtml(asset, open);
+      }
+      const paperLog = (st.paper_recent_trades || st.recent_trades || [])
+        .filter(t => String(t.mode || '').toLowerCase() === 'paper')
+        .slice(0, 24);
+      patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl);
+      return true;
+    }
 
     function humanTradesApi(asset) {
       return asset === 'eth' ? '/api/eth/hourly/human-trades' : '/api/hourly/human-trades';
@@ -2744,6 +2883,7 @@
       // Avoid yanking the mode dropdown out from under the user (main flicker source).
       const active = document.activeElement;
       if (active && active.id === `human-mode-${asset}`) return;
+      if (patchHumanTradesPanel(asset, payload)) return;
       const st = payload.status || {};
       const settings = st.settings || {};
       const pb = st.paper_bankroll || {};
@@ -2752,8 +2892,8 @@
       const mode = settings.mode || 'paper';
       const spot = humanLiveSpotInfo(asset);
       const spotHtml = spot
-        ? `<span style="font-size:.78rem"><strong>${spot.indexLabel}</strong> <strong class="up">${price(spot.price)}</strong></span>`
-        : `<span class="muted" style="font-size:.72rem">${asset === 'eth' ? 'ERTI' : 'BRTI'} —</span>`;
+        ? `<span id="human-spot-inline-${asset}" style="font-size:.78rem"><strong>${spot.indexLabel}</strong> <strong class="up">${price(spot.price)}</strong></span>`
+        : `<span id="human-spot-inline-${asset}" class="muted" style="font-size:.72rem">${asset === 'eth' ? 'ERTI' : 'BRTI'} —</span>`;
       updateHumanLiveSpot(asset);
       const pnlCls = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : 'muted');
       const fmtPnl = (n) => n == null ? '—' : signedPrice(Number(n));
@@ -2764,25 +2904,8 @@
         .filter(t => String(t.mode || '').toLowerCase() === 'paper')
         .slice(0, 24);
       const openHtml = `<div id="human-open-legs-${asset}">${humanOpenLegsInnerHtml(asset, open)}</div>`;
-      const logHtml = paperLog.length
-        ? `<details style="margin-top:.65rem;font-size:.72rem" open>
-            <summary><strong>Paper P&L log</strong> (${paperPnl.closed_legs || 0} closed)</summary>
-            <table style="width:100%;margin-top:.35rem;font-size:.68rem">
-              <thead><tr><th>Time</th><th>Action</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&L</th></tr></thead>
-              <tbody>${paperLog.map(t => {
-                const pnl = t.action === 'exit' ? t.pnl_usd : null;
-                return `<tr>
-                  <td>${t.created_at ? time(t.created_at) : '—'}</td>
-                  <td>${t.action || '—'}</td>
-                  <td style="font-size:.65rem">${t.label || t.market_ticker || '—'}</td>
-                  <td>${t.entry_price_cents != null ? t.entry_price_cents + '¢' : '—'}</td>
-                  <td>${t.action === 'exit' && t.exit_price_cents != null ? t.exit_price_cents + '¢' : '—'}</td>
-                  <td class="${pnl != null ? pnlCls(Number(pnl)) : 'muted'}">${pnl != null ? fmtPnl(Number(pnl)) : '—'}</td>
-                </tr>`;
-              }).join('')}</tbody>
-            </table>
-          </details>`
-        : '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after you Sell.</p>';
+      const logHtml = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl)
+        .replace(/DETAILS_ASSET/g, asset);
       const html = `
         <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.5rem">
           <label style="font-size:.75rem">Mode
@@ -2792,20 +2915,24 @@
             </select>
           </label>
           ${spotHtml}
-          <span class="muted" style="font-size:.72rem">Stake ≤ $${Number(settings.max_stake_per_entry_usd || 2.5).toFixed(2)} · Open ${open.length}/${settings.max_open_positions || 20}</span>
-          ${mode === 'paper' && pb.paper_bankroll_usd != null ? `<span class="muted" style="font-size:.72rem">Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong></span>` : ''}
+          <span id="human-open-meta-${asset}" class="muted" style="font-size:.72rem">Stake ≤ $${Number(settings.max_stake_per_entry_usd || 2.5).toFixed(2)} · Open ${open.length}/${settings.max_open_positions || 20}</span>
+          <span id="human-paper-bankroll-${asset}" class="muted" style="font-size:.72rem;${mode === 'paper' && pb.paper_bankroll_usd != null ? '' : 'display:none'}">${mode === 'paper' && pb.paper_bankroll_usd != null ? `Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong>` : ''}</span>
         </div>
         <div class="cal-stats" style="margin-bottom:.55rem">
-          <div><span>Paper realized</span><strong class="${pnlCls(Number(realized || 0))}">${fmtPnl(realized)}</strong></div>
-          <div><span>Today</span><strong class="${pnlCls(Number(today || 0))}">${fmtPnl(today)}</strong></div>
+          <div><span>Paper realized</span><strong id="human-paper-realized-${asset}" class="${pnlCls(Number(realized || 0))}">${fmtPnl(realized)}</strong></div>
+          <div><span>Today</span><strong id="human-paper-today-${asset}" class="${pnlCls(Number(today || 0))}">${fmtPnl(today)}</strong></div>
           <div><span>Open MTM</span><strong id="human-open-mtm-${asset}" class="${ur != null ? pnlCls(Number(ur)) : 'muted'}">${fmtPnl(ur)}</strong></div>
-          <div><span>Win rate</span><strong>${paperPnl.win_rate != null ? `${(paperPnl.win_rate * 100).toFixed(0)}%` : '—'} <span class="muted" style="font-weight:400">(${paperPnl.wins || 0}W/${paperPnl.losses || 0}L · ${paperPnl.closed_legs || 0} closed)</span></strong></div>
+          <div><span>Win rate</span><strong id="human-paper-wr-${asset}">${paperPnl.win_rate != null ? `${(paperPnl.win_rate * 100).toFixed(0)}%` : '—'} <span class="muted" style="font-weight:400">(${paperPnl.wins || 0}W/${paperPnl.losses || 0}L · ${paperPnl.closed_legs || 0} closed)</span></strong></div>
         </div>
         ${openHtml}
-        ${logHtml}
+        <div id="human-paper-log-wrap-${asset}">${logHtml}</div>
       `;
-      if (el.innerHTML === html) return;
       el.innerHTML = html;
+      const logDetails = $(`human-paper-log-${asset}`);
+      if (logDetails) {
+        logDetails.open = !!humanPaperLogExpanded[asset];
+        bindHumanPaperLogToggle(asset);
+      }
     }
 
     function humanPnlCls(n) {
