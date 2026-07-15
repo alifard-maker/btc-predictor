@@ -2745,6 +2745,7 @@
       const st = payload.status || {};
       const settings = st.settings || {};
       const pb = st.paper_bankroll || {};
+      const paperPnl = st.paper_pnl || {};
       const open = st.open_positions || [];
       const mode = settings.mode || 'paper';
       const spot = humanLiveSpotInfo(asset);
@@ -2752,6 +2753,46 @@
         ? `<span style="font-size:.78rem"><strong>${spot.indexLabel}</strong> <strong class="up">${price(spot.price)}</strong></span>`
         : `<span class="muted" style="font-size:.72rem">${asset === 'eth' ? 'ERTI' : 'BRTI'} —</span>`;
       updateHumanLiveSpot(asset);
+      const pnlCls = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : 'muted');
+      const fmtPnl = (n) => n == null ? '—' : signedPrice(Number(n));
+      const realized = paperPnl.realized_pnl_usd ?? pb.paper_realized_all_time_usd;
+      const today = paperPnl.today_realized_pnl_usd;
+      const ur = paperPnl.open_unrealized_pnl_usd;
+      const paperLog = (st.paper_recent_trades || st.recent_trades || [])
+        .filter(t => String(t.mode || '').toLowerCase() === 'paper')
+        .slice(0, 24);
+      const openHtml = open.length
+        ? `<div style="font-size:.72rem;margin-bottom:.35rem"><strong>Open legs</strong></div>
+          <ul style="list-style:none;padding:0;margin:0;font-size:.72rem">${open.map(p => {
+            const urP = p.unrealized_pnl_usd;
+            const mark = p.mark_price_cents;
+            const urTxt = urP != null
+              ? ` · mark ${mark != null ? mark + '¢' : '—'} · <span class="${pnlCls(urP)}">${fmtPnl(urP)}</span>`
+              : '';
+            return `<li style="margin:.2rem 0">${p.label || p.market_ticker} · ${String(p.side).toUpperCase()} ×${p.contracts} @ ${p.entry_price_cents}¢${urTxt}
+              <button type="button" class="btn-secondary" style="font-size:.6rem;padding:.1rem .35rem;margin-left:.35rem" onclick="humanManualExit('${asset}','${p.id}')">Sell</button>
+            </li>`;
+          }).join('')}</ul>`
+        : '<p class="muted" style="font-size:.72rem">No open manual legs — use Buy buttons on contract rows below.</p>';
+      const logHtml = paperLog.length
+        ? `<details style="margin-top:.65rem;font-size:.72rem" open>
+            <summary><strong>Paper P&L log</strong> (${paperPnl.closed_legs || 0} closed)</summary>
+            <table style="width:100%;margin-top:.35rem;font-size:.68rem">
+              <thead><tr><th>Time</th><th>Action</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&L</th></tr></thead>
+              <tbody>${paperLog.map(t => {
+                const pnl = t.action === 'exit' ? t.pnl_usd : null;
+                return `<tr>
+                  <td>${t.created_at ? time(t.created_at) : '—'}</td>
+                  <td>${t.action || '—'}</td>
+                  <td style="font-size:.65rem">${t.label || t.market_ticker || '—'}</td>
+                  <td>${t.entry_price_cents != null ? t.entry_price_cents + '¢' : '—'}</td>
+                  <td>${t.action === 'exit' && t.exit_price_cents != null ? t.exit_price_cents + '¢' : '—'}</td>
+                  <td class="${pnl != null ? pnlCls(Number(pnl)) : 'muted'}">${pnl != null ? fmtPnl(Number(pnl)) : '—'}</td>
+                </tr>`;
+              }).join('')}</tbody>
+            </table>
+          </details>`
+        : '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after you Sell.</p>';
       const html = `
         <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.5rem">
           <label style="font-size:.75rem">Mode
@@ -2764,11 +2805,14 @@
           <span class="muted" style="font-size:.72rem">Stake ≤ $${Number(settings.max_stake_per_entry_usd || 2.5).toFixed(2)} · Open ${open.length}/${settings.max_open_positions || 20}</span>
           ${mode === 'paper' && pb.paper_bankroll_usd != null ? `<span class="muted" style="font-size:.72rem">Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong></span>` : ''}
         </div>
-        ${open.length ? `<div style="font-size:.72rem;margin-bottom:.35rem"><strong>Open legs</strong></div>
-          <ul style="list-style:none;padding:0;margin:0;font-size:.72rem">${open.map(p => `
-            <li style="margin:.2rem 0">${p.label || p.market_ticker} · ${String(p.side).toUpperCase()} ×${p.contracts} @ ${p.entry_price_cents}¢
-              <button type="button" class="btn-secondary" style="font-size:.6rem;padding:.1rem .35rem;margin-left:.35rem" onclick="humanManualExit('${asset}','${p.id}')">Sell</button>
-            </li>`).join('')}</ul>` : '<p class="muted" style="font-size:.72rem">No open manual legs — use Buy buttons on contract rows below.</p>'}
+        <div class="cal-stats" style="margin-bottom:.55rem">
+          <div><span>Paper realized</span><strong class="${pnlCls(Number(realized || 0))}">${fmtPnl(realized)}</strong></div>
+          <div><span>Today</span><strong class="${pnlCls(Number(today || 0))}">${fmtPnl(today)}</strong></div>
+          <div><span>Open MTM</span><strong class="${ur != null ? pnlCls(Number(ur)) : 'muted'}">${fmtPnl(ur)}</strong></div>
+          <div><span>Closed legs</span><strong>${paperPnl.closed_legs || 0}${paperPnl.win_rate != null ? ` · ${(paperPnl.win_rate * 100).toFixed(0)}% WR` : ''}</strong></div>
+        </div>
+        ${openHtml}
+        ${logHtml}
       `;
       if (el.innerHTML === html) return;
       el.innerHTML = html;

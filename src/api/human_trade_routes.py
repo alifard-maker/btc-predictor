@@ -12,6 +12,7 @@ from src.trading.compare_paper_twins import compare_store_kinds
 from src.trading.human_bot_compare import build_human_bot_compare, export_human_training_rows
 from src.trading.human_hourly_trade import (
   apply_human_settings_body,
+  enrich_open_positions_marks,
   execute_manual_enter,
   execute_manual_exit,
   preview_manual_entry,
@@ -69,10 +70,25 @@ def register_human_trade_routes(
       event_ticker = (tab.get("event") or {}).get("event_ticker") if tab and tab.get("ok") else None
       kind = bot_kind or compare_store_kinds(asset)[0]
       bot_status = _bot_status_for_compare(loop, asset, tab, kind)
+      status = store.status(event_ticker)
+      status["open_positions"] = enrich_open_positions_marks(
+        list(status.get("open_positions") or []),
+        tab if tab and tab.get("ok") else None,
+      )
+      ur_sum = 0.0
+      ur_n = 0
+      for p in status["open_positions"]:
+        if p.get("unrealized_pnl_usd") is not None:
+          ur_sum += float(p["unrealized_pnl_usd"])
+          ur_n += 1
+      paper_pnl = dict(status.get("paper_pnl") or {})
+      paper_pnl["open_unrealized_pnl_usd"] = round(ur_sum, 2) if ur_n else None
+      paper_pnl["open_marked_legs"] = ur_n
+      status["paper_pnl"] = paper_pnl
       return {
         "ok": True,
         "asset": asset,
-        "status": store.status(event_ticker),
+        "status": status,
         "bot_status": bot_status,
         "bot_kind": kind,
       }

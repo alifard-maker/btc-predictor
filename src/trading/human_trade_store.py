@@ -327,17 +327,80 @@ class HumanTradeStore:
       out.append(row)
     return out
 
+  def sum_realized_pnl_usd(self, *, mode: str = "paper") -> float:
+    """Sum filled exit P&L for a mode (source of truth for paper ledger)."""
+    mode_l = str(mode).lower()
+    with self._connect() as conn:
+      row = conn.execute(
+        """
+        SELECT COALESCE(SUM(pnl_usd), 0) AS total
+        FROM human_trades
+        WHERE action = 'exit'
+          AND lower(mode) = ?
+          AND status IN ('filled', 'reconciled')
+          AND pnl_usd IS NOT NULL
+        """,
+        (mode_l,),
+      ).fetchone()
+    return round(float(row["total"] if row else 0.0), 2)
+
+  def pnl_summary(self, *, mode: str = "paper") -> dict[str, Any]:
+    """Closed-leg P&L summary for paper (or live) manual exits."""
+    mode_l = str(mode).lower()
+    with self._connect() as conn:
+      rows = conn.execute(
+        """
+        SELECT pnl_usd, created_at
+        FROM human_trades
+        WHERE action = 'exit'
+          AND lower(mode) = ?
+          AND status IN ('filled', 'reconciled')
+          AND pnl_usd IS NOT NULL
+        ORDER BY created_at DESC
+        """,
+        (mode_l,),
+      ).fetchall()
+    pnls = [float(r["pnl_usd"]) for r in rows]
+    total = round(sum(pnls), 2)
+    wins = sum(1 for p in pnls if p > 0)
+    losses = sum(1 for p in pnls if p < 0)
+    today_prefix = datetime.now(timezone.utc).date().isoformat()
+    today_pnls = [
+      float(r["pnl_usd"])
+      for r in rows
+      if str(r["created_at"] or "").startswith(today_prefix)
+    ]
+    return {
+      "mode": mode_l,
+      "closed_legs": len(pnls),
+      "realized_pnl_usd": total,
+      "today_realized_pnl_usd": round(sum(today_pnls), 2),
+      "today_closed_legs": len(today_pnls),
+      "wins": wins,
+      "losses": losses,
+      "win_rate": round(wins / len(pnls), 3) if pnls else None,
+      "avg_pnl_usd": round(total / len(pnls), 2) if pnls else None,
+    }
+
   def get_paper_state_dict(self, default_cap: float) -> dict[str, Any]:
     from src.trading.paper_bankroll import ensure_paper_state
 
     with self._connect() as conn:
-      return ensure_paper_state(conn, default_cap, backfill_pnl_fn=lambda: 0.0).to_dict()
+      return ensure_paper_state(
+        conn,
+        default_cap,
+        backfill_pnl_fn=lambda: self.sum_realized_pnl_usd(mode="paper"),
+      ).to_dict()
 
   def debit_paper_for_entry(self, cost_usd: float, default_cap: float) -> bool:
     from src.trading.paper_bankroll import PaperBankrollState, ensure_paper_state, save_paper_state
 
     with self._connect() as conn:
-      state = ensure_paper_state(conn, default_cap, backfill_pnl_fn=lambda: 0.0)
+      state = ensure_paper_state(
+        conn,
+        default_cap,
+        backfill_pnl_fn=lambda: self.sum_realized_pnl_usd(mode="paper"),
+      )
       if state.paper_bankroll_usd < float(cost_usd) - 0.001:
         return False
       updated = PaperBankrollState(
@@ -366,12 +429,18 @@ class HumanTradeStore:
       if event_ticker
       else []
     )
+    recent = self.list_trades(limit=80)
+    paper_pnl = self.pnl_summary(mode="paper")
     return {
       "settings": settings.to_dict(),
       "paper_bankroll": paper,
+      "paper_pnl": paper_pnl,
       "open_positions": open_pos,
       "open_position_count": len(open_pos),
       "hour_trades": hour_trades,
-      "recent_trades": self.list_trades(limit=50),
+      "recent_trades": recent,
+      "paper_recent_trades": [
+        t for t in recent if str(t.get("mode") or "").lower() == "paper"
+      ][:40],
       "event_ticker": event_ticker,
     }

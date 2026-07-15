@@ -14,6 +14,7 @@ from src.trading.paper_execution import (
   leg_pnl_usd,
   paper_entry_fill,
   paper_exit_fill,
+  unrealized_leg_pnl_usd,
 )
 
 
@@ -45,6 +46,35 @@ def settings_from_cfg(cfg: dict[str, Any] | None, store: HumanTradeStore) -> Hum
     ),
     max_open_positions=int(saved.max_open_positions or hcfg["max_open_positions"]),
   )
+
+
+def enrich_open_positions_marks(
+  open_positions: list[dict[str, Any]],
+  tab: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+  """Attach mark bid + unrealized P&L for dashboard open-leg display."""
+  out: list[dict[str, Any]] = []
+  for pos in open_positions:
+    row = dict(pos)
+    pick = pick_from_tab(tab, str(pos.get("market_ticker") or ""))
+    side = str(pos.get("side") or "yes").lower()
+    mark = None
+    if pick:
+      fill = paper_exit_fill(pick=pick, side=side)
+      if fill.get("ok") and fill.get("price_cents") is not None:
+        mark = int(fill["price_cents"])
+    entry_c = int(pos.get("entry_price_cents") or 0)
+    contracts = int(pos.get("contracts") or 0)
+    ur = unrealized_leg_pnl_usd(
+      side=side,
+      entry_price_cents=entry_c,
+      mark_price_cents=mark,
+      contracts=contracts,
+    )
+    row["mark_price_cents"] = mark
+    row["unrealized_pnl_usd"] = ur
+    out.append(row)
+  return out
 
 
 def pick_from_tab(tab: dict[str, Any] | None, market_ticker: str) -> dict[str, Any] | None:

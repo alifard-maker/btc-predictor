@@ -92,10 +92,36 @@ def test_execute_manual_enter_paper_round_trip(tmp_path: Path):
     cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
   )
   assert exited["ok"] is True
+  assert exited["pnl_usd"] is not None
   trades = store.list_trades(limit=10)
   assert len(trades) == 2
   enter_trade = next(t for t in trades if t.get("action") == "enter")
+  exit_trade = next(t for t in trades if t.get("action") == "exit")
   assert enter_trade["entry_context"]["bot_counterfactual"]["would_enter"] is True
+  assert exit_trade["pnl_usd"] == exited["pnl_usd"]
+  summary = store.pnl_summary(mode="paper")
+  assert summary["closed_legs"] == 1
+  assert summary["realized_pnl_usd"] == exited["pnl_usd"]
+  status = store.status("KXBTCD-26JUL1518")
+  assert status["paper_pnl"]["closed_legs"] == 1
+  assert any(t.get("action") == "exit" for t in status["paper_recent_trades"])
+
+
+def test_enrich_open_positions_marks_unrealized():
+  from src.trading.human_hourly_trade import enrich_open_positions_marks
+
+  tab = _tab_with_pick()
+  # yes_bid 43 → mark 43¢ vs entry 50¢ × 2 = −$0.14
+  open_pos = [{
+    "id": "p1",
+    "market_ticker": "KXBTCD-26JUL1518-T64000",
+    "side": "yes",
+    "contracts": 2,
+    "entry_price_cents": 50,
+  }]
+  enriched = enrich_open_positions_marks(open_pos, tab)
+  assert enriched[0]["mark_price_cents"] == 43
+  assert enriched[0]["unrealized_pnl_usd"] == -0.14
 
 
 def test_build_bot_counterfactual_blocks_range_spot_below_floor():
