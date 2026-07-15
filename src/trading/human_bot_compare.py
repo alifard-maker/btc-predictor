@@ -92,30 +92,71 @@ def build_human_bot_compare(
 def export_human_training_rows(
   human_store: HumanTradeStore,
   *,
-  limit: int = 500,
+  limit: int = 2000,
 ) -> list[dict[str, Any]]:
   """Phase C/D — flat rows for rule tuning or imitation (features + outcome)."""
   trades = human_store.list_trades(limit=limit)
-  closed = {c["enter_id"]: c for c in _closed_round_trips(trades)}
+  # Join exits → enters by position_id (human + bot round trips use that key).
+  closed_by_pid = {
+    str(c["position_id"]): c
+    for c in _closed_round_trips(trades)
+    if c.get("position_id")
+  }
+  exit_ctx_by_pid: dict[str, dict[str, Any]] = {}
+  for t in trades:
+    if t.get("action") != "exit" or t.get("status") != "filled":
+      continue
+    pid = str(t.get("position_id") or "")
+    if not pid:
+      continue
+    ctx = t.get("entry_context") or {}
+    exit_ctx_by_pid[pid] = {
+      "exit_at": t.get("created_at"),
+      "exit_price_cents": t.get("exit_price_cents") or t.get("price_cents"),
+      "exit_reason": ctx.get("exit_reason"),
+      "bot_exit_signal": ctx.get("bot_exit_signal"),
+      "exit_features": ctx.get("features") or {},
+      "pnl_usd": t.get("pnl_usd"),
+    }
   rows: list[dict[str, Any]] = []
   for t in trades:
     if t.get("action") != "enter":
       continue
+    if t.get("status") not in ("filled", "reconciled"):
+      continue
     ctx = t.get("entry_context") or {}
     feat = ctx.get("features") or {}
     cf = ctx.get("bot_counterfactual") or {}
-    rt = closed.get(t.get("id"))
+    pid = str(t.get("position_id") or t.get("id") or "")
+    rt = closed_by_pid.get(pid)
+    ex = exit_ctx_by_pid.get(pid) or {}
     rows.append({
       "trade_id": t.get("id"),
+      "position_id": pid or None,
+      "mode": t.get("mode"),
       "created_at": t.get("created_at"),
       "market_ticker": t.get("market_ticker"),
       "side": t.get("side"),
       "signal": t.get("signal"),
       "entry_price_cents": t.get("entry_price_cents"),
+      "contracts": t.get("contracts"),
+      "spot_price": feat.get("spot_price"),
+      "hours_to_settle": feat.get("hours_to_settle"),
+      "edge": feat.get("edge"),
+      "model_prob": feat.get("model_prob"),
+      "kalshi_mid": feat.get("kalshi_mid"),
+      "strike_type": feat.get("strike_type"),
+      "floor_strike": feat.get("floor_strike"),
+      "cap_strike": feat.get("cap_strike"),
       "features": feat,
       "bot_would_enter": cf.get("would_enter"),
       "bot_skip_reasons": cf.get("skip_reasons"),
-      "closed_pnl_usd": rt.get("pnl_usd") if rt else None,
       "closed": rt is not None,
+      "closed_pnl_usd": (ex.get("pnl_usd") if ex else None) if rt is not None else None,
+      "exit_at": ex.get("exit_at"),
+      "exit_price_cents": ex.get("exit_price_cents"),
+      "exit_reason": ex.get("exit_reason"),
+      "bot_exit_signal": ex.get("bot_exit_signal"),
+      "exit_features": ex.get("exit_features"),
     })
   return rows

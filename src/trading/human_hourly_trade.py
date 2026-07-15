@@ -7,7 +7,11 @@ from typing import Any
 
 from src.trading.contract_signals import is_buy_no, is_buy_yes
 from src.trading.human_trade_store import HumanTradeSettings, HumanTradeStore
-from src.trading.live_range_guards import range_band_spot_entry_block_reason
+from src.trading.live_range_guards import (
+  range_band_spot_entry_block_reason,
+  threshold_spot_entry_block_reason,
+  threshold_spot_entry_guard_shadow_only,
+)
 from src.trading.paper_execution import (
   entry_quote_log_fields,
   format_entry_book_detail,
@@ -197,10 +201,23 @@ def build_bot_counterfactual(
 ) -> dict[str, Any]:
   live = (tab or {}).get("live") or {}
   ref = live.get("current_price")
-  spot_block = range_band_spot_entry_block_reason(
+  try:
+    spot_f = float(ref) if ref is not None else None
+  except (TypeError, ValueError):
+    spot_f = None
+  range_block = range_band_spot_entry_block_reason(
     pick=pick,
     side=side,
-    spot_price=float(ref) if ref is not None else None,
+    spot_price=spot_f,
+    terminal_sigma=live.get("terminal_sigma"),
+    cfg=cfg,
+    kind="hourly",
+    asset=asset,
+  )
+  thresh_block = threshold_spot_entry_block_reason(
+    pick=pick,
+    side=side,
+    spot_price=spot_f,
     terminal_sigma=live.get("terminal_sigma"),
     cfg=cfg,
     kind="hourly",
@@ -218,12 +235,22 @@ def build_bot_counterfactual(
     and str(p.get("side") or "").lower() == side
   ]
   bot_entered_same = len(bot_open) > 0
-  would_enter = signal_ok and spot_block is None
   skip_reasons: list[str] = []
+  hard_skips: list[str] = []
   if not signal_ok:
     skip_reasons.append("signal_not_actionable_for_side")
-  if spot_block:
-    skip_reasons.append(spot_block)
+    hard_skips.append("signal_not_actionable_for_side")
+  if range_block:
+    skip_reasons.append(range_block)
+    hard_skips.append(range_block)
+  if thresh_block:
+    # Shadow Phase 1 logs would-blocks but does not hard-stop bot entries.
+    if threshold_spot_entry_guard_shadow_only(cfg, kind="hourly", asset=asset):
+      skip_reasons.append(f"shadow:{thresh_block}")
+    else:
+      skip_reasons.append(thresh_block)
+      hard_skips.append(thresh_block)
+  would_enter = not hard_skips
   return {
     "would_enter": would_enter,
     "skip_reasons": skip_reasons,
@@ -561,6 +588,22 @@ def execute_manual_exit(
 
   store.close_position(position_id)
   features = build_feature_snapshot(tab=tab, pick=pick, side=side_l) if tab else {}
+  # Capture bot exit advice at Sell time for later “adopt human exits” analysis.
+  bot_exit_signal = None
+  try:
+    marked = enrich_open_positions_marks(
+      [{
+        **open_pos,
+        "contracts": contracts,
+        "entry_price_cents": entry_c,
+      }],
+      tab,
+      cfg=cfg,
+    )
+    if marked:
+      bot_exit_signal = marked[0].get("bot_exit_signal")
+  except Exception:
+    bot_exit_signal = None
   trade = store.log_trade({
     "event_ticker": event_ticker,
     "action": "exit",
@@ -579,7 +622,13 @@ def execute_manual_exit(
     "detail": f"Manual {mode.upper()} exit @ {exit_cents}¢ · P&L {pnl:+.2f}",
     "kalshi_order_id": kalshi_order_id,
     "position_id": position_id,
-    "entry_context": {"features": features, "exit_reason": "manual_dashboard"},
+    "entry_context": {
+      "features": features,
+      "exit_reason": "manual_dashboard",
+      "bot_exit_signal": bot_exit_signal,
+      "mark_price_cents": exit_cents,
+      "realized_pnl_usd": round(pnl, 2),
+    },
   })
   return {
     "ok": True,

@@ -247,12 +247,38 @@ def test_export_human_training_rows(tmp_path: Path):
     "price_cents": 30,
     "entry_price_cents": 30,
     "cost_usd": 0.3,
+    "position_id": "pos-1",
     "status": "filled",
+    "created_at": "2026-07-15T18:00:00+00:00",
     "entry_context": {
-      "features": {"spot_price": 64000},
-      "bot_counterfactual": {"would_enter": False},
+      "features": {"spot_price": 64000, "hours_to_settle": 0.4, "edge": 0.12},
+      "bot_counterfactual": {"would_enter": False, "skip_reasons": ["budget"]},
+    },
+  })
+  store.log_trade({
+    "event_ticker": "KXBTCD-26JUL1518",
+    "action": "exit",
+    "mode": "paper",
+    "market_ticker": "T1",
+    "side": "yes",
+    "contracts": 1,
+    "price_cents": 40,
+    "entry_price_cents": 30,
+    "exit_price_cents": 40,
+    "pnl_usd": 0.10,
+    "position_id": "pos-1",
+    "status": "filled",
+    "created_at": "2026-07-15T18:10:00+00:00",
+    "entry_context": {
+      "features": {"spot_price": 64100},
+      "exit_reason": "manual_dashboard",
+      "bot_exit_signal": {"alert": "TAKE PROFIT"},
     },
   })
   rows = export_human_training_rows(store)
   assert len(rows) == 1
   assert rows[0]["bot_would_enter"] is False
+  assert rows[0]["closed"] is True
+  assert rows[0]["closed_pnl_usd"] == 0.10
+  assert rows[0]["spot_price"] == 64000
+  assert rows[0]["bot_exit_signal"]["alert"] == "TAKE PROFIT"

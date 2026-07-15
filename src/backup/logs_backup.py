@@ -402,24 +402,25 @@ def _export_mode_trades(
   kalshi: Any | None = None,
 ) -> dict[str, Any]:
   """Refresh per-bot CSVs and consolidated CSV for one mode."""
+  bot_log_stats = _export_bot_log_trades(
+    cfg,
+    mode=mode,
+    dest=dest,
+    csv_name="bot_log_trades.csv",
+    all_csv_name="all_bot_log_trades.csv",
+  )
+  # Paper + live: persist human SQLite ledger as CSV for later adopt/analyze.
+  human_log_stats = _export_human_log_trades(
+    cfg,
+    mode=mode,
+    dest=dest,
+    csv_name="human_log_trades.csv",
+    all_csv_name="all_human_log_trades.csv",
+  )
   if mode == "live":
     from src.backup.kalshi_tax_export import export_kalshi_wallet_live_trades, write_tax_readme
 
     write_tax_readme(dest)
-    bot_log_stats = _export_bot_log_trades(
-      cfg,
-      mode="live",
-      dest=dest,
-      csv_name="bot_log_trades.csv",
-      all_csv_name="all_bot_log_trades.csv",
-    )
-    human_log_stats = _export_human_log_trades(
-      cfg,
-      mode="live",
-      dest=dest,
-      csv_name="human_log_trades.csv",
-      all_csv_name="all_human_log_trades.csv",
-    )
     kalshi_stats = export_kalshi_wallet_live_trades(
       cfg,
       kalshi or _optional_kalshi_client(cfg),
@@ -427,7 +428,7 @@ def _export_mode_trades(
     )
     return {**kalshi_stats, "bot_log": bot_log_stats, "human_log": human_log_stats}
 
-  return _export_bot_log_trades(cfg, mode=mode, dest=dest)
+  return {"bot_log": bot_log_stats, "human_log": human_log_stats}
 
 
 def _copy_calibration_files(cfg: dict[str, Any], dest: Path) -> list[str]:
