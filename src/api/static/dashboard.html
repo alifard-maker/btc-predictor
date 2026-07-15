@@ -709,7 +709,7 @@
         <div style="overflow-x:auto" id="hourly-history"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="human-trades-card">
-        <h2>Manual trading (you)</h2>
+        <h2>Manual trading (you) <span class="muted" style="font-weight:400;font-size:.85rem" id="human-live-spot-btc">· BRTI —</span></h2>
         <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Follow dashboard signals and <strong>buy/sell from this tab</strong> while auto-bots keep running. Paper or live (live needs password). Each click logs features + bot counterfactual for later tuning.</p>
         <div id="human-trades-panel"><p class="muted">Loading…</p></div>
         <div id="human-bot-compare-panel" style="margin-top:.75rem"></div>
@@ -763,7 +763,7 @@
         <div style="overflow-x:auto" id="eth-hourly-history"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="eth-human-trades-card">
-        <h2>Manual trading (you)</h2>
+        <h2>Manual trading (you) <span class="muted" style="font-weight:400;font-size:.85rem" id="human-live-spot-eth">· ERTI —</span></h2>
         <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Follow dashboard signals and <strong>buy/sell from this tab</strong> while auto-bots keep running. Paper or live (live needs password). Each click logs features + bot counterfactual for later tuning.</p>
         <div id="eth-human-trades-panel"><p class="muted">Loading…</p></div>
         <div id="eth-human-bot-compare-panel" style="margin-top:.75rem"></div>
@@ -2682,6 +2682,27 @@
       return asset === 'eth' ? 'eth-human-bot-compare-panel' : 'human-bot-compare-panel';
     }
 
+    function humanLiveSpotInfo(asset) {
+      const data = lastDailyOkByAsset[asset];
+      if (!data || !data.ok) return null;
+      const live = data.live || data;
+      const px = data.brti_live ?? live.current_price ?? live.reference_price;
+      if (px == null || !(Number(px) > 0)) return null;
+      const idx = hourlyApiFor(hourlyTabForAsset(asset)).indexLabel
+        || (asset === 'eth' ? 'ERTI' : 'BRTI');
+      return { indexLabel: idx, price: Number(px) };
+    }
+
+    function updateHumanLiveSpot(asset) {
+      if (asset !== 'btc' && asset !== 'eth') return;
+      const el = $(`human-live-spot-${asset}`);
+      if (!el) return;
+      const info = humanLiveSpotInfo(asset);
+      const fallback = asset === 'eth' ? 'ERTI' : 'BRTI';
+      const next = info ? `· ${info.indexLabel} ${price(info.price)}` : `· ${fallback} —`;
+      if (el.textContent !== next) el.textContent = next;
+    }
+
     function humanOpenPositionForTicker(asset, ticker, side) {
       const st = humanTradesCache[asset];
       const open = (st && st.status && st.status.open_positions) || [];
@@ -2726,6 +2747,11 @@
       const pb = st.paper_bankroll || {};
       const open = st.open_positions || [];
       const mode = settings.mode || 'paper';
+      const spot = humanLiveSpotInfo(asset);
+      const spotHtml = spot
+        ? `<span style="font-size:.78rem"><strong>${spot.indexLabel}</strong> <strong class="up">${price(spot.price)}</strong></span>`
+        : `<span class="muted" style="font-size:.72rem">${asset === 'eth' ? 'ERTI' : 'BRTI'} —</span>`;
+      updateHumanLiveSpot(asset);
       const html = `
         <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.5rem">
           <label style="font-size:.75rem">Mode
@@ -2734,6 +2760,7 @@
               <option value="live" ${mode === 'live' ? 'selected' : ''}>Live</option>
             </select>
           </label>
+          ${spotHtml}
           <span class="muted" style="font-size:.72rem">Stake ≤ $${Number(settings.max_stake_per_entry_usd || 2.5).toFixed(2)} · Open ${open.length}/${settings.max_open_positions || 20}</span>
           ${mode === 'paper' && pb.paper_bankroll_usd != null ? `<span class="muted" style="font-size:.72rem">Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong></span>` : ''}
         </div>
@@ -6644,6 +6671,7 @@
         return;
       }
       lastDailyOkByAsset[assetForCache] = data;
+      if (assetForCache === 'btc' || assetForCache === 'eth') updateHumanLiveSpot(assetForCache);
       const live = data.live || data;
       const locked = data.locked || null;
       const hourOpen = data.hour_open || null;
