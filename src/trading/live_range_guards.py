@@ -192,6 +192,172 @@ def range_band_spot_entry_block_reason(
   return None
 
 
+def is_threshold_pick(pick: dict[str, Any] | None) -> bool:
+  """True for greater/less (S1) threshold contracts — not range bands."""
+  if not pick or is_range_pick(pick):
+    return False
+  ctype = str(pick.get("contract_type") or "").lower()
+  st = str(pick.get("strike_type") or "").lower()
+  return ctype == "threshold" or st in ("greater", "less")
+
+
+def _threshold_spot_guard_cfg(
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str,
+  asset: str | None = None,
+) -> dict[str, Any]:
+  """Same buffer defaults as range_band_spot_entry_guard; separate enable/shadow knobs."""
+  asset_l = _asset_from_cfg(cfg, asset)
+  defaults = dict(_ASSET_SPOT_GUARD_DEFAULTS.get(asset_l, _ASSET_SPOT_GUARD_DEFAULTS["btc"]))
+  inv = _live_inventory_cfg(cfg, kind=kind)
+  raw = dict(inv.get("threshold_spot_entry_guard") or {})
+  by_asset = raw.pop("by_asset", None) or inv.get("threshold_spot_entry_guard_by_asset") or {}
+  if isinstance(by_asset, dict):
+    asset_raw = by_asset.get(asset_l)
+    if isinstance(asset_raw, dict):
+      raw = {**raw, **asset_raw}
+  # Fall back to range-guard buffer knobs when threshold block omits them.
+  range_raw = dict(inv.get("range_band_spot_entry_guard") or {})
+  range_by = range_raw.get("by_asset") or {}
+  if isinstance(range_by, dict) and isinstance(range_by.get(asset_l), dict):
+    range_raw = {**range_raw, **range_by[asset_l]}
+  enabled = raw.get("enabled")
+  if enabled is None:
+    enabled = False
+  shadow_only = bool(raw.get("shadow_only", False))
+  return {
+    "enabled": bool(enabled),
+    "shadow_only": shadow_only,
+    "min_buffer_usd": float(
+      raw.get(
+        "min_buffer_usd",
+        range_raw.get("min_buffer_usd", inv.get("range_band_spot_min_buffer_usd", defaults["min_buffer_usd"])),
+      ),
+    ),
+    "sigma_buffer_fraction": float(
+      raw.get(
+        "sigma_buffer_fraction",
+        range_raw.get(
+          "sigma_buffer_fraction",
+          inv.get("range_band_spot_sigma_fraction", defaults["sigma_buffer_fraction"]),
+        ),
+      ),
+    ),
+    "min_spot_pct_buffer": float(
+      raw.get(
+        "min_spot_pct_buffer",
+        range_raw.get("min_spot_pct_buffer", defaults["min_spot_pct_buffer"]),
+      ),
+    ),
+    "asset": asset_l,
+  }
+
+
+def threshold_spot_entry_buffer_usd(
+  *,
+  spot_price: float,
+  terminal_sigma: float | None,
+  cfg: dict[str, Any] | None,
+  kind: str = "hourly",
+  asset: str | None = None,
+) -> float:
+  gcfg = _threshold_spot_guard_cfg(cfg, kind=kind, asset=asset)
+  buffer = float(gcfg["min_buffer_usd"])
+  pct = float(gcfg["min_spot_pct_buffer"])
+  if pct > 0 and spot_price > 0:
+    buffer = max(buffer, spot_price * pct / 100.0)
+  if terminal_sigma is not None and terminal_sigma > 0:
+    buffer = max(buffer, float(terminal_sigma) * float(gcfg["sigma_buffer_fraction"]))
+  return round(buffer, 2)
+
+
+def threshold_spot_entry_block_reason(
+  *,
+  pick: dict[str, Any] | None,
+  side: str,
+  spot_price: float | None,
+  terminal_sigma: float | None = None,
+  cfg: dict[str, Any] | None,
+  kind: str = "hourly",
+  asset: str | None = None,
+) -> str | None:
+  """Block S1 threshold entries when live spot is on the wrong side of the strike (+ buffer).
+
+  greater YES: spot+buffer < floor → block (OTM / spot against before entry)
+  greater NO:  spot-buffer > floor → block
+  less YES:    spot-buffer > cap → block
+  less NO:     spot+buffer < cap → block
+
+  When ``shadow_only`` is set in config, callers should log the reason but not hard-block.
+  """
+  if not is_threshold_pick(pick):
+    return None
+  gcfg = _threshold_spot_guard_cfg(cfg, kind=kind, asset=asset)
+  if not gcfg["enabled"] or spot_price is None:
+    return None
+  st = str((pick or {}).get("strike_type") or "").lower()
+  floor = (pick or {}).get("floor_strike")
+  cap = (pick or {}).get("cap_strike")
+  try:
+    spot = float(spot_price)
+  except (TypeError, ValueError):
+    return None
+
+  sigma: float | None = None
+  if terminal_sigma is not None:
+    try:
+      sigma = float(terminal_sigma)
+    except (TypeError, ValueError):
+      sigma = None
+
+  buffer = threshold_spot_entry_buffer_usd(
+    spot_price=spot,
+    terminal_sigma=sigma,
+    cfg=cfg,
+    kind=kind,
+    asset=asset or gcfg.get("asset"),
+  )
+  side_l = str(side).lower()
+
+  if st == "greater" and floor is not None:
+    try:
+      floor_f = float(floor)
+    except (TypeError, ValueError):
+      return None
+    if side_l == "yes" and spot + buffer < floor_f:
+      gap = floor_f - spot
+      return f"threshold_spot_below_floor:{gap:.0f}>{buffer:.0f}"
+    if side_l == "no" and spot - buffer > floor_f:
+      gap = spot - floor_f
+      return f"threshold_spot_above_floor:{gap:.0f}>{buffer:.0f}"
+    return None
+
+  if st == "less" and cap is not None:
+    try:
+      cap_f = float(cap)
+    except (TypeError, ValueError):
+      return None
+    if side_l == "yes" and spot - buffer > cap_f:
+      gap = spot - cap_f
+      return f"threshold_spot_above_cap:{gap:.0f}>{buffer:.0f}"
+    if side_l == "no" and spot + buffer < cap_f:
+      gap = cap_f - spot
+      return f"threshold_spot_below_cap:{gap:.0f}>{buffer:.0f}"
+    return None
+
+  return None
+
+
+def threshold_spot_entry_guard_shadow_only(
+  cfg: dict[str, Any] | None,
+  *,
+  kind: str = "hourly",
+  asset: str | None = None,
+) -> bool:
+  return bool(_threshold_spot_guard_cfg(cfg, kind=kind, asset=asset).get("shadow_only"))
+
+
 def max_contracts_per_range_band_per_hour(
   cfg: dict[str, Any] | None,
   *,

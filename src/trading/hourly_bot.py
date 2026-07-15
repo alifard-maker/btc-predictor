@@ -1479,7 +1479,11 @@ class HourlyBot:
         last_reason = pf_block
         continue
 
-      from src.trading.live_range_guards import range_band_spot_entry_block_reason
+      from src.trading.live_range_guards import (
+        range_band_spot_entry_block_reason,
+        threshold_spot_entry_block_reason,
+        threshold_spot_entry_guard_shadow_only,
+      )
 
       spot_block = range_band_spot_entry_block_reason(
         pick=pick,
@@ -1493,6 +1497,31 @@ class HourlyBot:
       if spot_block:
         last_reason = spot_block
         continue
+
+      thresh_spot_block = threshold_spot_entry_block_reason(
+        pick=pick,
+        side=side,
+        spot_price=ref_f,
+        terminal_sigma=live.get("terminal_sigma"),
+        cfg=cfg,
+        kind=self.kind,
+        asset=self.asset,
+      )
+      if thresh_spot_block:
+        if threshold_spot_entry_guard_shadow_only(
+          cfg, kind=self.kind, asset=self.asset,
+        ):
+          log.info(
+            "%s %s threshold_spot_entry_guard shadow would_block %s %s: %s",
+            self.asset.upper(),
+            self.kind,
+            side.upper(),
+            market_ticker,
+            thresh_spot_block,
+          )
+        else:
+          last_reason = thresh_spot_block
+          continue
 
       range_block = adaptive_range_band_block_reason(pick, adaptive, cfg)
       if range_block:

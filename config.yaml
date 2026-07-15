@@ -363,6 +363,18 @@ hourly:
           eth: { min_buffer_usd: 12, sigma_buffer_fraction: 0.22, min_spot_pct_buffer: 0.18 }
           spx: { min_buffer_usd: 25, sigma_buffer_fraction: 0.18, min_spot_pct_buffer: 0.10 }
           ndx: { min_buffer_usd: 90, sigma_buffer_fraction: 0.18, min_spot_pct_buffer: 0.10 }
+      # S1 threshold spot-vs-strike entry guard (Jul 15 leak: OTM YES → LEG STOP).
+      # Phase 1: shadow_only logs would-blocks; Phase 2: set shadow_only:false to hard-block.
+      threshold_spot_entry_guard:
+        enabled: true
+        shadow_only: true
+        min_buffer_usd: 75
+        sigma_buffer_fraction: 0.20
+        min_spot_pct_buffer: 0.12
+        by_asset:
+          eth: { min_buffer_usd: 12, sigma_buffer_fraction: 0.22, min_spot_pct_buffer: 0.18 }
+          spx: { min_buffer_usd: 25, sigma_buffer_fraction: 0.18, min_spot_pct_buffer: 0.10 }
+          ndx: { min_buffer_usd: 90, sigma_buffer_fraction: 0.18, min_spot_pct_buffer: 0.10 }
     live_exit:
       cut_loss_min_usd: 0.20
       cut_loss_min_hold_seconds: 90
@@ -934,6 +946,12 @@ eth:
           min_buffer_usd: 12
           sigma_buffer_fraction: 0.22
           min_spot_pct_buffer: 0.18   # ~$6 at $3.5k ETH; bands are ~$25 wide
+        threshold_spot_entry_guard:
+          enabled: true
+          shadow_only: true
+          min_buffer_usd: 12
+          sigma_buffer_fraction: 0.22
+          min_spot_pct_buffer: 0.18
       live_exit:
         cut_loss_min_usd: 0.20
         cut_loss_min_hold_seconds: 90
@@ -1164,6 +1182,12 @@ spx:
           min_buffer_usd: 25
           sigma_buffer_fraction: 0.18
           min_spot_pct_buffer: 0.10   # ~$6 at $6k SPX
+        threshold_spot_entry_guard:
+          enabled: true
+          shadow_only: true
+          min_buffer_usd: 25
+          sigma_buffer_fraction: 0.18
+          min_spot_pct_buffer: 0.10
     sigma_calibration: true
   live_settlement_index:
     enabled: true
@@ -1236,6 +1260,12 @@ ndx:
           min_buffer_usd: 90
           sigma_buffer_fraction: 0.18
           min_spot_pct_buffer: 0.10   # ~$22 at $22k NDX
+        threshold_spot_entry_guard:
+          enabled: true
+          shadow_only: true
+          min_buffer_usd: 90
+          sigma_buffer_fraction: 0.18
+          min_spot_pct_buffer: 0.10
     sigma_calibration: true
   live_settlement_index:
     enabled: true

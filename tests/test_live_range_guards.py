@@ -9,10 +9,13 @@ from src.trading.live_range_guards import (
   clamp_range_band_hour_contracts,
   estrat_for_range_scale_in,
   is_range_pick,
+  is_threshold_pick,
   open_range_contracts_on_band,
   range_band_hour_cap_block_reason,
   range_band_spot_entry_block_reason,
   range_band_spot_entry_buffer_usd,
+  threshold_spot_entry_block_reason,
+  threshold_spot_entry_guard_shadow_only,
 )
 from src.assets import asset_cfg
 
@@ -261,3 +264,107 @@ def test_estrat_for_range_scale_in_disables_scale_in():
     mode="live",
   )
   assert unchanged.allow_scale_in is True
+
+
+def _threshold_guard_cfg(*, shadow_only: bool = False) -> dict:
+  return {
+    "hourly": {
+      "bot": {
+        "live_inventory": {
+          "threshold_spot_entry_guard": {
+            "enabled": True,
+            "shadow_only": shadow_only,
+            "min_buffer_usd": 75,
+            "sigma_buffer_fraction": 0.20,
+            "min_spot_pct_buffer": 0.12,
+          },
+        },
+      },
+    },
+  }
+
+
+def test_is_threshold_pick_not_range():
+  assert is_threshold_pick({"strike_type": "greater", "floor_strike": 65000.0})
+  assert not is_threshold_pick(
+    {"strike_type": "between", "floor_strike": 65000.0, "cap_strike": 65100.0},
+  )
+
+
+def test_threshold_spot_guard_blocks_greater_yes_when_spot_below_floor():
+  """Jul 15 leak: BUY YES ≥$65,400 while BRTI ~$65,300 → later LEG STOP spot against."""
+  pick = {"strike_type": "greater", "contract_type": "threshold", "floor_strike": 65400.0}
+  reason = threshold_spot_entry_block_reason(
+    pick=pick,
+    side="yes",
+    spot_price=65300.0,
+    terminal_sigma=80.0,
+    cfg=_threshold_guard_cfg(),
+  )
+  assert reason and reason.startswith("threshold_spot_below_floor:")
+
+
+def test_threshold_spot_guard_allows_greater_yes_near_floor():
+  pick = {"strike_type": "greater", "floor_strike": 65400.0}
+  assert threshold_spot_entry_block_reason(
+    pick=pick,
+    side="yes",
+    spot_price=65350.0,
+    terminal_sigma=80.0,
+    cfg=_threshold_guard_cfg(),
+  ) is None
+
+
+def test_threshold_spot_guard_blocks_greater_no_when_spot_above_floor():
+  pick = {"strike_type": "greater", "floor_strike": 65000.0}
+  reason = threshold_spot_entry_block_reason(
+    pick=pick,
+    side="no",
+    spot_price=65150.0,
+    terminal_sigma=80.0,
+    cfg=_threshold_guard_cfg(),
+  )
+  assert reason and reason.startswith("threshold_spot_above_floor:")
+
+
+def test_threshold_spot_guard_disabled_by_default():
+  pick = {"strike_type": "greater", "floor_strike": 65400.0}
+  assert threshold_spot_entry_block_reason(
+    pick=pick,
+    side="yes",
+    spot_price=65000.0,
+    cfg={"hourly": {"bot": {"live_inventory": {}}}},
+  ) is None
+
+
+def test_threshold_spot_guard_shadow_only_flag():
+  assert threshold_spot_entry_guard_shadow_only(_threshold_guard_cfg(shadow_only=True))
+  assert not threshold_spot_entry_guard_shadow_only(_threshold_guard_cfg(shadow_only=False))
+
+
+def test_threshold_spot_guard_eth_reproduces_1950_otm_yes():
+  """ETH Jul 15 09:30 LEG STOP: YES ≥$1,950 while RTI ~$1,934.64 (gap > $12 buffer)."""
+  pick = {"strike_type": "greater", "floor_strike": 1950.0}
+  cfg = {
+    "hourly": {
+      "bot": {
+        "live_inventory": {
+          "threshold_spot_entry_guard": {
+            "enabled": True,
+            "min_buffer_usd": 12,
+            "min_spot_pct_buffer": 0.18,
+            "sigma_buffer_fraction": 0.22,
+          },
+        },
+      },
+    },
+  }
+  reason = threshold_spot_entry_block_reason(
+    pick=pick,
+    side="yes",
+    spot_price=1934.64,
+    terminal_sigma=8.0,
+    cfg=cfg,
+    asset="eth",
+  )
+  assert reason and reason.startswith("threshold_spot_below_floor:")
