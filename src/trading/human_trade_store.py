@@ -197,6 +197,38 @@ class HumanTradeStore:
       )
     return dict(row)
 
+  def update_trade_exit(
+    self,
+    trade_id: str,
+    *,
+    exit_price_cents: int,
+    pnl_usd: float,
+    detail: str | None = None,
+  ) -> dict[str, Any] | None:
+    with self._connect() as conn:
+      row = conn.execute(
+        "SELECT * FROM human_trades WHERE id = ?",
+        (trade_id,),
+      ).fetchone()
+      if not row:
+        return None
+      conn.execute(
+        """
+        UPDATE human_trades
+        SET exit_price_cents = ?,
+            price_cents = ?,
+            pnl_usd = ?,
+            detail = COALESCE(?, detail)
+        WHERE id = ?
+        """,
+        (int(exit_price_cents), int(exit_price_cents), float(pnl_usd), detail, trade_id),
+      )
+      updated = conn.execute(
+        "SELECT * FROM human_trades WHERE id = ?",
+        (trade_id,),
+      ).fetchone()
+    return dict(updated) if updated else None
+
   def find_open_position(
     self,
     *,

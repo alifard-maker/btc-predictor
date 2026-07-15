@@ -204,7 +204,7 @@ def test_settle_expired_human_paper_positions_pays_winners(tmp_path: Path):
   prev = "KXBTCD-26JUN3005"
   settle_at = hourly_event_settle_utc(prev)
   assert settle_at is not None
-  store.open_position({
+  pos = store.open_position({
     "event_ticker": prev,
     "market_ticker": f"{prev}-T65000",
     "side": "no",
@@ -217,24 +217,158 @@ def test_settle_expired_human_paper_positions_pays_winners(tmp_path: Path):
     "floor_strike": 65000.0,
     "mode": "paper",
   })
-  # Spot below floor → YES loses → NO wins at 100¢
+  store.debit_paper_for_entry(2.13, 100.0)
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "enter",
+    "mode": "paper",
+    "market_ticker": f"{prev}-T65000",
+    "side": "no",
+    "contracts": 3,
+    "price_cents": 71,
+    "entry_price_cents": 71,
+    "cost_usd": 2.13,
+    "label": "$65,000 or above",
+    "status": "filled",
+    "position_id": pos["id"],
+  })
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      return {"result": "no", "title": "$65,000 or above"}
+
+  # Official Kalshi result (NO wins) — not late live tape.
   rows = settle_expired_human_positions(
     store,
     current_event_ticker="KXBTCD-26JUN3017",
-    settle_price=64958.0,
+    settle_price=66000.0,  # late tape would wrongly lose; must use Kalshi result
     cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
     index_id="BRTI",
+    kalshi=_FakeKalshi(),
+    asset="btc",
   )
   assert len(rows) == 1
   assert rows[0]["exit_price_cents"] == 100
   # (100-71)*3/100 = +0.87
   assert abs(float(rows[0]["pnl_usd"]) - 0.87) < 0.01
   assert store.open_positions() == []
-  bank = store.get_paper_state_dict(100.0)
-  # started 100; no enter debit in this test path — settlement credits cost+pnl
-  assert bank["paper_bankroll_usd"] > 100.0
+  bank = store.reconcile_paper_bankroll(100.0)
+  # 100 - 2.13 + 2.13 + 0.87 ≈ 100.87
+  assert abs(bank["paper_bankroll_usd"] - 100.87) < 0.02
+
+
+def test_repair_orphan_enter_returns_cash(tmp_path: Path):
+  """Enter with no exit after hour end must still pay settlement (not leave a ghost enter)."""
+  from src.trading.human_hourly_trade import settle_expired_human_positions
+  from src.trading.hourly_event_time import hourly_event_settle_utc
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  prev = "KXBTCD-26JUN3005"
+  assert hourly_event_settle_utc(prev) is not None
+  pid = "orphan-1"
+  store.debit_paper_for_entry(2.40, 100.0)
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "enter",
+    "mode": "paper",
+    "market_ticker": f"{prev}-T66000",
+    "side": "no",
+    "contracts": 3,
+    "price_cents": 80,
+    "entry_price_cents": 80,
+    "cost_usd": 2.40,
+    "label": "$66,000 or above",
+    "status": "filled",
+    "position_id": pid,
+    "entry_context": {
+      "features": {
+        "strike_type": "greater",
+        "floor_strike": 66000.0,
+        "contract_type": "threshold",
+      },
+    },
+  })
+  # Position vanished from open book (UI hour roll) but enter remains.
+  assert store.open_positions() == []
+  # Reconcile returns principal when open_cost=0; win is still missing until exit.
+  mid = store.reconcile_paper_bankroll(100.0)
+  assert abs(mid["paper_bankroll_usd"] - 100.0) < 0.02
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      return {"result": "no"}
+
+  rows = settle_expired_human_positions(
+    store,
+    current_event_ticker="KXBTCD-26JUN3017",
+    settle_price=None,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    kalshi=_FakeKalshi(),
+    asset="btc",
+  )
+  assert len(rows) == 1
+  assert rows[0]["exit_price_cents"] == 100
+  bank = store.reconcile_paper_bankroll(100.0)
+  # win (100-80)*3/100 = +0.60 → bankroll 100.60
+  assert abs(bank["paper_bankroll_usd"] - 100.60) < 0.02
   exits = [t for t in store.list_trades(limit=10) if t["action"] == "exit"]
-  assert exits and "HOUR SETTLEMENT" in str(exits[0].get("detail") or "")
+  assert exits and float(exits[0]["pnl_usd"]) == 0.60
+
+
+def test_stuck_open_leg_gets_cash_and_win(tmp_path: Path):
+  """Open leg hidden by hour filter — still open in DB — must unlock capital + pay win."""
+  from src.trading.human_hourly_trade import settle_expired_human_positions
+  from src.trading.hourly_event_time import hourly_event_settle_utc
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  prev = "KXBTCD-26JUN3005"
+  assert hourly_event_settle_utc(prev) is not None
+  store.debit_paper_for_entry(2.13, 100.0)
+  pos = store.open_position({
+    "event_ticker": prev,
+    "market_ticker": f"{prev}-T65000",
+    "side": "no",
+    "contracts": 3,
+    "entry_price_cents": 71,
+    "cost_usd": 2.13,
+    "label": "$65,000 or above",
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 65000.0,
+    "mode": "paper",
+  })
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "enter",
+    "mode": "paper",
+    "market_ticker": f"{prev}-T65000",
+    "side": "no",
+    "contracts": 3,
+    "price_cents": 71,
+    "entry_price_cents": 71,
+    "cost_usd": 2.13,
+    "label": "$65,000 or above",
+    "status": "filled",
+    "position_id": pos["id"],
+  })
+  stuck = store.reconcile_paper_bankroll(100.0)
+  assert abs(stuck["paper_bankroll_usd"] - 97.87) < 0.02  # capital locked in open
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      return {"result": "no"}
+
+  settle_expired_human_positions(
+    store,
+    current_event_ticker="KXBTCD-26JUN3017",
+    settle_price=67000.0,  # late tape must not mark NO as loss
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    kalshi=_FakeKalshi(),
+    asset="btc",
+  )
+  bank = store.reconcile_paper_bankroll(100.0)
+  assert store.open_positions() == []
+  assert abs(bank["paper_bankroll_usd"] - 100.87) < 0.02
 
 
 def test_settle_expired_skips_current_hour(tmp_path: Path):

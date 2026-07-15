@@ -78,6 +78,7 @@ def _run_human_hour_settlement(
     cfg=cfg,
     kalshi=loop._kalshi_for(asset),
     index_id=index_id,
+    asset=asset,
   )
 
 
