@@ -414,15 +414,81 @@ class HumanTradeStore:
       save_paper_state(conn, updated)
     return True
 
-  def apply_paper_exit_pnl(self, pnl: float, default_cap: float) -> dict[str, Any]:
-    from src.trading.paper_bankroll import apply_paper_exit_pnl
-
+  def open_paper_cost_usd(self) -> float:
     with self._connect() as conn:
-      return apply_paper_exit_pnl(conn, pnl, default_cap).to_dict()
+      row = conn.execute(
+        """
+        SELECT COALESCE(SUM(cost_usd), 0) AS total
+        FROM human_positions
+        WHERE status = 'open' AND lower(mode) = 'paper'
+        """,
+      ).fetchone()
+    return round(float(row["total"] if row else 0.0), 2)
+
+  def apply_paper_exit_settlement(
+    self,
+    cost_usd: float,
+    pnl: float,
+    default_cap: float,
+  ) -> dict[str, Any]:
+    """Return entry capital + P&L to paper bankroll (enter debits cost; exit must restore it)."""
+    from src.trading.paper_bankroll import PaperBankrollState, ensure_paper_state, save_paper_state
+
+    proceeds = round(float(cost_usd) + float(pnl), 2)
+    with self._connect() as conn:
+      state = ensure_paper_state(
+        conn,
+        default_cap,
+        backfill_pnl_fn=lambda: self.sum_realized_pnl_usd(mode="paper"),
+      )
+      updated = PaperBankrollState(
+        paper_bankroll_usd=round(max(0.0, state.paper_bankroll_usd + proceeds), 2),
+        paper_bankroll_initial_usd=state.paper_bankroll_initial_usd,
+        paper_bankroll_started_at=state.paper_bankroll_started_at,
+        paper_realized_all_time_usd=round(state.paper_realized_all_time_usd + float(pnl), 2),
+        paper_refill_count=state.paper_refill_count,
+        paper_total_invested_usd=state.paper_total_invested_usd,
+      )
+      save_paper_state(conn, updated)
+      return updated.to_dict()
+
+  def reconcile_paper_bankroll(self, default_cap: float) -> dict[str, Any]:
+    """Heal bankroll = initial + realized exits − open paper costs (fixes principal-not-returned bug)."""
+    from src.trading.paper_bankroll import PaperBankrollState, ensure_paper_state, save_paper_state
+
+    realized = self.sum_realized_pnl_usd(mode="paper")
+    open_cost = self.open_paper_cost_usd()
+    with self._connect() as conn:
+      state = ensure_paper_state(
+        conn,
+        default_cap,
+        backfill_pnl_fn=lambda: realized,
+      )
+      expected = round(float(state.paper_bankroll_initial_usd) + realized - open_cost, 2)
+      expected = max(0.0, expected)
+      if (
+        abs(state.paper_bankroll_usd - expected) > 0.009
+        or abs(state.paper_realized_all_time_usd - realized) > 0.009
+      ):
+        updated = PaperBankrollState(
+          paper_bankroll_usd=expected,
+          paper_bankroll_initial_usd=state.paper_bankroll_initial_usd,
+          paper_bankroll_started_at=state.paper_bankroll_started_at,
+          paper_realized_all_time_usd=realized,
+          paper_refill_count=state.paper_refill_count,
+          paper_total_invested_usd=state.paper_total_invested_usd,
+        )
+        save_paper_state(conn, updated)
+        out = updated.to_dict()
+        out["reconciled"] = True
+        return out
+      out = state.to_dict()
+      out["reconciled"] = False
+      return out
 
   def status(self, event_ticker: str | None = None) -> dict[str, Any]:
     settings = self.get_settings()
-    paper = self.get_paper_state_dict(settings.paper_bankroll_initial_usd)
+    paper = self.reconcile_paper_bankroll(settings.paper_bankroll_initial_usd)
     open_pos = self.open_positions(event_ticker) if event_ticker else self.open_positions()
     hour_trades = (
       self.list_trades(limit=50, event_ticker=event_ticker)

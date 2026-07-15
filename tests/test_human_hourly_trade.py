@@ -102,9 +102,39 @@ def test_execute_manual_enter_paper_round_trip(tmp_path: Path):
   summary = store.pnl_summary(mode="paper")
   assert summary["closed_legs"] == 1
   assert summary["realized_pnl_usd"] == exited["pnl_usd"]
+  # Bankroll must restore entry cost + apply P&L (not P&L alone).
+  paper = store.get_paper_state_dict(100.0)
+  assert abs(paper["paper_bankroll_usd"] - (100.0 + exited["pnl_usd"])) < 0.02
   status = store.status("KXBTCD-26JUL1518")
   assert status["paper_pnl"]["closed_legs"] == 1
   assert any(t.get("action") == "exit" for t in status["paper_recent_trades"])
+
+
+def test_reconcile_paper_bankroll_restores_stuck_principal(tmp_path: Path):
+  store = HumanTradeStore(tmp_path / "human.db")
+  # Simulate bug: cost debited, exit only credited pnl.
+  assert store.debit_paper_for_entry(10.0, 100.0)
+  store.log_trade({
+    "event_ticker": "KXBTCD-26JUL1518",
+    "action": "exit",
+    "mode": "paper",
+    "market_ticker": "T1",
+    "side": "yes",
+    "contracts": 2,
+    "price_cents": 50,
+    "entry_price_cents": 40,
+    "exit_price_cents": 50,
+    "cost_usd": 0.8,
+    "pnl_usd": 1.68,
+    "status": "filled",
+  })
+  # Old buggy exit credit of pnl only (leaves principal stuck).
+  store.apply_paper_exit_settlement(0.0, 1.68, 100.0)
+  mid = store.get_paper_state_dict(100.0)
+  assert mid["paper_bankroll_usd"] < 95  # still missing principal
+  healed = store.reconcile_paper_bankroll(100.0)
+  assert abs(healed["paper_bankroll_usd"] - 101.68) < 0.02
+  assert healed["reconciled"] is True
 
 
 def test_enrich_open_positions_marks_unrealized():

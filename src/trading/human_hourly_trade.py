@@ -504,7 +504,12 @@ def execute_manual_exit(
   )
   if mode == "paper":
     settings = settings_from_cfg(cfg, store)
-    store.apply_paper_exit_pnl(pnl, settings.paper_bankroll_initial_usd)
+    cost_usd = float(open_pos.get("cost_usd") or (contracts * entry_c / 100.0))
+    store.apply_paper_exit_settlement(
+      cost_usd,
+      pnl,
+      settings.paper_bankroll_initial_usd,
+    )
 
   store.close_position(position_id)
   features = build_feature_snapshot(tab=tab, pick=pick, side=side_l) if tab else {}
