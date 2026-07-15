@@ -3125,7 +3125,12 @@
     async function humanManualExit(asset, positionId) {
       const st = humanTradesCache[asset];
       const mode = (st && st.status && st.status.settings && st.status.settings.mode) || 'paper';
+      const open = (st && st.status && st.status.open_positions) || [];
+      const pos = open.find(p => String(p.id) === String(positionId));
+      const badgeAlert = pos && pos.bot_exit_signal ? String(pos.bot_exit_signal.alert || '') : '';
       const body = { position_id: positionId };
+      // If Sell is driven by a TAKE PROFIT badge, re-check live quote before fill.
+      if (badgeAlert === 'TAKE PROFIT') body.verify_take_profit = true;
       if (mode === 'live') {
         const pw = promptLivePassword();
         if (!pw) return;
@@ -3138,6 +3143,11 @@
         if (cached?.ok) renderDaily(cached);
       } catch (e) {
         alert(e.message || 'Exit failed');
+        // Refresh badges so stale TAKE PROFIT is replaced by the live signal.
+        if (String(e.message || '').includes('TAKE PROFIT')) {
+          await loadHumanTrades(asset, { force: true });
+          await loadHumanMarksFast(asset);
+        }
       }
     }
 

@@ -356,16 +356,18 @@ def register_human_trade_routes(
       if mode == "live":
         require_live_password("paper", "live", body, live_bet_password(cfg))
       tab = _human_tab(loop, asset)
-      kalshi = loop._kalshi_for(asset) if mode == "live" else None
+      # Fresh Kalshi marks for paper + live exits (TAKE PROFIT re-check needs live bid).
+      kalshi = loop._kalshi_for(asset)
       out = execute_manual_exit(
         store=store,
         tab=tab,
         position_id=pos_id,
         cfg=cfg,
         kalshi=kalshi,
+        verify_take_profit=bool(body.get("verify_take_profit")),
       )
       if not out.get("ok"):
-        raise HTTPException(400, out.get("error") or "exit_failed")
+        raise HTTPException(400, out.get("message") or out.get("error") or "exit_failed")
       return out
 
   _mount("btc", "/api/hourly")

@@ -110,6 +110,59 @@ def test_execute_manual_enter_paper_round_trip(tmp_path: Path):
   assert any(t.get("action") == "exit" for t in status["paper_recent_trades"])
 
 
+def test_verify_take_profit_blocks_stale_sell(tmp_path: Path):
+  """Sell driven by TAKE PROFIT must re-check live mark and block if no longer TP."""
+  from src.trading.human_hourly_trade import execute_manual_enter, execute_manual_exit
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  tab = _tab_with_pick()
+  # Fat entry edge so later collapse + big marked gain can show TAKE PROFIT.
+  tab["live"]["strategy_threshold"]["contracts"][0]["yes_bid"] = 40
+  tab["live"]["strategy_threshold"]["contracts"][0]["yes_ask"] = 42
+  tab["live"]["strategy_threshold"]["contracts"][0]["edge"] = 0.20
+  entered = execute_manual_enter(
+    store=store,
+    tab=tab,
+    market_ticker="KXBTCD-26JUL1518-T64000",
+    side="yes",
+    mode="paper",
+    bot_status={"open_positions": []},
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    asset="btc",
+  )
+  assert entered["ok"] is True
+  pos_id = entered["position"]["id"]
+
+  # Stale book still looks like TAKE PROFIT (big mark up, edge gone).
+  tab["live"]["strategy_threshold"]["contracts"][0]["yes_bid"] = 95
+  tab["live"]["strategy_threshold"]["contracts"][0]["yes_ask"] = 97
+  tab["live"]["strategy_threshold"]["contracts"][0]["edge"] = 0.01
+
+  class _FadeKalshi:
+    def get_market_ticker(self, ticker):
+      # Live quote has already collapsed — selling now would lose / not be TP.
+      return {
+        "yes_bid_dollars": "0.30",
+        "yes_ask_dollars": "0.32",
+        "title": "≥ $64,000",
+        "strike_type": "greater",
+        "floor_strike": 64000.0,
+      }
+
+  blocked = execute_manual_exit(
+    store=store,
+    tab=tab,
+    position_id=pos_id,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}, "hourly": {"regime": {"min_edge": 0.05}}},
+    kalshi=_FadeKalshi(),
+    verify_take_profit=True,
+  )
+  assert blocked["ok"] is False
+  assert blocked["error"] == "take_profit_stale"
+  assert "TAKE PROFIT no longer valid" in str(blocked.get("message") or "")
+  assert store.open_positions()  # still open
+
+
 def test_reconcile_paper_bankroll_restores_stuck_principal(tmp_path: Path):
   store = HumanTradeStore(tmp_path / "human.db")
   # Simulate bug: cost debited, exit only credited pnl.

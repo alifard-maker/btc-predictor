@@ -555,6 +555,7 @@ def execute_manual_exit(
   position_id: str,
   cfg: dict[str, Any] | None,
   kalshi: Any | None = None,
+  verify_take_profit: bool = False,
 ) -> dict[str, Any]:
   hcfg = human_trade_cfg(cfg)
   if not hcfg["enabled"]:
@@ -573,6 +574,11 @@ def execute_manual_exit(
     pick = {
       "ticker": open_pos["market_ticker"],
       "label": open_pos.get("label"),
+      "signal": open_pos.get("signal"),
+      "strike_type": open_pos.get("strike_type"),
+      "contract_type": open_pos.get("contract_type"),
+      "floor_strike": open_pos.get("floor_strike"),
+      "cap_strike": open_pos.get("cap_strike"),
       "yes_bid": None,
       "yes_ask": None,
       "kalshi_mid": None,
@@ -583,6 +589,59 @@ def execute_manual_exit(
   contracts = int(open_pos["contracts"])
   entry_c = int(open_pos["entry_price_cents"])
   event_ticker = str(open_pos["event_ticker"])
+  ticker = str(open_pos["market_ticker"])
+
+  # Always prefer a live Kalshi bid for the exit mark (paper + live).
+  if kalshi:
+    from src.trading.hourly_bot import _pick_from_kalshi_market
+
+    fresh = _pick_from_kalshi_market(kalshi, ticker)
+    if fresh and (
+      fresh.get("yes_bid") is not None or fresh.get("yes_ask") is not None
+    ):
+      pick = dict(pick)
+      for key in ("yes_bid", "yes_ask", "kalshi_mid", "no_bid", "no_ask"):
+        if fresh.get(key) is not None:
+          pick[key] = fresh[key]
+
+  fill = paper_exit_fill(pick=pick, side=side_l)
+  if not fill.get("ok"):
+    return {"ok": False, "error": fill.get("skip_reason") or "no_liquidity"}
+
+  # If Sell was driven by a TAKE PROFIT badge, re-check on the fresh mark.
+  if verify_take_profit:
+    try:
+      marked = enrich_open_positions_marks(
+        [{
+          **open_pos,
+          "contracts": contracts,
+          "entry_price_cents": entry_c,
+        }],
+        tab,
+        cfg=cfg,
+        quote_overrides={ticker: pick},
+      )
+      fresh_sig = (marked[0].get("bot_exit_signal") if marked else None) or {}
+      ur = marked[0].get("unrealized_pnl_usd") if marked else None
+    except Exception:
+      fresh_sig = {"alert": "HOLD", "detail": "Could not re-check TAKE PROFIT"}
+      ur = None
+    alert = str(fresh_sig.get("alert") or "HOLD")
+    mark_c = fill.get("price_cents")
+    still_tp = alert == "TAKE PROFIT" and (ur is None or float(ur) > 0)
+    if not still_tp:
+      ur_txt = f"{float(ur):+.2f}" if ur is not None else "—"
+      return {
+        "ok": False,
+        "error": "take_profit_stale",
+        "message": (
+          f"TAKE PROFIT no longer valid on live quote — "
+          f"fresh signal is {alert} at mark {mark_c}¢ (P&L {ur_txt}). Sell blocked."
+        ),
+        "bot_exit_signal": fresh_sig,
+        "mark_price_cents": mark_c,
+        "unrealized_pnl_usd": ur,
+      }
 
   if mode == "live":
     if not kalshi or not getattr(kalshi, "authenticated", False):
@@ -594,14 +653,10 @@ def execute_manual_exit(
     )
     from src.trading.live_position_sync import kalshi_sellable_contracts
 
-    ticker = str(open_pos["market_ticker"])
     sellable = kalshi_sellable_contracts(kalshi, ticker, side_l, critical=True)
     if sellable is None or sellable < 0.05:
       return {"ok": False, "error": "no_kalshi_inventory"}
     sell_ct = min(contracts, int(sellable))
-    fill = paper_exit_fill(pick=pick, side=side_l)
-    if not fill.get("ok"):
-      return {"ok": False, "error": fill.get("skip_reason") or "no_liquidity"}
     bid = int(fill["price_cents"])
     haircut = live_exit_haircut_cents(cfg)
     sell_cents = aggressive_exit_limit_cents(bid, haircut=haircut)
@@ -622,9 +677,6 @@ def execute_manual_exit(
     except Exception as e:
       return {"ok": False, "error": f"kalshi_exit_failed:{e}"}
   else:
-    fill = paper_exit_fill(pick=pick, side=side_l)
-    if not fill.get("ok"):
-      return {"ok": False, "error": fill.get("skip_reason") or "no_liquidity"}
     exit_cents = int(fill["price_cents"])
     kalshi_order_id = None
     settings = settings_from_cfg(cfg, store)
@@ -659,6 +711,7 @@ def execute_manual_exit(
       }],
       tab,
       cfg=cfg,
+      quote_overrides={ticker: pick},
     )
     if marked:
       bot_exit_signal = marked[0].get("bot_exit_signal")
@@ -688,6 +741,7 @@ def execute_manual_exit(
       "bot_exit_signal": bot_exit_signal,
       "mark_price_cents": exit_cents,
       "realized_pnl_usd": round(pnl, 2),
+      "verify_take_profit": bool(verify_take_profit),
     },
   })
   return {
