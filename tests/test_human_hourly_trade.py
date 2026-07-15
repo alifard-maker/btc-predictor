@@ -423,6 +423,48 @@ def test_hour_rolled_settles_even_if_settle_clock_unparsed(tmp_path: Path, monke
   assert pos["id"]
 
 
+def test_repair_enter_without_position_id(tmp_path: Path):
+  """Unpaid enters must settle even when position_id was never stored."""
+  from src.trading.human_hourly_trade import settle_expired_human_positions
+  from src.trading.hourly_event_time import hourly_event_settle_utc
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  prev = "KXBTCD-26JUN3005"
+  assert hourly_event_settle_utc(prev) is not None
+  store.debit_paper_for_entry(2.40, 100.0)
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "enter",
+    "mode": "paper",
+    "market_ticker": f"{prev}-T66000",
+    "side": "no",
+    "contracts": 3,
+    "price_cents": 80,
+    "entry_price_cents": 80,
+    "cost_usd": 2.40,
+    "label": "$66,000 or above",
+    "status": "filled",
+    # no position_id — older bug path
+  })
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      return {"result": "no"}
+
+  rows = settle_expired_human_positions(
+    store,
+    current_event_ticker="KXBTCD-26JUN3017",
+    settle_price=None,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    kalshi=_FakeKalshi(),
+    asset="btc",
+  )
+  assert len(rows) == 1
+  assert rows[0]["exit_price_cents"] == 100
+  bank = store.reconcile_paper_bankroll(100.0)
+  assert abs(bank["paper_bankroll_usd"] - 100.60) < 0.02
+
+
 def test_settle_expired_skips_current_hour(tmp_path: Path):
   from src.trading.human_hourly_trade import settle_expired_human_positions
 
