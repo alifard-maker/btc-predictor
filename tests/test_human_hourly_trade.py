@@ -195,6 +195,75 @@ def test_enrich_open_positions_kalshi_quote_override():
   assert enriched[0]["unrealized_pnl_usd"] == 0.10
 
 
+def test_settle_expired_human_paper_positions_pays_winners(tmp_path: Path):
+  from src.trading.human_hourly_trade import settle_expired_human_positions
+  from src.trading.hourly_event_time import hourly_event_settle_utc
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  # Settled past hour (from hourly_event_time tests).
+  prev = "KXBTCD-26JUN3005"
+  settle_at = hourly_event_settle_utc(prev)
+  assert settle_at is not None
+  store.open_position({
+    "event_ticker": prev,
+    "market_ticker": f"{prev}-T65000",
+    "side": "no",
+    "contracts": 3,
+    "entry_price_cents": 71,
+    "cost_usd": 2.13,
+    "label": "$65,000 or above",
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 65000.0,
+    "mode": "paper",
+  })
+  # Spot below floor → YES loses → NO wins at 100¢
+  rows = settle_expired_human_positions(
+    store,
+    current_event_ticker="KXBTCD-26JUN3017",
+    settle_price=64958.0,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    index_id="BRTI",
+  )
+  assert len(rows) == 1
+  assert rows[0]["exit_price_cents"] == 100
+  # (100-71)*3/100 = +0.87
+  assert abs(float(rows[0]["pnl_usd"]) - 0.87) < 0.01
+  assert store.open_positions() == []
+  bank = store.get_paper_state_dict(100.0)
+  # started 100; no enter debit in this test path — settlement credits cost+pnl
+  assert bank["paper_bankroll_usd"] > 100.0
+  exits = [t for t in store.list_trades(limit=10) if t["action"] == "exit"]
+  assert exits and "HOUR SETTLEMENT" in str(exits[0].get("detail") or "")
+
+
+def test_settle_expired_skips_current_hour(tmp_path: Path):
+  from src.trading.human_hourly_trade import settle_expired_human_positions
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  cur = "KXBTCD-26JUL1518"
+  store.open_position({
+    "event_ticker": cur,
+    "market_ticker": f"{cur}-T64000",
+    "side": "yes",
+    "contracts": 2,
+    "entry_price_cents": 50,
+    "cost_usd": 1.0,
+    "label": "$64,000 or above",
+    "strike_type": "greater",
+    "floor_strike": 64000.0,
+    "mode": "paper",
+  })
+  rows = settle_expired_human_positions(
+    store,
+    current_event_ticker=cur,
+    settle_price=64100.0,
+    cfg={},
+  )
+  assert rows == []
+  assert len(store.open_positions(cur)) == 1
+
+
 def test_enrich_open_positions_bot_cut_when_spot_against():
   from src.trading.human_hourly_trade import enrich_open_positions_marks
 

@@ -17,6 +17,7 @@ from src.trading.human_hourly_trade import (
   execute_manual_enter,
   execute_manual_exit,
   preview_manual_entry,
+  settle_expired_human_positions,
 )
 from src.trading.live_mode_auth import live_bet_password, require_live_password
 
@@ -46,6 +47,38 @@ def _cached_human_tab(loop: Any, asset: str) -> dict[str, Any] | None:
   if tab and tab.get("ok"):
     return tab
   return None
+
+
+def _settle_price_from_tab(tab: dict[str, Any] | None) -> float | None:
+  if not tab:
+    return None
+  live = tab.get("live") or {}
+  raw = tab.get("brti_live") or tab.get("erti_live") or live.get("current_price")
+  try:
+    px = float(raw) if raw is not None else None
+  except (TypeError, ValueError):
+    return None
+  return px if px is not None and px > 0 else None
+
+
+def _run_human_hour_settlement(
+  loop: Any,
+  store: Any,
+  asset: str,
+  tab: dict[str, Any] | None,
+  cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+  event_ticker = (tab.get("event") or {}).get("event_ticker") if tab and tab.get("ok") else None
+  live = (tab or {}).get("live") or {}
+  index_id = str(live.get("index_id") or live.get("settlement_reference") or ("ERTI" if asset == "eth" else "BRTI"))
+  return settle_expired_human_positions(
+    store,
+    current_event_ticker=event_ticker,
+    settle_price=_settle_price_from_tab(tab),
+    cfg=cfg,
+    kalshi=loop._kalshi_for(asset),
+    index_id=index_id,
+  )
 
 
 def _bot_status_for_compare(
@@ -85,8 +118,20 @@ def register_human_trade_routes(
       event_ticker = (tab.get("event") or {}).get("event_ticker") if tab and tab.get("ok") else None
       kind = bot_kind or compare_store_kinds(asset)[0]
       bot_status = _bot_status_for_compare(loop, asset, tab, kind)
-      status = store.status(event_ticker)
       acfg = asset_cfg(get_cfg(), asset) if asset != "btc" else get_cfg()
+      settled = _run_human_hour_settlement(loop, store, asset, tab, acfg)
+      status = store.status(event_ticker)
+      if settled:
+        status["hour_settlements"] = [
+          {
+            "id": t.get("id"),
+            "label": t.get("label"),
+            "pnl_usd": t.get("pnl_usd"),
+            "exit_price_cents": t.get("exit_price_cents"),
+            "detail": t.get("detail"),
+          }
+          for t in settled
+        ]
       open_pos = list(status.get("open_positions") or [])
       # Prefer live Kalshi marks so /status doesn't regress the fast-mark poll.
       if open_pos:
@@ -129,7 +174,15 @@ def register_human_trade_routes(
       if loop is None:
         raise HTTPException(503, "Service starting")
       store = loop.human_trade_store(asset)
-      open_positions = list(store.open_positions())
+      tab = _cached_human_tab(loop, asset)
+      acfg = asset_cfg(get_cfg(), asset) if asset != "btc" else get_cfg()
+      _run_human_hour_settlement(loop, store, asset, tab, acfg)
+      event_ticker = (tab.get("event") or {}).get("event_ticker") if tab and tab.get("ok") else None
+      open_positions = (
+        list(store.open_positions(event_ticker))
+        if event_ticker
+        else list(store.open_positions())
+      )
       if not open_positions:
         return {
           "ok": True,
@@ -139,8 +192,6 @@ def register_human_trade_routes(
           "marked_at": datetime.now(timezone.utc).isoformat(),
           "quote_source": "none",
         }
-      tab = _cached_human_tab(loop, asset)
-      acfg = asset_cfg(get_cfg(), asset) if asset != "btc" else get_cfg()
       kalshi = loop._kalshi_for(asset)
       enriched = enrich_open_positions_fast_marks(
         open_positions,

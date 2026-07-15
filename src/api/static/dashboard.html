@@ -2675,7 +2675,7 @@
 
     function humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl) {
       if (!paperLog.length) {
-        return '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after you Sell.</p>';
+        return '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after Sell or hour settlement.</p>';
       }
       return `<details id="human-paper-log-DETAILS_ASSET" style="margin-top:.65rem;font-size:.72rem">
           <summary id="human-paper-log-summary-DETAILS_ASSET"><strong>Paper P&L log</strong> (${paperPnl.closed_legs || 0} closed)</summary>
@@ -2689,12 +2689,12 @@
     function humanPaperLogRowsHtml(paperLog, pnlCls, fmtPnl) {
       return paperLog.map(t => {
         const pnl = t.action === 'exit' ? t.pnl_usd : null;
-        return `<tr>
+          return `<tr>
           <td>${t.created_at ? time(t.created_at) : '—'}</td>
-          <td>${t.action || '—'}</td>
+          <td>${String(t.detail || '').includes('HOUR SETTLEMENT') ? 'settle' : (t.action || '—')}</td>
           <td style="font-size:.65rem">${t.label || t.market_ticker || '—'}</td>
           <td>${t.entry_price_cents != null ? t.entry_price_cents + '¢' : '—'}</td>
-          <td>${t.action === 'exit' && t.exit_price_cents != null ? t.exit_price_cents + '¢' : '—'}</td>
+          <td>${t.exit_price_cents != null ? t.exit_price_cents + '¢' : '—'}</td>
           <td class="${pnl != null ? pnlCls(Number(pnl)) : 'muted'}">${pnl != null ? fmtPnl(Number(pnl)) : '—'}</td>
         </tr>`;
       }).join('');
@@ -2715,7 +2715,7 @@
       if (!paperLog.length) {
         if (wrap && !details) return true;
         if (wrap) {
-          wrap.innerHTML = '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after you Sell.</p>';
+          wrap.innerHTML = '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after Sell or hour settlement.</p>';
         }
         return true;
       }
@@ -2805,7 +2805,7 @@
         legsEl.innerHTML = humanOpenLegsInnerHtml(asset, open);
       }
       const paperLog = (st.paper_recent_trades || st.recent_trades || [])
-        .filter(t => String(t.mode || '').toLowerCase() === 'paper')
+        .filter(t => String(t.mode || '').toLowerCase() === 'paper' && t.action === 'exit')
         .slice(0, 24);
       patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl);
       return true;
@@ -2901,7 +2901,7 @@
       const today = paperPnl.today_realized_pnl_usd;
       const ur = paperPnl.open_unrealized_pnl_usd;
       const paperLog = (st.paper_recent_trades || st.recent_trades || [])
-        .filter(t => String(t.mode || '').toLowerCase() === 'paper')
+        .filter(t => String(t.mode || '').toLowerCase() === 'paper' && t.action === 'exit')
         .slice(0, 24);
       const openHtml = `<div id="human-open-legs-${asset}">${humanOpenLegsInnerHtml(asset, open)}</div>`;
       const logHtml = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl)

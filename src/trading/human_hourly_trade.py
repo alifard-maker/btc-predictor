@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -20,6 +21,8 @@ from src.trading.paper_execution import (
   paper_exit_fill,
   unrealized_leg_pnl_usd,
 )
+
+log = logging.getLogger(__name__)
 
 
 def human_trade_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
@@ -691,6 +694,147 @@ def execute_manual_exit(
     "pnl_usd": round(pnl, 2),
     "status": store.status(event_ticker),
   }
+
+
+def _kalshi_market_result_exit_cents(
+  kalshi: Any,
+  market_ticker: str,
+  side: str,
+) -> tuple[int, str] | None:
+  """If Kalshi already posted the binary result, cash the held side at 100/0."""
+  if not kalshi:
+    return None
+  try:
+    row = kalshi.get_market_ticker(market_ticker)
+  except Exception:
+    return None
+  if not row:
+    return None
+  result = str(row.get("result") or row.get("market_result") or "").strip().lower()
+  if result not in ("yes", "no"):
+    return None
+  held_yes = str(side).lower() == "yes"
+  won = (result == "yes" and held_yes) or (result == "no" and not held_yes)
+  cents = 100 if won else 0
+  return cents, f"kalshi result={result} → settled @ {cents}¢"
+
+
+def settle_expired_human_positions(
+  store: HumanTradeStore,
+  *,
+  current_event_ticker: str | None,
+  settle_price: float | None,
+  cfg: dict[str, Any] | None = None,
+  kalshi: Any | None = None,
+  index_id: str = "BRTI",
+) -> list[dict[str, Any]]:
+  """
+  Cash out open human legs after their hourly event has settled.
+
+  Dashboard only lists opens for the *current* hour, so without this paper legs
+  from the prior hour vanish from Open legs with no exit row / bankroll credit.
+  """
+  from src.trading.hourly_event_time import (
+    canonical_hourly_event_ticker,
+    hourly_event_has_settled,
+  )
+  from src.trading.hourly_settlement import resolve_hourly_rollover_exit_cents
+  from src.trading.paper_execution import leg_pnl_usd
+
+  current = (
+    canonical_hourly_event_ticker(str(current_event_ticker))
+    if current_event_ticker
+    else None
+  )
+  settings = settings_from_cfg(cfg, store)
+  settled_rows: list[dict[str, Any]] = []
+
+  for pos in list(store.open_positions()):
+    event = str(pos.get("event_ticker") or "")
+    if not event:
+      continue
+    canon = canonical_hourly_event_ticker(event)
+    if current and canon == current:
+      continue
+    if not hourly_event_has_settled(canon):
+      continue
+
+    side_l = str(pos.get("side") or "yes").lower()
+    entry_c = int(pos["entry_price_cents"])
+    contracts = int(pos["contracts"])
+    mode = str(pos.get("mode") or "paper").lower()
+    ticker = str(pos.get("market_ticker") or "")
+
+    note = ""
+    exit_cents: int | None = None
+    kalshi_res = _kalshi_market_result_exit_cents(kalshi, ticker, side_l)
+    if kalshi_res:
+      exit_cents, note = kalshi_res
+    else:
+      cents, note = resolve_hourly_rollover_exit_cents(
+        pos,
+        settle_price=settle_price,
+        pick=None,
+        market_exit_cents=entry_c,
+      )
+      exit_cents = int(cents)
+
+    pnl = float(
+      leg_pnl_usd(
+        entry_price_cents=entry_c,
+        mark_or_exit_cents=int(exit_cents),
+        contracts=contracts,
+      )
+      or 0.0,
+    )
+    cost_usd = float(pos.get("cost_usd") or (contracts * entry_c / 100.0))
+    if mode == "paper":
+      store.apply_paper_exit_settlement(
+        cost_usd,
+        pnl,
+        settings.paper_bankroll_initial_usd,
+      )
+
+    store.close_position(str(pos["id"]))
+    settle_line = ""
+    if settle_price is not None:
+      try:
+        settle_line = f" · {index_id} ${float(settle_price):,.2f}"
+      except (TypeError, ValueError):
+        pass
+    detail = (
+      f"{mode.upper()} EXIT (HOUR SETTLEMENT): {side_l.upper()} ×{contracts} "
+      f"@ {exit_cents}¢ (entry {entry_c}¢) — {note}{settle_line}"
+    )
+    trade = store.log_trade({
+      "event_ticker": canon,
+      "action": "exit",
+      "mode": mode,
+      "market_ticker": ticker,
+      "side": side_l,
+      "contracts": contracts,
+      "price_cents": exit_cents,
+      "entry_price_cents": entry_c,
+      "exit_price_cents": exit_cents,
+      "cost_usd": cost_usd,
+      "pnl_usd": round(pnl, 2),
+      "signal": pos.get("signal"),
+      "label": pos.get("label"),
+      "status": "filled",
+      "detail": detail,
+      "position_id": pos["id"],
+      "entry_context": {
+        "exit_reason": "hour_settlement",
+        "settlement_note": note,
+        "settle_price": settle_price,
+        "index_id": index_id,
+        "realized_pnl_usd": round(pnl, 2),
+      },
+    })
+    settled_rows.append(trade)
+    log.info("Human hour settlement: %s", detail)
+
+  return settled_rows
 
 
 def apply_human_settings_body(
