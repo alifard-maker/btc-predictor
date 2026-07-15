@@ -347,6 +347,27 @@ def preview_manual_entry(
   if not event_ticker:
     return {"ok": False, "error": "no_active_hour"}
 
+  # Same mid-hour gate as the bot — block entries when the tab jumped to a
+  # future Kalshi hour (e.g. tomorrow 5pm) instead of the clock hour.
+  from src.trading.hourly_event_time import (
+    canonical_hourly_event_ticker,
+    market_ticker_event_ticker,
+    ticker_belongs_to_hourly_event,
+  )
+  from src.trading.hourly_regime import entry_too_far_from_settle_skip_reason
+
+  live = (tab or {}).get("live") or {}
+  far = entry_too_far_from_settle_skip_reason(live.get("hours_to_settle"), cfg)
+  if far:
+    return {"ok": False, "error": far}
+  pick_event = canonical_hourly_event_ticker(
+    market_ticker_event_ticker(str(pick.get("ticker") or market_ticker)),
+  )
+  tab_event = canonical_hourly_event_ticker(str(event_ticker))
+  if pick_event and tab_event and pick_event != tab_event:
+    if not ticker_belongs_to_hourly_event(str(pick.get("ticker") or ""), event_ticker):
+      return {"ok": False, "error": "wrong_hour_event"}
+
   features = build_feature_snapshot(tab=tab, pick=pick, side=side_l)
   counterfactual = build_bot_counterfactual(
     pick=pick,
@@ -1218,6 +1239,59 @@ def _credit_human_paper_exit(
   return trade
 
 
+def _human_leg_due_for_settlement(
+  event_ticker: str,
+  *,
+  current_event_ticker: str | None,
+  now: datetime,
+  kalshi: Any | None = None,
+  market_ticker: str | None = None,
+  side: str | None = None,
+  pos: dict[str, Any] | None = None,
+) -> bool:
+  """
+  True only when this leg's Kalshi hour is actually over.
+
+  Never treat "different from current tab event" as settled — the tab may jump to
+  a near hour while older future books (Jul 16/17 5pm) are still open.
+  """
+  from src.trading.hourly_event_time import (
+    canonical_hourly_event_ticker,
+    hourly_event_has_settled,
+    hourly_event_settle_utc,
+  )
+
+  canon = canonical_hourly_event_ticker(str(event_ticker or ""))
+  if not canon:
+    return False
+  current = (
+    canonical_hourly_event_ticker(str(current_event_ticker))
+    if current_event_ticker
+    else None
+  )
+  if current and canon == current:
+    return False
+  if hourly_event_has_settled(canon, now=now):
+    return True
+  settle_at = hourly_event_settle_utc(canon)
+  if settle_at is not None and settle_at > now:
+    return False
+  # Settle clock missing / broken: allow only when Kalshi already finalized.
+  if kalshi and market_ticker and side:
+    try:
+      got = _kalshi_market_result_exit_cents(
+        kalshi,
+        str(market_ticker),
+        str(side),
+        pos=pos,
+        event_ticker=canon,
+      )
+    except Exception:
+      got = None
+    return got is not None
+  return False
+
+
 def settle_expired_human_positions(
   store: HumanTradeStore,
   *,
@@ -1236,7 +1310,6 @@ def settle_expired_human_positions(
   """
   from src.trading.hourly_event_time import (
     canonical_hourly_event_ticker,
-    hourly_event_has_settled,
     hourly_event_settle_utc,
   )
 
@@ -1248,18 +1321,34 @@ def settle_expired_human_positions(
   settled_rows: list[dict[str, Any]] = []
   settle_brti_cache: dict[str, float | None] = {}
   now = datetime.now(timezone.utc)
+  existing_exit_pids = {
+    str(t.get("position_id") or "")
+    for t in store.list_trades(limit=5000)
+    if t.get("action") == "exit" and t.get("position_id")
+  }
 
   for pos in list(store.open_positions()):
     event = str(pos.get("event_ticker") or "")
     if not event:
       continue
     canon = canonical_hourly_event_ticker(event)
-    if current and canon == current:
+    pid = str(pos.get("id") or "")
+    if pid and pid in existing_exit_pids:
+      # Already cashed (duplicate status/marks polls) — close ghost open only.
+      try:
+        store.close_position(pid)
+      except Exception:
+        pass
       continue
-    # Hour rolled to a new event → prior opens must cash out even if settle-time
-    # parsing fails / is slightly skewed (these were invisible but still locking bankroll).
-    hour_rolled = bool(current and canon != current)
-    if not hour_rolled and not hourly_event_has_settled(canon, now=now):
+    if not _human_leg_due_for_settlement(
+      canon,
+      current_event_ticker=current,
+      now=now,
+      kalshi=kalshi,
+      market_ticker=str(pos.get("market_ticker") or ""),
+      side=str(pos.get("side") or ""),
+      pos=pos,
+    ):
       continue
 
     settle_at = hourly_event_settle_utc(canon)
@@ -1267,9 +1356,6 @@ def settle_expired_human_positions(
     if settle_at is not None:
       age_s = (now - settle_at).total_seconds()
       just_rolled = 0 <= age_s <= 10 * 60
-    elif hour_rolled:
-      # Unknown settle clock but new hour is live — treat as rolled for refund path.
-      just_rolled = False
 
     pos = dict(pos)
     pos["event_ticker"] = canon
@@ -1294,6 +1380,8 @@ def settle_expired_human_positions(
         source="open_leg_rollover",
       )
       settled_rows.append(trade)
+      if pid:
+        existing_exit_pids.add(pid)
     except Exception as e:
       log.exception(
         "Human open-leg settlement failed for %s: %s",
@@ -1332,7 +1420,6 @@ def repair_orphan_human_paper_enters(
   """Settle paper enters that have no exit after the hour settled (cash must come back)."""
   from src.trading.hourly_event_time import (
     canonical_hourly_event_ticker,
-    hourly_event_has_settled,
     hourly_event_settle_utc,
   )
   from src.trading.hourly_settlement import contract_spec_from_label
@@ -1388,12 +1475,6 @@ def repair_orphan_human_paper_enters(
     event = canonical_hourly_event_ticker(str(enter.get("event_ticker") or ""))
     if not event:
       continue
-    if current and event == current:
-      continue
-    hour_rolled = bool(current and event != current)
-    if not hour_rolled and not hourly_event_has_settled(event, now=now):
-      continue
-
     side_l = str(enter.get("side") or "yes").lower()
     market = str(enter.get("market_ticker") or "")
     entry_c = int(enter.get("entry_price_cents") or enter.get("price_cents") or 0)
@@ -1449,6 +1530,30 @@ def repair_orphan_human_paper_enters(
     if not pos.get("floor_strike") and not pos.get("cap_strike"):
       spec = contract_spec_from_label(str(pos.get("label") or enter.get("label") or ""))
       pos.update({k: v for k, v in spec.items() if v is not None})
+
+    # Upgrades of existing scratch exits may run before clock parse knows; new
+    # settlements require the hour to be due (blocks future Jul16/17 books).
+    if not existing_exit and not _human_leg_due_for_settlement(
+      event,
+      current_event_ticker=current,
+      now=now,
+      kalshi=kalshi,
+      market_ticker=market,
+      side=side_l,
+      pos=pos,
+    ):
+      continue
+    if existing_exit and not _human_leg_due_for_settlement(
+      event,
+      current_event_ticker=current,
+      now=now,
+      kalshi=kalshi,
+      market_ticker=market,
+      side=side_l,
+      pos=pos,
+    ):
+      # Future-hour scratch from the premature-settle bug — leave cash-back alone.
+      continue
 
     settle_at = hourly_event_settle_utc(event)
     just_rolled = False
@@ -1546,10 +1651,15 @@ def repair_orphan_human_paper_enters(
     event = canonical_hourly_event_ticker(str(pos.get("event_ticker") or ""))
     if not event:
       continue
-    if current and event == current:
-      continue
-    hour_rolled = bool(current and event != current)
-    if not hour_rolled and not hourly_event_has_settled(event, now=now):
+    if not _human_leg_due_for_settlement(
+      event,
+      current_event_ticker=current,
+      now=now,
+      kalshi=kalshi,
+      market_ticker=str(pos.get("market_ticker") or ""),
+      side=str(pos.get("side") or ""),
+      pos=pos,
+    ):
       continue
     leg_key = _leg_key(
       event=event,

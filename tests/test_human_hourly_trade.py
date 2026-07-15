@@ -424,8 +424,10 @@ def test_stuck_open_leg_gets_cash_and_win(tmp_path: Path):
   assert abs(bank["paper_bankroll_usd"] - 100.87) < 0.02
 
 
-def test_hour_rolled_settles_even_if_settle_clock_unparsed(tmp_path: Path, monkeypatch):
-  """Prior-hour opens must unlock bankroll whenever a new hour is live."""
+def test_unparsed_settle_clock_still_pays_when_kalshi_finalized(
+  tmp_path: Path, monkeypatch,
+):
+  """If settle clock parsing fails, Kalshi finalized result still unlocks the leg."""
   from src.trading import human_hourly_trade as hht
 
   store = HumanTradeStore(tmp_path / "human.db")
@@ -443,7 +445,6 @@ def test_hour_rolled_settles_even_if_settle_clock_unparsed(tmp_path: Path, monke
     "floor_strike": 65000.0,
     "mode": "paper",
   })
-  # Pretend settle-time check fails (would previously leave capital locked forever).
   monkeypatch.setattr(
     "src.trading.hourly_event_time.hourly_event_has_settled",
     lambda *_a, **_k: False,
@@ -471,9 +472,58 @@ def test_hour_rolled_settles_even_if_settle_clock_unparsed(tmp_path: Path, monke
   assert rows[0]["exit_price_cents"] == 100
   bank = store.reconcile_paper_bankroll(100.0)
   assert store.open_positions() == []
-  # entry was 100¢ so win pnl = 0, capital returned → $100
   assert abs(bank["paper_bankroll_usd"] - 100.0) < 0.02
   assert pos["id"]
+
+
+def test_future_hour_not_settled_just_because_tab_moved(tmp_path: Path):
+  """Tab on Jul 15 7pm must NOT cash out Jul 17 5pm paper opens as scratches."""
+  from src.trading.human_hourly_trade import settle_expired_human_positions
+  from src.trading.hourly_event_time import hourly_event_settle_utc
+
+  future = "KXBTCD-26JUL1717"
+  settle_at = hourly_event_settle_utc(future)
+  assert settle_at is not None
+  # Guard: this test only makes sense while that hour is still in the future.
+  from datetime import datetime, timezone
+  if settle_at <= datetime.now(timezone.utc):
+    return
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  store.debit_paper_for_entry(2.34, 100.0)
+  store.open_position({
+    "event_ticker": future,
+    "market_ticker": f"{future}-T65999.99",
+    "side": "no",
+    "contracts": 3,
+    "entry_price_cents": 78,
+    "cost_usd": 2.34,
+    "label": "$66,000 or above",
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 65999.99,
+    "mode": "paper",
+  })
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      return None
+
+    def get(self, path, params=None):
+      return {"markets": []}
+
+  rows = settle_expired_human_positions(
+    store,
+    current_event_ticker="KXBTCD-26JUL1519",
+    settle_price=64845.0,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    kalshi=_FakeKalshi(),
+    asset="btc",
+  )
+  assert rows == []
+  assert len(store.open_positions()) == 1
+  bank = store.reconcile_paper_bankroll(100.0)
+  assert abs(bank["paper_bankroll_usd"] - 97.66) < 0.02
 
 
 def test_repair_enter_without_position_id(tmp_path: Path):
