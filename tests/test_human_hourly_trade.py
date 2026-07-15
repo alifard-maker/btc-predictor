@@ -599,6 +599,95 @@ def test_upgrade_cashback_scratch_to_kalshi_win(tmp_path: Path):
   assert summary["win_rate"] == 1.0
 
 
+def test_upgrade_scratch_when_ticker_is_round_alias(tmp_path: Path):
+  """Book keeps …-T65000; Kalshi settles …-T64999.99 — still upgrade winners."""
+  from src.trading.human_hourly_trade import settle_expired_human_positions
+  from src.trading.hourly_event_time import hourly_event_settle_utc
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  prev = "KXBTCD-26JUN3005"
+  assert hourly_event_settle_utc(prev) is not None
+  our = f"{prev}-T65000"
+  kalshi_tk = f"{prev}-T64999.99"
+  store.debit_paper_for_entry(1.71, 100.0)
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "enter",
+    "mode": "paper",
+    "market_ticker": our,
+    "side": "no",
+    "contracts": 3,
+    "price_cents": 57,
+    "entry_price_cents": 57,
+    "cost_usd": 1.71,
+    "label": "$65,000 or above",
+    "status": "filled",
+    "position_id": "alias-1",
+  })
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "exit",
+    "mode": "paper",
+    "market_ticker": our,
+    "side": "no",
+    "contracts": 3,
+    "price_cents": 57,
+    "entry_price_cents": 57,
+    "exit_price_cents": 57,
+    "cost_usd": 1.71,
+    "pnl_usd": 0.0,
+    "label": "$65,000 or above",
+    "status": "filled",
+    "position_id": "alias-1",
+    "detail": "PAPER EXIT (HOUR SETTLEMENT): NO ×3 @ 57¢ (entry 57¢) — cash-back @ entry 57¢",
+  })
+  store.apply_paper_exit_settlement(1.71, 0.0, 100.0)
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      # Exact book ticker 404s; only the .99 strike exists.
+      if ticker == kalshi_tk:
+        return {
+          "ticker": kalshi_tk,
+          "event_ticker": prev,
+          "result": "no",
+          "floor_strike": 64999.99,
+          "expiration_value": "64784.02",
+          "status": "finalized",
+        }
+      return None
+
+    def get(self, path, params=None):
+      params = params or {}
+      if path == "/markets" and params.get("event_ticker") == prev:
+        return {
+          "markets": [{
+            "ticker": kalshi_tk,
+            "event_ticker": prev,
+            "result": "no",
+            "floor_strike": 64999.99,
+            "expiration_value": "64784.02",
+            "status": "finalized",
+          }],
+        }
+      return {}
+
+  rows = settle_expired_human_positions(
+    store,
+    current_event_ticker="KXBTCD-26JUN3017",
+    settle_price=None,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    kalshi=_FakeKalshi(),
+    asset="btc",
+  )
+  assert rows
+  assert rows[0]["exit_price_cents"] == 100
+  # NO @ 57¢ → 100¢ = +$1.29
+  assert abs(float(rows[0]["pnl_usd"]) - 1.29) < 0.01
+  bank = store.reconcile_paper_bankroll(100.0)
+  assert abs(bank["paper_bankroll_usd"] - 101.29) < 0.02
+
+
 def test_win_rate_excludes_scratch_pushes(tmp_path: Path):
   store = HumanTradeStore(tmp_path / "human.db")
   for pnl in (0.5, 0.3, -0.2, 0.0, 0.0):

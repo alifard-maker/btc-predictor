@@ -752,44 +752,161 @@ def execute_manual_exit(
   }
 
 
+def _ticker_aliases(market_ticker: str) -> list[str]:
+  """Kalshi threshold legs often use T64999.99 while our book shows T65000."""
+  t = str(market_ticker or "").strip()
+  if not t:
+    return []
+  out = [t]
+  m = re.search(r"^(.*)-T([\d.]+)$", t)
+  if not m:
+    return out
+  prefix, raw = m.group(1), m.group(2)
+  try:
+    strike = float(raw)
+  except ValueError:
+    return out
+  candidates = {
+    f"{prefix}-T{strike:g}",
+    f"{prefix}-T{strike:.2f}",
+    f"{prefix}-T{strike:.0f}",
+  }
+  if abs(strike - round(strike)) < 1e-9:
+    n = int(round(strike))
+    candidates.add(f"{prefix}-T{n}")
+    candidates.add(f"{prefix}-T{n - 1}.99")
+    candidates.add(f"{prefix}-T{n}.99")
+  for c in candidates:
+    if c not in out:
+      out.append(c)
+  return out
+
+
+def _list_event_markets(kalshi: Any, event_ticker: str) -> list[dict[str, Any]]:
+  if not kalshi or not event_ticker or not callable(getattr(kalshi, "get", None)):
+    return []
+  events = [str(event_ticker)]
+  e = str(event_ticker)
+  if e.startswith("KXBTCD-"):
+    events.append("KXBTC-" + e[len("KXBTCD-"):])
+  elif e.startswith("KXBTC-") and not e.startswith("KXBTCD-"):
+    events.append("KXBTCD-" + e[len("KXBTC-"):])
+  out: list[dict[str, Any]] = []
+  seen: set[str] = set()
+  for ev in events:
+    for params in (
+      {"event_ticker": ev, "status": "settled", "limit": 200},
+      {"event_ticker": ev, "limit": 200},
+    ):
+      try:
+        data = kalshi.get("/markets", params=params)
+      except Exception:
+        continue
+      markets = (data or {}).get("markets") if isinstance(data, dict) else None
+      if not isinstance(markets, list):
+        continue
+      for m in markets:
+        if not isinstance(m, dict):
+          continue
+        tk = str(m.get("ticker") or "")
+        if not tk or tk in seen:
+          continue
+        seen.add(tk)
+        out.append(m)
+      if out:
+        return out
+    try:
+      data = kalshi.get("/historical/markets", params={"event_ticker": ev, "limit": 200})
+      markets = (data or {}).get("markets") if isinstance(data, dict) else None
+      if isinstance(markets, list):
+        for m in markets:
+          if not isinstance(m, dict):
+            continue
+          tk = str(m.get("ticker") or "")
+          if not tk or tk in seen:
+            continue
+          seen.add(tk)
+          out.append(m)
+    except Exception:
+      pass
+    if out:
+      return out
+  return out
+
+
+def _match_event_market_for_pos(
+  markets: list[dict[str, Any]],
+  pos: dict[str, Any],
+) -> dict[str, Any] | None:
+  """Match Kalshi market by ticker alias or nearest floor/cap strike."""
+  ticker = str(pos.get("market_ticker") or "").upper()
+  aliases = {a.upper() for a in _ticker_aliases(ticker)}
+  for m in markets:
+    if str(m.get("ticker") or "").upper() in aliases:
+      return m
+  pos = _enrich_pos_contract_spec(pos)
+  floor = pos.get("floor_strike")
+  cap = pos.get("cap_strike")
+  best = None
+  best_dist = None
+  for m in markets:
+    mf = m.get("floor_strike")
+    mc = m.get("cap_strike")
+    dist = None
+    if floor is not None and mf is not None:
+      dist = abs(float(mf) - float(floor))
+    elif cap is not None and mc is not None:
+      dist = abs(float(mc) - float(cap))
+    elif floor is not None and mc is not None and mf is None:
+      dist = abs(float(mc) - float(floor))
+    if dist is None:
+      continue
+    if best_dist is None or dist < best_dist:
+      best_dist = dist
+      best = m
+  # Threshold labels "$65,000" map to T64999.99 (≈$1 away).
+  if best is not None and best_dist is not None and best_dist <= 2.0:
+    return best
+  return None
+
+
 def _kalshi_fetch_market_row(kalshi: Any, market_ticker: str) -> dict[str, Any] | None:
   """Live market row, then historical archive (settled hours leave /markets)."""
   if not kalshi or not market_ticker:
     return None
-  ticker = str(market_ticker).strip()
-  try:
-    row = kalshi.get_market_ticker(ticker)
-    if isinstance(row, dict) and row:
-      # Unwrap occasional envelopes.
-      inner = row.get("market")
-      if isinstance(inner, dict) and inner:
-        row = inner
-      return row
-  except Exception:
-    pass
-  get = getattr(kalshi, "get", None)
-  if not callable(get):
-    return None
-  for path, params in (
-    (f"/markets/{ticker}", None),
-    ("/historical/markets", {"tickers": ticker, "limit": 1}),
-    ("/markets", {"tickers": ticker, "limit": 1}),
-  ):
+  for ticker in _ticker_aliases(market_ticker):
     try:
-      data = get(path, params=params) if params else get(path)
+      row = kalshi.get_market_ticker(ticker)
+      if isinstance(row, dict) and row:
+        inner = row.get("market")
+        if isinstance(inner, dict) and inner:
+          row = inner
+        return row
     except Exception:
+      pass
+    get = getattr(kalshi, "get", None)
+    if not callable(get):
       continue
-    if not isinstance(data, dict):
-      continue
-    if isinstance(data.get("market"), dict):
-      return data["market"]
-    markets = data.get("markets")
-    if isinstance(markets, list) and markets:
-      for m in markets:
-        if isinstance(m, dict) and str(m.get("ticker") or "").upper() == ticker.upper():
-          return m
-      if isinstance(markets[0], dict):
-        return markets[0]
+    for path, params in (
+      (f"/markets/{ticker}", None),
+      ("/historical/markets", {"tickers": ticker, "limit": 1}),
+      ("/markets", {"tickers": ticker, "limit": 1}),
+    ):
+      try:
+        data = get(path, params=params) if params else get(path)
+      except Exception:
+        continue
+      if not isinstance(data, dict):
+        continue
+      if isinstance(data.get("market"), dict):
+        return data["market"]
+      markets = data.get("markets")
+      if isinstance(markets, list) and markets:
+        for m in markets:
+          if isinstance(m, dict) and str(m.get("ticker") or "").upper() == ticker.upper():
+            return m
+        if isinstance(markets[0], dict):
+          return markets[0]
   return None
 
 
@@ -817,9 +934,15 @@ def _kalshi_market_result_exit_cents(
   kalshi: Any,
   market_ticker: str,
   side: str,
+  *,
+  pos: dict[str, Any] | None = None,
+  event_ticker: str | None = None,
 ) -> tuple[int, str] | None:
   """If Kalshi already posted the binary result, cash the held side at 100/0."""
   row = _kalshi_fetch_market_row(kalshi, market_ticker)
+  if not row and event_ticker:
+    markets = _list_event_markets(kalshi, event_ticker)
+    row = _match_event_market_for_pos(markets, pos or {"market_ticker": market_ticker})
   if not row:
     return None
   result = _result_from_market_row(row)
@@ -837,8 +960,9 @@ def _kalshi_expiration_settle_price(
   *,
   event_ticker: str | None = None,
   cache: dict[str, float | None] | None = None,
+  pos: dict[str, Any] | None = None,
 ) -> float | None:
-  """Official hour close index from Kalshi (market or any sibling on the event)."""
+  """Official hour close index from Kalshi (matched market or event sibling)."""
   cache = cache if cache is not None else {}
   ticker = str(market_ticker or "").strip()
   event = str(event_ticker or "").strip()
@@ -859,27 +983,15 @@ def _kalshi_expiration_settle_price(
     return px if px > 0 else None
 
   px = _exp_from_row(_kalshi_fetch_market_row(kalshi, ticker)) if ticker else None
-  if px is None and event and kalshi and callable(getattr(kalshi, "get", None)):
-    for path, params in (
-      ("/markets", {"event_ticker": event, "status": "settled", "limit": 50}),
-      ("/markets", {"event_ticker": event, "limit": 50}),
-      ("/historical/markets", {"event_ticker": event, "limit": 50}),
-    ):
-      try:
-        data = kalshi.get(path, params=params)
-      except Exception:
-        continue
-      markets = (data or {}).get("markets") if isinstance(data, dict) else None
-      if not isinstance(markets, list):
-        continue
+  if px is None and event:
+    markets = _list_event_markets(kalshi, event)
+    matched = _match_event_market_for_pos(markets, pos or {"market_ticker": ticker})
+    px = _exp_from_row(matched)
+    if px is None:
       for m in markets:
-        if not isinstance(m, dict):
-          continue
         px = _exp_from_row(m)
         if px is not None:
           break
-      if px is not None:
-        break
 
   cache[cache_key] = px
   if event and px is not None:
@@ -977,7 +1089,13 @@ def _resolve_human_settlement_exit_cents(
   ticker = str(pos.get("market_ticker") or "")
   event = str(pos.get("event_ticker") or "")
 
-  kalshi_res = _kalshi_market_result_exit_cents(kalshi, ticker, side_l)
+  kalshi_res = _kalshi_market_result_exit_cents(
+    kalshi,
+    ticker,
+    side_l,
+    pos=pos,
+    event_ticker=event,
+  )
   if kalshi_res:
     cents, note = kalshi_res
     return cents, note, None
@@ -987,6 +1105,7 @@ def _resolve_human_settlement_exit_cents(
     ticker,
     event_ticker=event,
     cache=settle_brti_cache,
+    pos=pos,
   )
   settle_src = "kalshi expiration_value"
   if hour_settle is None:
