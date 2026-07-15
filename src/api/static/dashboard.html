@@ -1156,6 +1156,13 @@
     let loadAllInFlight = false;
     let loadAllStartedAt = 0;
     const LOAD_ALL_STUCK_MS = 35000;
+    let dailyLoadInFlight = false;
+    let dailyLoadStartedAt = 0;
+    const DAILY_LOAD_STUCK_MS = 35000;
+    const HOURLY_PREDICTION_TIMEOUT_MS = 25000;
+    const lastDailyOkByAsset = { btc: null, eth: null, spx: null, ndx: null };
+    let humanTradesLastLoadAt = { btc: 0, eth: 0 };
+    const HUMAN_TRADES_MIN_POLL_MS = 12000;
     let liveMonitorInFlight = false;
     let liveMonitorLastAt = 0;
     const LIVE_MONITOR_INTERVAL_MS = 3000;
@@ -2711,12 +2718,15 @@
         el.innerHTML = `<p class="muted" style="font-size:.78rem">${payload?.error || 'Manual trading unavailable'}</p>`;
         return;
       }
+      // Avoid yanking the mode dropdown out from under the user (main flicker source).
+      const active = document.activeElement;
+      if (active && active.id === `human-mode-${asset}`) return;
       const st = payload.status || {};
       const settings = st.settings || {};
       const pb = st.paper_bankroll || {};
       const open = st.open_positions || [];
       const mode = settings.mode || 'paper';
-      el.innerHTML = `
+      const html = `
         <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.5rem">
           <label style="font-size:.75rem">Mode
             <select id="human-mode-${asset}" style="margin-left:.25rem" onchange="humanSaveSettings('${asset}')">
@@ -2733,6 +2743,8 @@
               <button type="button" class="btn-secondary" style="font-size:.6rem;padding:.1rem .35rem;margin-left:.35rem" onclick="humanManualExit('${asset}','${p.id}')">Sell</button>
             </li>`).join('')}</ul>` : '<p class="muted" style="font-size:.72rem">No open manual legs — use Buy buttons on contract rows below.</p>'}
       `;
+      if (el.innerHTML === html) return;
+      el.innerHTML = html;
     }
 
     function renderHumanBotCompare(asset, data) {
@@ -2757,8 +2769,12 @@
         </details>`;
     }
 
-    async function loadHumanTrades(asset) {
+    async function loadHumanTrades(asset, opts = {}) {
       if (asset !== 'btc' && asset !== 'eth') return;
+      const force = !!opts.force;
+      const now = Date.now();
+      if (!force && now - (humanTradesLastLoadAt[asset] || 0) < HUMAN_TRADES_MIN_POLL_MS) return;
+      humanTradesLastLoadAt[asset] = now;
       try {
         const [status, compare] = await Promise.all([
           getWithTimeout(`${humanTradesApi(asset)}/status`, 12000),
@@ -2768,7 +2784,10 @@
         renderHumanTradesPanel(asset, status);
         renderHumanBotCompare(asset, compare);
       } catch (e) {
-        renderHumanTradesPanel(asset, { ok: false, error: e.message });
+        // Keep last-good open legs / mode UI — don't flash "unavailable" on blips.
+        if (!humanTradesCache[asset]?.ok) {
+          renderHumanTradesPanel(asset, { ok: false, error: e.message });
+        }
       }
     }
 
@@ -2783,11 +2802,11 @@
       }
       try {
         await postJson(`${humanTradesApi(asset)}/settings`, body);
-        await loadHumanTrades(asset);
-        if (isHourlyTab(activeTab)) await loadDaily();
+        await loadHumanTrades(asset, { force: true });
+        if (isHourlyTab(activeTab)) await loadDaily({ force: true });
       } catch (e) {
         alert(e.message || 'Settings failed');
-        await loadHumanTrades(asset);
+        await loadHumanTrades(asset, { force: true });
       }
     }
 
@@ -2808,8 +2827,10 @@
         const out = await postJson(`${humanTradesApi(asset)}/enter`, body);
         humanTradesCache[asset] = { ok: true, status: out.status };
         renderHumanTradesPanel(asset, humanTradesCache[asset]);
-        await loadHumanTrades(asset);
-        if (isHourlyTab(activeTab)) await loadDaily();
+        await loadHumanTrades(asset, { force: true });
+        // Refresh Trade column on rows without full prediction round-trip.
+        const cached = lastDailyOkByAsset[asset];
+        if (cached?.ok) renderDaily(cached);
       } catch (e) {
         alert(e.message || 'Enter failed');
       } finally {
@@ -2828,8 +2849,9 @@
       }
       try {
         await postJson(`${humanTradesApi(asset)}/exit`, body);
-        await loadHumanTrades(asset);
-        if (isHourlyTab(activeTab)) await loadDaily();
+        await loadHumanTrades(asset, { force: true });
+        const cached = lastDailyOkByAsset[asset];
+        if (cached?.ok) renderDaily(cached);
       } catch (e) {
         alert(e.message || 'Exit failed');
       }
@@ -2846,10 +2868,12 @@
       const asset = hourlyAssetForTab(activeTab);
       const showTrade = asset === 'btc' || asset === 'eth';
       if (!rows || !rows.length) {
+        // Keep last populated book across prediction timeouts / empty blips.
+        if (el.querySelector('table')) return;
         el.innerHTML = '<p class="muted">No contracts in this book.</p>';
         return;
       }
-      el.innerHTML = `<table>
+      const html = `<table>
         <thead><tr><th>Contract</th><th>Model</th><th>Kalshi</th><th>Edge</th><th>Signal</th>${showTrade ? '<th>Trade</th>' : ''}</tr></thead>
         <tbody>${rows.map(r => {
           const edge = r.edge != null ? (r.edge >= 0 ? '+' : '') + (r.edge * 100).toFixed(1) + '¢' : '—';
@@ -2872,6 +2896,8 @@
             ${tradeCell}
           </tr>`;
         }).join('')}</tbody></table>`;
+      if (el.innerHTML === html) return;
+      el.innerHTML = html;
     }
 
     function renderDailyStructure(st) {
@@ -6590,7 +6616,19 @@
 
     function renderDaily(data) {
       if (activeTab !== hourlyRenderTab) return;
+      const assetForCache = hourlyAssetForTab(hourlyRenderTab);
       if (!data || !data.ok) {
+        const stale = lastDailyOkByAsset[assetForCache];
+        if (stale?.ok) {
+          // Prediction blip — keep S1/S2 book so manual Buy buttons stay usable.
+          const meta = h$('daily-meta');
+          if (meta) {
+            const base = meta.textContent || '';
+            const note = ` · refresh paused (${formatHourlyError(data)})`;
+            if (!base.includes('refresh paused')) meta.textContent = (base || 'Hourly') + note;
+          }
+          return;
+        }
         hText('daily-meta', formatHourlyError(data));
         hHtml('hourly-guide', '<p class="muted">—</p>');
         hHtml('daily-freq-badge', '');
@@ -6604,6 +6642,7 @@
         hHtml('daily-structure', '<p class="muted">—</p>');
         return;
       }
+      lastDailyOkByAsset[assetForCache] = data;
       const live = data.live || data;
       const locked = data.locked || null;
       const hourOpen = data.hour_open || null;
@@ -6753,6 +6792,24 @@
       if (htAsset === 'btc' || htAsset === 'eth') loadHumanTrades(htAsset);
     }
 
+    function refreshHumanTradeColumns(asset) {
+      if (hourlyAssetForTab(activeTab) !== asset) return;
+      const data = lastDailyOkByAsset[asset];
+      if (!data?.ok) return;
+      const live = data.live || data;
+      const g = data.guidance || {};
+      const rangeRg = g.strategy_range || {};
+      renderDailyContracts(live.strategy_threshold?.contracts || [], 'daily-threshold', {
+        safest: live.strategy_threshold?.most_likely?.label,
+        edge: live.strategy_threshold?.best_edge?.label,
+      });
+      renderDailyContracts(live.strategy_range?.contracts || [], 'daily-range', {
+        safest: live.strategy_range?.most_likely?.label,
+        edge: live.strategy_range?.best_edge?.label,
+        locked: (rangeRg.recommendations || []).find(r => r.tier === 'locked')?.label,
+      });
+    }
+
     async function loadSlot15Bot(predictionBot) {
       const tabAtStart = activeTab;
       if (tabAtStart !== '15m' && tabAtStart !== 'eth-15m') return;
@@ -6885,9 +6942,16 @@
       }).catch(() => {});
     }
 
-    async function loadDaily() {
+    async function loadDaily(opts = {}) {
       const tabAtStart = activeTab;
       if (tabAtStart !== 'daily' && !isHourlyTab(tabAtStart)) return;
+      const force = !!opts.force;
+      if (dailyLoadInFlight && !force) {
+        if (Date.now() - dailyLoadStartedAt < DAILY_LOAD_STUCK_MS) return;
+        dailyLoadInFlight = false;
+      }
+      dailyLoadInFlight = true;
+      dailyLoadStartedAt = Date.now();
       const gen = ++dailyFetchGen;
       const api = hourlyApiFor(tabAtStart);
       const asset = hourlyAssetForTab(tabAtStart);
@@ -6919,7 +6983,7 @@
         renderHourlyHistory(hist);
       });
       try {
-        const d = await getWithTimeout(api.prediction, 12000);
+        const d = await getWithTimeout(api.prediction, HOURLY_PREDICTION_TIMEOUT_MS);
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderDaily(d);
         refreshHourlyBotDirect(asset, tabAtStart, gen, null);
@@ -6928,16 +6992,25 @@
           refreshIndexTrialBot(asset, tabAtStart, gen);
           refreshIndexLiveBotDirect(asset, tabAtStart, gen);
           loadIndexLivePreflight(asset, { force: true });
-        scheduleIndexLivePreflightPoll(asset);
+          scheduleIndexLivePreflightPoll(asset);
           loadIndexHourlyLiveTrialCompare(asset);
         }
       } catch (e) {
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
-        renderDaily({ ok: false, error: e.message, bot: cached || undefined });
-        renderHourlyCalibration({});
-        renderHourlyHistory([]);
+        const stalePred = lastDailyOkByAsset[asset];
+        if (stalePred?.ok) {
+          renderDaily(stalePred);
+          const meta = h$('daily-meta');
+          if (meta && !String(meta.textContent || '').includes('refresh paused')) {
+            meta.textContent = (meta.textContent || '') + ` · refresh paused (${e.message})`;
+          }
+        } else {
+          renderDaily({ ok: false, error: e.message, bot: cached || undefined });
+        }
         if (cached) renderHourlyBot(cached, asset);
-        else renderHourlyBot({ ok: false, error: e.message }, asset);
+        else if (!stalePred?.ok) renderHourlyBot({ ok: false, error: e.message }, asset);
+      } finally {
+        if (gen === dailyFetchGen) dailyLoadInFlight = false;
       }
     }
 
