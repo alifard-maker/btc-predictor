@@ -2783,6 +2783,7 @@
         humanTradesCache[asset] = status;
         renderHumanTradesPanel(asset, status);
         renderHumanBotCompare(asset, compare);
+        refreshHumanTradeColumns(asset);
       } catch (e) {
         // Keep last-good open legs / mode UI — don't flash "unavailable" on blips.
         if (!humanTradesCache[asset]?.ok) {
