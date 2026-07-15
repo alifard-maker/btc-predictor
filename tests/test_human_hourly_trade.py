@@ -510,7 +510,22 @@ def test_upgrade_cashback_scratch_to_kalshi_win(tmp_path: Path):
 
   class _FakeKalshi:
     def get_market_ticker(self, ticker):
-      return {"expiration_value": "64958.13", "status": "finalized"}
+      return None  # archived from live /markets
+
+    def get(self, path, params=None):
+      params = params or {}
+      if path.startswith("/historical/markets") or path == "/markets":
+        return {
+          "markets": [{
+            "ticker": f"{prev}-T66000",
+            "event_ticker": prev,
+            "result": "no",
+            "expiration_value": "64958.13",
+            "status": "finalized",
+            "settlement_value_dollars": "0",
+          }],
+        }
+      return {}
 
   rows = settle_expired_human_positions(
     store,

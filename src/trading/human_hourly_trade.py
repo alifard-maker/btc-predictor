@@ -698,21 +698,77 @@ def execute_manual_exit(
   }
 
 
+def _kalshi_fetch_market_row(kalshi: Any, market_ticker: str) -> dict[str, Any] | None:
+  """Live market row, then historical archive (settled hours leave /markets)."""
+  if not kalshi or not market_ticker:
+    return None
+  ticker = str(market_ticker).strip()
+  try:
+    row = kalshi.get_market_ticker(ticker)
+    if isinstance(row, dict) and row:
+      # Unwrap occasional envelopes.
+      inner = row.get("market")
+      if isinstance(inner, dict) and inner:
+        row = inner
+      return row
+  except Exception:
+    pass
+  get = getattr(kalshi, "get", None)
+  if not callable(get):
+    return None
+  for path, params in (
+    (f"/markets/{ticker}", None),
+    ("/historical/markets", {"tickers": ticker, "limit": 1}),
+    ("/markets", {"tickers": ticker, "limit": 1}),
+  ):
+    try:
+      data = get(path, params=params) if params else get(path)
+    except Exception:
+      continue
+    if not isinstance(data, dict):
+      continue
+    if isinstance(data.get("market"), dict):
+      return data["market"]
+    markets = data.get("markets")
+    if isinstance(markets, list) and markets:
+      for m in markets:
+        if isinstance(m, dict) and str(m.get("ticker") or "").upper() == ticker.upper():
+          return m
+      if isinstance(markets[0], dict):
+        return markets[0]
+  return None
+
+
+def _result_from_market_row(row: dict[str, Any]) -> str | None:
+  result = str(row.get("result") or row.get("market_result") or "").strip().lower()
+  if result in ("yes", "no"):
+    return result
+  # YES settlement payout in dollars (0 or 1) after finalize.
+  for key in ("settlement_value_dollars", "settlement_value", "yes_settlement"):
+    raw = row.get(key)
+    if raw in (None, ""):
+      continue
+    try:
+      val = float(raw)
+    except (TypeError, ValueError):
+      continue
+    if val >= 0.99:
+      return "yes"
+    if val <= 0.01:
+      return "no"
+  return None
+
+
 def _kalshi_market_result_exit_cents(
   kalshi: Any,
   market_ticker: str,
   side: str,
 ) -> tuple[int, str] | None:
   """If Kalshi already posted the binary result, cash the held side at 100/0."""
-  if not kalshi:
-    return None
-  try:
-    row = kalshi.get_market_ticker(market_ticker)
-  except Exception:
-    return None
+  row = _kalshi_fetch_market_row(kalshi, market_ticker)
   if not row:
     return None
-  result = str(row.get("result") or row.get("market_result") or "").strip().lower()
+  result = _result_from_market_row(row)
   if result not in ("yes", "no"):
     return None
   held_yes = str(side).lower() == "yes"
@@ -721,24 +777,60 @@ def _kalshi_market_result_exit_cents(
   return cents, f"kalshi result={result} → settled @ {cents}¢"
 
 
-def _kalshi_expiration_settle_price(kalshi: Any, market_ticker: str) -> float | None:
-  """Official hour close index from Kalshi market row (expiration_value)."""
-  if not kalshi:
-    return None
-  try:
-    row = kalshi.get_market_ticker(market_ticker)
-  except Exception:
-    return None
-  if not row:
-    return None
-  exp = row.get("expiration_value")
-  if exp in (None, ""):
-    return None
-  try:
-    px = float(exp)
-  except (TypeError, ValueError):
-    return None
-  return px if px > 0 else None
+def _kalshi_expiration_settle_price(
+  kalshi: Any,
+  market_ticker: str,
+  *,
+  event_ticker: str | None = None,
+  cache: dict[str, float | None] | None = None,
+) -> float | None:
+  """Official hour close index from Kalshi (market or any sibling on the event)."""
+  cache = cache if cache is not None else {}
+  ticker = str(market_ticker or "").strip()
+  event = str(event_ticker or "").strip()
+  cache_key = f"exp:{ticker or event}"
+  if cache_key in cache:
+    return cache[cache_key]
+
+  def _exp_from_row(row: dict[str, Any] | None) -> float | None:
+    if not row:
+      return None
+    exp = row.get("expiration_value")
+    if exp in (None, ""):
+      return None
+    try:
+      px = float(exp)
+    except (TypeError, ValueError):
+      return None
+    return px if px > 0 else None
+
+  px = _exp_from_row(_kalshi_fetch_market_row(kalshi, ticker)) if ticker else None
+  if px is None and event and kalshi and callable(getattr(kalshi, "get", None)):
+    for path, params in (
+      ("/markets", {"event_ticker": event, "status": "settled", "limit": 50}),
+      ("/markets", {"event_ticker": event, "limit": 50}),
+      ("/historical/markets", {"event_ticker": event, "limit": 50}),
+    ):
+      try:
+        data = kalshi.get(path, params=params)
+      except Exception:
+        continue
+      markets = (data or {}).get("markets") if isinstance(data, dict) else None
+      if not isinstance(markets, list):
+        continue
+      for m in markets:
+        if not isinstance(m, dict):
+          continue
+        px = _exp_from_row(m)
+        if px is not None:
+          break
+      if px is not None:
+        break
+
+  cache[cache_key] = px
+  if event and px is not None:
+    cache[f"exp-event:{event}"] = px
+  return px
 
 
 def _enrich_pos_contract_spec(pos: dict[str, Any]) -> dict[str, Any]:
@@ -778,15 +870,27 @@ def _event_settle_brti(
   if not cfg:
     cache[event_ticker] = None
     return None
+  candidates = [str(event_ticker)]
+  e = str(event_ticker)
+  if e.startswith("KXBTCD-"):
+    candidates.append("KXBTC-" + e[len("KXBTCD-"):])
+  elif e.startswith("KXBTC-") and not e.startswith("KXBTCD-"):
+    candidates.append("KXBTCD-" + e[len("KXBTC-"):])
+  if e.startswith("KXETHD-"):
+    candidates.append("KXETH-" + e[len("KXETHD-"):])
+  elif e.startswith("KXETH-") and not e.startswith("KXETHD-"):
+    candidates.append("KXETHD-" + e[len("KXETH-"):])
   try:
     from src.assets import asset_cfg
     from src.db.hourly_store import create_hourly_store
 
     acfg = cfg if asset == "btc" else asset_cfg(cfg, asset)
     store = create_hourly_store(acfg, asset=asset)
-    row = store.get_by_event_ticker(event_ticker)
-    if row and row.get("settle_brti") is not None:
-      price = float(row["settle_brti"])
+    for cand in candidates:
+      row = store.get_by_event_ticker(cand)
+      if row and row.get("settle_brti") is not None:
+        price = float(row["settle_brti"])
+        break
   except Exception as e:
     log.warning("Human settle_brti lookup failed for %s %s: %s", asset, event_ticker, e)
     price = None
@@ -824,7 +928,12 @@ def _resolve_human_settlement_exit_cents(
     cents, note = kalshi_res
     return cents, note, None
 
-  hour_settle = _kalshi_expiration_settle_price(kalshi, ticker)
+  hour_settle = _kalshi_expiration_settle_price(
+    kalshi,
+    ticker,
+    event_ticker=event,
+    cache=settle_brti_cache,
+  )
   settle_src = "kalshi expiration_value"
   if hour_settle is None:
     hour_settle = _event_settle_brti(
@@ -1202,8 +1311,13 @@ def repair_orphan_human_paper_enters(
       old_exit = int(existing_exit.get("exit_price_cents") or existing_exit.get("price_cents") or 0)
       old_pnl = float(existing_exit.get("pnl_usd") or 0.0)
       is_scratch = abs(old_pnl) < 0.009 and old_exit == entry_c
-      # Still no official print — leave cash-back alone.
-      if "cash-back @ entry" in note:
+      # Still no official print — leave cash-back alone (will retry next poll).
+      if "cash-back @ entry" in note or "awaiting official result" in note:
+        if is_scratch:
+          log.info(
+            "Human scratch still awaiting settle print for %s (%s)",
+            market, pos_id,
+          )
         continue
       if int(exit_cents) == old_exit and abs(fair_pnl - old_pnl) < 0.009:
         continue
