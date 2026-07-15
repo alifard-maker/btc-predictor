@@ -12,6 +12,7 @@ from src.trading.compare_paper_twins import compare_store_kinds
 from src.trading.human_bot_compare import build_human_bot_compare, export_human_training_rows
 from src.trading.human_hourly_trade import (
   apply_human_settings_body,
+  enrich_open_positions_fast_marks,
   enrich_open_positions_marks,
   execute_manual_enter,
   execute_manual_exit,
@@ -31,6 +32,20 @@ def _human_tab(loop: Any, asset: str) -> dict[str, Any] | None:
       return fn(include_bot=False)
     return None
   return loop.daily_prediction(include_bot=False)
+
+
+def _cached_human_tab(loop: Any, asset: str) -> dict[str, Any] | None:
+  """Latest prediction snapshot only — no rebuild (for fast open-leg marks)."""
+  if asset == "btc":
+    tab = getattr(loop, "latest_hourly_prediction", None)
+  elif asset == "eth":
+    tab = getattr(loop, "latest_eth_hourly_prediction", None)
+  else:
+    preds = getattr(loop, "_latest_hourly_predictions", None) or {}
+    tab = preds.get(asset)
+  if tab and tab.get("ok"):
+    return tab
+  return None
 
 
 def _bot_status_for_compare(
@@ -72,11 +87,21 @@ def register_human_trade_routes(
       bot_status = _bot_status_for_compare(loop, asset, tab, kind)
       status = store.status(event_ticker)
       acfg = asset_cfg(get_cfg(), asset) if asset != "btc" else get_cfg()
-      status["open_positions"] = enrich_open_positions_marks(
-        list(status.get("open_positions") or []),
-        tab if tab and tab.get("ok") else None,
-        cfg=acfg,
-      )
+      open_pos = list(status.get("open_positions") or [])
+      # Prefer live Kalshi marks so /status doesn't regress the fast-mark poll.
+      if open_pos:
+        status["open_positions"] = enrich_open_positions_fast_marks(
+          open_pos,
+          kalshi=loop._kalshi_for(asset),
+          tab=tab if tab and tab.get("ok") else None,
+          cfg=acfg,
+        )
+      else:
+        status["open_positions"] = enrich_open_positions_marks(
+          open_pos,
+          tab if tab and tab.get("ok") else None,
+          cfg=acfg,
+        )
       ur_sum = 0.0
       ur_n = 0
       for p in status["open_positions"]:
@@ -93,6 +118,51 @@ def register_human_trade_routes(
         "status": status,
         "bot_status": bot_status,
         "bot_kind": kind,
+      }
+
+    @app.get(f"{prefix}/human-trades/marks")
+    def human_trades_marks(_: None = Depends(session_dep)):
+      """Fast open-leg marks via Kalshi /markets only (no S1/S2 rebuild)."""
+      from datetime import datetime, timezone
+
+      loop = get_loop()
+      if loop is None:
+        raise HTTPException(503, "Service starting")
+      store = loop.human_trade_store(asset)
+      open_positions = list(store.open_positions())
+      if not open_positions:
+        return {
+          "ok": True,
+          "asset": asset,
+          "open_positions": [],
+          "open_unrealized_pnl_usd": None,
+          "marked_at": datetime.now(timezone.utc).isoformat(),
+          "quote_source": "none",
+        }
+      tab = _cached_human_tab(loop, asset)
+      acfg = asset_cfg(get_cfg(), asset) if asset != "btc" else get_cfg()
+      kalshi = loop._kalshi_for(asset)
+      enriched = enrich_open_positions_fast_marks(
+        open_positions,
+        kalshi=kalshi,
+        tab=tab,
+        cfg=acfg,
+      )
+      ur_sum = 0.0
+      ur_n = 0
+      for p in enriched:
+        if p.get("unrealized_pnl_usd") is not None:
+          ur_sum += float(p["unrealized_pnl_usd"])
+          ur_n += 1
+      return {
+        "ok": True,
+        "asset": asset,
+        "open_positions": enriched,
+        "open_unrealized_pnl_usd": round(ur_sum, 2) if ur_n else None,
+        "open_marked_legs": ur_n,
+        "marked_at": datetime.now(timezone.utc).isoformat(),
+        "quote_source": "kalshi_live",
+        "spot_cached": bool(tab),
       }
 
     @app.get(f"{prefix}/human-trades/compare")

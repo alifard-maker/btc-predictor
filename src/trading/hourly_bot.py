@@ -916,6 +916,16 @@ class HourlyBot:
       pick = _find_contract_in_live(live, pos["market_ticker"])
       if not pick:
         continue
+      # Prefer fresh Kalshi bid/ask over discovery-book quotes (can lag a cycle).
+      if self.kalshi:
+        fresh = _pick_from_kalshi_market(self.kalshi, str(pos["market_ticker"]))
+        if fresh and (
+          fresh.get("yes_bid") is not None or fresh.get("yes_ask") is not None
+        ):
+          pick = dict(pick)
+          for key in ("yes_bid", "yes_ask", "kalshi_mid"):
+            if fresh.get(key) is not None:
+              pick[key] = fresh[key]
 
       regime = live.get("regime") or {}
       exit_fill = paper_exit_fill(pick=pick, side=str(pos["side"]))

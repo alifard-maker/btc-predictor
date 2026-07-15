@@ -158,6 +158,43 @@ def test_enrich_open_positions_marks_unrealized():
   assert enriched[0]["bot_exit_signal"]["alert"] in ("HOLD", "CUT LOSSES", "TAKE PROFIT")
 
 
+def test_enrich_open_positions_kalshi_quote_override():
+  from src.trading.human_hourly_trade import enrich_open_positions_fast_marks
+
+  tab = _tab_with_pick()
+  open_pos = [{
+    "id": "p1",
+    "market_ticker": "KXBTCD-26JUL1518-T64000",
+    "side": "yes",
+    "contracts": 2,
+    "entry_price_cents": 50,
+    "signal": "BUY YES",
+    "strike_type": "greater",
+    "floor_strike": 64000.0,
+  }]
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      assert ticker == "KXBTCD-26JUL1518-T64000"
+      return {
+        "yes_bid_dollars": "0.55",
+        "yes_ask_dollars": "0.57",
+        "title": "≥ $64,000",
+        "strike_type": "greater",
+        "floor_strike": 64000.0,
+      }
+
+  enriched = enrich_open_positions_fast_marks(
+    open_pos,
+    kalshi=_FakeKalshi(),
+    tab=tab,
+    cfg={},
+  )
+  assert enriched[0]["mark_price_cents"] == 55
+  assert enriched[0]["quote_source"] == "kalshi_live"
+  assert enriched[0]["unrealized_pnl_usd"] == 0.10
+
+
 def test_enrich_open_positions_bot_cut_when_spot_against():
   from src.trading.human_hourly_trade import enrich_open_positions_marks
 

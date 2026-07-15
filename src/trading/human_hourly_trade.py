@@ -56,6 +56,8 @@ def enrich_open_positions_marks(
   open_positions: list[dict[str, Any]],
   tab: dict[str, Any] | None,
   cfg: dict[str, Any] | None = None,
+  *,
+  quote_overrides: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
   """Attach mark bid, unrealized P&L, and bot exit signal for open manual legs."""
   from src.trading.hourly_position_alert import assess_held_hourly_position_alert
@@ -75,10 +77,12 @@ def enrich_open_positions_marks(
   except (TypeError, ValueError):
     hours_f = None
   regime = live.get("regime") or {}
+  overrides = {str(k).upper(): v for k, v in (quote_overrides or {}).items()}
   out: list[dict[str, Any]] = []
   for pos in open_positions:
     row = dict(pos)
-    pick = pick_from_tab(tab, str(pos.get("market_ticker") or ""))
+    ticker = str(pos.get("market_ticker") or "")
+    pick = pick_from_tab(tab, ticker)
     if not pick:
       # Fall back to stored strike fields so spot-vs-strike exit advice still works.
       pick = {
@@ -90,12 +94,26 @@ def enrich_open_positions_marks(
         "floor_strike": pos.get("floor_strike"),
         "cap_strike": pos.get("cap_strike"),
       }
+    ov = overrides.get(ticker.upper())
+    if ov:
+      pick = dict(pick)
+      for key in ("yes_bid", "yes_ask", "kalshi_mid", "no_bid", "no_ask"):
+        if ov.get(key) is not None:
+          pick[key] = ov[key]
+      row["quote_source"] = "kalshi_live"
+    else:
+      row["quote_source"] = "prediction_book"
     side = str(pos.get("side") or "yes").lower()
     mark = None
     if pick and (pick.get("yes_bid") is not None or pick.get("kalshi_mid") is not None):
       fill = paper_exit_fill(pick=pick, side=side)
       if fill.get("ok") and fill.get("price_cents") is not None:
         mark = int(fill["price_cents"])
+      row["mark_bid_cents"] = fill.get("bid_cents")
+      row["mark_ask_cents"] = fill.get("ask_cents")
+    else:
+      row["mark_bid_cents"] = None
+      row["mark_ask_cents"] = None
     entry_c = int(pos.get("entry_price_cents") or 0)
     contracts = int(pos.get("contracts") or 0)
     ur = unrealized_leg_pnl_usd(
@@ -127,6 +145,43 @@ def enrich_open_positions_marks(
       }
     out.append(row)
   return out
+
+
+def fetch_kalshi_quote_overrides(
+  open_positions: list[dict[str, Any]],
+  kalshi: Any,
+) -> dict[str, dict[str, Any]]:
+  """Per-ticker Kalshi /markets quotes for open legs only (no full discovery)."""
+  from src.trading.hourly_bot import _pick_from_kalshi_market
+
+  if not kalshi or not open_positions:
+    return {}
+  out: dict[str, dict[str, Any]] = {}
+  for pos in open_positions:
+    ticker = str(pos.get("market_ticker") or "").strip()
+    if not ticker or ticker.upper() in out:
+      continue
+    pick = _pick_from_kalshi_market(kalshi, ticker)
+    if pick:
+      out[ticker.upper()] = pick
+  return out
+
+
+def enrich_open_positions_fast_marks(
+  open_positions: list[dict[str, Any]],
+  *,
+  kalshi: Any,
+  tab: dict[str, Any] | None,
+  cfg: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+  """Fast mark path: live Kalshi bid/ask on held tickers + cached spot for exit advice."""
+  overrides = fetch_kalshi_quote_overrides(open_positions, kalshi)
+  return enrich_open_positions_marks(
+    open_positions,
+    tab,
+    cfg,
+    quote_overrides=overrides,
+  )
 
 
 def pick_from_tab(tab: dict[str, Any] | None, market_ticker: str) -> dict[str, Any] | None:
