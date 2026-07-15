@@ -521,7 +521,8 @@ class HumanTradeStore:
   def status(self, event_ticker: str | None = None) -> dict[str, Any]:
     settings = self.get_settings()
     paper = self.reconcile_paper_bankroll(settings.paper_bankroll_initial_usd)
-    open_pos = self.open_positions(event_ticker) if event_ticker else self.open_positions()
+    open_all = self.open_positions()
+    open_pos = self.open_positions(event_ticker) if event_ticker else list(open_all)
     hour_trades = (
       self.list_trades(limit=50, event_ticker=event_ticker)
       if event_ticker
@@ -529,12 +530,28 @@ class HumanTradeStore:
     )
     recent = self.list_trades(limit=80)
     paper_pnl = self.pnl_summary(mode="paper")
+    open_cost = self.open_paper_cost_usd()
+    initial = float(settings.paper_bankroll_initial_usd)
+    realized = float(paper_pnl.get("realized_pnl_usd") or 0.0)
+    expected = round(max(0.0, initial + realized - open_cost), 2)
+    paper = dict(paper)
+    paper["paper_open_cost_usd"] = open_cost
+    paper["paper_expected_bankroll_usd"] = expected
+    paper["paper_locked_legs"] = len(open_all)
+    # Force heal if ledger drifted (should be rare after reconcile).
+    if abs(float(paper.get("paper_bankroll_usd") or 0) - expected) > 0.009:
+      paper = self.reconcile_paper_bankroll(settings.paper_bankroll_initial_usd)
+      paper = dict(paper)
+      paper["paper_open_cost_usd"] = open_cost
+      paper["paper_expected_bankroll_usd"] = expected
+      paper["paper_locked_legs"] = len(open_all)
     return {
       "settings": settings.to_dict(),
       "paper_bankroll": paper,
       "paper_pnl": paper_pnl,
       "open_positions": open_pos,
       "open_position_count": len(open_pos),
+      "all_open_position_count": len(open_all),
       "hour_trades": hour_trades,
       "recent_trades": recent,
       "paper_recent_trades": [

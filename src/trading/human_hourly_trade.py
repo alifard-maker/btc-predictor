@@ -928,7 +928,10 @@ def settle_expired_human_positions(
     canon = canonical_hourly_event_ticker(event)
     if current and canon == current:
       continue
-    if not hourly_event_has_settled(canon, now=now):
+    # Hour rolled to a new event → prior opens must cash out even if settle-time
+    # parsing fails / is slightly skewed (these were invisible but still locking bankroll).
+    hour_rolled = bool(current and canon != current)
+    if not hour_rolled and not hourly_event_has_settled(canon, now=now):
       continue
 
     settle_at = hourly_event_settle_utc(canon)
@@ -936,29 +939,39 @@ def settle_expired_human_positions(
     if settle_at is not None:
       age_s = (now - settle_at).total_seconds()
       just_rolled = 0 <= age_s <= 10 * 60
+    elif hour_rolled:
+      # Unknown settle clock but new hour is live — treat as rolled for refund path.
+      just_rolled = False
 
     pos = dict(pos)
     pos["event_ticker"] = canon
-    exit_cents, note, used_px = _resolve_human_settlement_exit_cents(
-      pos,
-      asset=asset,
-      cfg=cfg,
-      kalshi=kalshi,
-      live_settle_price=settle_price,
-      just_rolled=just_rolled,
-      settle_brti_cache=settle_brti_cache,
-    )
-    trade = _credit_human_paper_exit(
-      store,
-      pos=pos,
-      exit_cents=exit_cents,
-      note=note,
-      settle_price=used_px if used_px is not None else settle_price,
-      index_id=index_id,
-      cfg=cfg,
-      source="open_leg_rollover",
-    )
-    settled_rows.append(trade)
+    try:
+      exit_cents, note, used_px = _resolve_human_settlement_exit_cents(
+        pos,
+        asset=asset,
+        cfg=cfg,
+        kalshi=kalshi,
+        live_settle_price=settle_price,
+        just_rolled=just_rolled,
+        settle_brti_cache=settle_brti_cache,
+      )
+      trade = _credit_human_paper_exit(
+        store,
+        pos=pos,
+        exit_cents=exit_cents,
+        note=note,
+        settle_price=used_px if used_px is not None else settle_price,
+        index_id=index_id,
+        cfg=cfg,
+        source="open_leg_rollover",
+      )
+      settled_rows.append(trade)
+    except Exception as e:
+      log.exception(
+        "Human open-leg settlement failed for %s: %s",
+        pos.get("market_ticker"),
+        e,
+      )
 
   # Repair orphan paper enters (visible as EXIT — in the log): still funded,
   # but no exit / bankroll credit after the hour UI scrolled away.
@@ -1032,7 +1045,8 @@ def repair_orphan_human_paper_enters(
       continue
     if current and event == current:
       continue
-    if not hourly_event_has_settled(event, now=now):
+    hour_rolled = bool(current and event != current)
+    if not hour_rolled and not hourly_event_has_settled(event, now=now):
       continue
 
     existing_exit = exits_by_pos.get(pid)

@@ -2795,7 +2795,12 @@
       if (bankrollEl) {
         if (mode === 'paper' && pb.paper_bankroll_usd != null) {
           bankrollEl.style.display = '';
-          bankrollEl.innerHTML = `Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong>`;
+          const locked = Number(pb.paper_open_cost_usd || 0);
+          const lockedN = Number(st.all_open_position_count || pb.paper_locked_legs || 0);
+          const lockTxt = locked > 0.009
+            ? ` <span class="muted">($${locked.toFixed(2)} still locked in ${lockedN} open)</span>`
+            : '';
+          bankrollEl.innerHTML = `Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong>${lockTxt}`;
         } else {
           bankrollEl.style.display = 'none';
         }
@@ -2916,7 +2921,7 @@
           </label>
           ${spotHtml}
           <span id="human-open-meta-${asset}" class="muted" style="font-size:.72rem">Stake ≤ $${Number(settings.max_stake_per_entry_usd || 2.5).toFixed(2)} · Open ${open.length}/${settings.max_open_positions || 20}</span>
-          <span id="human-paper-bankroll-${asset}" class="muted" style="font-size:.72rem;${mode === 'paper' && pb.paper_bankroll_usd != null ? '' : 'display:none'}">${mode === 'paper' && pb.paper_bankroll_usd != null ? `Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong>` : ''}</span>
+          <span id="human-paper-bankroll-${asset}" class="muted" style="font-size:.72rem;${mode === 'paper' && pb.paper_bankroll_usd != null ? '' : 'display:none'}">${mode === 'paper' && pb.paper_bankroll_usd != null ? `Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong>${Number(pb.paper_open_cost_usd || 0) > 0.009 ? ` <span class="muted">($${Number(pb.paper_open_cost_usd).toFixed(2)} still locked in ${Number(st.all_open_position_count || pb.paper_locked_legs || 0)} open)</span>` : ''}` : ''}</span>
         </div>
         <div class="cal-stats" style="margin-bottom:.55rem">
           <div><span>Paper realized</span><strong id="human-paper-realized-${asset}" class="${pnlCls(Number(realized || 0))}">${fmtPnl(realized)}</strong></div>

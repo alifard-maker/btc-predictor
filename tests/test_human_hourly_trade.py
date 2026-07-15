@@ -371,6 +371,58 @@ def test_stuck_open_leg_gets_cash_and_win(tmp_path: Path):
   assert abs(bank["paper_bankroll_usd"] - 100.87) < 0.02
 
 
+def test_hour_rolled_settles_even_if_settle_clock_unparsed(tmp_path: Path, monkeypatch):
+  """Prior-hour opens must unlock bankroll whenever a new hour is live."""
+  from src.trading import human_hourly_trade as hht
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  store.debit_paper_for_entry(5.0, 100.0)
+  pos = store.open_position({
+    "event_ticker": "KXBTCD-26JUL1516",
+    "market_ticker": "KXBTCD-26JUL1516-T65000",
+    "side": "no",
+    "contracts": 5,
+    "entry_price_cents": 100,
+    "cost_usd": 5.0,
+    "label": "$65,000 or above",
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 65000.0,
+    "mode": "paper",
+  })
+  # Pretend settle-time check fails (would previously leave capital locked forever).
+  monkeypatch.setattr(
+    "src.trading.hourly_event_time.hourly_event_has_settled",
+    lambda *_a, **_k: False,
+  )
+  monkeypatch.setattr(
+    "src.trading.hourly_event_time.hourly_event_settle_utc",
+    lambda *_a, **_k: None,
+  )
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      return {"result": "no"}
+
+  stuck = store.reconcile_paper_bankroll(100.0)
+  assert abs(stuck["paper_bankroll_usd"] - 95.0) < 0.02
+  rows = hht.settle_expired_human_positions(
+    store,
+    current_event_ticker="KXBTCD-26JUL1517",
+    settle_price=None,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    kalshi=_FakeKalshi(),
+    asset="btc",
+  )
+  assert len(rows) == 1
+  assert rows[0]["exit_price_cents"] == 100
+  bank = store.reconcile_paper_bankroll(100.0)
+  assert store.open_positions() == []
+  # entry was 100¢ so win pnl = 0, capital returned → $100
+  assert abs(bank["paper_bankroll_usd"] - 100.0) < 0.02
+  assert pos["id"]
+
+
 def test_settle_expired_skips_current_hour(tmp_path: Path):
   from src.trading.human_hourly_trade import settle_expired_human_positions
 
