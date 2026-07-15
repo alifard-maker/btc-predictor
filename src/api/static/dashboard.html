@@ -708,6 +708,12 @@
         <h2>Hourly prediction history</h2>
         <div style="overflow-x:auto" id="hourly-history"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="human-trades-card">
+        <h2>Manual trading (you)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Follow dashboard signals and <strong>buy/sell from this tab</strong> while auto-bots keep running. Paper or live (live needs password). Each click logs features + bot counterfactual for later tuning.</p>
+        <div id="human-trades-panel"><p class="muted">Loading…</p></div>
+        <div id="human-bot-compare-panel" style="margin-top:.75rem"></div>
+      </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
         <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>BUY YES / BUY NO</strong> = explicit Kalshi leg when model direction and edge agree. <strong>VALUE YES</strong> = cheap OTM tail; <strong>FADE YES</strong> = Kalshi overpriced vs model on a likely leg.</p>
@@ -755,6 +761,12 @@
       <div class="card">
         <h2>Hourly prediction history</h2>
         <div style="overflow-x:auto" id="eth-hourly-history"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="eth-human-trades-card">
+        <h2>Manual trading (you)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Follow dashboard signals and <strong>buy/sell from this tab</strong> while auto-bots keep running. Paper or live (live needs password). Each click logs features + bot counterfactual for later tuning.</p>
+        <div id="eth-human-trades-panel"><p class="muted">Loading…</p></div>
+        <div id="eth-human-bot-compare-panel" style="margin-top:.75rem"></div>
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
@@ -1507,6 +1519,22 @@
       } finally {
         clearTimeout(timer);
       }
+    }
+
+    async function postJson(path, body) {
+      const r = await fetch(path, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
+      if (r.status === 401) {
+        window.location.href = '/login';
+        throw new Error('Unauthorized');
+      }
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || data.error || (r.status + ' ' + path));
+      return data;
     }
 
     function showError(msg) {
@@ -2633,6 +2661,180 @@
       }
     }
 
+    const humanTradesCache = { btc: null, eth: null };
+
+    function humanTradesApi(asset) {
+      return asset === 'eth' ? '/api/eth/hourly/human-trades' : '/api/hourly/human-trades';
+    }
+
+    function humanTradesPanelId(asset) {
+      return asset === 'eth' ? 'eth-human-trades-panel' : 'human-trades-panel';
+    }
+
+    function humanComparePanelId(asset) {
+      return asset === 'eth' ? 'eth-human-bot-compare-panel' : 'human-bot-compare-panel';
+    }
+
+    function humanOpenPositionForTicker(asset, ticker, side) {
+      const st = humanTradesCache[asset];
+      const open = (st && st.status && st.status.open_positions) || [];
+      const t = String(ticker || '').toUpperCase();
+      const s = String(side || '').toLowerCase();
+      return open.find(p => String(p.market_ticker || '').toUpperCase() === t && String(p.side || '').toLowerCase() === s) || null;
+    }
+
+    function renderHumanTradeActions(r, asset) {
+      if (asset !== 'btc' && asset !== 'eth') return '<span class="muted">—</span>';
+      const ticker = String(r.ticker || '');
+      if (!ticker) return '<span class="muted">—</span>';
+      const esc = ticker.replace(/"/g, '&quot;');
+      const yesPos = humanOpenPositionForTicker(asset, ticker, 'yes');
+      const noPos = humanOpenPositionForTicker(asset, ticker, 'no');
+      const parts = [];
+      if (yesPos) {
+        parts.push(`<button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" onclick="humanManualExit('${asset}','${yesPos.id}')">Sell YES</button>`);
+      } else if (isBuyYes(r.signal)) {
+        parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="yes" onclick="humanManualEnter(this,'${asset}')">Buy YES</button>`);
+      }
+      if (noPos) {
+        parts.push(`<button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" onclick="humanManualExit('${asset}','${noPos.id}')">Sell NO</button>`);
+      } else if (isBuyNo(r.signal)) {
+        parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="no" onclick="humanManualEnter(this,'${asset}')">Buy NO</button>`);
+      }
+      return parts.length ? parts.join(' ') : '<span class="muted" style="font-size:.68rem">—</span>';
+    }
+
+    function renderHumanTradesPanel(asset, payload) {
+      const el = $(humanTradesPanelId(asset));
+      if (!el) return;
+      if (!payload || !payload.ok) {
+        el.innerHTML = `<p class="muted" style="font-size:.78rem">${payload?.error || 'Manual trading unavailable'}</p>`;
+        return;
+      }
+      const st = payload.status || {};
+      const settings = st.settings || {};
+      const pb = st.paper_bankroll || {};
+      const open = st.open_positions || [];
+      const mode = settings.mode || 'paper';
+      el.innerHTML = `
+        <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.5rem">
+          <label style="font-size:.75rem">Mode
+            <select id="human-mode-${asset}" style="margin-left:.25rem" onchange="humanSaveSettings('${asset}')">
+              <option value="paper" ${mode === 'paper' ? 'selected' : ''}>Paper</option>
+              <option value="live" ${mode === 'live' ? 'selected' : ''}>Live</option>
+            </select>
+          </label>
+          <span class="muted" style="font-size:.72rem">Stake ≤ $${Number(settings.max_stake_per_entry_usd || 2.5).toFixed(2)} · Open ${open.length}/${settings.max_open_positions || 20}</span>
+          ${mode === 'paper' && pb.paper_bankroll_usd != null ? `<span class="muted" style="font-size:.72rem">Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong></span>` : ''}
+        </div>
+        ${open.length ? `<div style="font-size:.72rem;margin-bottom:.35rem"><strong>Open legs</strong></div>
+          <ul style="list-style:none;padding:0;margin:0;font-size:.72rem">${open.map(p => `
+            <li style="margin:.2rem 0">${p.label || p.market_ticker} · ${String(p.side).toUpperCase()} ×${p.contracts} @ ${p.entry_price_cents}¢
+              <button type="button" class="btn-secondary" style="font-size:.6rem;padding:.1rem .35rem;margin-left:.35rem" onclick="humanManualExit('${asset}','${p.id}')">Sell</button>
+            </li>`).join('')}</ul>` : '<p class="muted" style="font-size:.72rem">No open manual legs — use Buy buttons on contract rows below.</p>'}
+      `;
+    }
+
+    function renderHumanBotCompare(asset, data) {
+      const el = $(humanComparePanelId(asset));
+      if (!el) return;
+      if (!data || !data.ok) {
+        el.innerHTML = '';
+        return;
+      }
+      const hs = data.human_summary || {};
+      const bs = data.bot_summary || {};
+      const lr = data.learning_ready || {};
+      el.innerHTML = `
+        <details style="font-size:.75rem">
+          <summary><strong>Human vs bot</strong> (${data.pairing?.paired_count || 0} paired · ${data.human_only_entries || 0} human-only · ${data.bot_only_entries || 0} bot-only)</summary>
+          <div class="cal-stats" style="margin-top:.45rem">
+            <div><span>Human enters</span><strong>${lr.human_enters || 0}</strong></div>
+            <div><span>Human $/leg</span><strong>${hs.avg_pnl_usd != null ? signedPrice(hs.avg_pnl_usd) : '—'}</strong></div>
+            <div><span>Bot $/leg</span><strong>${bs.avg_pnl_usd != null ? signedPrice(bs.avg_pnl_usd) : '—'}</strong></div>
+            <div><span>Bucket tune</span><strong>${lr.sufficient_for_buckets ? 'ready' : 'need 30+'}</strong></div>
+          </div>
+        </details>`;
+    }
+
+    async function loadHumanTrades(asset) {
+      if (asset !== 'btc' && asset !== 'eth') return;
+      try {
+        const [status, compare] = await Promise.all([
+          getWithTimeout(`${humanTradesApi(asset)}/status`, 12000),
+          getWithTimeout(`${humanTradesApi(asset)}/compare`, 12000),
+        ]);
+        humanTradesCache[asset] = status;
+        renderHumanTradesPanel(asset, status);
+        renderHumanBotCompare(asset, compare);
+      } catch (e) {
+        renderHumanTradesPanel(asset, { ok: false, error: e.message });
+      }
+    }
+
+    async function humanSaveSettings(asset) {
+      const sel = $(`human-mode-${asset}`);
+      if (!sel) return;
+      const body = { mode: sel.value };
+      if (body.mode === 'live') {
+        const pw = promptLivePassword();
+        if (!pw) { await loadHumanTrades(asset); return; }
+        body.live_password = pw;
+      }
+      try {
+        await postJson(`${humanTradesApi(asset)}/settings`, body);
+        await loadHumanTrades(asset);
+        if (isHourlyTab(activeTab)) await loadDaily();
+      } catch (e) {
+        alert(e.message || 'Settings failed');
+        await loadHumanTrades(asset);
+      }
+    }
+
+    async function humanManualEnter(btn, asset) {
+      const ticker = btn.dataset.ticker;
+      const side = btn.dataset.side;
+      if (!ticker || !side) return;
+      const st = humanTradesCache[asset];
+      const mode = (st && st.status && st.status.settings && st.status.settings.mode) || 'paper';
+      const body = { market_ticker: ticker, side, mode };
+      if (mode === 'live') {
+        const pw = promptLivePassword();
+        if (!pw) return;
+        body.live_password = pw;
+      }
+      btn.disabled = true;
+      try {
+        const out = await postJson(`${humanTradesApi(asset)}/enter`, body);
+        humanTradesCache[asset] = { ok: true, status: out.status };
+        renderHumanTradesPanel(asset, humanTradesCache[asset]);
+        await loadHumanTrades(asset);
+        if (isHourlyTab(activeTab)) await loadDaily();
+      } catch (e) {
+        alert(e.message || 'Enter failed');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function humanManualExit(asset, positionId) {
+      const st = humanTradesCache[asset];
+      const mode = (st && st.status && st.status.settings && st.status.settings.mode) || 'paper';
+      const body = { position_id: positionId };
+      if (mode === 'live') {
+        const pw = promptLivePassword();
+        if (!pw) return;
+        body.live_password = pw;
+      }
+      try {
+        await postJson(`${humanTradesApi(asset)}/exit`, body);
+        await loadHumanTrades(asset);
+        if (isHourlyTab(activeTab)) await loadDaily();
+      } catch (e) {
+        alert(e.message || 'Exit failed');
+      }
+    }
+
     function contractSignalCls(sig) {
       return signalEdgeCls(sig);
     }
@@ -2641,12 +2843,14 @@
       const tags = highlightLabels || {};
       const el = h$(containerId);
       if (!el) return;
+      const asset = hourlyAssetForTab(activeTab);
+      const showTrade = asset === 'btc' || asset === 'eth';
       if (!rows || !rows.length) {
         el.innerHTML = '<p class="muted">No contracts in this book.</p>';
         return;
       }
       el.innerHTML = `<table>
-        <thead><tr><th>Contract</th><th>Model</th><th>Kalshi</th><th>Edge</th><th>Signal</th></tr></thead>
+        <thead><tr><th>Contract</th><th>Model</th><th>Kalshi</th><th>Edge</th><th>Signal</th>${showTrade ? '<th>Trade</th>' : ''}</tr></thead>
         <tbody>${rows.map(r => {
           const edge = r.edge != null ? (r.edge >= 0 ? '+' : '') + (r.edge * 100).toFixed(1) + '¢' : '—';
           const edgeCls = contractSignalCls(r.signal);
@@ -2658,12 +2862,14 @@
           const pricedIn = r.model_prob > 0.88;
           if (farOtm && r.signal === 'NEUTRAL') tag += ' <span class="badge muted" style="font-size:.65rem">low predictability</span>';
           if (pricedIn && r.signal === 'NEUTRAL') tag += ' <span class="badge muted" style="font-size:.65rem">priced in · no edge</span>';
+          const tradeCell = showTrade ? `<td>${renderHumanTradeActions(r, asset)}</td>` : '';
           return `<tr>
             <td style="font-size:.78rem">${r.label}${tag}</td>
             <td class="up">${pct(r.model_prob)}</td>
             <td>${r.kalshi_mid != null ? pct(r.kalshi_mid) : '—'}</td>
             <td class="${edgeCls}">${edge}</td>
             <td>${r.signal}</td>
+            ${tradeCell}
           </tr>`;
         }).join('')}</tbody></table>`;
     }
@@ -6543,6 +6749,8 @@
         locked: (rangeRg.recommendations || []).find(r => r.tier === 'locked')?.label,
       });
       renderDailyStructure(live.structure);
+      const htAsset = hourlyAssetForTab(activeTab);
+      if (htAsset === 'btc' || htAsset === 'eth') loadHumanTrades(htAsset);
     }
 
     async function loadSlot15Bot(predictionBot) {

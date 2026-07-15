@@ -186,10 +186,26 @@ def run_index_hourly_live_bot_continuous(loop: Any, asset: str) -> None:
   asset = asset.lower()
   if not asset_enabled(loop.cfg, asset):
     return
+  from src.trading.index_live_experiment import (
+    disable_index_live_store_if_not_armed,
+    index_live_runtime_allows_trading,
+  )
+
   acfg = acfg_for(loop, asset)
+  store = loop.hourly_bot_store(asset, kind="hourly_live")
+  if not index_live_runtime_allows_trading(loop.cfg, asset):
+    disable_index_live_store_if_not_armed(
+      store,
+      loop.cfg,
+      asset,
+      source="index_live_continuous_gate",
+    )
+    store.set_last_skip_reason("index_live_not_armed")
+    store.record_cycle(active=False)
+    return
   if not index_trading_allowed(acfg):
-    store = loop.hourly_bot_store(asset, kind="hourly_live")
     store.set_last_skip_reason("outside_market_hours")
+    store.record_cycle(active=False)
     return
   loop._run_hourly_bot_continuous(asset, kind="hourly_live")
 

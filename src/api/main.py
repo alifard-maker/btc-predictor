@@ -2656,3 +2656,12 @@ register_sports_routes(
   lambda: _cfg,
   _session_user,
 )
+
+from src.api.human_trade_routes import register_human_trade_routes
+
+register_human_trade_routes(
+  app,
+  get_loop=lambda: _loop,
+  get_cfg=lambda: _cfg,
+  session_dep=_session_user,
+)

@@ -90,10 +90,61 @@ def test_export_scaffold_writes_per_bot_csv(tmp_path):
   stats = export_kalshi_wallet_live_trades(cfg, None, dest)
   assert (dest / "btc_hourly" / "trades.csv").exists()
   assert (dest / "eth_hourly" / "trades.csv").exists()
+  assert (dest / "btc_hourly_human" / "trades.csv").exists()
+  assert (dest / "eth_hourly_human" / "trades.csv").exists()
   assert (dest / "kalshi_other" / "trades.csv").exists()
   assert (dest / "TAX_README.txt").exists()
   assert stats.get("ok") is False
   assert stats.get("reason") == "kalshi_not_authenticated"
+
+
+def test_build_live_kalshi_order_bot_map_includes_human(tmp_path):
+  import sqlite3
+
+  data = tmp_path / "data"
+  cfg = {"paths": {"logs": str(data / "logs")}}
+  human_db = data / "logs" / "human_trades_btc.db"
+  human_db.parent.mkdir(parents=True)
+  conn = sqlite3.connect(human_db)
+  conn.executescript(
+    """
+    CREATE TABLE human_trades (
+      id TEXT PRIMARY KEY,
+      mode TEXT,
+      action TEXT,
+      kalshi_order_id TEXT
+    );
+    INSERT INTO human_trades VALUES ('1', 'live', 'enter', 'human-order-1');
+    INSERT INTO human_trades VALUES ('2', 'live', 'exit', 'human-order-2');
+    INSERT INTO human_trades VALUES ('3', 'paper', 'enter', 'human-order-3');
+    """
+  )
+  conn.close()
+  mapping = build_live_kalshi_order_bot_map(cfg)
+  assert mapping["human-order-1"] == "btc_hourly_human"
+  assert "human-order-2" not in mapping
+  assert "human-order-3" not in mapping
+
+
+def test_attribute_human_order_id(tmp_path):
+  leg = {
+    "ticker": "KXBTCD-1",
+    "side": "yes",
+    "category": "BTC hourly",
+    "contracts": 5,
+    "entry_cents": 40,
+    "exit_cents": 55,
+    "cost_usd": 2.0,
+    "pnl_usd": 0.75,
+    "buy_at": datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc),
+    "exit_at": datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
+    "exit_type": "SELL",
+    "buy_order_id": "human-order-1",
+  }
+  order_map = {"human-order-1": "btc_hourly_human"}
+  rows = attribute_closed_leg_to_bots(leg, [], order_map)
+  assert len(rows) == 1
+  assert rows[0][0] == "btc_hourly_human"
 
 
 def test_build_live_kalshi_order_bot_map(tmp_path):

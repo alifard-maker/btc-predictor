@@ -107,6 +107,48 @@ HOURLY_BOT_KINDS_BY_ASSET: dict[str, tuple[str, ...]] = {
 SLOT15_ASSETS = ("btc", "eth")
 BACKUP_ASSETS = tuple(HOURLY_BOT_KINDS_BY_ASSET.keys())
 SLOT15_TRIAL_KIND = "slot15_trial"
+HUMAN_TAX_ASSETS = ("btc", "eth")
+
+
+def human_tax_bot_label(asset: str) -> str:
+  return f"{asset.lower()}_hourly_human"
+
+
+def human_trade_db_specs(cfg: dict[str, Any]) -> list[tuple[str, Path]]:
+  """(asset, db_path) for dashboard manual hourly trade stores."""
+  data_dir = Path(cfg["paths"]["logs"]).parent
+  specs: list[tuple[str, Path]] = []
+  for asset in HUMAN_TAX_ASSETS:
+    logs = _asset_logs_dir(data_dir, asset)
+    specs.append((asset, logs / f"human_trades_{asset}.db"))
+  return specs
+
+
+HUMAN_TRADE_COLUMNS = [
+  "id",
+  "event_ticker",
+  "action",
+  "mode",
+  "market_ticker",
+  "side",
+  "contracts",
+  "price_cents",
+  "entry_price_cents",
+  "exit_price_cents",
+  "cost_usd",
+  "pnl_usd",
+  "signal",
+  "label",
+  "status",
+  "detail",
+  "kalshi_order_id",
+  "position_id",
+  "entry_bid_cents",
+  "entry_ask_cents",
+  "entry_spread_cents",
+  "entry_context_json",
+  "created_at",
+]
 
 
 def _asset_logs_dir(data_dir: Path, asset: str) -> Path:
@@ -189,6 +231,71 @@ def _file_sha256(path: Path) -> str | None:
     for chunk in iter(lambda: f.read(65536), b""):
       h.update(chunk)
   return h.hexdigest()
+
+
+def _rows_from_human_db(db_path: Path, mode: str) -> list[dict[str, Any]]:
+  if not db_path.exists():
+    return []
+  conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+  conn.row_factory = sqlite3.Row
+  try:
+    rows = conn.execute(
+      "SELECT * FROM human_trades WHERE mode = ? ORDER BY created_at ASC",
+      (mode,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+  except sqlite3.Error:
+    return []
+  finally:
+    conn.close()
+
+
+def _human_trade_counts(db_path: Path) -> dict[str, int]:
+  if not db_path.exists():
+    return {}
+  conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+  try:
+    rows = conn.execute(
+      "SELECT mode, COUNT(*) FROM human_trades GROUP BY mode",
+    ).fetchall()
+    return {str(m): int(c) for m, c in rows}
+  except sqlite3.Error:
+    return {}
+  finally:
+    conn.close()
+
+
+def _write_human_csv(rows: list[dict[str, Any]], path: Path) -> None:
+  path.parent.mkdir(parents=True, exist_ok=True)
+  with open(path, "w", newline="", encoding="utf-8") as f:
+    w = csv.DictWriter(f, fieldnames=HUMAN_TRADE_COLUMNS, extrasaction="ignore")
+    w.writeheader()
+    for row in rows:
+      w.writerow({k: row.get(k) for k in HUMAN_TRADE_COLUMNS})
+
+
+def _export_human_log_trades(
+  cfg: dict[str, Any],
+  *,
+  mode: str,
+  dest: Path,
+  csv_name: str = "human_log_trades.csv",
+  all_csv_name: str | None = None,
+) -> dict[str, Any]:
+  """Export human manual trade SQLite logs (strategy ledger; live taxes use trades.csv)."""
+  all_rows: list[dict[str, Any]] = []
+  per_bot: dict[str, int] = {}
+  for asset, db_path in human_trade_db_specs(cfg):
+    rows = _rows_from_human_db(db_path, mode)
+    label = human_tax_bot_label(asset)
+    per_bot[label] = len(rows)
+    if rows:
+      _write_human_csv(rows, dest / label / csv_name)
+      all_rows.extend(rows)
+  if all_rows:
+    all_rows.sort(key=lambda r: str(r.get("created_at") or ""))
+    _write_human_csv(all_rows, dest / (all_csv_name or "all_human_log_trades.csv"))
+  return {"mode": mode, "total_trades": len(all_rows), "per_bot": per_bot, "source": "human_log"}
 
 
 def _rows_from_db(db_path: Path, mode: str) -> list[dict[str, Any]]:
@@ -306,12 +413,19 @@ def _export_mode_trades(
       csv_name="bot_log_trades.csv",
       all_csv_name="all_bot_log_trades.csv",
     )
+    human_log_stats = _export_human_log_trades(
+      cfg,
+      mode="live",
+      dest=dest,
+      csv_name="human_log_trades.csv",
+      all_csv_name="all_human_log_trades.csv",
+    )
     kalshi_stats = export_kalshi_wallet_live_trades(
       cfg,
       kalshi or _optional_kalshi_client(cfg),
       dest,
     )
-    return {**kalshi_stats, "bot_log": bot_log_stats}
+    return {**kalshi_stats, "bot_log": bot_log_stats, "human_log": human_log_stats}
 
   return _export_bot_log_trades(cfg, mode=mode, dest=dest)
 
@@ -372,6 +486,10 @@ def run_full_backup(cfg: dict[str, Any], *, reason: str = "scheduled", kalshi: A
         if db_path.exists():
           rel = f"{asset}/logs/{db_path.name}"
           _sqlite_backup(db_path, full_dir / rel)
+      for asset, db_path in human_trade_db_specs(cfg):
+        if db_path.exists():
+          rel = f"{asset}/logs/{db_path.name}"
+          _sqlite_backup(db_path, full_dir / rel)
 
       cal_dest = snap_dir / "calibration"
       cal_files = _copy_calibration_files(cfg, cal_dest)
@@ -385,6 +503,8 @@ def run_full_backup(cfg: dict[str, Any], *, reason: str = "scheduled", kalshi: A
       bot_counts: dict[str, dict[str, int]] = {}
       for asset, kind, db_path in bot_db_specs(cfg):
         bot_counts[f"{asset}_{kind}"] = _trade_counts(db_path)
+      for asset, db_path in human_trade_db_specs(cfg):
+        bot_counts[human_tax_bot_label(asset)] = _human_trade_counts(db_path)
 
       manifest = {
         "backed_up_at": datetime.now(timezone.utc).isoformat(),
@@ -542,6 +662,23 @@ def tax_export_status(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "trades_csv": tax_csv.exists(),
         "bot_log_csv": bot_log.exists(),
         "kalshi_wallet_rows": row_count,
+      }
+    for asset, _db_path in human_trade_db_specs(full_cfg):
+      label = human_tax_bot_label(asset)
+      tax_csv = live_dir / label / "trades.csv"
+      human_log = live_dir / label / "human_log_trades.csv"
+      row_count = 0
+      if tax_csv.exists():
+        try:
+          with open(tax_csv, encoding="utf-8") as f:
+            row_count = max(0, sum(1 for _ in f) - 1)
+        except OSError:
+          pass
+      per_bot[label] = {
+        "trades_csv": tax_csv.exists(),
+        "human_log_csv": human_log.exists(),
+        "kalshi_wallet_rows": row_count,
+        "actor": "dashboard_manual",
       }
     other = live_dir / "kalshi_other" / "trades.csv"
     other_rows = 0

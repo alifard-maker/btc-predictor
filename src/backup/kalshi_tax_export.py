@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.backup.logs_backup import bot_db_specs
+from src.backup.logs_backup import bot_db_specs, human_tax_bot_label, human_trade_db_specs
 from src.data.kalshi import KalshiClient
 from src.trading.kalshi_portfolio_pnl import PNL_SOURCE_KALSHI_WALLET, portfolio_activity_from_kalshi
 
@@ -83,12 +83,40 @@ def _rows_from_db(db_path: Path, mode: str) -> list[dict[str, Any]]:
     conn.close()
 
 
+def _human_order_rows_from_db(db_path: Path, mode: str) -> list[dict[str, Any]]:
+  if not db_path.exists():
+    return []
+  import sqlite3
+
+  conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+  conn.row_factory = sqlite3.Row
+  try:
+    rows = conn.execute(
+      """
+      SELECT kalshi_order_id FROM human_trades
+      WHERE mode = ? AND kalshi_order_id IS NOT NULL AND action = 'enter'
+      """,
+      (mode,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+  except sqlite3.Error:
+    return []
+  finally:
+    conn.close()
+
+
 def build_live_kalshi_order_bot_map(cfg: dict[str, Any]) -> dict[str, str]:
-  """Map Kalshi order_id → bot label (e.g. eth_hourly) from live bot logs."""
+  """Map Kalshi order_id → bot label (e.g. eth_hourly, btc_hourly_human) from live logs."""
   mapping: dict[str, str] = {}
   for asset, kind, db_path in bot_db_specs(cfg):
     label = f"{asset}_{kind}"
     for row in _rows_from_db(db_path, "live"):
+      oid = str(row.get("kalshi_order_id") or "").strip()
+      if oid:
+        mapping[oid] = label
+  for asset, db_path in human_trade_db_specs(cfg):
+    label = human_tax_bot_label(asset)
+    for row in _human_order_rows_from_db(db_path, "live"):
       oid = str(row.get("kalshi_order_id") or "").strip()
       if oid:
         mapping[oid] = label
@@ -175,6 +203,11 @@ def write_tax_export_scaffold(cfg: dict[str, Any], dest: Path) -> list[str]:
     path = dest / label / "trades.csv"
     _write_kalshi_tax_csv([], path)
     written.append(str(path.relative_to(dest)))
+  for asset, _db_path in human_trade_db_specs(cfg):
+    label = human_tax_bot_label(asset)
+    path = dest / label / "trades.csv"
+    _write_kalshi_tax_csv([], path)
+    written.append(str(path.relative_to(dest)))
   other_path = dest / OTHER_BOT_LABEL / "trades.csv"
   _write_kalshi_tax_csv([], other_path)
   written.append(str(other_path.relative_to(dest)))
@@ -189,15 +222,19 @@ def write_tax_readme(dest: Path) -> None:
 
 Each subfolder is one bot lane. Open trades.csv inside:
 
-  btc_hourly/trades.csv     — BTC hourly live (Kalshi wallet P&L)
-  eth_hourly/trades.csv     — ETH hourly live
+  btc_hourly/trades.csv     — BTC hourly live auto-bot (Kalshi wallet P&L)
+  eth_hourly/trades.csv     — ETH hourly live auto-bot
+  btc_hourly_human/trades.csv — BTC hourly manual dashboard trades (you)
+  eth_hourly_human/trades.csv  — ETH hourly manual dashboard trades (you)
   btc_slot15/trades.csv     — BTC 15m
   eth_slot15/trades.csv     — ETH 15m
-  kalshi_other/trades.csv   — Sports / manual / unattributed wallet legs
+  kalshi_other/trades.csv   — Sports / other unattributed wallet legs
 
 Column pnl_source is always kalshi_wallet (NOT bot SQLite).
 
-bot_log_trades.csv (if present) is strategy DB only — do not use for taxes.
+bot_log_trades.csv — auto-bot strategy DB only — do not use for taxes.
+human_log_trades.csv — manual trade ledger (features + bot counterfactual at click).
+  Use trades.csv in *_hourly_human/ for tax P&L; human_log is audit/supporting detail.
 
 Refresh: scheduled every 15 min on Railway, or:
   python3 scripts/backup_logs.py
@@ -246,6 +283,14 @@ def export_kalshi_wallet_live_trades(
   per_bot_counts: dict[str, int] = {}
   for asset, kind, _db_path in bot_db_specs(cfg):
     label = f"{asset}_{kind}"
+    rows = per_bot.get(label, [])
+    rows.sort(key=lambda r: str(r.get("exit_at") or ""))
+    per_bot_counts[label] = len(rows)
+    _write_kalshi_tax_csv(rows, dest / label / "trades.csv")
+    all_rows.extend(rows)
+
+  for asset, _db_path in human_trade_db_specs(cfg):
+    label = human_tax_bot_label(asset)
     rows = per_bot.get(label, [])
     rows.sort(key=lambda r: str(r.get("exit_at") or ""))
     per_bot_counts[label] = len(rows)

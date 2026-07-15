@@ -130,16 +130,54 @@ def disarm_index_live_mirror(
   return {"ok": True, "asset": asset, "disarmed": True, "enabled": False}
 
 
+def disable_index_live_store_if_not_armed(
+  store: Any,
+  cfg: dict[str, Any] | None,
+  asset: str,
+  *,
+  source: str = "index_live_runtime_gate",
+) -> dict[str, Any]:
+  """Disable hourly_live auto-bet when runtime arm flag is off (store/store drift guard)."""
+  asset = asset.lower()
+  if index_live_runtime_armed(cfg, asset):
+    return {"ok": True, "skipped": True, "reason": "runtime_armed", "asset": asset}
+  cur = store.get_settings()
+  if not cur.enabled:
+    return {"ok": True, "unchanged": True, "asset": asset, "enabled": False}
+  from src.trading.hourly_bot_store import HourlyBotSettings
+
+  merged = {**cur.to_dict(), "enabled": False}
+  store.save_settings(HourlyBotSettings.from_dict(merged), source=source)
+  return {"ok": True, "asset": asset, "enabled": False, "store_disabled": True}
+
+
+def index_live_runtime_allows_trading(cfg: dict[str, Any] | None, asset: str) -> bool:
+  """True only when dashboard/runtime arm is on — not yaml live_mirror.enabled alone."""
+  return index_live_runtime_armed(cfg, asset)
+
+
+def ensure_index_live_store_matches_runtime(
+  loop: Any,
+  cfg: dict[str, Any] | None,
+  asset: str,
+  *,
+  source: str = "index_live_runtime_sync",
+) -> dict[str, Any]:
+  """Align hourly_live store with runtime arm — arm seeds live, disarm disables store."""
+  asset = asset.lower()
+  store = loop.hourly_bot_store(asset, kind="hourly_live")
+  if index_live_runtime_armed(cfg, asset):
+    return sync_index_live_store_if_armed(loop, cfg, asset, source=source)
+  return disable_index_live_store_if_not_armed(store, cfg, asset, source=source)
+
+
 def ensure_index_live_experiments(loop: Any) -> dict[str, Any]:
-  """Seed SPX/NDX hourly_live stores when live mirror is armed."""
+  """Seed SPX/NDX hourly_live stores when runtime arm is on; disable when off."""
   results: dict[str, Any] = {}
   for asset in INDEX_ASSETS:
     if not asset_enabled(loop.cfg, asset):
       continue
-    if not index_live_mirror_active(loop.cfg, asset):
-      results[asset] = {"ok": True, "skipped": True, "reason": "live_mirror_disabled"}
-      continue
-    results[asset] = sync_index_live_store_if_armed(
+    results[asset] = ensure_index_live_store_matches_runtime(
       loop,
       loop.cfg,
       asset,
@@ -310,6 +348,14 @@ def run_index_live_preflight(
   try:
     if runtime_armed:
       sync_index_live_store_if_armed(loop, cfg, asset, source="index_live_preflight_sync")
+    else:
+      live_store = loop.hourly_bot_store(asset, kind="hourly_live")
+      disable_index_live_store_if_not_armed(
+        live_store,
+        cfg,
+        asset,
+        source="index_live_preflight_disarm_sync",
+      )
     live_store = loop.hourly_bot_store(asset, kind="hourly_live")
     live_settings = live_store.get_settings()
     live_enabled = bool(live_settings.enabled)

@@ -99,6 +99,7 @@ class PredictionLoop:
     self._eth_second_chance_advisor: SecondChanceAdvisor | None = None
     self.eth_last_error: str | None = None
     self._hourly_bot_stores: dict[str, Any] = {}
+    self._human_trade_stores: dict[str, Any] = {}
     self._hourly_bots: dict[str, Any] = {}
     self._slot15_bot_stores: dict[str, Any] = {}
     self._slot15_bots: dict[str, Any] = {}
@@ -556,6 +557,17 @@ class PredictionLoop:
       db_name = self._hourly_bot_db_name(kind, asset)
       self._hourly_bot_stores[key] = HourlyBotStore(logs / db_name)
     return self._hourly_bot_stores[key]
+
+  def human_trade_store(self, asset: str):
+    asset = asset.lower()
+    key = f"human_{asset}"
+    if key not in self._human_trade_stores:
+      from src.trading.human_trade_store import HumanTradeStore
+
+      acfg = self._acfg(asset)
+      logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
+      self._human_trade_stores[key] = HumanTradeStore(logs / f"human_trades_{asset}.db")
+    return self._human_trade_stores[key]
 
   def hourly_trial_bot_store(self, asset: str):
     return self.hourly_bot_store(asset, kind="hourly_trial")

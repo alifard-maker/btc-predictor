@@ -127,6 +127,26 @@ def test_disarm_index_live_mirror(tmp_path, index_cfg):
   assert not index_live_mirror_active(index_cfg, "spx")
 
 
+def test_disable_index_live_store_if_not_armed(tmp_path, index_cfg):
+  from src.trading.index_live_experiment import disable_index_live_store_if_not_armed
+
+  store = HourlyBotStore(tmp_path / "spx_live.db")
+  store.save_settings(HourlyBotSettings.from_dict({"enabled": True, "mode": "live"}))
+  set_index_live_runtime_armed(index_cfg, "spx", False)
+  out = disable_index_live_store_if_not_armed(store, index_cfg, "spx")
+  assert out.get("store_disabled")
+  assert not store.get_settings().enabled
+
+
+def test_index_live_runtime_allows_trading(index_cfg):
+  from src.trading.index_live_experiment import index_live_runtime_allows_trading
+
+  set_index_live_runtime_armed(index_cfg, "spx", False)
+  assert not index_live_runtime_allows_trading(index_cfg, "spx")
+  set_index_live_runtime_armed(index_cfg, "spx", True)
+  assert index_live_runtime_allows_trading(index_cfg, "spx")
+
+
 def test_preflight_blocks_when_allow_index_live_off(tmp_path, index_cfg):
   index_cfg["pnl_first_manager"]["allow_index_live"] = False
   loop = MagicMock()

@@ -166,9 +166,9 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
         if mgr.allow_index_paper:
           targets.append((index_asset, "hourly", "hourly_bot_store"))
         if mgr.allow_index_live:
-          from src.trading.index_live_experiment import index_live_mirror_active
+          from src.trading.index_live_experiment import index_live_runtime_armed
 
-          if index_live_mirror_active(cfg, index_asset):
+          if index_live_runtime_armed(cfg, index_asset):
             targets.append((index_asset, "hourly_live", "hourly_bot_store"))
 
   for asset, kind, store_fn in targets:
@@ -229,9 +229,9 @@ def enforce_sleep_lock(loop: Any, mgr: PnlFirstManagerConfig) -> list[dict[str, 
         ):
           index_paper_exempt = True
     if asset in ("spx", "ndx") and kind == "hourly_live" and mgr.allow_index_live:
-      from src.trading.index_live_experiment import index_live_mirror_active
+      from src.trading.index_live_experiment import index_live_runtime_armed
 
-      if index_live_mirror_active(cfg, asset):
+      if index_live_runtime_armed(cfg, asset):
         index_live_exempt = True
     if eth_paper_exempt:
       if not settings.enabled:

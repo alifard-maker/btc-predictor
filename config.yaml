@@ -714,6 +714,14 @@ live_resting_exits:
   cheap_leg_only: true
   bracket_take_profit: true
 
+# Dashboard manual (human) hourly trades — separate ledger from auto-bots; used for human vs bot learning
+human_trading:
+  enabled: true
+  default_mode: paper          # paper | live
+  max_stake_per_entry_usd: 2.50
+  paper_bankroll_initial_usd: 100.0
+  max_open_positions: 20
+
 bot_auto_tune:
   enabled: true
   hour: 3
