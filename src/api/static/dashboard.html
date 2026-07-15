@@ -2761,16 +2761,28 @@
       const paperLog = (st.paper_recent_trades || st.recent_trades || [])
         .filter(t => String(t.mode || '').toLowerCase() === 'paper')
         .slice(0, 24);
+      const exitBadge = (sig) => {
+        if (!sig || !sig.alert) return '';
+        const a = String(sig.alert);
+        const tone = a === 'CUT LOSSES' ? 'down' : a === 'TAKE PROFIT' ? 'up' : 'muted';
+        const label = a === 'CUT LOSSES' ? 'Bot: CUT' : a === 'TAKE PROFIT' ? 'Bot: TAKE PROFIT' : 'Bot: HOLD';
+        const detail = String(sig.detail || '').replace(/"/g, '&quot;');
+        return ` <span class="badge ${tone}" style="font-size:.62rem" title="${detail}">${label}</span>`;
+      };
       const openHtml = open.length
-        ? `<div style="font-size:.72rem;margin-bottom:.35rem"><strong>Open legs</strong></div>
+        ? `<div style="font-size:.72rem;margin-bottom:.35rem"><strong>Open legs</strong> <span class="muted">· bot exit advice updates with spot</span></div>
           <ul style="list-style:none;padding:0;margin:0;font-size:.72rem">${open.map(p => {
             const urP = p.unrealized_pnl_usd;
             const mark = p.mark_price_cents;
             const urTxt = urP != null
               ? ` · mark ${mark != null ? mark + '¢' : '—'} · <span class="${pnlCls(urP)}">${fmtPnl(urP)}</span>`
               : '';
-            return `<li style="margin:.2rem 0">${p.label || p.market_ticker} · ${String(p.side).toUpperCase()} ×${p.contracts} @ ${p.entry_price_cents}¢${urTxt}
+            const tip = (p.bot_exit_signal && p.bot_exit_signal.detail)
+              ? `<div class="muted" style="font-size:.65rem;margin:.1rem 0 .25rem 0;max-width:36rem">${p.bot_exit_signal.detail}</div>`
+              : '';
+            return `<li style="margin:.25rem 0">${p.label || p.market_ticker} · ${String(p.side).toUpperCase()} ×${p.contracts} @ ${p.entry_price_cents}¢${urTxt}${exitBadge(p.bot_exit_signal)}
               <button type="button" class="btn-secondary" style="font-size:.6rem;padding:.1rem .35rem;margin-left:.35rem" onclick="humanManualExit('${asset}','${p.id}')">Sell</button>
+              ${tip}
             </li>`;
           }).join('')}</ul>`
         : '<p class="muted" style="font-size:.72rem">No open manual legs — use Buy buttons on contract rows below.</p>';

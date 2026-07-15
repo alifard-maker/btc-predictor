@@ -148,10 +148,34 @@ def test_enrich_open_positions_marks_unrealized():
     "side": "yes",
     "contracts": 2,
     "entry_price_cents": 50,
+    "signal": "BUY YES",
+    "strike_type": "greater",
+    "floor_strike": 64000.0,
   }]
   enriched = enrich_open_positions_marks(open_pos, tab)
   assert enriched[0]["mark_price_cents"] == 43
   assert enriched[0]["unrealized_pnl_usd"] == -0.14
+  assert enriched[0]["bot_exit_signal"]["alert"] in ("HOLD", "CUT LOSSES", "TAKE PROFIT")
+
+
+def test_enrich_open_positions_bot_cut_when_spot_against():
+  from src.trading.human_hourly_trade import enrich_open_positions_marks
+
+  tab = _tab_with_pick()
+  tab["live"]["current_price"] = 63500.0  # below ≥64000 floor → spot against YES
+  open_pos = [{
+    "id": "p1",
+    "market_ticker": "KXBTCD-26JUL1518-T64000",
+    "side": "yes",
+    "contracts": 2,
+    "entry_price_cents": 50,
+    "signal": "BUY YES",
+    "strike_type": "greater",
+    "contract_type": "threshold",
+    "floor_strike": 64000.0,
+  }]
+  enriched = enrich_open_positions_marks(open_pos, tab, cfg={})
+  assert enriched[0]["bot_exit_signal"]["alert"] == "CUT LOSSES"
 
 
 def test_build_bot_counterfactual_blocks_range_spot_below_floor():

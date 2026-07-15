@@ -71,9 +71,11 @@ def register_human_trade_routes(
       kind = bot_kind or compare_store_kinds(asset)[0]
       bot_status = _bot_status_for_compare(loop, asset, tab, kind)
       status = store.status(event_ticker)
+      acfg = asset_cfg(get_cfg(), asset) if asset != "btc" else get_cfg()
       status["open_positions"] = enrich_open_positions_marks(
         list(status.get("open_positions") or []),
         tab if tab and tab.get("ok") else None,
+        cfg=acfg,
       )
       ur_sum = 0.0
       ur_n = 0

@@ -51,15 +51,44 @@ def settings_from_cfg(cfg: dict[str, Any] | None, store: HumanTradeStore) -> Hum
 def enrich_open_positions_marks(
   open_positions: list[dict[str, Any]],
   tab: dict[str, Any] | None,
+  cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-  """Attach mark bid + unrealized P&L for dashboard open-leg display."""
+  """Attach mark bid, unrealized P&L, and bot exit signal for open manual legs."""
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  live = (tab or {}).get("live") or {}
+  try:
+    live_price = float(
+      (tab or {}).get("brti_live")
+      or (tab or {}).get("erti_live")
+      or live.get("current_price"),
+    )
+  except (TypeError, ValueError):
+    live_price = None
+  hours_left = live.get("hours_to_settle")
+  try:
+    hours_f = float(hours_left) if hours_left is not None else None
+  except (TypeError, ValueError):
+    hours_f = None
+  regime = live.get("regime") or {}
   out: list[dict[str, Any]] = []
   for pos in open_positions:
     row = dict(pos)
     pick = pick_from_tab(tab, str(pos.get("market_ticker") or ""))
+    if not pick:
+      # Fall back to stored strike fields so spot-vs-strike exit advice still works.
+      pick = {
+        "ticker": pos.get("market_ticker"),
+        "label": pos.get("label"),
+        "signal": pos.get("signal"),
+        "strike_type": pos.get("strike_type"),
+        "contract_type": pos.get("contract_type"),
+        "floor_strike": pos.get("floor_strike"),
+        "cap_strike": pos.get("cap_strike"),
+      }
     side = str(pos.get("side") or "yes").lower()
     mark = None
-    if pick:
+    if pick and (pick.get("yes_bid") is not None or pick.get("kalshi_mid") is not None):
       fill = paper_exit_fill(pick=pick, side=side)
       if fill.get("ok") and fill.get("price_cents") is not None:
         mark = int(fill["price_cents"])
@@ -73,6 +102,25 @@ def enrich_open_positions_marks(
     )
     row["mark_price_cents"] = mark
     row["unrealized_pnl_usd"] = ur
+    row["current_signal"] = pick.get("signal") if pick else None
+    try:
+      row["bot_exit_signal"] = assess_held_hourly_position_alert(
+        pos=row,
+        pick=pick,
+        live_price=live_price,
+        regime_allow_trade=bool(regime.get("allow_trade", True)),
+        regime_reasons=list(regime.get("reasons") or []),
+        unrealized_pnl_usd=ur,
+        hours_to_settle=hours_f,
+        cfg=cfg,
+      )
+    except Exception:
+      row["bot_exit_signal"] = {
+        "alert": "HOLD",
+        "alert_tone": "neutral",
+        "headline": "HOLD",
+        "detail": "Bot exit signal unavailable",
+      }
     out.append(row)
   return out
 
