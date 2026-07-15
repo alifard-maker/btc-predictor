@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -720,6 +721,49 @@ def _kalshi_market_result_exit_cents(
   return cents, f"kalshi result={result} → settled @ {cents}¢"
 
 
+def _kalshi_expiration_settle_price(kalshi: Any, market_ticker: str) -> float | None:
+  """Official hour close index from Kalshi market row (expiration_value)."""
+  if not kalshi:
+    return None
+  try:
+    row = kalshi.get_market_ticker(market_ticker)
+  except Exception:
+    return None
+  if not row:
+    return None
+  exp = row.get("expiration_value")
+  if exp in (None, ""):
+    return None
+  try:
+    px = float(exp)
+  except (TypeError, ValueError):
+    return None
+  return px if px > 0 else None
+
+
+def _enrich_pos_contract_spec(pos: dict[str, Any]) -> dict[str, Any]:
+  """Fill strike metadata from label / ticker when missing on orphan repairs."""
+  from src.trading.hourly_settlement import contract_spec_from_label, contract_spec_from_position
+
+  out = dict(pos)
+  spec = contract_spec_from_position(out)
+  if spec.get("floor_strike") is None and spec.get("cap_strike") is None:
+    spec = {**spec, **contract_spec_from_label(str(out.get("label") or ""))}
+  if spec.get("floor_strike") is None and spec.get("cap_strike") is None:
+    ticker = str(out.get("market_ticker") or "")
+    m = re.search(r"-T([\d.]+)$", ticker)
+    if m:
+      spec = {
+        "contract_type": "threshold",
+        "strike_type": "greater",
+        "floor_strike": float(m.group(1)),
+      }
+  for k, v in spec.items():
+    if out.get(k) is None and v is not None:
+      out[k] = v
+  return out
+
+
 def _event_settle_brti(
   *,
   asset: str,
@@ -763,15 +807,13 @@ def _resolve_human_settlement_exit_cents(
   """
   Resolve exit cents for an expired human leg.
 
-  Prefer Kalshi official result, then hour settle_brti from our DB, then live
-  spot only when the hour *just* rolled. Never wipe winners with a late tape
-  print — if unsure, refund at entry (cash back, 0 P&L).
+  Prefer Kalshi official result / expiration_value, then hour settle_brti, then
+  live spot only when the hour *just* rolled. Never wipe winners with a late
+  tape print — if unsure, refund at entry (cash back, 0 P&L).
   """
-  from src.trading.hourly_settlement import (
-    contract_spec_from_position,
-    settlement_exit_cents,
-  )
+  from src.trading.hourly_settlement import settlement_exit_cents
 
+  pos = _enrich_pos_contract_spec(pos)
   side_l = str(pos.get("side") or "yes").lower()
   entry_c = int(pos["entry_price_cents"])
   ticker = str(pos.get("market_ticker") or "")
@@ -782,31 +824,35 @@ def _resolve_human_settlement_exit_cents(
     cents, note = kalshi_res
     return cents, note, None
 
-  hour_settle = _event_settle_brti(
-    asset=asset,
-    event_ticker=event,
-    cfg=cfg,
-    cache=settle_brti_cache,
-  )
+  hour_settle = _kalshi_expiration_settle_price(kalshi, ticker)
+  settle_src = "kalshi expiration_value"
+  if hour_settle is None:
+    hour_settle = _event_settle_brti(
+      asset=asset,
+      event_ticker=event,
+      cfg=cfg,
+      cache=settle_brti_cache,
+    )
+    settle_src = "hour settle_brti"
   if hour_settle is None and just_rolled and live_settle_price is not None:
     hour_settle = float(live_settle_price)
+    settle_src = "live roll print"
 
   if hour_settle is not None and hour_settle > 0:
-    spec = contract_spec_from_position(pos)
     settled = settlement_exit_cents(
       side=side_l,
       settle_price=float(hour_settle),
-      spec=spec,
+      spec=pos,
     )
     if settled is not None:
       outcome = "won" if settled == 100 else "lost"
       return (
         int(settled),
-        f"settled @ {settled}¢ ({outcome} vs ${float(hour_settle):,.2f})",
+        f"settled @ {settled}¢ ({outcome} vs ${float(hour_settle):,.2f} · {settle_src})",
         float(hour_settle),
       )
 
-  # No trustworthy settle print yet — return principal (scratch), never guess-lose.
+  # No unknown settle print yet — return principal (scratch), never guess-lose.
   return entry_c, f"cash-back @ entry {entry_c}¢ (awaiting official result)", None
 
 
@@ -1155,9 +1201,11 @@ def repair_orphan_human_paper_enters(
     if existing_exit:
       old_exit = int(existing_exit.get("exit_price_cents") or existing_exit.get("price_cents") or 0)
       old_pnl = float(existing_exit.get("pnl_usd") or 0.0)
-      if int(exit_cents) == old_exit and abs(fair_pnl - old_pnl) < 0.009:
+      is_scratch = abs(old_pnl) < 0.009 and old_exit == entry_c
+      # Still no official print — leave cash-back alone.
+      if "cash-back @ entry" in note:
         continue
-      if "cash-back @ entry" in note and old_exit in (0, 100):
+      if int(exit_cents) == old_exit and abs(fair_pnl - old_pnl) < 0.009:
         continue
       delta = round(fair_pnl - old_pnl, 2)
       if abs(delta) < 0.009 and int(exit_cents) == old_exit:
@@ -1168,7 +1216,8 @@ def repair_orphan_human_paper_enters(
         pnl_usd=round(fair_pnl, 2),
         detail=(
           f"PAPER EXIT (HOUR SETTLEMENT CORRECTED): {side_l.upper()} ×{contracts} "
-          f"@ {exit_cents}¢ (entry {entry_c}¢) — {note} [was {old_exit}¢ / {old_pnl:+.2f}]"
+          f"@ {exit_cents}¢ (entry {entry_c}¢) — {note} "
+          f"[was {old_exit}¢ / {old_pnl:+.2f}{' scratch' if is_scratch else ''}]"
         ),
       )
       if abs(delta) >= 0.009:

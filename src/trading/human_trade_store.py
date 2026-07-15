@@ -396,6 +396,8 @@ class HumanTradeStore:
     total = round(sum(pnls), 2)
     wins = sum(1 for p in pnls if p > 0)
     losses = sum(1 for p in pnls if p < 0)
+    pushes = sum(1 for p in pnls if p == 0)
+    decisive = wins + losses
     today_prefix = datetime.now(timezone.utc).date().isoformat()
     today_pnls = [
       float(r["pnl_usd"])
@@ -410,7 +412,9 @@ class HumanTradeStore:
       "today_closed_legs": len(today_pnls),
       "wins": wins,
       "losses": losses,
-      "win_rate": round(wins / len(pnls), 3) if pnls else None,
+      "pushes": pushes,
+      # Exclude scratch/+0 settles (cash-back) from WR denominator.
+      "win_rate": round(wins / decisive, 3) if decisive else None,
       "avg_pnl_usd": round(total / len(pnls), 2) if pnls else None,
     }
 

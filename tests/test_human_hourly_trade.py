@@ -465,6 +465,96 @@ def test_repair_enter_without_position_id(tmp_path: Path):
   assert abs(bank["paper_bankroll_usd"] - 100.60) < 0.02
 
 
+def test_upgrade_cashback_scratch_to_kalshi_win(tmp_path: Path):
+  """Cash-back +$0 settles must upgrade to 100¢ when expiration_value is known."""
+  from src.trading.human_hourly_trade import settle_expired_human_positions
+  from src.trading.hourly_event_time import hourly_event_settle_utc
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  prev = "KXBTCD-26JUN3005"
+  assert hourly_event_settle_utc(prev) is not None
+  store.debit_paper_for_entry(2.40, 100.0)
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "enter",
+    "mode": "paper",
+    "market_ticker": f"{prev}-T66000",
+    "side": "no",
+    "contracts": 3,
+    "price_cents": 80,
+    "entry_price_cents": 80,
+    "cost_usd": 2.40,
+    "label": "$66,000 or above",
+    "status": "filled",
+    "position_id": "scratch-1",
+  })
+  # Prior cash-back settle (what 5.0.125 wrote when result was missing).
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "exit",
+    "mode": "paper",
+    "market_ticker": f"{prev}-T66000",
+    "side": "no",
+    "contracts": 3,
+    "price_cents": 80,
+    "entry_price_cents": 80,
+    "exit_price_cents": 80,
+    "cost_usd": 2.40,
+    "pnl_usd": 0.0,
+    "label": "$66,000 or above",
+    "status": "filled",
+    "position_id": "scratch-1",
+    "detail": "PAPER EXIT (HOUR SETTLEMENT): NO ×3 @ 80¢ (entry 80¢) — cash-back @ entry 80¢",
+  })
+  store.apply_paper_exit_settlement(2.40, 0.0, 100.0)
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      return {"expiration_value": "64958.13", "status": "finalized"}
+
+  rows = settle_expired_human_positions(
+    store,
+    current_event_ticker="KXBTCD-26JUN3017",
+    settle_price=None,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    kalshi=_FakeKalshi(),
+    asset="btc",
+  )
+  assert rows
+  assert rows[0]["exit_price_cents"] == 100
+  assert abs(float(rows[0]["pnl_usd"]) - 0.60) < 0.01
+  bank = store.reconcile_paper_bankroll(100.0)
+  assert abs(bank["paper_bankroll_usd"] - 100.60) < 0.02
+  summary = store.pnl_summary(mode="paper")
+  assert summary["wins"] == 1
+  assert summary["pushes"] == 0
+  assert summary["win_rate"] == 1.0
+
+
+def test_win_rate_excludes_scratch_pushes(tmp_path: Path):
+  store = HumanTradeStore(tmp_path / "human.db")
+  for pnl in (0.5, 0.3, -0.2, 0.0, 0.0):
+    store.log_trade({
+      "event_ticker": "KXBTCD-26JUN3005",
+      "action": "exit",
+      "mode": "paper",
+      "market_ticker": "KXBTCD-26JUN3005-T64000",
+      "side": "yes",
+      "contracts": 1,
+      "entry_price_cents": 50,
+      "exit_price_cents": 50 if pnl == 0 else (100 if pnl > 0 else 0),
+      "pnl_usd": pnl,
+      "status": "filled",
+    })
+  s = store.pnl_summary(mode="paper")
+  assert s["wins"] == 2
+  assert s["losses"] == 1
+  assert s["pushes"] == 2
+  assert s["closed_legs"] == 5
+  # 2/(2+1) = 0.667 — not 2/5
+  assert abs(s["win_rate"] - 0.667) < 0.001
+
+
 def test_settle_expired_skips_current_hour(tmp_path: Path):
   from src.trading.human_hourly_trade import settle_expired_human_positions
 

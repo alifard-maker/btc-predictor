@@ -2785,7 +2785,7 @@
       }
       const wrEl = $(`human-paper-wr-${asset}`);
       if (wrEl) {
-        wrEl.innerHTML = `${paperPnl.win_rate != null ? `${(paperPnl.win_rate * 100).toFixed(0)}%` : '—'} <span class="muted" style="font-weight:400">(${paperPnl.wins || 0}W/${paperPnl.losses || 0}L · ${paperPnl.closed_legs || 0} closed)</span>`;
+        wrEl.innerHTML = `${paperPnl.win_rate != null ? `${(paperPnl.win_rate * 100).toFixed(0)}%` : '—'} <span class="muted" style="font-weight:400">(${paperPnl.wins || 0}W/${paperPnl.losses || 0}L${paperPnl.pushes ? `/${paperPnl.pushes}P` : ''} · ${paperPnl.closed_legs || 0} closed)</span>`;
       }
       const openMeta = $(`human-open-meta-${asset}`);
       if (openMeta) {
@@ -2927,7 +2927,7 @@
           <div><span>Paper realized</span><strong id="human-paper-realized-${asset}" class="${pnlCls(Number(realized || 0))}">${fmtPnl(realized)}</strong></div>
           <div><span>Today</span><strong id="human-paper-today-${asset}" class="${pnlCls(Number(today || 0))}">${fmtPnl(today)}</strong></div>
           <div><span>Open MTM</span><strong id="human-open-mtm-${asset}" class="${ur != null ? pnlCls(Number(ur)) : 'muted'}">${fmtPnl(ur)}</strong></div>
-          <div><span>Win rate</span><strong id="human-paper-wr-${asset}">${paperPnl.win_rate != null ? `${(paperPnl.win_rate * 100).toFixed(0)}%` : '—'} <span class="muted" style="font-weight:400">(${paperPnl.wins || 0}W/${paperPnl.losses || 0}L · ${paperPnl.closed_legs || 0} closed)</span></strong></div>
+          <div><span>Win rate</span><strong id="human-paper-wr-${asset}">${paperPnl.win_rate != null ? `${(paperPnl.win_rate * 100).toFixed(0)}%` : '—'} <span class="muted" style="font-weight:400">(${paperPnl.wins || 0}W/${paperPnl.losses || 0}L${paperPnl.pushes ? `/${paperPnl.pushes}P` : ''} · ${paperPnl.closed_legs || 0} closed)</span></strong></div>
         </div>
         ${openHtml}
         <div id="human-paper-log-wrap-${asset}">${logHtml}</div>
