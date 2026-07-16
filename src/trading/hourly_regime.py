@@ -76,6 +76,33 @@ def max_hours_to_settle_for_entry(cfg: dict[str, Any] | None) -> float:
   return 1.25
 
 
+def max_hours_to_settle_for_manual_entry(cfg: dict[str, Any] | None) -> float:
+  """Manual/dashboard lane — allow the full current Kalshi hour, not twin mid-hour 0.75.
+
+  Bot twin uses max 0.75 (first 15m blocked). Manual should only block *future*
+  hours (e.g. 5pm when it's 2am), so default ~1.35h like pnl_first hour-edge.
+  """
+  human = (cfg or {}).get("human_trading") or {}
+  if "max_hours_to_settle_for_entry" in human:
+    return float(human["max_hours_to_settle_for_entry"])
+  pf = (cfg or {}).get("pnl_first") or {}
+  if "max_hours_to_settle_for_entry" in pf:
+    return float(pf["max_hours_to_settle_for_entry"])
+  return 1.35
+
+
+def entry_too_far_for_manual_skip_reason(
+  hours_to_settle: float | None,
+  cfg: dict[str, Any] | None,
+) -> str | None:
+  if hours_to_settle is None:
+    return None
+  max_h = max_hours_to_settle_for_manual_entry(cfg)
+  if float(hours_to_settle) > max_h:
+    return "too_far_for_new_entries"
+  return None
+
+
 @dataclass(frozen=True)
 class LateEntryConfig:
   enabled: bool = True

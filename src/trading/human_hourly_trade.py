@@ -347,17 +347,17 @@ def preview_manual_entry(
   if not event_ticker:
     return {"ok": False, "error": "no_active_hour"}
 
-  # Same mid-hour gate as the bot — block entries when the tab jumped to a
-  # future Kalshi hour (e.g. tomorrow 5pm) instead of the clock hour.
+  # Block only far-future Kalshi hours (e.g. tomorrow 5pm), not early current-hour.
+  # Twin mid-hour bot max (0.75) must NOT gate manual — that paused buys at 0.8h left.
   from src.trading.hourly_event_time import (
     canonical_hourly_event_ticker,
     market_ticker_event_ticker,
     ticker_belongs_to_hourly_event,
   )
-  from src.trading.hourly_regime import entry_too_far_from_settle_skip_reason
+  from src.trading.hourly_regime import entry_too_far_for_manual_skip_reason
 
   live = (tab or {}).get("live") or {}
-  far = entry_too_far_from_settle_skip_reason(live.get("hours_to_settle"), cfg)
+  far = entry_too_far_for_manual_skip_reason(live.get("hours_to_settle"), cfg)
   if far:
     return {"ok": False, "error": far}
   pick_event = canonical_hourly_event_ticker(

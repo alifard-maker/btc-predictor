@@ -743,6 +743,8 @@ human_trading:
   max_stake_per_entry_usd: 2.50
   paper_bankroll_initial_usd: 100.0
   max_open_positions: 20
+  # Full current hour (not twin mid-hour 0.75) — only block far-future books
+  max_hours_to_settle_for_entry: 1.35
 
 bot_auto_tune:
   enabled: true

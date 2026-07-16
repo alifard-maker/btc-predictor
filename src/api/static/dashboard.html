@@ -2893,7 +2893,7 @@
     }
 
     function humanManualBookGate(asset) {
-      /** Live mid-hour book only — hide Buys when Kalshi tab is a far/future event (e.g. 5pm). */
+      /** Allow current-hour Kalshi books; pause Buys only on far/future events. */
       const data = lastDailyOkByAsset[asset];
       if (!data || !data.ok) {
         return {
@@ -2906,23 +2906,36 @@
       const live = data.live || data;
       const ev = live.event || data.event || {};
       const hours = live.hours_to_settle;
-      // Twin mid-hour window — prefer server max from prediction payload.
+      // Manual lane uses ~1.35h (full current hour) — NOT twin mid-hour 0.75.
       const maxH = Number(
-        live.max_hours_to_settle_for_entry
-        ?? live.manual_entry?.max_hours_to_settle_for_entry
+        live.manual_entry?.max_hours_to_settle_for_entry
+        ?? live.max_hours_to_settle_for_entry
         ?? data.max_hours_to_settle_for_entry
-        ?? 0.75,
+        ?? 1.35,
       );
       const title = String(ev.title || ev.sub_title || ev.event_ticker || 'Kalshi event');
       const ticker = String(ev.event_ticker || '');
+      const farDetail = (hVal) => {
+        const when = hVal >= 20 ? `${(hVal / 24).toFixed(1)}d` : `${Number(hVal).toFixed(1)}h`;
+        if (Number(hVal) > 1.05) {
+          return {
+            title: 'Not a live mid-hour book',
+            detail: `Showing ${title} · settles in ${when}. That is not the current clock hour — Buys are paused so you do not treat it as an hourly bet. Sell still works on any open legs.`,
+          };
+        }
+        return {
+          title: 'Too early in the hour',
+          detail: `Showing ${title} · settles in ${when} (max ${maxH.toFixed(2)}h for new Buys). Sell still works on any open legs.`,
+        };
+      };
       if (live.manual_entry && live.manual_entry.allowed === false) {
         const blockedH = Number(live.manual_entry.hours_to_settle ?? hours);
-        const when = blockedH >= 20 ? `${(blockedH / 24).toFixed(1)}d` : `${Number(blockedH).toFixed(1)}h`;
+        const msg = farDetail(blockedH);
         return {
           allowBuys: false,
           reason: live.manual_entry.block_reason || 'too_far_for_new_entries',
-          title: 'Not a live mid-hour book',
-          detail: `Showing ${title} · settles in ${when}. That is not the current clock hour — Buys are paused so you do not treat it as an hourly bet. Sell still works on any open legs.`,
+          title: msg.title,
+          detail: msg.detail,
           event_ticker: ticker,
           hours_to_settle: blockedH,
           max_hours: maxH,
@@ -2940,12 +2953,12 @@
       }
       const h = Number(hours);
       if (h > maxH) {
-        const when = h >= 20 ? `${(h / 24).toFixed(1)}d` : `${h.toFixed(1)}h`;
+        const msg = farDetail(h);
         return {
           allowBuys: false,
           reason: 'too_far_for_new_entries',
-          title: 'Not a live mid-hour book',
-          detail: `Showing ${title} · settles in ${when}. That is not the current clock hour — Buys are paused so you do not treat it as an hourly bet. Sell still works on any open legs.`,
+          title: msg.title,
+          detail: msg.detail,
           event_ticker: ticker,
           hours_to_settle: h,
           max_hours: maxH,
