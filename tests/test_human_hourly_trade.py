@@ -913,3 +913,38 @@ def test_export_human_training_rows(tmp_path: Path):
   assert rows[0]["closed_pnl_usd"] == 0.10
   assert rows[0]["spot_price"] == 64000
   assert rows[0]["bot_exit_signal"]["alert"] == "TAKE PROFIT"
+
+
+def test_paper_exit_log_includes_all_exits_not_capped_by_enters(tmp_path: Path):
+  """paper_exit_log must not drop older exits when enter rows fill recent_trades."""
+  store = HumanTradeStore(tmp_path / "human.db")
+  evt = "KXBTCD-26JUL1518"
+  for i in range(30):
+    store.log_trade({
+      "event_ticker": evt,
+      "action": "enter",
+      "mode": "paper",
+      "status": "filled",
+      "market_ticker": f"T{i}",
+      "side": "yes",
+      "contracts": 1,
+      "created_at": f"2026-07-15T10:{i:02d}:00+00:00",
+      "entry_price_cents": 50,
+      "cost_usd": 0.5,
+    })
+    store.log_trade({
+      "event_ticker": evt,
+      "action": "exit",
+      "mode": "paper",
+      "status": "filled",
+      "market_ticker": f"T{i}",
+      "side": "yes",
+      "contracts": 1,
+      "created_at": f"2026-07-15T10:{i:02d}:30+00:00",
+      "entry_price_cents": 50,
+      "exit_price_cents": 55,
+      "pnl_usd": 0.05,
+    })
+  status = store.status()
+  assert len(status["paper_exit_log"]) == 30
+  assert len([t for t in status["paper_recent_trades"] if t.get("action") == "exit"]) < 30

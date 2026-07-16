@@ -320,6 +320,32 @@ class HumanTradeStore:
         pass
     return out
 
+  def list_paper_exits(self, *, limit: int = 200) -> list[dict[str, Any]]:
+    """All paper exit rows for the manual P&L log (not capped by enter rows)."""
+    with self._connect() as conn:
+      rows = conn.execute(
+        """
+        SELECT * FROM human_trades
+        WHERE action = 'exit'
+          AND lower(mode) = 'paper'
+          AND status IN ('filled', 'reconciled')
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (int(limit),),
+      ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+      row = dict(r)
+      raw = row.pop("entry_context_json", None)
+      if raw:
+        try:
+          row["entry_context"] = json.loads(raw)
+        except json.JSONDecodeError:
+          pass
+      out.append(row)
+    return out
+
   def list_trades(
     self,
     *,
@@ -561,5 +587,6 @@ class HumanTradeStore:
       "paper_recent_trades": [
         t for t in recent if str(t.get("mode") or "").lower() == "paper"
       ][:40],
+      "paper_exit_log": self.list_paper_exits(limit=200),
       "event_ticker": event_ticker,
     }
