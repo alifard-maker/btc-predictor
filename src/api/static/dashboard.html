@@ -695,6 +695,7 @@
       <div class="card" id="daily-summary-card">
         <h2><span id="daily-event-title">BTC Kalshi event</span> <span id="daily-freq-badge"></span></h2>
         <p class="muted" id="daily-meta">Loading…</p>
+        <div id="daily-book-gate" role="status" style="display:none;margin:.35rem 0 .55rem;padding:.55rem .7rem;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.12);border-radius:8px;font-size:.78rem;line-height:1.35"></div>
         <div id="intrahour-opportunity"></div>
         <div id="daily-primary-signal"></div>
         <div id="daily-late-call"></div>
@@ -749,6 +750,7 @@
       <div class="card" id="eth-daily-summary-card">
         <h2>ETH Kalshi event <span id="eth-daily-freq-badge"></span></h2>
         <p class="muted" id="eth-daily-meta">Loading…</p>
+        <div id="eth-daily-book-gate" role="status" style="display:none;margin:.35rem 0 .55rem;padding:.55rem .7rem;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.12);border-radius:8px;font-size:.78rem;line-height:1.35"></div>
         <div id="eth-intrahour-opportunity"></div>
         <div id="eth-daily-primary-signal"></div>
         <div id="eth-daily-late-call"></div>
@@ -2809,6 +2811,10 @@
       if (legsEl) {
         legsEl.innerHTML = humanOpenLegsInnerHtml(asset, open);
       }
+      const gateEl = $(`human-book-gate-${asset}`);
+      if (gateEl) {
+        gateEl.innerHTML = humanManualBookBannerHtml(asset);
+      }
       const paperLog = (st.paper_recent_trades || st.recent_trades || [])
         .filter(t => String(t.mode || '').toLowerCase() === 'paper' && t.action === 'exit')
         .slice(0, 24);
@@ -2849,6 +2855,95 @@
       if (el.textContent !== next) el.textContent = next;
     }
 
+    function humanManualBookGate(asset) {
+      /** Live mid-hour book only — hide Buys when Kalshi tab is a far/future event (e.g. 5pm). */
+      const data = lastDailyOkByAsset[asset];
+      if (!data || !data.ok) {
+        return {
+          allowBuys: false,
+          reason: 'no_prediction',
+          title: 'No live hourly book',
+          detail: 'Waiting for a Kalshi hourly prediction — Buys paused so you do not trade a stale or wrong event.',
+        };
+      }
+      const live = data.live || data;
+      const ev = live.event || data.event || {};
+      const hours = live.hours_to_settle;
+      // Twin mid-hour window — prefer server max from prediction payload.
+      const maxH = Number(
+        live.max_hours_to_settle_for_entry
+        ?? live.manual_entry?.max_hours_to_settle_for_entry
+        ?? data.max_hours_to_settle_for_entry
+        ?? 0.75,
+      );
+      const title = String(ev.title || ev.sub_title || ev.event_ticker || 'Kalshi event');
+      const ticker = String(ev.event_ticker || '');
+      if (live.manual_entry && live.manual_entry.allowed === false) {
+        const blockedH = Number(live.manual_entry.hours_to_settle ?? hours);
+        const when = blockedH >= 20 ? `${(blockedH / 24).toFixed(1)}d` : `${Number(blockedH).toFixed(1)}h`;
+        return {
+          allowBuys: false,
+          reason: live.manual_entry.block_reason || 'too_far_for_new_entries',
+          title: 'Not a live mid-hour book',
+          detail: `Showing ${title} · settles in ${when}. That is not the current clock hour — Buys are paused so you do not treat it as an hourly bet. Sell still works on any open legs.`,
+          event_ticker: ticker,
+          hours_to_settle: blockedH,
+          max_hours: maxH,
+        };
+      }
+      if (hours == null || Number.isNaN(Number(hours))) {
+        return {
+          allowBuys: false,
+          reason: 'unknown_settle',
+          title: 'Hour settle time unknown',
+          detail: `${title} — Buys paused until settle timing is clear.`,
+          event_ticker: ticker,
+          hours_to_settle: hours,
+        };
+      }
+      const h = Number(hours);
+      if (h > maxH) {
+        const when = h >= 20 ? `${(h / 24).toFixed(1)}d` : `${h.toFixed(1)}h`;
+        return {
+          allowBuys: false,
+          reason: 'too_far_for_new_entries',
+          title: 'Not a live mid-hour book',
+          detail: `Showing ${title} · settles in ${when}. That is not the current clock hour — Buys are paused so you do not treat it as an hourly bet. Sell still works on any open legs.`,
+          event_ticker: ticker,
+          hours_to_settle: h,
+          max_hours: maxH,
+        };
+      }
+      if (h < 0) {
+        return {
+          allowBuys: false,
+          reason: 'settled',
+          title: 'Hour already settled',
+          detail: `${title} has settled — waiting for the next open hourly book.`,
+          event_ticker: ticker,
+          hours_to_settle: h,
+        };
+      }
+      return {
+        allowBuys: true,
+        reason: null,
+        title: title,
+        detail: `Live hourly · ${h.toFixed(2)}h to settle`,
+        event_ticker: ticker,
+        hours_to_settle: h,
+        max_hours: maxH,
+      };
+    }
+
+    function humanManualBookBannerHtml(asset) {
+      const gate = humanManualBookGate(asset);
+      if (gate.allowBuys) return '';
+      return `<div role="status" style="margin:.15rem 0 .65rem;padding:.55rem .7rem;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.12);border-radius:8px;font-size:.78rem;line-height:1.35">
+        <strong style="color:#fbbf24">${gate.title}</strong>
+        <div style="margin-top:.25rem">${gate.detail}</div>
+      </div>`;
+    }
+
     function humanOpenPositionForTicker(asset, ticker, side) {
       const st = humanTradesCache[asset];
       const open = (st && st.status && st.status.open_positions) || [];
@@ -2864,16 +2959,20 @@
       const esc = ticker.replace(/"/g, '&quot;');
       const yesPos = humanOpenPositionForTicker(asset, ticker, 'yes');
       const noPos = humanOpenPositionForTicker(asset, ticker, 'no');
+      const gate = humanManualBookGate(asset);
       const parts = [];
       if (yesPos) {
         parts.push(`<button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" onclick="humanManualExit('${asset}','${yesPos.id}')">Sell YES</button>`);
-      } else if (isBuyYes(r.signal)) {
+      } else if (gate.allowBuys && isBuyYes(r.signal)) {
         parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="yes" onclick="humanManualEnter(this,'${asset}')">Buy YES</button>`);
       }
       if (noPos) {
         parts.push(`<button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" onclick="humanManualExit('${asset}','${noPos.id}')">Sell NO</button>`);
-      } else if (isBuyNo(r.signal)) {
+      } else if (gate.allowBuys && isBuyNo(r.signal)) {
         parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="no" onclick="humanManualEnter(this,'${asset}')">Buy NO</button>`);
+      }
+      if (!parts.length && !gate.allowBuys) {
+        return '<span class="muted" style="font-size:.65rem" title="Not a live mid-hour book">Buys paused</span>';
       }
       return parts.length ? parts.join(' ') : '<span class="muted" style="font-size:.68rem">—</span>';
     }
@@ -2911,7 +3010,9 @@
       const openHtml = `<div id="human-open-legs-${asset}">${humanOpenLegsInnerHtml(asset, open)}</div>`;
       const logHtml = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl)
         .replace(/DETAILS_ASSET/g, asset);
+      const bookBanner = humanManualBookBannerHtml(asset);
       const html = `
+        <div id="human-book-gate-${asset}">${bookBanner}</div>
         <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.5rem">
           <label style="font-size:.75rem">Mode
             <select id="human-mode-${asset}" style="margin-left:.25rem" onchange="humanSaveSettings('${asset}')">
@@ -2959,6 +3060,10 @@
 
     function humanOpenLegsInnerHtml(asset, open, meta = {}) {
       if (!open || !open.length) {
+        const gate = humanManualBookGate(asset);
+        if (!gate.allowBuys) {
+          return `<p class="muted" style="font-size:.72rem">No open manual legs. <strong style="color:#fbbf24">Buys paused</strong> — ${gate.title.toLowerCase()}.</p>`;
+        }
         return '<p class="muted" style="font-size:.72rem">No open manual legs — use Buy buttons on contract rows below.</p>';
       }
       const stamp = meta.marked_at
@@ -3098,6 +3203,11 @@
       const ticker = btn.dataset.ticker;
       const side = btn.dataset.side;
       if (!ticker || !side) return;
+      const gate = humanManualBookGate(asset);
+      if (!gate.allowBuys) {
+        alert(gate.detail || 'Buys paused — not a live mid-hour Kalshi book.');
+        return;
+      }
       const st = humanTradesCache[asset];
       const mode = (st && st.status && st.status.settings && st.status.settings.mode) || 'paper';
       const body = { market_ticker: ticker, side, mode };
@@ -3116,7 +3226,12 @@
         const cached = lastDailyOkByAsset[asset];
         if (cached?.ok) renderDaily(cached);
       } catch (e) {
-        alert(e.message || 'Enter failed');
+        const msg = String(e.message || 'Enter failed');
+        if (msg.includes('too_far_for_new_entries')) {
+          alert('Buys blocked: this Kalshi event is too far from settle (not the current hourly). Wait for a live mid-hour book.');
+        } else {
+          alert(msg);
+        }
       } finally {
         btn.disabled = false;
       }
@@ -6970,6 +7085,23 @@
       renderHourlyGuidance(g);
 
       h$('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · settles ${settle} · ${idx} now ${price(data.brti_live || live.current_price)} · ${live.hours_to_settle}h left · ${lockNote}`;
+      const bookGateEl = h$('daily-book-gate');
+      if (bookGateEl) {
+        const assetGate = hourlyAssetForTab(hourlyRenderTab || activeTab);
+        if (assetGate === 'btc' || assetGate === 'eth') {
+          const gate = humanManualBookGate(assetGate);
+          if (!gate.allowBuys) {
+            bookGateEl.style.display = '';
+            bookGateEl.innerHTML = `<strong style="color:#fbbf24">${gate.title}</strong> — ${gate.detail}`;
+          } else {
+            bookGateEl.style.display = 'none';
+            bookGateEl.innerHTML = '';
+          }
+        } else {
+          bookGateEl.style.display = 'none';
+          bookGateEl.innerHTML = '';
+        }
+      }
 
       h$('intrahour-opportunity').innerHTML = renderIntrahourOpportunityBanner(data.intrahour_opportunity);
 

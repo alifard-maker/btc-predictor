@@ -220,6 +220,16 @@ class HourlyPredictor:
     blended["prob_15m_avg"] = round(prob_15m_avg, 4) if prob_15m_avg is not None else None
     blended["regime"] = {"allow_trade": regime.allow_trade, "reasons": regime.reasons}
     blended["primary_pick"] = pick
+    from src.trading.hourly_regime import max_hours_to_settle_for_entry
+
+    blended["max_hours_to_settle_for_entry"] = float(max_hours_to_settle_for_entry(self.cfg))
+    far = hours_left > blended["max_hours_to_settle_for_entry"]
+    blended["manual_entry"] = {
+      "allowed": not far,
+      "block_reason": "too_far_for_new_entries" if far else None,
+      "hours_to_settle": round(hours_left, 2),
+      "max_hours_to_settle_for_entry": blended["max_hours_to_settle_for_entry"],
+    }
     hrcfg = self.hcfg.get("regime", {})
     blended["bet_assessment"] = assess_hourly_bet(
       signal=pick.get("signal") if pick else "NEUTRAL",
