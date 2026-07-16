@@ -536,17 +536,27 @@ hourly:
       reassess_neutral_band: 0.07
       reassess_neutral_min_unrealized_usd: 0.05
     trial_rally:
-      continuous_enabled: true
+      continuous_enabled: false  # legacy — Trials tab removed from dashboard
       poll_seconds: 10
     trial_soft:
-      continuous_enabled: true
+      continuous_enabled: false  # legacy — Trials tab removed from dashboard
       poll_seconds: 10
     trial_mech:
       continuous_enabled: true
       poll_seconds: 10
       compare_twin: true  # paper twin for live↔mech compare card
       max_spend_per_hour_usd: 15
-      pause_when_live_regime_blocked: true  # Tier 2: no solo trial bleed when live blocked
+      pause_when_live_regime_blocked: false  # signal-mirror follows manual lane
+      signal_mirror:
+        enabled: true
+        use_thesis_exits: true
+        skip_spot_guards: true
+        min_ask_edge_cents: 0
+        max_entries_per_cycle: 4
+        max_concurrent_positions: 20
+        max_stake_per_entry_usd: 2.50
+        max_hours_to_settle_for_entry: 1.35
+        late_entry_enabled: false
       entry_strategy:
         max_contracts_per_entry: 2
         max_stake_per_entry_usd: 2.50
@@ -555,7 +565,7 @@ hourly:
 
 # Hourly V2 — path-memory predictor + paper bot (fully isolated from v1 hourly above)
 hourly_v2:
-  enabled: true
+  enabled: false  # legacy — removed from dashboard; code kept as backup
   prediction_db: hourly_v2_predictions.db
   hour_open_snapshot: true
   open_log_minute: 0
@@ -867,6 +877,16 @@ eth:
     bot:
       mirror_btc_settings: false  # Phase 0-1: do not mirror BTC live state to ETH
       live_mechanics_profile: pnl_first
+      signal_mirror:
+        enabled: true
+        use_thesis_exits: true
+        skip_spot_guards: true
+        min_ask_edge_cents: 0
+        max_entries_per_cycle: 4
+        max_concurrent_positions: 20
+        max_stake_per_entry_usd: 2.50
+        max_hours_to_settle_for_entry: 1.35
+        late_entry_enabled: false
       enabled: true
       mode: paper
       max_spend_per_hour_usd: 15
@@ -1096,17 +1116,17 @@ eth:
         reassess_neutral_band: 0.07
         reassess_neutral_min_unrealized_usd: 0.05
       trial_rally:
-        continuous_enabled: true
+        continuous_enabled: false
         poll_seconds: 10
       trial_soft:
-        continuous_enabled: true
+        continuous_enabled: false
         poll_seconds: 10
       trial_mech:
         continuous_enabled: true
         poll_seconds: 10
     sigma_calibration: true
   hourly_v2:
-    enabled: true
+    enabled: false  # legacy — removed from dashboard
     experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET
     bot:
       enabled: true

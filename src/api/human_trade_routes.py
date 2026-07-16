@@ -8,7 +8,7 @@ from typing import Any, Callable
 from fastapi import Depends, HTTPException, Query, Request
 
 from src.assets import asset_cfg
-from src.trading.compare_paper_twins import compare_store_kinds
+from src.trading.compare_paper_twins import compare_store_kinds, human_compare_bot_kind
 from src.trading.human_bot_compare import build_human_bot_compare, export_human_training_rows
 from src.trading.human_hourly_trade import (
   apply_human_settings_body,
@@ -117,7 +117,7 @@ def register_human_trade_routes(
       store = loop.human_trade_store(asset)
       tab = _human_tab(loop, asset)
       event_ticker = (tab.get("event") or {}).get("event_ticker") if tab and tab.get("ok") else None
-      kind = bot_kind or compare_store_kinds(asset)[0]
+      kind = bot_kind or human_compare_bot_kind(asset)
       bot_status = _bot_status_for_compare(loop, asset, tab, kind)
       acfg = asset_cfg(get_cfg(), asset) if asset != "btc" else get_cfg()
       settled = _run_human_hour_settlement(loop, store, asset, tab, acfg)
@@ -226,7 +226,7 @@ def register_human_trade_routes(
       loop = get_loop()
       if loop is None:
         raise HTTPException(503, "Service starting")
-      kind = bot_kind or compare_store_kinds(asset)[0]
+      kind = bot_kind or human_compare_bot_kind(asset)
       return build_human_bot_compare(
         loop.human_trade_store(asset),
         loop.hourly_bot_store(asset, kind=kind),
@@ -287,7 +287,7 @@ def register_human_trade_routes(
       store = loop.human_trade_store(asset)
       settings = store.get_settings()
       mode = str(body.get("mode") or settings.mode).lower()
-      bot_kind = str(body.get("bot_kind") or compare_store_kinds(asset)[0])
+      bot_kind = str(body.get("bot_kind") or human_compare_bot_kind(asset))
       tab = _human_tab(loop, asset)
       bot_status = _bot_status_for_compare(loop, asset, tab, bot_kind)
       return preview_manual_entry(
@@ -316,7 +316,7 @@ def register_human_trade_routes(
       mode = str(body.get("mode") or settings.mode).lower()
       if mode == "live":
         require_live_password("paper", "live", body, live_bet_password(cfg))
-      bot_kind = str(body.get("bot_kind") or compare_store_kinds(asset)[0])
+      bot_kind = str(body.get("bot_kind") or human_compare_bot_kind(asset))
       tab = _human_tab(loop, asset)
       bot_status = _bot_status_for_compare(loop, asset, tab, bot_kind)
       kalshi = loop._kalshi_for(asset) if mode == "live" else None

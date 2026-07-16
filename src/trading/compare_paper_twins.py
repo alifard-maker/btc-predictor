@@ -176,3 +176,13 @@ def compare_store_kinds(asset: str) -> tuple[str, str]:
   if asset == "eth":
     return "hourly_live", "hourly_trial"
   return "hourly", "hourly_trial"
+
+
+def human_compare_bot_kind(asset: str) -> str:
+  """Paper bot that mirrors manual signals (human vs bot panel)."""
+  asset = asset.lower()
+  if asset == "btc":
+    return "hourly_trial_mech"
+  if asset == "eth":
+    return "hourly"
+  return "hourly"

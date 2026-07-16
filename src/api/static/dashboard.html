@@ -305,8 +305,7 @@
       <button type="button" class="tab" id="tab-eth-hourly" data-panel="panel-eth-hourly" onclick="switchTab('eth-hourly')">ETH Hourly</button>
       <button type="button" class="tab" id="tab-spx-hourly" data-panel="panel-spx-hourly" onclick="switchTab('spx-hourly')">SPX Hourly</button>
       <button type="button" class="tab" id="tab-ndx-hourly" data-panel="panel-ndx-hourly" onclick="switchTab('ndx-hourly')">NDX Hourly</button>
-      <button type="button" class="tab" id="tab-trials" data-panel="panel-trials" onclick="switchTab('trials')">Trials</button>
-      <button type="button" class="tab" id="tab-hourly-v2" data-panel="panel-hourly-v2" onclick="switchTab('hourly-v2')">Hourly V2</button>
+      <!-- Trials + Hourly V2 tabs removed (legacy backup — panels kept in DOM, polling off) -->
       <button type="button" class="tab" id="tab-sports" data-panel="panel-sports" onclick="switchTab('sports')">Sports</button>
       <button type="button" class="tab" id="tab-kalshi-pnl" data-panel="panel-kalshi-pnl" onclick="switchTab('kalshi-pnl')">Kalshi P&amp;L</button>
     </nav>
@@ -2394,8 +2393,6 @@
       $('panel-eth-hourly').style.display = name === 'eth-hourly' ? '' : 'none';
       $('panel-spx-hourly').style.display = name === 'spx-hourly' ? '' : 'none';
       $('panel-ndx-hourly').style.display = name === 'ndx-hourly' ? '' : 'none';
-      $('panel-trials').style.display = name === 'trials' ? '' : 'none';
-      $('panel-hourly-v2').style.display = name === 'hourly-v2' ? '' : 'none';
       $('panel-sports').style.display = name === 'sports' ? '' : 'none';
       $('panel-kalshi-pnl').style.display = name === 'kalshi-pnl' ? '' : 'none';
       $('tab-15m').classList.toggle('active', name === '15m');
@@ -2404,8 +2401,6 @@
       $('tab-eth-hourly').classList.toggle('active', name === 'eth-hourly');
       $('tab-spx-hourly').classList.toggle('active', name === 'spx-hourly');
       $('tab-ndx-hourly').classList.toggle('active', name === 'ndx-hourly');
-      $('tab-trials').classList.toggle('active', name === 'trials');
-      $('tab-hourly-v2').classList.toggle('active', name === 'hourly-v2');
       $('tab-sports').classList.toggle('active', name === 'sports');
       $('tab-kalshi-pnl').classList.toggle('active', name === 'kalshi-pnl');
       if (name === 'kalshi-pnl') {
@@ -2414,33 +2409,6 @@
       }
       if (name === 'sports') {
         loadSports();
-        return;
-      }
-      if (name === 'hourly-v2') {
-        for (const asset of ['btc', 'eth']) {
-          const cached = lastV2BotStatus[asset];
-          const key = botUiKey(HOURLY_V2_KIND, asset);
-          if (cached?.settings && !pendingBotPatch[key]) {
-            lastKnownBotSettings[key] = normalizeBotSettings(cached.settings, 'max_spend_per_hour_usd');
-          }
-          if (cached) renderHourlyBot(cached, asset, HOURLY_V2_KIND);
-          else renderHourlyBot({ ok: false, error: 'Loading bot status…' }, asset, HOURLY_V2_KIND);
-        }
-        loadHourlyV2();
-        return;
-      }
-      if (name === 'trials') {
-        for (const asset of ['btc', 'eth']) {
-          for (const trialKind of hourlyTrialKindsForAsset(asset)) {
-            const trialCached = getTrialBotCache(trialKind, asset);
-            const trialKey = botUiKey(trialKind, asset);
-            if (trialCached?.settings && !pendingBotPatch[trialKey]) {
-              lastKnownBotSettings[trialKey] = normalizeBotSettings(trialCached.settings, 'max_spend_per_hour_usd');
-            }
-            if (trialCached) renderHourlyBot(trialCached, asset, trialKind);
-          }
-        }
-        loadTrials();
         return;
       }
       if (isHourlyTab(name)) {
@@ -3227,8 +3195,8 @@
       const lr = data.learning_ready || {};
       const skip = (botStatus && botStatus.last_skip_reason) || '';
       const skipLine = skip
-        ? `<p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Bot last skip: <code>${skip}</code> — auto-bot uses mid-hour entry windows, ask-edge gates, and budget caps; manual can enter on any actionable row.</p>`
-        : `<p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Bot follows the same BUY YES/NO signals but only enters when hourly gates pass (mid-hour window, min edge, budget). Your manual lane is the training signal.</p>`;
+        ? `<p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Bot last skip: <code>${skip}</code></p>`
+        : `<p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Signal-mirror paper bot enters on the same BUY YES/NO rows you see; exits on TP / HOLD / CUT (15m flip grace).</p>`;
       el.innerHTML = `
         <details style="font-size:.75rem">
           <summary><strong>Human vs bot</strong> (${data.pairing?.paired_count || 0} paired · ${data.human_only_entries || 0} human-only · ${data.bot_only_entries || 0} bot-only)</summary>
@@ -8224,10 +8192,6 @@
         }
       } else if (isHourlyTab(activeTab)) {
         loadDaily();
-      } else if (activeTab === 'trials') {
-        tasks.push(loadTrials());
-      } else if (activeTab === 'hourly-v2') {
-        tasks.push(loadHourlyV2());
       } else if (activeTab === 'sports') {
         tasks.push(loadSports());
       }

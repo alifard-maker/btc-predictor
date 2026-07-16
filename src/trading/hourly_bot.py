@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import replace
 from typing import Any
 
 from src.trading.bot_risk_gates import record_exit_and_maybe_cap, risk_gate_skip_reason, sync_auto_stop_for_risk
@@ -49,6 +50,14 @@ from src.trading.hourly_live_trial_align import (
   pending_resting_enter_blocks_entry,
   should_mirror_trial_entry_execution,
   should_use_trial_leg_exits,
+)
+from src.trading.hourly_signal_mirror import (
+  apply_signal_mirror_entry_estrat,
+  signal_mirror_active,
+  signal_mirror_cfg,
+  signal_mirror_entry_cfg,
+  signal_mirror_skip_spot_guards,
+  signal_mirror_uses_thesis_exits,
 )
 from src.trading.bot_adaptive_calibration import (
   adaptive_entry_allowed,
@@ -766,7 +775,12 @@ class HourlyBot:
   ) -> tuple[str | None, str]:
     """Return (exit_reason, detail_suffix) or (None, '') if position should stay open."""
     hold_seconds = position_hold_seconds(pos)
-    if should_use_trial_leg_exits(
+    if not signal_mirror_uses_thesis_exits(
+      cfg,
+      kind=self.kind,
+      asset=self.asset,
+      mode=settings.mode,
+    ) and should_use_trial_leg_exits(
       cfg,
       kind=self.kind,
       mode=settings.mode,
@@ -1210,6 +1224,12 @@ class HourlyBot:
     live = tab.get("live") or tab
     results: list[dict[str, Any]] = []
 
+    mirror = signal_mirror_active(
+      cfg, kind=self.kind, asset=self.asset, mode=settings.mode,
+    )
+    mcfg = signal_mirror_cfg(cfg, kind=self.kind, asset=self.asset) if mirror else {}
+    entry_cfg = signal_mirror_entry_cfg(cfg, mcfg) if mirror else cfg
+
     if settings.auto_stopped:
       skip = settings.auto_stop_reason or "auto_stopped_budget_exhausted"
       if skip == "budget_exhausted":
@@ -1267,7 +1287,7 @@ class HourlyBot:
     self.store.set_hour_momentum(momentum_snap)
 
     settle_gate = entry_too_close_to_settle_skip_reason(
-      live.get("hours_to_settle"), cfg,
+      live.get("hours_to_settle"), entry_cfg,
     )
     if settle_gate:
       # Prefer a more actionable cooldown reason when available (especially for
@@ -1292,21 +1312,22 @@ class HourlyBot:
       return results
 
     far_gate = entry_too_far_from_settle_skip_reason(
-      live.get("hours_to_settle"), cfg,
+      live.get("hours_to_settle"), entry_cfg,
     )
     if far_gate:
       self.store.set_last_skip_reason(far_gate)
       return results
 
-    mid_gate = mid_hour_entry_skip_reason(
-      live.get("hours_to_settle"),
-      cfg,
-      asset=self.asset,
-      mode=settings.mode,
-    )
-    if mid_gate:
-      self.store.set_last_skip_reason(mid_gate)
-      return results
+    if not mirror:
+      mid_gate = mid_hour_entry_skip_reason(
+        live.get("hours_to_settle"),
+        cfg,
+        asset=self.asset,
+        mode=settings.mode,
+      )
+      if mid_gate:
+        self.store.set_last_skip_reason(mid_gate)
+        return results
 
     max_cap = settings.max_spend_per_hour_usd
     remaining = self.store.remaining_budget_usd(event_ticker, max_cap, settings)
@@ -1324,56 +1345,57 @@ class HourlyBot:
 
     candidates = _entry_candidates(tab, cfg)
 
-    trial_regime_sync = trial_mech_pause_when_live_regime_blocked(
-      tab, cfg, kind=self.kind, asset=self.asset,
-    )
-    if trial_regime_sync:
-      self.store.set_last_skip_reason(trial_regime_sync)
-      return results
-
-    regime_block = pnl_first_regime_block_reason(
-      tab, cfg, kind=self.kind, mode=settings.mode,
-    )
-    if regime_block:
-      self.store.set_last_skip_reason(regime_block)
-      return results
-
-    churn_block = probe_entry_churn_block_reason(
-      self.store,
-      event_ticker,
-      cfg,
-      kind=self.kind,
-      mode=settings.mode,
-    )
-    if churn_block:
-      self.store.set_last_skip_reason(churn_block)
-      return results
-
-    candidates = filter_pnl_first_candidates(
-      candidates, cfg, kind=self.kind, mode=settings.mode, asset=self.asset,
-    )
-    if not candidates:
-      if pnl_first_s1_only_active(cfg, kind=self.kind, mode=settings.mode, asset=self.asset):
-        self.store.set_last_skip_reason("pnl_first_no_s1_candidates")
-      else:
-        live_tab = tab.get("live") or tab
-        regime = live_tab.get("regime") or tab.get("regime") or {}
-        if regime.get("blocked") is True or regime.get("allow_trade") is False:
-          reasons = list(regime.get("reasons") or regime.get("block_reasons") or [])
-          hint = str(reasons[0])[:96] if reasons else "regime"
-          self.store.set_last_skip_reason(f"regime_blocked:{hint}")
-        else:
-          self.store.set_last_skip_reason("no_buy_yes_no_candidates")
-      return results
-
-    if adaptive.mode == "locked":
-      self.store.set_last_skip_reason(
-        f"hour_profit_locked:{adaptive.realized_pnl_usd:.2f}"
+    if not mirror:
+      trial_regime_sync = trial_mech_pause_when_live_regime_blocked(
+        tab, cfg, kind=self.kind, asset=self.asset,
       )
-      return results
-    if defense_entries_blocked(adaptive, cfg):
-      self.store.set_last_skip_reason("adaptive_defense_skip")
-      return results
+      if trial_regime_sync:
+        self.store.set_last_skip_reason(trial_regime_sync)
+        return results
+
+      regime_block = pnl_first_regime_block_reason(
+        tab, cfg, kind=self.kind, mode=settings.mode,
+      )
+      if regime_block:
+        self.store.set_last_skip_reason(regime_block)
+        return results
+
+      churn_block = probe_entry_churn_block_reason(
+        self.store,
+        event_ticker,
+        cfg,
+        kind=self.kind,
+        mode=settings.mode,
+      )
+      if churn_block:
+        self.store.set_last_skip_reason(churn_block)
+        return results
+
+      candidates = filter_pnl_first_candidates(
+        candidates, cfg, kind=self.kind, mode=settings.mode, asset=self.asset,
+      )
+      if not candidates:
+        if pnl_first_s1_only_active(cfg, kind=self.kind, mode=settings.mode, asset=self.asset):
+          self.store.set_last_skip_reason("pnl_first_no_s1_candidates")
+        else:
+          live_tab = tab.get("live") or tab
+          regime = live_tab.get("regime") or tab.get("regime") or {}
+          if regime.get("blocked") is True or regime.get("allow_trade") is False:
+            reasons = list(regime.get("reasons") or regime.get("block_reasons") or [])
+            hint = str(reasons[0])[:96] if reasons else "regime"
+            self.store.set_last_skip_reason(f"regime_blocked:{hint}")
+          else:
+            self.store.set_last_skip_reason("no_buy_yes_no_candidates")
+        return results
+
+      if adaptive.mode == "locked":
+        self.store.set_last_skip_reason(
+          f"hour_profit_locked:{adaptive.realized_pnl_usd:.2f}"
+        )
+        return results
+      if defense_entries_blocked(adaptive, cfg):
+        self.store.set_last_skip_reason("adaptive_defense_skip")
+        return results
 
     wcfg = merge_whipsaw_align_overrides(
       WhipsawGuardConfig.from_cfg(cfg, kind="hourly"),
@@ -1381,6 +1403,8 @@ class HourlyBot:
       kind="hourly",
       mode=settings.mode,
     )
+    if mirror:
+      wcfg = replace(wcfg, enabled=False)
     align_cfg = HourlyLiveTrialAlignConfig.from_cfg(cfg, kind="hourly")
     quick_exit_cuts = self.store.count_quick_exit_cuts(event_ticker) if wcfg.enabled else 0
     whipsaw_block = whipsaw_hour_entry_blocked(
@@ -1390,12 +1414,13 @@ class HourlyBot:
       self.store.set_last_skip_reason(whipsaw_block)
       return results
 
-    leg_stop_block = leg_stop_entry_blocked(
-      self.store, event_ticker, cfg=cfg, kind=self.kind, mode=settings.mode,
-    )
-    if leg_stop_block:
-      self.store.set_last_skip_reason(leg_stop_block)
-      return results
+    if not mirror:
+      leg_stop_block = leg_stop_entry_blocked(
+        self.store, event_ticker, cfg=cfg, kind=self.kind, mode=settings.mode,
+      )
+      if leg_stop_block:
+        self.store.set_last_skip_reason(leg_stop_block)
+        return results
 
     estrat = effective_bot_entry_strategy(
       cfg,
@@ -1403,22 +1428,24 @@ class HourlyBot:
       aggressive=settings.aggressive_entries,
       tuning=self.store.get_auto_tuning(),
     )
-    estrat = apply_live_inventory_guards(
-      estrat, cfg, mode=settings.mode, kind=entry_kind_for_bot(self.kind),
-    )
-    estrat = apply_adaptive_passive_guards(estrat, adaptive, cfg)
-    estrat = apply_live_exit_entry_guards(
-      estrat, cfg, mode=settings.mode, kind=entry_kind_for_bot(self.kind),
-    )
-
-    estrat = apply_hour_momentum_policy(estrat, momentum_policy)
-    estrat = apply_mirror_trial_entry_estrat(
-      estrat, cfg, kind=self.kind, mode=settings.mode,
-    )
-    estrat = apply_probe_entry_estrat_overlay(
-      estrat, cfg, kind=self.kind, mode=settings.mode,
-    )
-    estrat = apply_whipsaw_momentum_contract_cap(estrat, momentum_policy, wcfg)
+    if mirror:
+      estrat = apply_signal_mirror_entry_estrat(estrat, mcfg)
+    else:
+      estrat = apply_live_inventory_guards(
+        estrat, cfg, mode=settings.mode, kind=entry_kind_for_bot(self.kind),
+      )
+      estrat = apply_adaptive_passive_guards(estrat, adaptive, cfg)
+      estrat = apply_live_exit_entry_guards(
+        estrat, cfg, mode=settings.mode, kind=entry_kind_for_bot(self.kind),
+      )
+      estrat = apply_hour_momentum_policy(estrat, momentum_policy)
+      estrat = apply_mirror_trial_entry_estrat(
+        estrat, cfg, kind=self.kind, mode=settings.mode,
+      )
+      estrat = apply_probe_entry_estrat_overlay(
+        estrat, cfg, kind=self.kind, mode=settings.mode,
+      )
+      estrat = apply_whipsaw_momentum_contract_cap(estrat, momentum_policy, wcfg)
     late_entry_effective = resolve_late_entry_config(cfg, momentum_policy)
 
     ranked = rank_hourly_candidates(candidates, estrat=estrat)
@@ -1454,13 +1481,22 @@ class HourlyBot:
       else len(open_pos)
     )
 
+    entry_settings = (
+      replace(settings, allow_strong=False, allow_actionable=False)
+      if mirror
+      else settings
+    )
+    skip_spot = mirror and signal_mirror_skip_spot_guards(
+      cfg, kind=self.kind, asset=self.asset,
+    )
+
     for _composite, _edge, _saf, pick, bet in ranked:
       if not cycle_budget.can_enter(pick):
         continue
       if slots_used >= max_slots:
         last_reason = "max_concurrent_positions"
         break
-      if not bet_qualifies(pick, bet, settings):
+      if not bet_qualifies(pick, bet, entry_settings):
         last_reason = "signal_filtered_by_settings"
         continue
 
@@ -1476,19 +1512,20 @@ class HourlyBot:
         continue
 
       settle_skip = entry_pick_settle_skip_reason(
-        live.get("hours_to_settle"), cfg, pick=pick, side=side,
+        live.get("hours_to_settle"), entry_cfg, pick=pick, side=side,
         le_override=late_entry_effective,
       )
       if settle_skip:
         last_reason = settle_skip
         continue
 
-      pf_block = pnl_first_entry_block_reason(
-        pick, side, cfg, kind=self.kind, mode=settings.mode, asset=self.asset,
-      )
-      if pf_block:
-        last_reason = pf_block
-        continue
+      if not mirror:
+        pf_block = pnl_first_entry_block_reason(
+          pick, side, cfg, kind=self.kind, mode=settings.mode, asset=self.asset,
+        )
+        if pf_block:
+          last_reason = pf_block
+          continue
 
       from src.trading.live_range_guards import (
         range_band_spot_entry_block_reason,
@@ -1496,53 +1533,55 @@ class HourlyBot:
         threshold_spot_entry_guard_shadow_only,
       )
 
-      spot_block = range_band_spot_entry_block_reason(
-        pick=pick,
-        side=side,
-        spot_price=ref_f,
-        terminal_sigma=live.get("terminal_sigma"),
-        cfg=cfg,
-        kind=self.kind,
-        asset=self.asset,
-      )
-      if spot_block:
-        last_reason = spot_block
-        continue
-
-      thresh_spot_block = threshold_spot_entry_block_reason(
-        pick=pick,
-        side=side,
-        spot_price=ref_f,
-        terminal_sigma=live.get("terminal_sigma"),
-        cfg=cfg,
-        kind=self.kind,
-        asset=self.asset,
-      )
-      if thresh_spot_block:
-        if threshold_spot_entry_guard_shadow_only(
-          cfg, kind=self.kind, asset=self.asset,
-        ):
-          log.info(
-            "%s %s threshold_spot_entry_guard shadow would_block %s %s: %s",
-            self.asset.upper(),
-            self.kind,
-            side.upper(),
-            market_ticker,
-            thresh_spot_block,
-          )
-        else:
-          last_reason = thresh_spot_block
+      if not skip_spot:
+        spot_block = range_band_spot_entry_block_reason(
+          pick=pick,
+          side=side,
+          spot_price=ref_f,
+          terminal_sigma=live.get("terminal_sigma"),
+          cfg=cfg,
+          kind=self.kind,
+          asset=self.asset,
+        )
+        if spot_block:
+          last_reason = spot_block
           continue
 
-      range_block = adaptive_range_band_block_reason(pick, adaptive, cfg)
-      if range_block:
-        last_reason = range_block
-        continue
+        thresh_spot_block = threshold_spot_entry_block_reason(
+          pick=pick,
+          side=side,
+          spot_price=ref_f,
+          terminal_sigma=live.get("terminal_sigma"),
+          cfg=cfg,
+          kind=self.kind,
+          asset=self.asset,
+        )
+        if thresh_spot_block:
+          if threshold_spot_entry_guard_shadow_only(
+            cfg, kind=self.kind, asset=self.asset,
+          ):
+            log.info(
+              "%s %s threshold_spot_entry_guard shadow would_block %s %s: %s",
+              self.asset.upper(),
+              self.kind,
+              side.upper(),
+              market_ticker,
+              thresh_spot_block,
+            )
+          else:
+            last_reason = thresh_spot_block
+            continue
 
-      defense_block = adaptive_defense_entry_block_reason(pick, side, adaptive, cfg)
-      if defense_block:
-        last_reason = defense_block
-        continue
+      if not mirror:
+        range_block = adaptive_range_band_block_reason(pick, adaptive, cfg)
+        if range_block:
+          last_reason = range_block
+          continue
+
+        defense_block = adaptive_defense_entry_block_reason(pick, side, adaptive, cfg)
+        if defense_block:
+          last_reason = defense_block
+          continue
 
       if settings.mode == "live":
         from src.trading.hourly_live_trial_align import skip_live_inventory_guards
