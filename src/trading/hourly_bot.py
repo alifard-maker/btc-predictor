@@ -455,6 +455,7 @@ def enrich_open_positions_live(
           regime_allow_trade=bool(regime.get("allow_trade", True)),
           regime_reasons=list(regime.get("reasons") or []),
           unrealized_pnl_usd=row.get("unrealized_pnl_usd"),
+          hours_to_settle=float(hours_left) if hours_left is not None else None,
           cfg=cfg,
         )
     else:

@@ -2674,16 +2674,82 @@
 
     const humanTradesCache = { btc: null, eth: null };
     const humanPaperLogExpanded = { btc: false, eth: false };
+    const humanPaperLogHidePushes = { btc: true, eth: true };
 
-    function humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl) {
-      if (!paperLog.length) {
+    function isHumanPaperPush(t) {
+      if (String(t.action || '') !== 'exit') return false;
+      const pnl = Number(t.pnl_usd || 0);
+      const entry = t.entry_price_cents;
+      const exit = t.exit_price_cents;
+      if (entry != null && exit != null && entry === exit && Math.abs(pnl) < 0.009) return true;
+      const detail = String(t.detail || '');
+      return detail.includes('cash-back @ entry') || (
+        detail.includes('HOUR SETTLEMENT') && Math.abs(pnl) < 0.009
+      );
+    }
+
+    function humanPaperLogRows(log, asset) {
+      const rows = Array.isArray(log) ? log : [];
+      if (!humanPaperLogHidePushes[asset]) return rows;
+      return rows.filter(t => !isHumanPaperPush(t));
+    }
+
+    function humanPaperLogSummary(paperPnl, log, asset) {
+      const pushes = Number(paperPnl.pushes || 0);
+      const decisive = Math.max(0, Number(paperPnl.closed_legs || 0) - pushes);
+      const visible = humanPaperLogRows(log, asset).length;
+      const hidden = humanPaperLogHidePushes[asset] ? Math.max(0, rowsHiddenCount(log, asset)) : 0;
+      let label = `<strong>Paper P&L log</strong> (${decisive} decisive`;
+      if (pushes > 0) label += ` · ${pushes}P`;
+      label += ')';
+      if (hidden > 0) {
+        label += ` <span class="muted" style="font-weight:400">· ${hidden} scratch${hidden === 1 ? '' : 'es'} hidden</span>`;
+        label += ` <button type="button" class="btn-secondary" style="font-size:.58rem;padding:.08rem .3rem;margin-left:.2rem" onclick="humanTogglePaperPushes('${asset}')">show</button>`;
+      } else if (pushes > 0 && !humanPaperLogHidePushes[asset]) {
+        label += ` <button type="button" class="btn-secondary" style="font-size:.58rem;padding:.08rem .3rem;margin-left:.2rem" onclick="humanTogglePaperPushes('${asset}')">hide scratches</button>`;
+      }
+      return label;
+    }
+
+    function rowsHiddenCount(log, asset) {
+      if (!humanPaperLogHidePushes[asset]) return 0;
+      return (log || []).filter(t => isHumanPaperPush(t)).length;
+    }
+
+    function humanTogglePaperPushes(asset) {
+      humanPaperLogHidePushes[asset] = !humanPaperLogHidePushes[asset];
+      const cached = humanTradesCache[asset];
+      if (cached?.ok) {
+        renderHumanTradesPanel(asset, cached);
+        refreshHumanPaperLog(asset);
+      }
+    }
+
+    function refreshHumanPaperLog(asset) {
+      const cached = humanTradesCache[asset];
+      if (!cached?.ok) return;
+      const st = cached.status || {};
+      const paperPnl = st.paper_pnl || {};
+      const paperLog = (st.paper_recent_trades || st.recent_trades || [])
+        .filter(t => String(t.mode || '').toLowerCase() === 'paper' && t.action === 'exit')
+        .slice(0, 60);
+      patchHumanPaperLog(asset, paperLog, paperPnl, humanPnlCls, humanFmtPnl);
+    }
+
+    function humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset) {
+      const visible = humanPaperLogRows(paperLog, asset);
+      if (!visible.length) {
+        const hidden = rowsHiddenCount(paperLog, asset);
+        if (hidden > 0) {
+          return `<p class="muted" style="font-size:.72rem;margin-top:.5rem">${hidden} cash-back scratch${hidden === 1 ? '' : 'es'} hidden — <button type="button" class="btn-secondary" style="font-size:.58rem;padding:.08rem .3rem" onclick="humanTogglePaperPushes('${asset}')">show scratches</button></p>`;
+        }
         return '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after Sell or hour settlement.</p>';
       }
       return `<details id="human-paper-log-DETAILS_ASSET" style="margin-top:.65rem;font-size:.72rem">
-          <summary id="human-paper-log-summary-DETAILS_ASSET"><strong>Paper P&L log</strong> (${paperPnl.closed_legs || 0} closed)</summary>
+          <summary id="human-paper-log-summary-DETAILS_ASSET">${humanPaperLogSummary(paperPnl, paperLog, asset)}</summary>
           <table style="width:100%;margin-top:.35rem;font-size:.68rem">
             <thead><tr><th>Time</th><th>Action</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&L</th></tr></thead>
-            <tbody id="human-paper-log-body-DETAILS_ASSET">${humanPaperLogRowsHtml(paperLog, pnlCls, fmtPnl)}</tbody>
+            <tbody id="human-paper-log-body-DETAILS_ASSET">${humanPaperLogRowsHtml(visible, pnlCls, fmtPnl)}</tbody>
           </table>
         </details>`;
     }
@@ -2714,7 +2780,21 @@
     function patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl) {
       const wrap = $(`human-paper-log-wrap-${asset}`);
       const details = $(`human-paper-log-${asset}`);
-      if (!paperLog.length) {
+      const visible = humanPaperLogRows(paperLog, asset);
+      if (!visible.length) {
+        if (wrap && !details) {
+          wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset).replace(/DETAILS_ASSET/g, asset);
+          const fresh = $(`human-paper-log-${asset}`);
+          if (fresh) {
+            fresh.open = !!humanPaperLogExpanded[asset];
+            bindHumanPaperLogToggle(asset);
+          }
+          return true;
+        }
+        if (wrap && rowsHiddenCount(paperLog, asset) > 0) {
+          wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset).replace(/DETAILS_ASSET/g, asset);
+          return true;
+        }
         if (wrap && !details) return true;
         if (wrap) {
           wrap.innerHTML = '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after Sell or hour settlement.</p>';
@@ -2722,7 +2802,7 @@
         return true;
       }
       if (!details && wrap) {
-        wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl).replace(/DETAILS_ASSET/g, asset);
+        wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset).replace(/DETAILS_ASSET/g, asset);
         const fresh = $(`human-paper-log-${asset}`);
         if (fresh) {
           fresh.open = !!humanPaperLogExpanded[asset];
@@ -2734,10 +2814,10 @@
       const summary = $(`human-paper-log-summary-${asset}`);
       const tbody = $(`human-paper-log-body-${asset}`);
       if (summary) {
-        summary.innerHTML = `<strong>Paper P&L log</strong> (${paperPnl.closed_legs || 0} closed)`;
+        summary.innerHTML = humanPaperLogSummary(paperPnl, paperLog, asset);
       }
       if (tbody && details.open) {
-        tbody.innerHTML = humanPaperLogRowsHtml(paperLog, pnlCls, fmtPnl);
+        tbody.innerHTML = humanPaperLogRowsHtml(visible, pnlCls, fmtPnl);
       }
       bindHumanPaperLogToggle(asset);
       return true;
@@ -2817,7 +2897,7 @@
       }
       const paperLog = (st.paper_recent_trades || st.recent_trades || [])
         .filter(t => String(t.mode || '').toLowerCase() === 'paper' && t.action === 'exit')
-        .slice(0, 24);
+        .slice(0, 60);
       patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl);
       return true;
     }
@@ -3006,9 +3086,9 @@
       const ur = paperPnl.open_unrealized_pnl_usd;
       const paperLog = (st.paper_recent_trades || st.recent_trades || [])
         .filter(t => String(t.mode || '').toLowerCase() === 'paper' && t.action === 'exit')
-        .slice(0, 24);
+        .slice(0, 60);
       const openHtml = `<div id="human-open-legs-${asset}">${humanOpenLegsInnerHtml(asset, open)}</div>`;
-      const logHtml = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl)
+      const logHtml = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset)
         .replace(/DETAILS_ASSET/g, asset);
       const bookBanner = humanManualBookBannerHtml(asset);
       const html = `
@@ -3135,7 +3215,7 @@
       if (asset === 'btc' || asset === 'eth') loadHumanMarksFast(asset);
     }
 
-    function renderHumanBotCompare(asset, data) {
+    function renderHumanBotCompare(asset, data, botStatus) {
       const el = $(humanComparePanelId(asset));
       if (!el) return;
       if (!data || !data.ok) {
@@ -3145,6 +3225,10 @@
       const hs = data.human_summary || {};
       const bs = data.bot_summary || {};
       const lr = data.learning_ready || {};
+      const skip = (botStatus && botStatus.last_skip_reason) || '';
+      const skipLine = skip
+        ? `<p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Bot last skip: <code>${skip}</code> — auto-bot uses mid-hour entry windows, ask-edge gates, and budget caps; manual can enter on any actionable row.</p>`
+        : `<p class="muted" style="font-size:.68rem;margin:.45rem 0 0">Bot follows the same BUY YES/NO signals but only enters when hourly gates pass (mid-hour window, min edge, budget). Your manual lane is the training signal.</p>`;
       el.innerHTML = `
         <details style="font-size:.75rem">
           <summary><strong>Human vs bot</strong> (${data.pairing?.paired_count || 0} paired · ${data.human_only_entries || 0} human-only · ${data.bot_only_entries || 0} bot-only)</summary>
@@ -3154,6 +3238,7 @@
             <div><span>Bot $/leg</span><strong>${bs.avg_pnl_usd != null ? signedPrice(bs.avg_pnl_usd) : '—'}</strong></div>
             <div><span>Bucket tune</span><strong>${lr.sufficient_for_buckets ? 'ready' : 'need 30+'}</strong></div>
           </div>
+          ${skipLine}
         </details>`;
     }
 
@@ -3170,7 +3255,7 @@
         ]);
         humanTradesCache[asset] = status;
         renderHumanTradesPanel(asset, status);
-        renderHumanBotCompare(asset, compare);
+        renderHumanBotCompare(asset, compare, status.bot_status);
         refreshHumanTradeColumns(asset);
       } catch (e) {
         // Keep last-good open legs / mode UI — don't flash "unavailable" on blips.

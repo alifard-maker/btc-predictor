@@ -393,3 +393,52 @@ def test_held_threshold_no_cuts_near_strike_late_in_hour():
     cfg={"hourly": {"bot": {"near_strike_cut_min_hours": 0.083, "near_strike_tolerance_usd": 3.0}}},
   )
   assert result["alert"] == "CUT LOSSES"
+
+
+def test_held_signal_flip_holds_when_more_than_15m_left():
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY YES",
+    "edge": 0.08,
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 65000.0,
+  }
+  pos = {"side": "no", "signal": "BUY NO", "entry_price_cents": 70, "contracts": 3}
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=64950.0,
+    regime_allow_trade=True,
+    regime_reasons=[],
+    unrealized_pnl_usd=-0.12,
+    hours_to_settle=0.40,
+    cfg={"hourly": {"bot": {"early_signal_flip_hold_hours": 0.25}}},
+  )
+  assert result["alert"] == "HOLD"
+  assert "recover" in result["detail"]
+
+
+def test_held_signal_flip_still_cuts_inside_15m_window():
+  from src.trading.hourly_position_alert import assess_held_hourly_position_alert
+
+  pick = {
+    "signal": "BUY YES",
+    "edge": 0.08,
+    "contract_type": "threshold",
+    "strike_type": "greater",
+    "floor_strike": 65000.0,
+  }
+  pos = {"side": "no", "signal": "BUY NO", "entry_price_cents": 70, "contracts": 3}
+  result = assess_held_hourly_position_alert(
+    pos=pos,
+    pick=pick,
+    live_price=64950.0,
+    regime_allow_trade=True,
+    regime_reasons=[],
+    unrealized_pnl_usd=-0.12,
+    hours_to_settle=0.10,
+    cfg={"hourly": {"bot": {"early_signal_flip_hold_hours": 0.25}}},
+  )
+  assert result["alert"] == "CUT LOSSES"

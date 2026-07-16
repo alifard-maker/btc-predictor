@@ -108,6 +108,12 @@ def near_strike_cut_cfg(cfg: dict[str, Any] | None) -> tuple[float, float]:
   return min_hours, tolerance
 
 
+def early_signal_flip_hold_hours(cfg: dict[str, Any] | None) -> float:
+  """When > this many hours remain, a signal flip alone should not force CUT LOSSES."""
+  bot_cfg = (cfg or {}).get("hourly", {}).get("bot") or {}
+  return float(bot_cfg.get("early_signal_flip_hold_hours", 0.25))
+
+
 def hourly_spot_cut_suppressed_near_strike(
   pick: dict[str, Any],
   *,
@@ -221,6 +227,15 @@ def assess_held_hourly_position_alert(
 
   if unrealized_pnl_usd is not None and unrealized_pnl_usd < -0.05:
     if sig_flipped:
+      grace_h = early_signal_flip_hold_hours(cfg)
+      if hours_to_settle is not None and float(hours_to_settle) > grace_h:
+        mins = int(float(hours_to_settle) * 60)
+        return _result(
+          "HOLD",
+          "neutral",
+          f"Signal flipped ({entry_signal} → {current_signal}) but {mins}m to settle "
+          f"(> {int(grace_h * 60)}m) — hold and let the hour recover before cutting.",
+        )
       return _result(
         "CUT LOSSES",
         "danger",
