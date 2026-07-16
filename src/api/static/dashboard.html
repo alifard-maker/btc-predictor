@@ -683,8 +683,8 @@
 
     <div id="panel-daily" style="display:none">
       <div class="card" id="btc-hourly-bot-card">
-        <h2>BTC hourly auto-bet</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON — enters and exits paper/live positions from live signals (no browser required). <strong>Live mode</strong> uses the same entry mechanics as <strong>BTC Hourly Trial — Mech</strong> (<code>mechanical_fixes</code>: adaptive off, inventory caps, leg TP/stop exits). <strong>Max at-risk $/hour</strong> caps open exposure; exits free budget for re-entry. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any BUY YES/NO pick).</p>
+        <h2>BTC hourly auto-bet (live twin)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Over-gated P&amp;L-first / Mech live stack — <strong>not</strong> your manual training twin. For signal-mirror paper trading, use the green card below. This bot runs <strong>every ~5s on the server</strong> while Auto-bet is ON. <strong>Max at-risk $/hour</strong> caps open exposure.</p>
         <div id="btc-hourly-bot"><p class="muted">Loading…</p></div>
       </div>
       <div class="card" id="hourly-guide-card">
@@ -708,9 +708,14 @@
         <h2>Hourly prediction history</h2>
         <div style="overflow-x:auto" id="hourly-history"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="btc-hourly-trial-mech-bot-card" style="border-color:rgba(34,197,94,.45)">
+        <h2>BTC signal-mirror paper bot</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Your training twin for this tab. Enters on the same actionable <strong>BUY YES/NO</strong> rows you see (no mid-hour / pnl_first / adaptive over-gates). Exits on thesis <strong>TP / HOLD / CUT</strong> with the 15m flip grace. <strong>Human vs bot</strong> below pairs your manual enters against this bot. Keep Auto-bet ON while you paper-trade.</p>
+        <div id="btc-hourly-trial-mech-bot"><p class="muted">Loading…</p></div>
+      </div>
       <div class="card" id="human-trades-card">
         <h2>Manual trading (you) <span class="muted" style="font-weight:400;font-size:.85rem" id="human-live-spot-btc">· BRTI —</span></h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Follow dashboard signals and <strong>buy/sell from this tab</strong> while auto-bots keep running. Paper or live (live needs password). Each click logs features + bot counterfactual for later tuning.</p>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Follow dashboard signals and <strong>buy/sell from this tab</strong> while the signal-mirror paper bot keeps running. Paper or live (live needs password). Each click logs features + bot counterfactual for later tuning.</p>
         <div id="human-trades-panel"><p class="muted">Loading…</p></div>
         <div id="human-bot-compare-panel" style="margin-top:.75rem"></div>
       </div>
@@ -929,12 +934,8 @@
           <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>soft rally</strong> entry profile — full rally entries; defense limited to 1 YES threshold leg (40–80¢ mid) with edge ≥15¢. Same leg TP/stop exits.</p>
           <div id="btc-hourly-trial-soft-bot"><p class="muted">Loading…</p></div>
         </div>
-        <div class="card" id="btc-hourly-trial-mech-bot-card" style="border-color:rgba(34,197,94,.35)">
-          <h2>BTC Hourly Trial — Mech</h2>
-          <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Paper trial with <strong>mechanical fixes</strong> entry profile — 084d7d1 guards ON, <strong>adaptive OFF</strong> (inventory caps, no rally/defense modes). Same leg TP/stop exits.</p>
-          <div id="btc-hourly-trial-mech-bot"><p class="muted">Loading…</p></div>
-        </div>
       </div>
+      <p class="muted" style="font-size:.72rem;margin:.35rem 0 .75rem">BTC Trial Mech moved to <strong>BTC Hourly</strong> as <strong>signal-mirror paper bot</strong> (same store).</p>
       <div class="card" id="eth-hourly-trial-bot-card" style="border-color:rgba(168,85,247,.35)">
         <h2>ETH Hourly Trial</h2>
         <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same entries and market data as <strong>ETH hourly</strong> live bot, but exits use <strong>15m-style contract-first logic</strong> (+3¢ take-profit, −4¢ stop, leg trail). Separate paper bankroll for A/B comparison.</p>
@@ -2424,6 +2425,15 @@
         }
         if (cached) renderHourlyBot(cached, asset);
         else renderHourlyBot({ ok: false, error: 'Loading bot status…' }, asset);
+        if (asset === 'btc') {
+          const mirrorCached = getTrialBotCache('hourly_trial_mech', 'btc');
+          const mirrorKey = botUiKey('hourly_trial_mech', 'btc');
+          if (mirrorCached?.settings && !pendingBotPatch[mirrorKey]) {
+            lastKnownBotSettings[mirrorKey] = normalizeBotSettings(mirrorCached.settings, 'max_spend_per_hour_usd');
+          }
+          if (mirrorCached) renderHourlyBot(mirrorCached, 'btc', 'hourly_trial_mech');
+          else renderHourlyBot({ ok: false, error: 'Loading signal-mirror…' }, 'btc', 'hourly_trial_mech');
+        }
         loadAll();
         return;
       }
@@ -3962,7 +3972,7 @@
     function hourlyTrialKindLabel(kind) {
       if (kind === 'hourly_trial_rally') return 'hourly trial rally';
       if (kind === 'hourly_trial_soft') return 'hourly trial soft';
-      if (kind === 'hourly_trial_mech') return 'hourly trial mech';
+      if (kind === 'hourly_trial_mech') return 'signal-mirror';
       if (kind === 'hourly_trial') return 'hourly trial';
       return kind;
     }
@@ -4093,6 +4103,7 @@
         return false;
       }
       if (isHourlyTrialKind(kind)) {
+        if (kind === 'hourly_trial_mech' && asset === 'btc' && activeTab === 'daily') return true;
         if (activeTab === 'trials') return true;
         if (asset === 'spx' && activeTab === 'spx-hourly') return true;
         if (asset === 'ndx' && activeTab === 'ndx-hourly') return true;
@@ -7399,6 +7410,30 @@
       }).catch(() => {});
     }
 
+    function refreshBtcSignalMirrorBot(tabAtStart, gen) {
+      const kind = 'hourly_trial_mech';
+      const asset = 'btc';
+      getWithTimeout(hourlyBotStatusUrl(asset, kind, true), 15000).then((botDirect) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        if (!botDirect?.ok) {
+          const cached = getTrialBotCache(kind, asset);
+          if (cached?.ok) renderHourlyBot(cached, asset, kind);
+          return;
+        }
+        const bot = mergeHourlyTrialBotStatus(asset, botDirect, kind);
+        if (bot?.ok && shouldRenderHourlyBot(asset, kind)) renderHourlyBot(bot, asset, kind);
+      }).catch(() => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
+        const cached = getTrialBotCache(kind, asset);
+        if (cached) renderHourlyBot(cached, asset, kind);
+      });
+      getWithTimeout(hourlyBotStatusUrl(asset, kind, false), 30000).then((fullBot) => {
+        if (gen !== dailyFetchGen || activeTab !== tabAtStart || !fullBot?.ok) return;
+        const bot = mergeHourlyTrialBotStatus(asset, fullBot, kind);
+        if (bot?.ok && shouldRenderHourlyBot(asset, kind)) renderHourlyBot(bot, asset, kind);
+      }).catch(() => {});
+    }
+
     async function loadDaily(opts = {}) {
       const tabAtStart = activeTab;
       if (tabAtStart !== 'daily' && !isHourlyTab(tabAtStart)) return;
@@ -7416,6 +7451,11 @@
       const cached = lastBotStatus[asset];
       if (cached) renderHourlyBot(cached, asset);
       else renderHourlyBot({ ok: false, error: 'Loading bot status…' }, asset);
+      if (asset === 'btc') {
+        const mirrorCached = getTrialBotCache('hourly_trial_mech', 'btc');
+        if (mirrorCached) renderHourlyBot(mirrorCached, 'btc', 'hourly_trial_mech');
+        else renderHourlyBot({ ok: false, error: 'Loading signal-mirror…' }, 'btc', 'hourly_trial_mech');
+      }
       if (asset === 'eth') {
         const liveCached = lastHourlyLiveBotStatus.eth;
         if (liveCached) renderHourlyBot(liveCached, 'eth', HOURLY_LIVE_KIND);
@@ -7444,6 +7484,7 @@
         if (gen !== dailyFetchGen || activeTab !== tabAtStart) return;
         renderDaily(d);
         refreshHourlyBotDirect(asset, tabAtStart, gen, null);
+        if (asset === 'btc') refreshBtcSignalMirrorBot(tabAtStart, gen);
         if (asset === 'eth') refreshHourlyLiveBotDirect(tabAtStart, gen);
         if (asset === 'spx' || asset === 'ndx') {
           refreshIndexTrialBot(asset, tabAtStart, gen);
