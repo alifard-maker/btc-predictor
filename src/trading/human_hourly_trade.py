@@ -39,8 +39,6 @@ def human_trade_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
     "max_stake_per_entry_usd": float(stake),
     "paper_bankroll_initial_usd": float(raw.get("paper_bankroll_initial_usd", 100.0)),
     "max_open_positions": int(raw.get("max_open_positions", 20)),
-    "daily_spend_cap_usd": float(raw.get("daily_spend_cap_usd", 50.0)),
-    "daily_loss_cap_usd": float(raw.get("daily_loss_cap_usd", 25.0)),
   }
 
 
@@ -60,98 +58,7 @@ def settings_from_cfg(cfg: dict[str, Any] | None, store: HumanTradeStore) -> Hum
       saved.paper_bankroll_initial_usd or hcfg["paper_bankroll_initial_usd"],
     ),
     max_open_positions=int(saved.max_open_positions or hcfg["max_open_positions"]),
-    daily_spend_cap_usd=float(
-      saved.daily_spend_cap_usd
-      if saved.daily_spend_cap_usd is not None
-      else hcfg["daily_spend_cap_usd"],
-    ),
-    daily_loss_cap_usd=float(
-      saved.daily_loss_cap_usd
-      if saved.daily_loss_cap_usd is not None
-      else hcfg["daily_loss_cap_usd"],
-    ),
   )
-
-
-def human_et_day_bounds() -> tuple[str, str, str]:
-  """Return (day_start_utc_iso, day_end_utc_iso, et_date) for America/New_York calendar day."""
-  from datetime import timedelta
-  from zoneinfo import ZoneInfo
-
-  et = ZoneInfo("America/New_York")
-  now_et = datetime.now(et)
-  start_et = now_et.replace(hour=0, minute=0, second=0, microsecond=0)
-  end_et = start_et + timedelta(days=1)
-  return (
-    start_et.astimezone(timezone.utc).isoformat(),
-    end_et.astimezone(timezone.utc).isoformat(),
-    start_et.date().isoformat(),
-  )
-
-
-def human_day_risk_status(
-  store: HumanTradeStore,
-  settings: HumanTradeSettings,
-  *,
-  mode: str | None = None,
-) -> dict[str, Any]:
-  mode_l = str(mode or settings.mode or "paper").lower()
-  day_start, day_end, et_date = human_et_day_bounds()
-  activity = store.day_activity(mode=mode_l, day_start_iso=day_start, day_end_iso=day_end)
-  spend_cap = float(settings.daily_spend_cap_usd or 0.0)
-  loss_cap = float(settings.daily_loss_cap_usd or 0.0)
-  spend = float(activity["day_spend_usd"])
-  realized = float(activity["day_realized_pnl_usd"])
-  spend_blocked = spend_cap > 0 and spend >= spend_cap - 1e-9
-  loss_blocked = loss_cap > 0 and realized <= -loss_cap + 1e-9
-  return {
-    **activity,
-    "et_date": et_date,
-    "daily_spend_cap_usd": spend_cap,
-    "daily_loss_cap_usd": loss_cap,
-    "spend_remaining_usd": (
-      round(max(0.0, spend_cap - spend), 2) if spend_cap > 0 else None
-    ),
-    "loss_room_usd": (
-      round(max(0.0, loss_cap + realized), 2) if loss_cap > 0 else None
-    ),
-    "spend_blocked": spend_blocked,
-    "loss_blocked": loss_blocked,
-    "entries_blocked": spend_blocked or loss_blocked,
-  }
-
-
-def human_day_entry_block_reason(
-  store: HumanTradeStore,
-  settings: HumanTradeSettings,
-  *,
-  mode: str,
-  next_cost_usd: float = 0.0,
-) -> str | None:
-  risk = human_day_risk_status(store, settings, mode=mode)
-  if risk["loss_blocked"]:
-    return (
-      f"daily_loss_cap:{risk['day_realized_pnl_usd']:.2f}"
-      f"<=-{float(settings.daily_loss_cap_usd):.2f}"
-    )
-  spend_cap = float(settings.daily_spend_cap_usd or 0.0)
-  if spend_cap > 0:
-    projected = float(risk["day_spend_usd"]) + max(0.0, float(next_cost_usd))
-    if projected > spend_cap + 1e-9:
-      return (
-        f"daily_spend_cap:{projected:.2f}>{spend_cap:.2f}"
-      )
-  return None
-
-
-def enrich_human_status_day_risk(
-  status: dict[str, Any],
-  store: HumanTradeStore,
-  settings: HumanTradeSettings,
-) -> dict[str, Any]:
-  out = dict(status)
-  out["day_risk"] = human_day_risk_status(store, settings, mode=settings.mode)
-  return out
 
 
 def enrich_open_positions_marks(
@@ -570,20 +477,6 @@ def execute_manual_enter(
   if contracts <= 0:
     return {"ok": False, "error": "zero_contracts", "preview": preview}
   cost_usd = round(contracts * price_cents / 100.0, 2)
-
-  day_block = human_day_entry_block_reason(
-    store,
-    settings,
-    mode=mode,
-    next_cost_usd=cost_usd,
-  )
-  if day_block:
-    return {
-      "ok": False,
-      "error": day_block,
-      "day_risk": human_day_risk_status(store, settings, mode=mode),
-      "preview": preview,
-    }
 
   entry_context = {
     "features": preview["features"],
@@ -1934,14 +1827,6 @@ def apply_human_settings_body(
       body.get("paper_bankroll_initial_usd", current.paper_bankroll_initial_usd),
     ),
     max_open_positions=int(body.get("max_open_positions", current.max_open_positions)),
-    daily_spend_cap_usd=max(
-      0.0,
-      float(body.get("daily_spend_cap_usd", current.daily_spend_cap_usd)),
-    ),
-    daily_loss_cap_usd=max(
-      0.0,
-      float(body.get("daily_loss_cap_usd", current.daily_loss_cap_usd)),
-    ),
   )
   store.save_settings(updated)
   return updated

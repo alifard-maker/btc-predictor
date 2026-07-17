@@ -17,9 +17,6 @@ class HumanTradeSettings:
   max_stake_per_entry_usd: float = 2.50
   paper_bankroll_initial_usd: float = 100.0
   max_open_positions: int = 20
-  # 0 = disabled. Caps are per-asset (BTC/ETH have separate stores), America/New_York day.
-  daily_spend_cap_usd: float = 50.0
-  daily_loss_cap_usd: float = 25.0
 
   def to_dict(self) -> dict[str, Any]:
     return asdict(self)
@@ -33,8 +30,6 @@ class HumanTradeSettings:
       max_stake_per_entry_usd=float(raw.get("max_stake_per_entry_usd", 2.50)),
       paper_bankroll_initial_usd=float(raw.get("paper_bankroll_initial_usd", 100.0)),
       max_open_positions=int(raw.get("max_open_positions", 20)),
-      daily_spend_cap_usd=float(raw.get("daily_spend_cap_usd", 50.0)),
-      daily_loss_cap_usd=float(raw.get("daily_loss_cap_usd", 25.0)),
     )
 
 
@@ -449,52 +444,6 @@ class HumanTradeStore:
       "avg_pnl_usd": round(total / len(pnls), 2) if pnls else None,
     }
 
-  def day_activity(
-    self,
-    *,
-    mode: str,
-    day_start_iso: str,
-    day_end_iso: str,
-  ) -> dict[str, Any]:
-    """Spend (enters) + realized P&L (exits) for [day_start, day_end) ISO timestamps."""
-    mode_l = str(mode).lower()
-    with self._connect() as conn:
-      spend_row = conn.execute(
-        """
-        SELECT COALESCE(SUM(cost_usd), 0) AS spend, COUNT(*) AS n
-        FROM human_trades
-        WHERE action = 'enter'
-          AND lower(mode) = ?
-          AND status IN ('filled', 'reconciled')
-          AND created_at >= ?
-          AND created_at < ?
-        """,
-        (mode_l, day_start_iso, day_end_iso),
-      ).fetchone()
-      pnl_row = conn.execute(
-        """
-        SELECT COALESCE(SUM(pnl_usd), 0) AS pnl, COUNT(*) AS n
-        FROM human_trades
-        WHERE action = 'exit'
-          AND lower(mode) = ?
-          AND status IN ('filled', 'reconciled')
-          AND created_at >= ?
-          AND created_at < ?
-        """,
-        (mode_l, day_start_iso, day_end_iso),
-      ).fetchone()
-    spend = round(float(spend_row["spend"] if spend_row else 0.0), 2)
-    realized = round(float(pnl_row["pnl"] if pnl_row else 0.0), 2)
-    return {
-      "mode": mode_l,
-      "day_spend_usd": spend,
-      "day_enter_count": int(spend_row["n"] if spend_row else 0),
-      "day_realized_pnl_usd": realized,
-      "day_exit_count": int(pnl_row["n"] if pnl_row else 0),
-      "day_start": day_start_iso,
-      "day_end": day_end_iso,
-    }
-
   def get_paper_state_dict(self, default_cap: float) -> dict[str, Any]:
     from src.trading.paper_bankroll import ensure_paper_state
 
@@ -642,5 +591,4 @@ class HumanTradeStore:
       ][:40],
       "paper_exit_log": self.list_paper_exits(limit=200),
       "event_ticker": event_ticker,
-      "day_risk": None,  # filled by human_hourly_trade.status enricher when available
     }

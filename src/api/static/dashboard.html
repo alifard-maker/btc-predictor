@@ -2977,14 +2977,7 @@
       const logHtml = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset)
         .replace(/DETAILS_ASSET/g, asset);
       const bookBanner = humanManualBookBannerHtml(asset);
-      const dayRisk = st.day_risk || {};
-      const spendCap = Number(settings.daily_spend_cap_usd ?? 50);
-      const lossCap = Number(settings.daily_loss_cap_usd ?? 25);
       const stakeVal = Number(settings.max_stake_per_entry_usd || 2.5);
-      const dayBlocked = !!dayRisk.entries_blocked;
-      const dayRiskHtml = dayBlocked
-        ? `<span class="badge down" style="font-size:.65rem" title="ET day caps">Day cap hit</span>`
-        : `<span class="muted" style="font-size:.68rem">Today spend $${Number(dayRisk.day_spend_usd || 0).toFixed(2)}${spendCap > 0 ? ` / $${spendCap.toFixed(0)}` : ''} · day P&amp;L <span class="${pnlCls(Number(dayRisk.day_realized_pnl_usd || 0))}">${fmtPnl(dayRisk.day_realized_pnl_usd)}</span>${lossCap > 0 ? ` · loss cap $${lossCap.toFixed(0)}` : ''}</span>`;
       const html = `
         <div id="human-book-gate-${asset}">${bookBanner}</div>
         <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.5rem">
@@ -2998,18 +2991,9 @@
             <input id="human-stake-${asset}" type="number" min="0.5" max="100" step="0.5" value="${stakeVal.toFixed(2)}"
               style="width:4.2rem;margin-left:.2rem" onchange="humanSaveSettings('${asset}')" />
           </label>
-          <label style="font-size:.75rem">Cap/day $
-            <input id="human-spend-cap-${asset}" type="number" min="0" max="500" step="5" value="${spendCap.toFixed(0)}"
-              title="Max $ entered today (ET). 0 = off" style="width:3.6rem;margin-left:.2rem" onchange="humanSaveSettings('${asset}')" />
-          </label>
-          <label style="font-size:.75rem">Loss/day $
-            <input id="human-loss-cap-${asset}" type="number" min="0" max="500" step="5" value="${lossCap.toFixed(0)}"
-              title="Stop new buys when day realized ≤ −this (ET). 0 = off" style="width:3.6rem;margin-left:.2rem" onchange="humanSaveSettings('${asset}')" />
-          </label>
           ${spotHtml}
           <span id="human-open-meta-${asset}" class="muted" style="font-size:.72rem">Stake ≤ $${stakeVal.toFixed(2)} · Open ${open.length}/${settings.max_open_positions || 20}</span>
           <span id="human-paper-bankroll-${asset}" class="muted" style="font-size:.72rem;${mode === 'paper' && pb.paper_bankroll_usd != null ? '' : 'display:none'}">${mode === 'paper' && pb.paper_bankroll_usd != null ? `Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong>${Number(pb.paper_open_cost_usd || 0) > 0.009 ? ` <span class="muted">($${Number(pb.paper_open_cost_usd).toFixed(2)} still locked in ${Number(st.all_open_position_count || pb.paper_locked_legs || 0)} open)</span>` : ''}` : ''}</span>
-          ${dayRiskHtml}
         </div>
         <div class="cal-stats" style="margin-bottom:.55rem">
           <div><span>Paper realized</span><strong id="human-paper-realized-${asset}" class="${pnlCls(Number(realized || 0))}">${fmtPnl(realized)}</strong></div>
@@ -3172,13 +3156,9 @@
       const sel = $(`human-mode-${asset}`);
       if (!sel) return;
       const stakeEl = $(`human-stake-${asset}`);
-      const spendEl = $(`human-spend-cap-${asset}`);
-      const lossEl = $(`human-loss-cap-${asset}`);
       const body = {
         mode: sel.value,
         max_stake_per_entry_usd: Number(stakeEl?.value || 2.5),
-        daily_spend_cap_usd: Number(spendEl?.value || 0),
-        daily_loss_cap_usd: Number(lossEl?.value || 0),
       };
       if (body.mode === 'live') {
         const pw = promptLivePassword();
