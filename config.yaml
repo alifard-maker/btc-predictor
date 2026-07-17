@@ -103,7 +103,7 @@ intra_slot:
     use_accumulated_profit: false
     profit_use_pct: 100
     paper_auto_refill: true
-    continuous_enabled: true
+    continuous_enabled: false
     poll_seconds: 10
     paper_max_spread_cents: 40
     take_profit_enabled: true
@@ -192,7 +192,7 @@ intra_slot:
         leg_stop_reentry_cooldown_seconds: 600
         leg_stop_event_cooldown_seconds: 300
     trial:
-      continuous_enabled: true
+      continuous_enabled: false
       poll_seconds: 10
       enabled: true
       mode: paper
@@ -283,7 +283,7 @@ hourly:
     use_accumulated_profit: false
     profit_use_pct: 100
     paper_auto_refill: true
-    continuous_enabled: true
+    continuous_enabled: false
     poll_seconds: 10
     take_profit_enabled: true
     take_profit_mode: hybrid
@@ -305,7 +305,7 @@ hourly:
     experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET — experiment / Kalshi wallet anchor
     twin_live:
       enabled: true
-      continuous_enabled: true
+      continuous_enabled: false
       poll_seconds: 10
       max_spend_per_hour_usd: 15
       experiment_start_at: "2026-07-10T12:10:00+00:00"  # BTC+ETH twin live epoch
@@ -512,7 +512,7 @@ hourly:
       rally_block_range_bands: false
       defense_block_range_bands: true
     trial:
-      continuous_enabled: true
+      continuous_enabled: false
       poll_seconds: 10
       take_profit_enabled: true
       take_profit_mode: hybrid
@@ -542,7 +542,7 @@ hourly:
       continuous_enabled: false  # legacy — Trials tab removed from dashboard
       poll_seconds: 10
     trial_mech:
-      continuous_enabled: true
+      continuous_enabled: false
       poll_seconds: 10
       compare_twin: true  # paper twin for live↔mech compare card
       max_spend_per_hour_usd: 15
@@ -597,7 +597,7 @@ hourly_v2:
     enabled: true
     mode: paper
     max_spend_per_hour_usd: 15
-    continuous_enabled: true
+    continuous_enabled: false
     poll_seconds: 10
     experiment_start_at: "2026-07-11T04:00:00+00:00"  # Sat Jul 11 00:00 ET
     entry_strategy:
@@ -717,19 +717,19 @@ pnl_first_manager:
   enforce_sleep: true
   trading_armed: false
   auto_wake_when_ready: false
-  owner_poa_live: true          # owner granted POA Jul 5 2026: may arm/wake if ping unanswered
+  owner_poa_live: false          # owner granted POA Jul 5 2026: may arm/wake if ping unanswered
   owner_poa_debug_cap_usd: 15.0 # max hourly cap when exercising POA for debug/live proof
   live_cap_usd: 30.0
   milestone_interval_minutes: 60
   auto_sync_on_reconcile: true
   lock_eth_live: true
   lock_slot15: true          # BTC/ETH 15m + trial bots — sleep during Phase 0–1
-  allow_eth_paper: true      # ETH hourly paper runs under sleep lock
-  allow_eth_live: true       # ETH hourly_live mirror (parallel live arm)
-  allow_eth_slot15_paper: true  # $4k/week plan — ETH KXETH15M paper lane (separate epoch)
-  allow_btc_live: true       # BTC hourly twin live (same mid-hour / pnl_first mechanics)
-  allow_index_paper: true    # SPX/NDX hourly paper trials (ETH live rules)
-  allow_index_live: true     # SPX/NDX hourly_live mirror — arm via dashboard after preflight
+  allow_eth_paper: false      # ETH hourly paper runs under sleep lock
+  allow_eth_live: false       # ETH hourly_live mirror (parallel live arm)
+  allow_eth_slot15_paper: false  # $4k/week plan — ETH KXETH15M paper lane (separate epoch)
+  allow_btc_live: false       # BTC hourly twin live (same mid-hour / pnl_first mechanics)
+  allow_index_paper: false    # SPX/NDX hourly paper trials (ETH live rules)
+  allow_index_live: false     # SPX/NDX hourly_live mirror — arm via dashboard after preflight
 
 # Resting limit sells on Kalshi after live cheap-leg entries (software bracket)
 live_resting_exits:
@@ -817,7 +817,7 @@ eth:
       max_spend_per_slot_usd: 5
       poll_seconds: 15
       tab_cache_seconds: 12
-      continuous_enabled: true
+      continuous_enabled: false
       experiment_start_at: "2026-07-12T15:30:00+00:00"
       cheap_leg_cut_cooldown_seconds: 180
       leg_stop_loss_cents: 4
@@ -898,7 +898,7 @@ eth:
       use_accumulated_profit: false
       profit_use_pct: 100
       paper_auto_refill: true
-      continuous_enabled: true
+      continuous_enabled: false
       poll_seconds: 10
       take_profit_enabled: true
       take_profit_mode: hybrid
@@ -1057,7 +1057,7 @@ eth:
         sync_settings_on_arm: true
       live_mirror:
         enabled: true
-        continuous_enabled: true
+        continuous_enabled: false
         poll_seconds: 10
         max_spend_per_hour_usd: 15
         experiment_start_at: "2026-07-10T06:45:00+00:00"  # dual-arm live epoch (paper keeps Jul 9)
@@ -1092,7 +1092,7 @@ eth:
         compare:
           pair_window_seconds: 180
       trial:
-        continuous_enabled: true
+        continuous_enabled: false
         poll_seconds: 10
         compare_twin: true  # paper twin for ETH live↔trial compare card
         pause_when_live_regime_blocked: true
@@ -1125,7 +1125,7 @@ eth:
         continuous_enabled: false
         poll_seconds: 10
       trial_mech:
-        continuous_enabled: true
+        continuous_enabled: false
         poll_seconds: 10
     sigma_calibration: true
   hourly_v2:
@@ -1135,7 +1135,7 @@ eth:
       enabled: true
       mode: paper
       max_spend_per_hour_usd: 15
-      continuous_enabled: true
+      continuous_enabled: false
       poll_seconds: 10
 
 # S&P 500 — hourly threshold ladder (KXINXU) + range bands (KXINX)
