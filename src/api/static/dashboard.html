@@ -682,14 +682,11 @@
     </div>
 
     <div id="panel-daily" style="display:none">
-      <div class="card" id="btc-hourly-bot-card">
-        <h2>BTC hourly auto-bet (live twin)</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Over-gated P&amp;L-first / Mech live stack — <strong>not</strong> your manual training twin. For signal-mirror paper trading, use the green card below. This bot runs <strong>every ~5s on the server</strong> while Auto-bet is ON. <strong>Max at-risk $/hour</strong> caps open exposure.</p>
-        <div id="btc-hourly-bot"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card" id="hourly-guide-card">
-        <h2>How to read this tab</h2>
-        <div id="hourly-guide"><p class="muted">Loading…</p></div>
+      <div class="card" id="human-trades-card">
+        <h2>Manual trading (you) <span class="muted" style="font-weight:400;font-size:.85rem" id="human-live-spot-btc">· BRTI —</span></h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Buy/sell from the contract tables below. Paper or live (live needs password).</p>
+        <div id="human-trades-panel"><p class="muted">Loading…</p></div>
+        <div id="human-bot-compare-panel" style="margin-top:.75rem"></div>
       </div>
       <div class="card" id="daily-summary-card">
         <h2><span id="daily-event-title">BTC Kalshi event</span> <span id="daily-freq-badge"></span></h2>
@@ -699,25 +696,6 @@
         <div id="daily-primary-signal"></div>
         <div id="daily-late-call"></div>
         <div id="daily-summary"></div>
-      </div>
-      <div class="card">
-        <h2>Hourly calibration</h2>
-        <div id="hourly-calibration"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card">
-        <h2>Hourly prediction history</h2>
-        <div style="overflow-x:auto" id="hourly-history"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card" id="btc-hourly-trial-mech-bot-card" style="border-color:rgba(34,197,94,.45)">
-        <h2>BTC signal-mirror paper bot</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Your training twin for this tab. Enters on the same actionable <strong>BUY YES/NO</strong> rows you see (no mid-hour / pnl_first / adaptive over-gates). Exits on thesis <strong>TP / HOLD / CUT</strong> with the 15m flip grace. <strong>Human vs bot</strong> below pairs your manual enters against this bot. Keep Auto-bet ON while you paper-trade.</p>
-        <div id="btc-hourly-trial-mech-bot"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card" id="human-trades-card">
-        <h2>Manual trading (you) <span class="muted" style="font-weight:400;font-size:.85rem" id="human-live-spot-btc">· BRTI —</span></h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Follow dashboard signals and <strong>buy/sell from this tab</strong> while the signal-mirror paper bot keeps running. Paper or live (live needs password). Each click logs features + bot counterfactual for later tuning.</p>
-        <div id="human-trades-panel"><p class="muted">Loading…</p></div>
-        <div id="human-bot-compare-panel" style="margin-top:.75rem"></div>
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
@@ -734,22 +712,36 @@
         <h2>Chart structure</h2>
         <div id="daily-structure"><p class="muted">Loading…</p></div>
       </div>
+      <div class="card" id="btc-hourly-bot-card">
+        <h2>BTC hourly auto-bet (live twin)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Over-gated P&amp;L-first / Mech live stack — <strong>not</strong> your manual training twin. For signal-mirror paper trading, use the green card below. This bot runs <strong>every ~5s on the server</strong> while Auto-bet is ON. <strong>Max at-risk $/hour</strong> caps open exposure.</p>
+        <div id="btc-hourly-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="btc-hourly-trial-mech-bot-card" style="border-color:rgba(34,197,94,.45)">
+        <h2>BTC signal-mirror paper bot</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Your training twin for this tab. Enters on the same actionable <strong>BUY YES/NO</strong> rows you see (no mid-hour / pnl_first / adaptive over-gates). Exits on thesis <strong>TP / HOLD / CUT</strong> with the 15m flip grace. <strong>Human vs bot</strong> above pairs your manual enters against this bot. Keep Auto-bet ON while you paper-trade.</p>
+        <div id="btc-hourly-trial-mech-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="hourly-guide-card">
+        <h2>How to read this tab</h2>
+        <div id="hourly-guide"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Hourly calibration</h2>
+        <div id="hourly-calibration"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Hourly prediction history</h2>
+        <div style="overflow-x:auto" id="hourly-history"><p class="muted">Loading…</p></div>
+      </div>
     </div>
 
     <div id="panel-eth-hourly" style="display:none">
-      <div class="card" id="eth-hourly-bot-card">
-        <h2>ETH hourly auto-bet (paper)</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON (browser not required) — continuous enter/exit within your <strong>max at-risk $/hour</strong> (open exposure only; exits free budget). <strong>Paper arm</strong> of the dual ETH experiment — live mirror panel below uses identical mechanics on Kalshi. Uses <strong>standard trial</strong> live guards (stricter than BTC Mech) — see bot panel for active filters. <strong>Cumulative $ entered</strong> can exceed your cap when the bot rotates through many round-trips. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
-        <div id="eth-hourly-bot"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card" id="eth-hourly-live-bot-card">
-        <h2>ETH hourly live mirror</h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same P&amp;L-first hourly mechanics as the paper bot above, executed <strong>live on Kalshi</strong>. Armed by the <strong>P&amp;L-first manager</strong> (<code>eth.hourly.bot.live_mirror</code>) — settings are read-only here. Separate trade log and stats epoch from paper (Jul 10 06:45 UTC). Kalshi sync imports real fills into this log.</p>
-        <div id="eth-hourly-live-bot"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card" id="eth-hourly-guide-card">
-        <h2>How to read this tab</h2>
-        <div id="eth-hourly-guide"><p class="muted">Loading…</p></div>
+      <div class="card" id="eth-human-trades-card">
+        <h2>Manual trading (you) <span class="muted" style="font-weight:400;font-size:.85rem" id="human-live-spot-eth">· ERTI —</span></h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Buy/sell from the contract tables below. Paper or live (live needs password).</p>
+        <div id="eth-human-trades-panel"><p class="muted">Loading…</p></div>
+        <div id="eth-human-bot-compare-panel" style="margin-top:.75rem"></div>
       </div>
       <div class="card" id="eth-daily-summary-card">
         <h2>ETH Kalshi event <span id="eth-daily-freq-badge"></span></h2>
@@ -759,20 +751,6 @@
         <div id="eth-daily-primary-signal"></div>
         <div id="eth-daily-late-call"></div>
         <div id="eth-daily-summary"></div>
-      </div>
-      <div class="card">
-        <h2>Hourly calibration</h2>
-        <div id="eth-hourly-calibration"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card">
-        <h2>Hourly prediction history</h2>
-        <div style="overflow-x:auto" id="eth-hourly-history"><p class="muted">Loading…</p></div>
-      </div>
-      <div class="card" id="eth-human-trades-card">
-        <h2>Manual trading (you) <span class="muted" style="font-weight:400;font-size:.85rem" id="human-live-spot-eth">· ERTI —</span></h2>
-        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Follow dashboard signals and <strong>buy/sell from this tab</strong> while auto-bots keep running. Paper or live (live needs password). Each click logs features + bot counterfactual for later tuning.</p>
-        <div id="eth-human-trades-panel"><p class="muted">Loading…</p></div>
-        <div id="eth-human-bot-compare-panel" style="margin-top:.75rem"></div>
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
@@ -788,6 +766,28 @@
       <div class="card">
         <h2>Chart structure</h2>
         <div id="eth-daily-structure"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="eth-hourly-bot-card">
+        <h2>ETH hourly auto-bet (paper)</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON (browser not required) — continuous enter/exit within your <strong>max at-risk $/hour</strong> (open exposure only; exits free budget). <strong>Paper arm</strong> of the dual ETH experiment — live mirror panel below uses identical mechanics on Kalshi. Uses <strong>standard trial</strong> live guards (stricter than BTC Mech) — see bot panel for active filters. <strong>Cumulative $ entered</strong> can exceed your cap when the bot rotates through many round-trips. <strong>Both filters off</strong> = free mode (any BUY YES/NO).</p>
+        <div id="eth-hourly-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="eth-hourly-live-bot-card">
+        <h2>ETH hourly live mirror</h2>
+        <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Same P&amp;L-first hourly mechanics as the paper bot above, executed <strong>live on Kalshi</strong>. Armed by the <strong>P&amp;L-first manager</strong> (<code>eth.hourly.bot.live_mirror</code>) — settings are read-only here. Separate trade log and stats epoch from paper (Jul 10 06:45 UTC). Kalshi sync imports real fills into this log.</p>
+        <div id="eth-hourly-live-bot"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card" id="eth-hourly-guide-card">
+        <h2>How to read this tab</h2>
+        <div id="eth-hourly-guide"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Hourly calibration</h2>
+        <div id="eth-hourly-calibration"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <h2>Hourly prediction history</h2>
+        <div style="overflow-x:auto" id="eth-hourly-history"><p class="muted">Loading…</p></div>
       </div>
     </div>
 
