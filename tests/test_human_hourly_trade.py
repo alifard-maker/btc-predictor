@@ -1084,3 +1084,80 @@ def test_paper_exit_log_includes_all_exits_not_capped_by_enters(tmp_path: Path):
   status = store.status()
   assert len(status["paper_exit_log"]) == 30
   assert len([t for t in status["paper_recent_trades"] if t.get("action") == "exit"]) < 30
+
+
+def test_human_day_spend_and_loss_caps(tmp_path: Path):
+  from src.trading.human_hourly_trade import (
+    human_day_entry_block_reason,
+    settings_from_cfg,
+  )
+  from src.trading.human_trade_store import HumanTradeSettings
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  store.save_settings(HumanTradeSettings(
+    mode="paper",
+    max_stake_per_entry_usd=2.5,
+    daily_spend_cap_usd=5.0,
+    daily_loss_cap_usd=1.0,
+  ))
+  settings = settings_from_cfg({"human_trading": {}}, store)
+  assert human_day_entry_block_reason(store, settings, mode="paper", next_cost_usd=2.0) is None
+
+  store.log_trade({
+    "event_ticker": "KXBTCD-26JUL1712",
+    "action": "enter",
+    "mode": "paper",
+    "market_ticker": "T1",
+    "side": "no",
+    "contracts": 2,
+    "price_cents": 50,
+    "entry_price_cents": 50,
+    "cost_usd": 4.0,
+    "status": "filled",
+  })
+  # Next $2 would push spend 4→6 over $5 cap
+  assert human_day_entry_block_reason(
+    store, settings, mode="paper", next_cost_usd=2.0,
+  ).startswith("daily_spend_cap")
+
+  store2 = HumanTradeStore(tmp_path / "human2.db")
+  store2.save_settings(HumanTradeSettings(
+    mode="paper",
+    daily_spend_cap_usd=0.0,
+    daily_loss_cap_usd=1.0,
+  ))
+  settings2 = settings_from_cfg({"human_trading": {}}, store2)
+  store2.log_trade({
+    "event_ticker": "KXBTCD-26JUL1712",
+    "action": "exit",
+    "mode": "paper",
+    "market_ticker": "T1",
+    "side": "no",
+    "contracts": 2,
+    "entry_price_cents": 50,
+    "exit_price_cents": 10,
+    "pnl_usd": -1.5,
+    "status": "filled",
+  })
+  assert human_day_entry_block_reason(
+    store2, settings2, mode="paper", next_cost_usd=1.0,
+  ).startswith("daily_loss_cap")
+
+
+def test_apply_human_settings_stake_and_caps(tmp_path: Path):
+  from src.trading.human_hourly_trade import apply_human_settings_body
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  updated = apply_human_settings_body(
+    store,
+    {
+      "mode": "paper",
+      "max_stake_per_entry_usd": 5.0,
+      "daily_spend_cap_usd": 40,
+      "daily_loss_cap_usd": 15,
+    },
+    cfg={"human_trading": {}},
+  )
+  assert updated.max_stake_per_entry_usd == 5.0
+  assert updated.daily_spend_cap_usd == 40.0
+  assert updated.daily_loss_cap_usd == 15.0

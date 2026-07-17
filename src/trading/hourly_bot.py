@@ -663,7 +663,10 @@ class HourlyBot:
     if settings.mode == "paper":
       if exposure > 0:
         return None
-      if bankroll > 0:
+      # Near-zero bankroll (e.g. $0.04) cannot buy 1 contract but still blocks
+      # refill when the check is only `bankroll > 0`.
+      min_usable = max(0.50, float(getattr(settings, "max_stake_per_entry_usd", 0) or 0) * 0.2)
+      if bankroll >= min_usable:
         return None
       if settings.paper_auto_refill:
         state = self.store.refill_paper_bankroll(max_cap)

@@ -12,12 +12,14 @@ from src.trading.compare_paper_twins import compare_store_kinds, human_compare_b
 from src.trading.human_bot_compare import build_human_bot_compare, export_human_training_rows
 from src.trading.human_hourly_trade import (
   apply_human_settings_body,
+  enrich_human_status_day_risk,
   enrich_open_positions_fast_marks,
   enrich_open_positions_marks,
   execute_manual_enter,
   execute_manual_exit,
   preview_manual_entry,
   settle_expired_human_positions,
+  settings_from_cfg,
 )
 from src.trading.live_mode_auth import live_bet_password, require_live_password
 
@@ -158,6 +160,11 @@ def register_human_trade_routes(
       paper_pnl["open_unrealized_pnl_usd"] = round(ur_sum, 2) if ur_n else None
       paper_pnl["open_marked_legs"] = ur_n
       status["paper_pnl"] = paper_pnl
+      status = enrich_human_status_day_risk(
+        status,
+        store,
+        settings_from_cfg(acfg, store),
+      )
       return {
         "ok": True,
         "asset": asset,
@@ -272,7 +279,12 @@ def register_human_trade_routes(
       apply_human_settings_body(store, body, cfg=cfg)
       tab = _human_tab(loop, asset)
       event_ticker = (tab.get("event") or {}).get("event_ticker") if tab and tab.get("ok") else None
-      return {"ok": True, "status": store.status(event_ticker)}
+      status = enrich_human_status_day_risk(
+        store.status(event_ticker),
+        store,
+        settings_from_cfg(cfg, store),
+      )
+      return {"ok": True, "status": status}
 
     @app.post(f"{prefix}/human-trades/preview")
     async def human_trades_preview(
