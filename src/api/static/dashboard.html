@@ -3241,6 +3241,46 @@
       return signalEdgeCls(sig);
     }
 
+    /** Cents for buying the suggested side (YES ask / NO ask). */
+    function humanMarketAskCents(r) {
+      const toC = (v) => {
+        if (v == null || v === '') return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) return null;
+        const c = n <= 1 ? Math.round(n * 100) : Math.round(n);
+        return Math.max(1, Math.min(99, c));
+      };
+      const yesBid = toC(r.yes_bid);
+      const yesAsk = toC(r.yes_ask);
+      const noAsk = toC(r.no_ask) ?? (yesBid != null ? Math.max(1, Math.min(99, 100 - yesBid)) : null);
+      const mid = toC(r.kalshi_mid);
+      const sig = String(r.signal || '');
+      if (isBuyYes(sig) || sig === 'VALUE YES') {
+        return { side: 'YES', ask: yesAsk ?? (mid != null ? Math.min(99, mid + 1) : null) };
+      }
+      if (isBuyNo(sig) || sig === 'FADE YES') {
+        return { side: 'NO', ask: noAsk ?? (mid != null ? Math.min(99, 100 - mid + 1) : null) };
+      }
+      return { side: null, ask: yesAsk ?? mid, yesAsk, noAsk };
+    }
+
+    function renderHumanMarketAskCell(r) {
+      const m = humanMarketAskCents(r);
+      if (m.side && m.ask != null) {
+        const tone = m.side === 'YES' ? 'up' : 'down';
+        return `<span class="${tone}" style="font-variant-numeric:tabular-nums">${m.side} <strong>${m.ask}¢</strong></span>`;
+      }
+      if (m.yesAsk != null || m.noAsk != null) {
+        const y = m.yesAsk != null ? `Y ${m.yesAsk}¢` : 'Y —';
+        const n = m.noAsk != null ? `N ${m.noAsk}¢` : 'N —';
+        return `<span class="muted" style="font-size:.72rem;font-variant-numeric:tabular-nums">${y} · ${n}</span>`;
+      }
+      if (m.ask != null) {
+        return `<span class="muted" style="font-variant-numeric:tabular-nums">${m.ask}¢</span>`;
+      }
+      return '<span class="muted">—</span>';
+    }
+
     function renderDailyContracts(rows, containerId, highlightLabels) {
       const tags = highlightLabels || {};
       const el = h$(containerId);
@@ -3254,7 +3294,7 @@
         return;
       }
       const html = `<table>
-        <thead><tr><th>Contract</th><th>Model</th><th>Kalshi</th><th>Edge</th><th>Signal</th>${showTrade ? '<th>Trade</th>' : ''}</tr></thead>
+        <thead><tr><th>Contract</th><th>Model</th><th>Kalshi</th><th>Edge</th><th>Signal</th>${showTrade ? '<th>Ask</th><th>Trade</th>' : ''}</tr></thead>
         <tbody>${rows.map(r => {
           const edge = r.edge != null ? (r.edge >= 0 ? '+' : '') + (r.edge * 100).toFixed(1) + '¢' : '—';
           const edgeCls = contractSignalCls(r.signal);
@@ -3266,6 +3306,7 @@
           const pricedIn = r.model_prob > 0.88;
           if (farOtm && r.signal === 'NEUTRAL') tag += ' <span class="badge muted" style="font-size:.65rem">low predictability</span>';
           if (pricedIn && r.signal === 'NEUTRAL') tag += ' <span class="badge muted" style="font-size:.65rem">priced in · no edge</span>';
+          const askCell = showTrade ? `<td>${renderHumanMarketAskCell(r)}</td>` : '';
           const tradeCell = showTrade ? `<td>${renderHumanTradeActions(r, asset)}</td>` : '';
           return `<tr>
             <td style="font-size:.78rem">${r.label}${tag}</td>
@@ -3273,6 +3314,7 @@
             <td>${r.kalshi_mid != null ? pct(r.kalshi_mid) : '—'}</td>
             <td class="${edgeCls}">${edge}</td>
             <td>${r.signal}</td>
+            ${askCell}
             ${tradeCell}
           </tr>`;
         }).join('')}</tbody></table>`;
