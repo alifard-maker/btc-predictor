@@ -603,7 +603,9 @@ class HumanTradeStore:
     settings = self.get_settings()
     paper = self.reconcile_paper_bankroll(settings.paper_bankroll_initial_usd)
     open_all = self.open_positions()
-    open_pos = self.open_positions(event_ticker) if event_ticker else list(open_all)
+    # Manual UI must see every open leg (any hour) — filtering by current event
+    # hid locked capital and made "Buys paused" look like lost positions.
+    open_pos = list(open_all)
     hour_trades = (
       self.list_trades(limit=50, event_ticker=event_ticker)
       if event_ticker

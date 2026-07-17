@@ -444,19 +444,14 @@ def preview_manual_entry(
   if not event_ticker:
     return {"ok": False, "error": "no_active_hour"}
 
-  # Block only far-future Kalshi hours (e.g. tomorrow 5pm), not early current-hour.
-  # Twin mid-hour bot max (0.75) must NOT gate manual — that paused buys at 0.8h left.
+  # No settle-timing pause for manual — you pick the book. Still require ticker
+  # to belong to the active tab event when both are known.
   from src.trading.hourly_event_time import (
     canonical_hourly_event_ticker,
     market_ticker_event_ticker,
     ticker_belongs_to_hourly_event,
   )
-  from src.trading.hourly_regime import entry_too_far_for_manual_skip_reason
 
-  live = (tab or {}).get("live") or {}
-  far = entry_too_far_for_manual_skip_reason(live.get("hours_to_settle"), cfg)
-  if far:
-    return {"ok": False, "error": far}
   pick_event = canonical_hourly_event_ticker(
     market_ticker_event_ticker(str(pick.get("ticker") or market_ticker)),
   )

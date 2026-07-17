@@ -223,11 +223,11 @@ class HourlyPredictor:
     from src.trading.hourly_regime import max_hours_to_settle_for_manual_entry
 
     blended["max_hours_to_settle_for_entry"] = float(max_hours_to_settle_for_manual_entry(self.cfg))
-    far = hours_left > blended["max_hours_to_settle_for_entry"]
+    # Manual lane never pauses on settle timing — UI/API buys always allowed.
     blended["manual_entry"] = {
-      "allowed": not far,
-      "block_reason": "too_far_for_new_entries" if far else None,
-      "hours_to_settle": round(hours_left, 2),
+      "allowed": True,
+      "block_reason": None,
+      "hours_to_settle": round(hours_left, 2) if hours_left is not None else None,
       "max_hours_to_settle_for_entry": blended["max_hours_to_settle_for_entry"],
     }
     hrcfg = self.hcfg.get("regime", {})

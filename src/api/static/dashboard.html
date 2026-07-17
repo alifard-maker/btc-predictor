@@ -2893,105 +2893,23 @@
     }
 
     function humanManualBookGate(asset) {
-      /** Allow current-hour Kalshi books; pause Buys only on far/future events. */
+      /** Manual buys are never paused by settle timing — you choose what to trade. */
       const data = lastDailyOkByAsset[asset];
-      if (!data || !data.ok) {
-        return {
-          allowBuys: false,
-          reason: 'no_prediction',
-          title: 'No live hourly book',
-          detail: 'Waiting for a Kalshi hourly prediction — Buys paused so you do not trade a stale or wrong event.',
-        };
-      }
-      const live = data.live || data;
-      const ev = live.event || data.event || {};
+      const live = (data && data.ok) ? (data.live || data) : {};
+      const ev = live.event || (data && data.event) || {};
       const hours = live.hours_to_settle;
-      // Manual lane uses ~1.35h (full current hour) — NOT twin mid-hour 0.75.
-      const maxH = Number(
-        live.manual_entry?.max_hours_to_settle_for_entry
-        ?? live.max_hours_to_settle_for_entry
-        ?? data.max_hours_to_settle_for_entry
-        ?? 1.35,
-      );
-      const title = String(ev.title || ev.sub_title || ev.event_ticker || 'Kalshi event');
-      const ticker = String(ev.event_ticker || '');
-      const farDetail = (hVal) => {
-        const when = hVal >= 20 ? `${(hVal / 24).toFixed(1)}d` : `${Number(hVal).toFixed(1)}h`;
-        if (Number(hVal) > 1.05) {
-          return {
-            title: 'Not a live mid-hour book',
-            detail: `Showing ${title} · settles in ${when}. That is not the current clock hour — Buys are paused so you do not treat it as an hourly bet. Sell still works on any open legs.`,
-          };
-        }
-        return {
-          title: 'Too early in the hour',
-          detail: `Showing ${title} · settles in ${when} (max ${maxH.toFixed(2)}h for new Buys). Sell still works on any open legs.`,
-        };
-      };
-      if (live.manual_entry && live.manual_entry.allowed === false) {
-        const blockedH = Number(live.manual_entry.hours_to_settle ?? hours);
-        const msg = farDetail(blockedH);
-        return {
-          allowBuys: false,
-          reason: live.manual_entry.block_reason || 'too_far_for_new_entries',
-          title: msg.title,
-          detail: msg.detail,
-          event_ticker: ticker,
-          hours_to_settle: blockedH,
-          max_hours: maxH,
-        };
-      }
-      if (hours == null || Number.isNaN(Number(hours))) {
-        return {
-          allowBuys: false,
-          reason: 'unknown_settle',
-          title: 'Hour settle time unknown',
-          detail: `${title} — Buys paused until settle timing is clear.`,
-          event_ticker: ticker,
-          hours_to_settle: hours,
-        };
-      }
-      const h = Number(hours);
-      if (h > maxH) {
-        const msg = farDetail(h);
-        return {
-          allowBuys: false,
-          reason: 'too_far_for_new_entries',
-          title: msg.title,
-          detail: msg.detail,
-          event_ticker: ticker,
-          hours_to_settle: h,
-          max_hours: maxH,
-        };
-      }
-      if (h < 0) {
-        return {
-          allowBuys: false,
-          reason: 'settled',
-          title: 'Hour already settled',
-          detail: `${title} has settled — waiting for the next open hourly book.`,
-          event_ticker: ticker,
-          hours_to_settle: h,
-        };
-      }
       return {
         allowBuys: true,
         reason: null,
-        title: title,
-        detail: `Live hourly · ${h.toFixed(2)}h to settle`,
-        event_ticker: ticker,
-        hours_to_settle: h,
-        max_hours: maxH,
+        title: String(ev.title || ev.sub_title || ev.event_ticker || 'Kalshi event'),
+        detail: hours != null ? `Hourly · ${Number(hours).toFixed(2)}h to settle` : 'Manual buys always enabled',
+        event_ticker: String(ev.event_ticker || ''),
+        hours_to_settle: hours,
       };
     }
 
     function humanManualBookBannerHtml(asset) {
-      const gate = humanManualBookGate(asset);
-      if (gate.allowBuys) return '';
-      return `<div role="status" style="margin:.15rem 0 .65rem;padding:.55rem .7rem;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.12);border-radius:8px;font-size:.78rem;line-height:1.35">
-        <strong style="color:#fbbf24">${gate.title}</strong>
-        <div style="margin-top:.25rem">${gate.detail}</div>
-      </div>`;
+      return '';
     }
 
     function humanOpenPositionForTicker(asset, ticker, side) {
@@ -3013,19 +2931,16 @@
       const parts = [];
       if (yesPos) {
         parts.push(`<button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" onclick="humanManualExit('${asset}','${yesPos.id}')">Sell YES</button>`);
-      } else if (gate.allowBuys && (isBuyYes(r.signal) || r.signal === 'VALUE YES')) {
+      } else if (isBuyYes(r.signal) || r.signal === 'VALUE YES') {
         const yesLabel = r.signal === 'VALUE YES' ? 'Buy YES (value)' : 'Buy YES';
         parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="yes" onclick="humanManualEnter(this,'${asset}')">${yesLabel}</button>`);
       }
       if (noPos) {
         parts.push(`<button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" onclick="humanManualExit('${asset}','${noPos.id}')">Sell NO</button>`);
-      } else if (gate.allowBuys && (isBuyNo(r.signal) || r.signal === 'FADE YES')) {
+      } else if (isBuyNo(r.signal) || r.signal === 'FADE YES') {
         // FADE YES = Kalshi Yes is rich vs model → trade is Buy NO (fade), not Buy YES.
         const noLabel = r.signal === 'FADE YES' ? 'Buy NO (fade)' : 'Buy NO';
         parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="no" onclick="humanManualEnter(this,'${asset}')">${noLabel}</button>`);
-      }
-      if (!parts.length && !gate.allowBuys) {
-        return '<span class="muted" style="font-size:.65rem" title="Not a live mid-hour book">Buys paused</span>';
       }
       return parts.length ? parts.join(' ') : '<span class="muted" style="font-size:.68rem">—</span>';
     }
@@ -3132,10 +3047,6 @@
 
     function humanOpenLegsInnerHtml(asset, open, meta = {}) {
       if (!open || !open.length) {
-        const gate = humanManualBookGate(asset);
-        if (!gate.allowBuys) {
-          return `<p class="muted" style="font-size:.72rem">No open manual legs. <strong style="color:#fbbf24">Buys paused</strong> — ${gate.title.toLowerCase()}.</p>`;
-        }
         return '<p class="muted" style="font-size:.72rem">No open manual legs — use Buy buttons on contract rows below.</p>';
       }
       const stamp = meta.marked_at
@@ -3288,11 +3199,6 @@
       const ticker = btn.dataset.ticker;
       const side = btn.dataset.side;
       if (!ticker || !side) return;
-      const gate = humanManualBookGate(asset);
-      if (!gate.allowBuys) {
-        alert(gate.detail || 'Buys paused — not a live mid-hour Kalshi book.');
-        return;
-      }
       const st = humanTradesCache[asset];
       const mode = (st && st.status && st.status.settings && st.status.settings.mode) || 'paper';
       const body = { market_ticker: ticker, side, mode };
@@ -7173,20 +7079,13 @@
       h$('daily-meta').textContent = `${ev.title || ev.event_ticker || ''} · settles ${settle} · ${idx} now ${price(data.brti_live || live.current_price)} · ${live.hours_to_settle}h left · ${lockNote}`;
       const bookGateEl = h$('daily-book-gate');
       if (bookGateEl) {
-        const assetGate = hourlyAssetForTab(hourlyRenderTab || activeTab);
-        if (assetGate === 'btc' || assetGate === 'eth') {
-          const gate = humanManualBookGate(assetGate);
-          if (!gate.allowBuys) {
-            bookGateEl.style.display = '';
-            bookGateEl.innerHTML = `<strong style="color:#fbbf24">${gate.title}</strong> — ${gate.detail}`;
-          } else {
-            bookGateEl.style.display = 'none';
-            bookGateEl.innerHTML = '';
-          }
-        } else {
-          bookGateEl.style.display = 'none';
-          bookGateEl.innerHTML = '';
-        }
+        bookGateEl.style.display = 'none';
+        bookGateEl.innerHTML = '';
+      }
+      const ethBookGateEl = h$('eth-daily-book-gate');
+      if (ethBookGateEl) {
+        ethBookGateEl.style.display = 'none';
+        ethBookGateEl.innerHTML = '';
       }
 
       h$('intrahour-opportunity').innerHTML = renderIntrahourOpportunityBanner(data.intrahour_opportunity);

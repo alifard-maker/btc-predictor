@@ -95,11 +95,7 @@ def entry_too_far_for_manual_skip_reason(
   hours_to_settle: float | None,
   cfg: dict[str, Any] | None,
 ) -> str | None:
-  if hours_to_settle is None:
-    return None
-  max_h = max_hours_to_settle_for_manual_entry(cfg)
-  if float(hours_to_settle) > max_h:
-    return "too_far_for_new_entries"
+  """Deprecated: manual lane no longer pauses on settle timing. Always None."""
   return None
 
 
