@@ -73,6 +73,18 @@ def test_signal_mirror_thesis_exits_on_trial_mech():
   )
 
 
+def test_mirror_tradable_includes_fade_value():
+  from src.trading.hourly_bot import _mirror_tradable_signal, _side_from_signal
+
+  assert _mirror_tradable_signal("BUY YES")
+  assert _mirror_tradable_signal("BUY NO")
+  assert _mirror_tradable_signal("VALUE YES")
+  assert _mirror_tradable_signal("FADE YES")
+  assert not _mirror_tradable_signal("NEUTRAL")
+  assert _side_from_signal("VALUE YES") == "yes"
+  assert _side_from_signal("FADE YES") == "no"
+
+
 def test_human_compare_bot_kind():
   assert human_compare_bot_kind("btc") == "hourly_trial_mech"
   assert human_compare_bot_kind("eth") == "hourly"

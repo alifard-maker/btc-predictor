@@ -76,7 +76,13 @@ from src.trading.bot_profit_exit import (
   position_hold_seconds,
   should_defer_leg_stop,
 )
-from src.trading.contract_signals import is_actionable_buy, is_buy_no, is_buy_yes
+from src.trading.contract_signals import (
+  FADE_YES,
+  VALUE_YES,
+  is_actionable_buy,
+  is_buy_no,
+  is_buy_yes,
+)
 from src.trading.bot_entry_presets import (
   apply_bot_runtime_settings,
   effective_bot_entry_strategy,
@@ -213,11 +219,17 @@ def _contracts_for_budget(remaining_usd: float, price_cents: int) -> int:
 
 
 def _side_from_signal(signal: str | None) -> str | None:
-  if is_buy_yes(signal):
+  if is_buy_yes(signal) or str(signal or "") == VALUE_YES:
     return "yes"
-  if is_buy_no(signal):
+  if is_buy_no(signal) or str(signal or "") == FADE_YES:
     return "no"
   return None
+
+
+def _mirror_tradable_signal(signal: str | None) -> bool:
+  """Manual lane trades BUY YES/NO plus VALUE YES / FADE YES."""
+  sig = str(signal or "")
+  return is_actionable_buy(sig) or sig in (VALUE_YES, FADE_YES)
 
 
 def _adaptive_settings_payload(decision: AdaptiveDecision | None) -> dict[str, Any] | None:
@@ -268,7 +280,12 @@ def _find_contract_in_live(live: dict[str, Any], market_ticker: str) -> dict[str
   return None
 
 
-def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[tuple[float, dict[str, Any], dict[str, Any]]]:
+def _entry_candidates(
+  tab: dict[str, Any],
+  cfg: dict[str, Any] | None,
+  *,
+  signal_ok=None,
+) -> list[tuple[float, dict[str, Any], dict[str, Any]]]:
   """Ranked (score, pick, bet_assessment) entry opportunities."""
   live = tab.get("live") or tab
   locked = tab.get("locked")
@@ -277,12 +294,13 @@ def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[t
   price = tab.get("brti_live") or live.get("current_price")
   out: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
   seen: set[str] = set()
+  ok_fn = signal_ok or is_actionable_buy
 
   def add(pick: dict[str, Any] | None, bet: dict[str, Any] | None, score_boost: float = 0.0) -> None:
     if not pick or not pick.get("ticker"):
       return
     t = str(pick["ticker"])
-    if t in seen or not is_actionable_buy(pick.get("signal")):
+    if t in seen or not ok_fn(pick.get("signal")):
       return
     seen.add(t)
     edge = abs(float(pick.get("edge") or 0))
@@ -303,7 +321,7 @@ def _entry_candidates(tab: dict[str, Any], cfg: dict[str, Any] | None) -> list[t
     add(intrahour.get("primary_pick"), intrahour.get("bet_assessment"), score_boost=0.12)
 
   primary = live.get("primary_pick")
-  primary_actionable = primary and is_actionable_buy(primary.get("signal"))
+  primary_actionable = primary and ok_fn(primary.get("signal"))
   if primary:
     bet = assess_contract_bet(
       signal=primary.get("signal"),
@@ -1292,7 +1310,7 @@ class HourlyBot:
     settle_gate = entry_too_close_to_settle_skip_reason(
       live.get("hours_to_settle"), entry_cfg,
     )
-    if settle_gate:
+    if settle_gate and not mirror:
       # Prefer a more actionable cooldown reason when available (especially for
       # trial bots near the end of the hour).
       pp = live.get("primary_pick") or {}
@@ -1317,7 +1335,8 @@ class HourlyBot:
     far_gate = entry_too_far_from_settle_skip_reason(
       live.get("hours_to_settle"), entry_cfg,
     )
-    if far_gate:
+    # Mirror must follow manual: no settle-timing pause (same as human lane).
+    if far_gate and not mirror:
       self.store.set_last_skip_reason(far_gate)
       return results
 
@@ -1346,7 +1365,11 @@ class HourlyBot:
         self.store.set_last_skip_reason("fully_deployed")
       return results
 
-    candidates = _entry_candidates(tab, cfg)
+    candidates = _entry_candidates(
+      tab,
+      cfg,
+      signal_ok=_mirror_tradable_signal if mirror else is_actionable_buy,
+    )
 
     if not mirror:
       trial_regime_sync = trial_mech_pause_when_live_regime_blocked(
@@ -1499,7 +1522,11 @@ class HourlyBot:
       if slots_used >= max_slots:
         last_reason = "max_concurrent_positions"
         break
-      if not bet_qualifies(pick, bet, entry_settings):
+      if mirror:
+        if not entry_settings.enabled or not _mirror_tradable_signal(pick.get("signal")):
+          last_reason = "signal_filtered_by_settings"
+          continue
+      elif not bet_qualifies(pick, bet, entry_settings):
         last_reason = "signal_filtered_by_settings"
         continue
 
@@ -1514,13 +1541,14 @@ class HourlyBot:
         last_reason = "unrecognized_signal"
         continue
 
-      settle_skip = entry_pick_settle_skip_reason(
-        live.get("hours_to_settle"), entry_cfg, pick=pick, side=side,
-        le_override=late_entry_effective,
-      )
-      if settle_skip:
-        last_reason = settle_skip
-        continue
+      if not mirror:
+        settle_skip = entry_pick_settle_skip_reason(
+          live.get("hours_to_settle"), entry_cfg, pick=pick, side=side,
+          le_override=late_entry_effective,
+        )
+        if settle_skip:
+          last_reason = settle_skip
+          continue
 
       if not mirror:
         pf_block = pnl_first_entry_block_reason(

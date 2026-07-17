@@ -555,8 +555,9 @@ hourly:
         max_entries_per_cycle: 4
         max_concurrent_positions: 20
         max_stake_per_entry_usd: 2.50
-        max_hours_to_settle_for_entry: 1.35
-        late_entry_enabled: false
+        # Match manual: no settle-window pause (code also skips far/close gates).
+        max_hours_to_settle_for_entry: 24
+        late_entry_enabled: true
       entry_strategy:
         max_contracts_per_entry: 2
         max_stake_per_entry_usd: 2.50
