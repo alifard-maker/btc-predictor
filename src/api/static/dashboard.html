@@ -467,7 +467,7 @@
           <dt><span class="signal-tag yes">VALUE YES</span> <span class="muted" style="font-size:.72rem">(thresholds only)</span></dt>
           <dd>Cheap OTM Yes tail — model &lt;50% but Kalshi is even cheaper; speculative Yes, not a high-confidence direction call.</dd>
           <dt><span class="signal-tag no">FADE YES</span> <span class="muted" style="font-size:.72rem">(thresholds only)</span></dt>
-          <dd>Kalshi Yes looks rich vs model on a likely leg — fade overpriced Yes (often when model already favors Yes but market is hotter).</dd>
+          <dd>Kalshi Yes looks rich vs model on a likely leg — <strong>fade = Buy NO</strong> on that contract (not Buy Yes). Dashboard shows <em>Buy NO (fade)</em>.</dd>
           <dt><span class="signal-tag neutral">NEUTRAL</span></dt>
           <dd>Edge below minimum or no Kalshi mid — no actionable mispricing tag. Far OTM rows may also show <em>low predictability</em> or <em>priced in · no edge</em>.</dd>
         </dl>
@@ -721,7 +721,7 @@
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>BUY YES / BUY NO</strong> = explicit Kalshi leg when model direction and edge agree. <strong>VALUE YES</strong> = cheap OTM tail; <strong>FADE YES</strong> = Kalshi overpriced vs model on a likely leg.</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>BUY YES / BUY NO</strong> = explicit Kalshi leg when model direction and edge agree. <strong>VALUE YES</strong> = cheap OTM tail (Buy Yes). <strong>FADE YES</strong> = Kalshi overpriced vs model — trade is <strong>Buy NO</strong> (fade), not Buy Yes.</p>
         <div id="daily-threshold"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
@@ -776,7 +776,7 @@
       </div>
       <div class="card">
         <h2>Strategy 1 · Above / below (threshold)</h2>
-        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>BUY YES / BUY NO</strong> = explicit Kalshi leg when model direction and edge agree. <strong>VALUE YES</strong> = cheap OTM tail; <strong>FADE YES</strong> = Kalshi overpriced vs model on a likely leg.</p>
+        <p class="muted" style="font-size:.8rem;margin-bottom:.65rem">Up to 30 strikes nearest forecast μ. <strong>BUY YES / BUY NO</strong> = explicit Kalshi leg when model direction and edge agree. <strong>VALUE YES</strong> = cheap OTM tail (Buy Yes). <strong>FADE YES</strong> = Kalshi overpriced vs model — trade is <strong>Buy NO</strong> (fade), not Buy Yes.</p>
         <div id="eth-daily-threshold"><p class="muted">Loading…</p></div>
       </div>
       <div class="card">
@@ -3013,13 +3013,16 @@
       const parts = [];
       if (yesPos) {
         parts.push(`<button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" onclick="humanManualExit('${asset}','${yesPos.id}')">Sell YES</button>`);
-      } else if (gate.allowBuys && isBuyYes(r.signal)) {
-        parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="yes" onclick="humanManualEnter(this,'${asset}')">Buy YES</button>`);
+      } else if (gate.allowBuys && (isBuyYes(r.signal) || r.signal === 'VALUE YES')) {
+        const yesLabel = r.signal === 'VALUE YES' ? 'Buy YES (value)' : 'Buy YES';
+        parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="yes" onclick="humanManualEnter(this,'${asset}')">${yesLabel}</button>`);
       }
       if (noPos) {
         parts.push(`<button type="button" class="btn-secondary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" onclick="humanManualExit('${asset}','${noPos.id}')">Sell NO</button>`);
-      } else if (gate.allowBuys && isBuyNo(r.signal)) {
-        parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="no" onclick="humanManualEnter(this,'${asset}')">Buy NO</button>`);
+      } else if (gate.allowBuys && (isBuyNo(r.signal) || r.signal === 'FADE YES')) {
+        // FADE YES = Kalshi Yes is rich vs model → trade is Buy NO (fade), not Buy YES.
+        const noLabel = r.signal === 'FADE YES' ? 'Buy NO (fade)' : 'Buy NO';
+        parts.push(`<button type="button" class="btn-primary" style="font-size:.62rem;padding:.15rem .4rem;margin:.1rem" data-ticker="${esc}" data-side="no" onclick="humanManualEnter(this,'${asset}')">${noLabel}</button>`);
       }
       if (!parts.length && !gate.allowBuys) {
         return '<span class="muted" style="font-size:.65rem" title="Not a live mid-hour book">Buys paused</span>';
