@@ -509,6 +509,11 @@
     </details>
 
     <div id="panel-15m">
+    <div class="card" id="btc-slot15-human-trades-card">
+      <h2>Manual trading (you) · BTC 15m <span class="muted" style="font-weight:400;font-size:.85rem" id="human-live-spot-btc15">· BRTI —</span></h2>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Buy YES (LONG) / Buy NO (SHORT) on the active KXBTC15M market. Paper or <strong>Live</strong> (live needs password). Separate ledger from hourly manual.</p>
+      <div id="btc-slot15-human-trades-panel"><p class="muted">Loading…</p></div>
+    </div>
     <div class="card" id="btc-slot15-bot-card">
       <h2>BTC 15m auto-bet</h2>
       <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> while Auto-bet is ON — enters and exits paper/live positions from live 15m signals (browser not required). <strong>Max at-risk $/slot</strong> caps open exposure; exits free budget for re-entry. <strong>Both STRONG and ACTIONABLE off</strong> = free mode (any LONG/SHORT).</p>
@@ -629,6 +634,11 @@
     </div>
 
     <div id="panel-eth-15m" style="display:none">
+    <div class="card" id="eth-slot15-human-trades-card">
+      <h2>Manual trading (you) · ETH 15m <span class="muted" style="font-weight:400;font-size:.85rem" id="human-live-spot-eth15">· ERTI —</span></h2>
+      <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Buy YES (LONG) / Buy NO (SHORT) on the active KXETH15M market. Paper or <strong>Live</strong> (live needs password). Separate ledger from hourly manual.</p>
+      <div id="eth-slot15-human-trades-panel"><p class="muted">Loading…</p></div>
+    </div>
     <div class="card" id="eth-slot15-bot-card">
       <h2>ETH 15m auto-bet (live)</h2>
       <p class="muted" style="font-size:.78rem;margin-bottom:.65rem">Runs <strong>every ~5s on the server</strong> (browser not required when Auto-bet is ON) — live entries aligned with paper via <strong>live_trial_align</strong> (cross spread when edge allows). Uses LONG/SHORT, late entry, and flip signals.</p>
@@ -1163,9 +1173,9 @@
     const DAILY_LOAD_STUCK_MS = 35000;
     const HOURLY_PREDICTION_TIMEOUT_MS = 25000;
     const lastDailyOkByAsset = { btc: null, eth: null, spx: null, ndx: null };
-    let humanTradesLastLoadAt = { btc: 0, eth: 0 };
+    let humanTradesLastLoadAt = { btc: 0, eth: 0, btc15: 0, eth15: 0 };
     const HUMAN_TRADES_MIN_POLL_MS = 12000;
-    let humanMarksInFlight = { btc: false, eth: false };
+    let humanMarksInFlight = { btc: false, eth: false, btc15: false, eth15: false };
     const HUMAN_MARKS_POLL_MS = 2500;
     let liveMonitorInFlight = false;
     let liveMonitorLastAt = 0;
@@ -2439,6 +2449,8 @@
       }
       if (name === '15m' || name === 'eth-15m') {
         const asset = name === 'eth-15m' ? 'eth' : 'btc';
+        const humanKey = name === 'eth-15m' ? 'eth15' : 'btc15';
+        loadHumanTrades(humanKey);
         const cached = lastSlot15BotStatus[asset];
         const key = botUiKey('slot15', asset);
         if (cached?.settings && !pendingBotPatch[key]) {
@@ -2650,8 +2662,8 @@
       }
     }
 
-    const humanTradesCache = { btc: null, eth: null };
-    const humanPaperLogExpanded = { btc: false, eth: false };
+    const humanTradesCache = { btc: null, eth: null, btc15: null, eth15: null };
+    const humanPaperLogExpanded = { btc: false, eth: false, btc15: false, eth15: false };
 
     function isHumanPaperPush(t) {
       if (String(t.action || '') !== 'exit') return false;
@@ -2784,6 +2796,8 @@
 
     function patchHumanTradesPanel(asset, payload) {
       if (!$(`human-mode-${asset}`)) return false;
+      // Slot15 panel includes live Ask/Trade controls — full re-render keeps quotes fresh.
+      if (isSlot15HumanAsset(asset)) return false;
       const st = payload.status || {};
       const settings = st.settings || {};
       const pb = st.paper_bankroll || {};
@@ -2799,7 +2813,8 @@
           spotInline.className = '';
           spotInline.style.fontSize = '.78rem';
         } else {
-          spotInline.textContent = asset === 'eth' ? 'ERTI —' : 'BRTI —';
+          const base = humanBaseAsset(asset);
+          spotInline.textContent = base === 'eth' ? 'ERTI —' : 'BRTI —';
           spotInline.className = 'muted';
           spotInline.style.fontSize = '.72rem';
         }
@@ -2860,10 +2875,14 @@
     }
 
     function humanTradesApi(asset) {
+      if (asset === 'btc15') return '/api/15m/human-trades';
+      if (asset === 'eth15') return '/api/eth/15m/human-trades';
       return asset === 'eth' ? '/api/eth/hourly/human-trades' : '/api/hourly/human-trades';
     }
 
     function humanTradesPanelId(asset) {
+      if (asset === 'btc15') return 'btc-slot15-human-trades-panel';
+      if (asset === 'eth15') return 'eth-slot15-human-trades-panel';
       return asset === 'eth' ? 'eth-human-trades-panel' : 'human-trades-panel';
     }
 
@@ -2871,7 +2890,25 @@
       return asset === 'eth' ? 'eth-human-bot-compare-panel' : 'human-bot-compare-panel';
     }
 
+    function isSlot15HumanAsset(asset) {
+      return asset === 'btc15' || asset === 'eth15';
+    }
+
+    function humanBaseAsset(asset) {
+      if (asset === 'btc15') return 'btc';
+      if (asset === 'eth15') return 'eth';
+      return asset;
+    }
+
     function humanLiveSpotInfo(asset) {
+      if (isSlot15HumanAsset(asset)) {
+        const cached = humanTradesCache[asset];
+        const base = humanBaseAsset(asset);
+        const idx = (cached && cached.index_label) || (base === 'eth' ? 'ERTI' : 'BRTI');
+        const px = cached && cached.spot_price;
+        if (px != null && Number(px) > 0) return { indexLabel: idx, price: Number(px) };
+        return null;
+      }
       const data = lastDailyOkByAsset[asset];
       if (!data || !data.ok) return null;
       const live = data.live || data;
@@ -2883,11 +2920,12 @@
     }
 
     function updateHumanLiveSpot(asset) {
-      if (asset !== 'btc' && asset !== 'eth') return;
+      if (asset !== 'btc' && asset !== 'eth' && !isSlot15HumanAsset(asset)) return;
       const el = $(`human-live-spot-${asset}`);
       if (!el) return;
       const info = humanLiveSpotInfo(asset);
-      const fallback = asset === 'eth' ? 'ERTI' : 'BRTI';
+      const base = humanBaseAsset(asset);
+      const fallback = base === 'eth' ? 'ERTI' : 'BRTI';
       const next = info ? `· ${info.indexLabel} ${price(info.price)}` : `· ${fallback} —`;
       if (el.textContent !== next) el.textContent = next;
     }
@@ -2945,6 +2983,50 @@
       return parts.length ? parts.join(' ') : '<span class="muted" style="font-size:.68rem">—</span>';
     }
 
+    function humanSlot15MarketTradeHtml(asset, payload) {
+      if (!isSlot15HumanAsset(asset)) return '';
+      const m = (payload && payload.market) || {};
+      const ticker = String(m.market_ticker || '');
+      if (!ticker) {
+        return '<p class="muted" style="font-size:.72rem;margin:.35rem 0">No active 15m Kalshi market — wait for the next slot.</p>';
+      }
+      const toC = (v) => {
+        if (v == null || v === '') return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) return null;
+        const c = n <= 1 ? Math.round(n * 100) : Math.round(n);
+        return Math.max(1, Math.min(99, c));
+      };
+      const yesBid = toC(m.yes_bid);
+      const yesAsk = toC(m.yes_ask);
+      const noAsk = yesBid != null ? Math.max(1, Math.min(99, 100 - yesBid)) : null;
+      const yesPos = humanOpenPositionForTicker(asset, ticker, 'yes');
+      const noPos = humanOpenPositionForTicker(asset, ticker, 'no');
+      const esc = ticker.replace(/"/g, '&quot;');
+      const yesAskTxt = yesAsk != null ? `${yesAsk}¢` : '—';
+      const noAskTxt = noAsk != null ? `${noAsk}¢` : '—';
+      const sig = String(m.signal || '');
+      const parts = [];
+      if (yesPos) {
+        parts.push(`<button type="button" class="btn-secondary" style="font-size:.65rem;padding:.2rem .45rem" onclick="humanManualExit('${asset}','${yesPos.id}')">Sell YES</button>`);
+      } else {
+        parts.push(`<button type="button" class="primary" style="font-size:.65rem;padding:.2rem .45rem" data-ticker="${esc}" data-side="yes" onclick="humanManualEnter(this,'${asset}')">Buy YES</button>`);
+      }
+      if (noPos) {
+        parts.push(`<button type="button" class="btn-secondary" style="font-size:.65rem;padding:.2rem .45rem" onclick="humanManualExit('${asset}','${noPos.id}')">Sell NO</button>`);
+      } else {
+        parts.push(`<button type="button" class="primary" style="font-size:.65rem;padding:.2rem .45rem" data-ticker="${esc}" data-side="no" onclick="humanManualEnter(this,'${asset}')">Buy NO</button>`);
+      }
+      return `<div style="margin:.4rem 0 .55rem;padding:.55rem .65rem;border:1px solid var(--border);border-radius:8px;font-size:.75rem">
+        <div style="margin-bottom:.35rem"><strong>${m.title || ticker}</strong> <span class="muted">${ticker}</span>${sig ? ` · ${badge(sig)}` : ''}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:.55rem;align-items:center">
+          <span>YES ask <strong>${yesAskTxt}</strong></span>
+          <span>NO ask <strong>${noAskTxt}</strong></span>
+          ${parts.join(' ')}
+        </div>
+      </div>`;
+    }
+
     function renderHumanTradesPanel(asset, payload) {
       const el = $(humanTradesPanelId(asset));
       if (!el) return;
@@ -2963,9 +3045,10 @@
       const open = st.open_positions || [];
       const mode = settings.mode || 'paper';
       const spot = humanLiveSpotInfo(asset);
+      const base = humanBaseAsset(asset);
       const spotHtml = spot
         ? `<span id="human-spot-inline-${asset}" style="font-size:.78rem"><strong>${spot.indexLabel}</strong> <strong class="up">${price(spot.price)}</strong></span>`
-        : `<span id="human-spot-inline-${asset}" class="muted" style="font-size:.72rem">${asset === 'eth' ? 'ERTI' : 'BRTI'} —</span>`;
+        : `<span id="human-spot-inline-${asset}" class="muted" style="font-size:.72rem">${base === 'eth' ? 'ERTI' : 'BRTI'} —</span>`;
       updateHumanLiveSpot(asset);
       const pnlCls = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : 'muted');
       const fmtPnl = (n) => n == null ? '—' : signedPrice(Number(n));
@@ -2976,7 +3059,8 @@
       const openHtml = `<div id="human-open-legs-${asset}">${humanOpenLegsInnerHtml(asset, open)}</div>`;
       const logHtml = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset)
         .replace(/DETAILS_ASSET/g, asset);
-      const bookBanner = humanManualBookBannerHtml(asset);
+      const bookBanner = isSlot15HumanAsset(asset) ? '' : humanManualBookBannerHtml(asset);
+      const marketHtml = humanSlot15MarketTradeHtml(asset, payload);
       const stakeVal = Number(settings.max_stake_per_entry_usd || 2.5);
       const html = `
         <div id="human-book-gate-${asset}">${bookBanner}</div>
@@ -2995,6 +3079,7 @@
           <span id="human-open-meta-${asset}" class="muted" style="font-size:.72rem">Stake ≤ $${stakeVal.toFixed(2)} · Open ${open.length}/${settings.max_open_positions || 20}</span>
           <span id="human-paper-bankroll-${asset}" class="muted" style="font-size:.72rem;${mode === 'paper' && pb.paper_bankroll_usd != null ? '' : 'display:none'}">${mode === 'paper' && pb.paper_bankroll_usd != null ? `Paper bankroll <strong>$${Number(pb.paper_bankroll_usd).toFixed(2)}</strong>${Number(pb.paper_open_cost_usd || 0) > 0.009 ? ` <span class="muted">($${Number(pb.paper_open_cost_usd).toFixed(2)} still locked in ${Number(st.all_open_position_count || pb.paper_locked_legs || 0)} open)</span>` : ''}` : ''}</span>
         </div>
+        ${marketHtml}
         <div class="cal-stats" style="margin-bottom:.55rem">
           <div><span>Paper realized</span><strong id="human-paper-realized-${asset}" class="${pnlCls(Number(realized || 0))}">${fmtPnl(realized)}</strong></div>
           <div><span>Today</span><strong id="human-paper-today-${asset}" class="${pnlCls(Number(today || 0))}">${fmtPnl(today)}</strong></div>
@@ -3031,7 +3116,10 @@
 
     function humanOpenLegsInnerHtml(asset, open, meta = {}) {
       if (!open || !open.length) {
-        return '<p class="muted" style="font-size:.72rem">No open manual legs — use Buy buttons on contract rows below.</p>';
+        const hint = isSlot15HumanAsset(asset)
+          ? 'No open manual legs — use Buy YES / Buy NO above.'
+          : 'No open manual legs — use Buy buttons on contract rows below.';
+        return `<p class="muted" style="font-size:.72rem">${hint}</p>`;
       }
       const stamp = meta.marked_at
         ? ` · marks ${time(meta.marked_at)}${meta.quote_source === 'kalshi_live' ? ' · Kalshi live' : ''}`
@@ -3079,7 +3167,7 @@
     }
 
     async function loadHumanMarksFast(asset) {
-      if (asset !== 'btc' && asset !== 'eth') return;
+      if (asset !== 'btc' && asset !== 'eth' && !isSlot15HumanAsset(asset)) return;
       if (humanMarksInFlight[asset]) return;
       const cached = humanTradesCache[asset];
       const openN = (cached?.status?.open_positions || []).length;
@@ -3098,6 +3186,14 @@
     }
 
     function pollHumanMarksIfNeeded() {
+      if (activeTab === '15m') {
+        loadHumanMarksFast('btc15');
+        return;
+      }
+      if (activeTab === 'eth-15m') {
+        loadHumanMarksFast('eth15');
+        return;
+      }
       const asset = hourlyAssetForTab(activeTab);
       if (asset === 'btc' || asset === 'eth') loadHumanMarksFast(asset);
     }
@@ -3130,12 +3226,18 @@
     }
 
     async function loadHumanTrades(asset, opts = {}) {
-      if (asset !== 'btc' && asset !== 'eth') return;
+      if (asset !== 'btc' && asset !== 'eth' && !isSlot15HumanAsset(asset)) return;
       const force = !!opts.force;
       const now = Date.now();
       if (!force && now - (humanTradesLastLoadAt[asset] || 0) < HUMAN_TRADES_MIN_POLL_MS) return;
       humanTradesLastLoadAt[asset] = now;
       try {
+        if (isSlot15HumanAsset(asset)) {
+          const status = await getWithTimeout(`${humanTradesApi(asset)}/status`, 12000);
+          humanTradesCache[asset] = status;
+          renderHumanTradesPanel(asset, status);
+          return;
+        }
         const [status, compare] = await Promise.all([
           getWithTimeout(`${humanTradesApi(asset)}/status`, 12000),
           getWithTimeout(`${humanTradesApi(asset)}/compare`, 12000),
@@ -3190,12 +3292,14 @@
       btn.disabled = true;
       try {
         const out = await postJson(`${humanTradesApi(asset)}/enter`, body);
-        humanTradesCache[asset] = { ok: true, status: out.status };
+        humanTradesCache[asset] = { ok: true, status: out.status, market: humanTradesCache[asset]?.market, spot_price: humanTradesCache[asset]?.spot_price, index_label: humanTradesCache[asset]?.index_label };
         renderHumanTradesPanel(asset, humanTradesCache[asset]);
         await loadHumanTrades(asset, { force: true });
         // Refresh Trade column on rows without full prediction round-trip.
-        const cached = lastDailyOkByAsset[asset];
-        if (cached?.ok) renderDaily(cached);
+        if (!isSlot15HumanAsset(asset)) {
+          const cached = lastDailyOkByAsset[asset];
+          if (cached?.ok) renderDaily(cached);
+        }
       } catch (e) {
         const msg = String(e.message || 'Enter failed');
         if (msg.includes('too_far_for_new_entries')) {
@@ -3225,8 +3329,10 @@
       try {
         await postJson(`${humanTradesApi(asset)}/exit`, body);
         await loadHumanTrades(asset, { force: true });
-        const cached = lastDailyOkByAsset[asset];
-        if (cached?.ok) renderDaily(cached);
+        if (!isSlot15HumanAsset(asset)) {
+          const cached = lastDailyOkByAsset[asset];
+          if (cached?.ok) renderDaily(cached);
+        }
       } catch (e) {
         alert(e.message || 'Exit failed');
         // Refresh badges so stale TAKE PROFIT is replaced by the live signal.
@@ -8142,6 +8248,8 @@
       syncGlobalComparePanel();
       if (activeTab === '15m' || activeTab === 'eth-15m') {
         const api = slot15Api();
+        const humanKey = activeTab === 'eth-15m' ? 'eth15' : 'btc15';
+        loadHumanTrades(humanKey);
         tasks.push(
         getWithTimeout(api.prediction + refQ, 15000).then((p) => {
           if (stored?.slot_start && p?.slot_start && stored.slot_start !== p.slot_start) {

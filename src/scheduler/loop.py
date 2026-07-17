@@ -569,6 +569,18 @@ class PredictionLoop:
       self._human_trade_stores[key] = HumanTradeStore(logs / f"human_trades_{asset}.db")
     return self._human_trade_stores[key]
 
+  def human_slot15_trade_store(self, asset: str):
+    """Separate ledger for manual BTC/ETH 15m trades (not mixed with hourly)."""
+    asset = asset.lower()
+    key = f"human_slot15_{asset}"
+    if key not in self._human_trade_stores:
+      from src.trading.human_trade_store import HumanTradeStore
+
+      acfg = self._acfg_15m(asset)
+      logs = Path(acfg.get("paths", {}).get("logs", "data/logs"))
+      self._human_trade_stores[key] = HumanTradeStore(logs / f"human_trades_slot15_{asset}.db")
+    return self._human_trade_stores[key]
+
   def hourly_trial_bot_store(self, asset: str):
     return self.hourly_bot_store(asset, kind="hourly_trial")
 

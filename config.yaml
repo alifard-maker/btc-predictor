@@ -737,7 +737,7 @@ live_resting_exits:
   cheap_leg_only: true
   bracket_take_profit: true
 
-# Dashboard manual (human) hourly trades — separate ledger from auto-bots; used for human vs bot learning
+# Dashboard manual (human) trades — separate ledger from auto-bots (hourly + 15m)
 human_trading:
   enabled: true
   default_mode: paper          # paper | live
