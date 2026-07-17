@@ -310,6 +310,142 @@ def test_settle_expired_human_paper_positions_pays_winners(tmp_path: Path):
   assert abs(bank["paper_bankroll_usd"] - 100.87) < 0.02
 
 
+def test_repair_orphan_does_not_overwrite_early_exit(tmp_path: Path):
+  """Mid-hour manual exits must stay at exit price — not rewritten to settlement 100¢."""
+  from src.trading.human_hourly_trade import settle_expired_human_positions
+  from src.trading.hourly_event_time import hourly_event_settle_utc
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  prev = "KXBTCD-26JUN3005"
+  assert hourly_event_settle_utc(prev) is not None
+  pid = "early-1"
+  store.debit_paper_for_entry(2.38, 100.0)
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "enter",
+    "mode": "paper",
+    "market_ticker": f"{prev}-T62800",
+    "side": "no",
+    "contracts": 7,
+    "price_cents": 34,
+    "entry_price_cents": 34,
+    "cost_usd": 2.38,
+    "label": "$62,800 or above",
+    "status": "filled",
+    "position_id": pid,
+    "entry_context": {
+      "features": {
+        "strike_type": "greater",
+        "floor_strike": 62800.0,
+        "contract_type": "threshold",
+      },
+    },
+  })
+  store.apply_paper_exit_settlement(2.38, 0.35, 100.0)
+  store.log_trade({
+    "event_ticker": prev,
+    "action": "exit",
+    "mode": "paper",
+    "market_ticker": f"{prev}-T62800",
+    "side": "no",
+    "contracts": 7,
+    "entry_price_cents": 34,
+    "exit_price_cents": 39,
+    "price_cents": 39,
+    "cost_usd": 2.38,
+    "pnl_usd": 0.35,
+    "label": "$62,800 or above",
+    "status": "filled",
+    "position_id": pid,
+    "detail": "Manual PAPER exit · bid 39¢",
+  })
+  bank_before = store.reconcile_paper_bankroll(100.0)["paper_bankroll_usd"]
+
+  class _FakeKalshi:
+    def get_market_ticker(self, ticker):
+      return {"result": "no"}
+
+  settle_expired_human_positions(
+    store,
+    current_event_ticker="KXBTCD-26JUN3017",
+    settle_price=62733.0,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+    kalshi=_FakeKalshi(),
+    asset="btc",
+  )
+  exits = [t for t in store.list_trades(limit=20) if t["action"] == "exit"]
+  assert len(exits) == 1
+  assert exits[0]["exit_price_cents"] == 39
+  assert abs(float(exits[0]["pnl_usd"]) - 0.35) < 0.01
+  bank_after = store.reconcile_paper_bankroll(100.0)["paper_bankroll_usd"]
+  assert abs(bank_after - bank_before) < 0.02
+
+
+def test_restore_skips_settlement_placeholder_was(tmp_path: Path):
+  from src.trading.human_hourly_trade import restore_overwritten_early_human_exits
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  store.log_trade({
+    "event_ticker": "KXBTCD-26JUL1704",
+    "action": "exit",
+    "mode": "paper",
+    "market_ticker": "T",
+    "side": "no",
+    "contracts": 1,
+    "entry_price_cents": 50,
+    "exit_price_cents": 0,
+    "pnl_usd": -0.50,
+    "status": "filled",
+    "detail": (
+      "PAPER EXIT (HOUR SETTLEMENT CORRECTED): NO ×1 @ 0¢ (entry 50¢) — "
+      "lost [was 100¢ / +0.50]"
+    ),
+  })
+  rows = restore_overwritten_early_human_exits(
+    store,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+  )
+  assert rows == []
+  exits = [t for t in store.list_trades(limit=5) if t["action"] == "exit"]
+  assert exits[0]["exit_price_cents"] == 0
+
+
+def test_restore_overwritten_early_exit(tmp_path: Path):
+  from src.trading.human_hourly_trade import restore_overwritten_early_human_exits
+
+  store = HumanTradeStore(tmp_path / "human.db")
+  store.debit_paper_for_entry(2.38, 100.0)
+  # Inflated settlement rewrite already applied to bankroll (+4.62 instead of +0.35).
+  store.apply_paper_exit_settlement(2.38, 4.62, 100.0)
+  store.log_trade({
+    "event_ticker": "KXBTCD-26JUL1704",
+    "action": "exit",
+    "mode": "paper",
+    "market_ticker": "KXBTCD-26JUL1704-T62799.99",
+    "side": "no",
+    "contracts": 7,
+    "entry_price_cents": 34,
+    "exit_price_cents": 100,
+    "price_cents": 100,
+    "pnl_usd": 4.62,
+    "status": "filled",
+    "detail": (
+      "PAPER EXIT (HOUR SETTLEMENT CORRECTED): NO ×7 @ 100¢ (entry 34¢) — "
+      "settled @ 100¢ (won vs $62,733.54 · live roll print) [was 39¢ / +0.35]"
+    ),
+  })
+  rows = restore_overwritten_early_human_exits(
+    store,
+    cfg={"human_trading": {"paper_bankroll_initial_usd": 100}},
+  )
+  assert len(rows) == 1
+  assert rows[0]["exit_price_cents"] == 39
+  assert abs(float(rows[0]["pnl_usd"]) - 0.35) < 0.01
+  bank = store.reconcile_paper_bankroll(100.0)
+  # 100 - 2.38 + 2.38 + 0.35 = 100.35
+  assert abs(bank["paper_bankroll_usd"] - 100.35) < 0.02
+
+
 def test_repair_orphan_enter_returns_cash(tmp_path: Path):
   """Enter with no exit after hour end must still pay settlement (not leave a ghost enter)."""
   from src.trading.human_hourly_trade import settle_expired_human_positions

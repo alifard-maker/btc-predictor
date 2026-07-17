@@ -1403,7 +1403,81 @@ def settle_expired_human_positions(
       settle_brti_cache=settle_brti_cache,
     ),
   )
+  settled_rows.extend(restore_overwritten_early_human_exits(store, cfg=cfg))
   return settled_rows
+
+
+_WAS_EARLY_EXIT_RE = re.compile(
+  r"HOUR SETTLEMENT CORRECTED.*?\[was\s+(\d+)\s*[¢c]\s*/\s*([+\-]?\d+(?:\.\d+)?)",
+  re.IGNORECASE | re.DOTALL,
+)
+
+
+def restore_overwritten_early_human_exits(
+  store: HumanTradeStore,
+  *,
+  cfg: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+  """
+  Undo settlement rewrite of real early exits.
+
+  Orphan repair used to overwrite manual mid-hour exits (e.g. 39¢ / +$0.35)
+  with hour settlement (100¢ / +$4.62). Restore the early exit when the
+  CORRECTED detail still carries ``[was X¢ / +Y]``.
+  """
+  settings = settings_from_cfg(cfg, store)
+  restored: list[dict[str, Any]] = []
+  for trade in store.list_trades(limit=5000):
+    if str(trade.get("action") or "") != "exit":
+      continue
+    detail = str(trade.get("detail") or "")
+    m = _WAS_EARLY_EXIT_RE.search(detail)
+    if not m:
+      continue
+    was_exit = int(m.group(1))
+    was_pnl = float(m.group(2))
+    # Only restore true mid-market early exits — never settle placeholders (0/100).
+    if was_exit in (0, 100):
+      continue
+    cur_exit = int(trade.get("exit_price_cents") or trade.get("price_cents") or 0)
+    cur_pnl = float(trade.get("pnl_usd") or 0.0)
+    # Already restored / never inflated.
+    if cur_exit == was_exit and abs(cur_pnl - was_pnl) < 0.009:
+      continue
+    # Only unwind settlement overwrites (typically 0 or 100).
+    if cur_exit not in (0, 100):
+      continue
+    delta = round(was_pnl - cur_pnl, 2)
+    entry_c = int(trade.get("entry_price_cents") or 0)
+    side_l = str(trade.get("side") or "yes").lower()
+    contracts = int(trade.get("contracts") or 0)
+    new_detail = (
+      f"PAPER EXIT (EARLY EXIT RESTORED): {side_l.upper()} ×{contracts} "
+      f"@ {was_exit}¢ (entry {entry_c}¢) — mid-hour exit kept "
+      f"[settlement rewrite {cur_exit}¢ / {cur_pnl:+.2f} reversed]"
+    )
+    updated = store.update_trade_exit(
+      str(trade["id"]),
+      exit_price_cents=was_exit,
+      pnl_usd=round(was_pnl, 2),
+      detail=new_detail,
+    )
+    if abs(delta) >= 0.009:
+      store.apply_paper_exit_settlement(0.0, delta, settings.paper_bankroll_initial_usd)
+    if updated:
+      restored.append(updated)
+      log.info(
+        "Restored early human exit %s: %s¢ / %+.2f → %s¢ / %+.2f (Δ bankroll %+.2f)",
+        trade.get("id"),
+        cur_exit,
+        cur_pnl,
+        was_exit,
+        was_pnl,
+        delta,
+      )
+  if restored:
+    store.reconcile_paper_bankroll(settings.paper_bankroll_initial_usd)
+  return restored
 
 
 def repair_orphan_human_paper_enters(
@@ -1588,7 +1662,17 @@ def repair_orphan_human_paper_enters(
     if existing_exit:
       old_exit = int(existing_exit.get("exit_price_cents") or existing_exit.get("price_cents") or 0)
       old_pnl = float(existing_exit.get("pnl_usd") or 0.0)
+      detail_l = str(existing_exit.get("detail") or "").lower()
       is_scratch = abs(old_pnl) < 0.009 and old_exit == entry_c
+      is_placeholder = (
+        is_scratch
+        or "cash-back @ entry" in detail_l
+        or "awaiting official result" in detail_l
+      )
+      # Real early exits (manual TP/CUT) must never be rewritten to hour settlement.
+      # Only upgrade scratch / cash-back placeholders once the official print is in.
+      if not is_placeholder:
+        continue
       # Still no official print — leave cash-back alone (will retry next poll).
       if "cash-back @ entry" in note or "awaiting official result" in note:
         if is_scratch:
