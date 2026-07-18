@@ -1086,6 +1086,32 @@ def test_paper_exit_log_includes_all_exits_not_capped_by_enters(tmp_path: Path):
   assert len([t for t in status["paper_recent_trades"] if t.get("action") == "exit"]) < 30
 
 
+def test_exit_log_includes_live_settlement_with_return_pct(tmp_path: Path):
+  store = HumanTradeStore(tmp_path / "human_live.db")
+  store.log_trade({
+    "event_ticker": "KXBTCD-26JUL1808",
+    "action": "exit",
+    "mode": "live",
+    "status": "filled",
+    "market_ticker": "KXBTCD-26JUL1808-T63999.99",
+    "label": "$64,000 or above",
+    "side": "yes",
+    "contracts": 10,
+    "entry_price_cents": 25,
+    "exit_price_cents": 100,
+    "cost_usd": 2.5,
+    "pnl_usd": 7.5,
+    "detail": "LIVE EXIT (HOUR SETTLEMENT): YES ×10 @ 100¢",
+  })
+  status = store.status()
+  assert status["live_pnl"]["realized_pnl_usd"] == 7.5
+  assert len(status["exit_log"]) == 1
+  row = status["exit_log"][0]
+  assert row["mode"] == "live"
+  assert row["return_pct"] == 300.0
+  assert status["paper_exit_log"] == []
+
+
 def test_apply_human_settings_stake(tmp_path: Path):
   from src.trading.human_hourly_trade import apply_human_settings_body
 

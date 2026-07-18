@@ -2695,20 +2695,45 @@
     }
 
     function humanPaperLogSource(st) {
+      // Prefer combined paper+live exit_log so Live settlements (e.g. VALUE YES to 100¢) show up.
+      const combined = st.exit_log;
+      if (Array.isArray(combined) && combined.length) {
+        return combined.filter(t => t.action === 'exit');
+      }
       return (st.paper_exit_log || st.paper_recent_trades || st.recent_trades || [])
-        .filter(t => String(t.mode || '').toLowerCase() === 'paper' && t.action === 'exit');
+        .filter(t => t.action === 'exit');
     }
 
-    function humanPaperLogSummary(paperPnl, log) {
-      const pushes = Number(paperPnl.pushes || 0);
-      const decisive = Math.max(0, Number(paperPnl.closed_legs || 0) - pushes);
-      const shown = humanPaperLogRows(log).length;
-      let label = `<strong>Paper P&L log</strong> — ${shown} decisive`;
-      if (shown < decisive) {
-        label += ` <span class="muted" style="font-weight:400">(${decisive} total)</span>`;
+    function humanExitReturnPct(t) {
+      if (t.return_pct != null && Number.isFinite(Number(t.return_pct))) return Number(t.return_pct);
+      const cost = Number(t.cost_usd);
+      const pnl = Number(t.pnl_usd);
+      if (!(cost > 0.009) || !Number.isFinite(pnl)) return null;
+      return Math.round((pnl / cost) * 1000) / 10;
+    }
+
+    function humanExitActionLabel(t) {
+      const detail = String(t.detail || '');
+      if (detail.includes('HOUR SETTLEMENT') || detail.includes('SLOT SETTLEMENT')) return 'settle';
+      return t.action || '—';
+    }
+
+    function humanPaperLogSummary(paperPnl, log, livePnl) {
+      const visible = humanPaperLogRows(log);
+      const liveN = visible.filter(t => String(t.mode || '').toLowerCase() === 'live').length;
+      const paperN = visible.length - liveN;
+      const pushes = Number(paperPnl.pushes || 0) + Number((livePnl && livePnl.pushes) || 0);
+      let label = `<strong>Trade P&L log</strong> — ${visible.length} decisive`;
+      if (liveN > 0 || paperN > 0) {
+        label += ` <span class="muted" style="font-weight:400">(${paperN} paper · ${liveN} live)</span>`;
       }
       if (pushes > 0) {
         label += ` <span class="muted" style="font-weight:400">· ${pushes} scratch${pushes === 1 ? '' : 'es'} omitted</span>`;
+      }
+      const liveReal = livePnl && livePnl.realized_pnl_usd;
+      if (liveReal != null && Number(liveReal) !== 0) {
+        const cls = Number(liveReal) > 0 ? 'up' : Number(liveReal) < 0 ? 'down' : 'muted';
+        label += ` · <span class="${cls}">live ${signedPrice(Number(liveReal))}</span>`;
       }
       return label;
     }
@@ -2718,23 +2743,24 @@
       if (!cached?.ok) return;
       const st = cached.status || {};
       const paperPnl = st.paper_pnl || {};
+      const livePnl = st.live_pnl || {};
       const paperLog = humanPaperLogSource(st);
-      patchHumanPaperLog(asset, paperLog, paperPnl, humanPnlCls, humanFmtPnl);
+      patchHumanPaperLog(asset, paperLog, paperPnl, humanPnlCls, humanFmtPnl, livePnl);
     }
 
-    function humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset) {
+    function humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset, livePnl) {
       const visible = humanPaperLogRows(paperLog);
       if (!visible.length) {
-        const pushes = Number(paperPnl.pushes || 0);
+        const pushes = Number(paperPnl.pushes || 0) + Number((livePnl && livePnl.pushes) || 0);
         if (pushes > 0) {
-          return `<p class="muted" style="font-size:.72rem;margin-top:.5rem">No decisive paper exits yet — ${pushes} scratch${pushes === 1 ? '' : 'es'} omitted from this log.</p>`;
+          return `<p class="muted" style="font-size:.72rem;margin-top:.5rem">No decisive exits yet — ${pushes} scratch${pushes === 1 ? '' : 'es'} omitted from this log.</p>`;
         }
-        return '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No paper exits yet — P&L appears here after Sell or hour settlement.</p>';
+        return '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No exits yet — P&L appears here after Sell or hour settlement (paper + live).</p>';
       }
       return `<details id="human-paper-log-DETAILS_ASSET" style="margin-top:.65rem;font-size:.72rem">
-          <summary id="human-paper-log-summary-DETAILS_ASSET">${humanPaperLogSummary(paperPnl, paperLog)}</summary>
+          <summary id="human-paper-log-summary-DETAILS_ASSET">${humanPaperLogSummary(paperPnl, paperLog, livePnl)}</summary>
           <table style="width:100%;margin-top:.35rem;font-size:.68rem">
-            <thead><tr><th>Time</th><th>Action</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&L</th></tr></thead>
+            <thead><tr><th>Time</th><th>Mode</th><th>Action</th><th>Contract</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Return</th></tr></thead>
             <tbody id="human-paper-log-body-DETAILS_ASSET">${humanPaperLogRowsHtml(visible, pnlCls, fmtPnl)}</tbody>
           </table>
         </details>`;
@@ -2743,13 +2769,20 @@
     function humanPaperLogRowsHtml(paperLog, pnlCls, fmtPnl) {
       return paperLog.map(t => {
         const pnl = t.action === 'exit' ? t.pnl_usd : null;
+        const mode = String(t.mode || 'paper').toUpperCase();
+        const modeCls = mode === 'LIVE' ? 'up' : 'muted';
+        const ret = humanExitReturnPct(t);
+        const retTxt = ret == null ? '—' : `${ret > 0 ? '+' : ''}${ret.toFixed(0)}%`;
+        const retCls = ret == null ? 'muted' : pnlCls(ret);
           return `<tr>
           <td>${t.created_at ? time(t.created_at) : '—'}</td>
-          <td>${String(t.detail || '').includes('HOUR SETTLEMENT') ? 'settle' : (t.action || '—')}</td>
+          <td class="${modeCls}" style="font-weight:600">${mode}</td>
+          <td>${humanExitActionLabel(t)}</td>
           <td style="font-size:.65rem">${t.label || t.market_ticker || '—'}</td>
           <td>${t.entry_price_cents != null ? t.entry_price_cents + '¢' : '—'}</td>
           <td>${t.exit_price_cents != null ? t.exit_price_cents + '¢' : '—'}</td>
           <td class="${pnl != null ? pnlCls(Number(pnl)) : 'muted'}">${pnl != null ? fmtPnl(Number(pnl)) : '—'}</td>
+          <td class="${retCls}">${retTxt}</td>
         </tr>`;
       }).join('');
     }
@@ -2763,13 +2796,13 @@
       });
     }
 
-    function patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl) {
+    function patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl, livePnl) {
       const wrap = $(`human-paper-log-wrap-${asset}`);
       const details = $(`human-paper-log-${asset}`);
       const visible = humanPaperLogRows(paperLog);
       if (!visible.length) {
         if (wrap) {
-          wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset).replace(/DETAILS_ASSET/g, asset);
+          wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset, livePnl).replace(/DETAILS_ASSET/g, asset);
           const fresh = $(`human-paper-log-${asset}`);
           if (fresh) {
             fresh.open = !!humanPaperLogExpanded[asset];
@@ -2779,7 +2812,7 @@
         return true;
       }
       if (!details && wrap) {
-        wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset).replace(/DETAILS_ASSET/g, asset);
+        wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset, livePnl).replace(/DETAILS_ASSET/g, asset);
         const fresh = $(`human-paper-log-${asset}`);
         if (fresh) {
           fresh.open = !!humanPaperLogExpanded[asset];
@@ -2791,7 +2824,7 @@
       const summary = $(`human-paper-log-summary-${asset}`);
       const tbody = $(`human-paper-log-body-${asset}`);
       if (summary) {
-        summary.innerHTML = humanPaperLogSummary(paperPnl, paperLog);
+        summary.innerHTML = humanPaperLogSummary(paperPnl, paperLog, livePnl);
       }
       if (tbody && details.open) {
         tbody.innerHTML = humanPaperLogRowsHtml(visible, pnlCls, fmtPnl);
@@ -2840,6 +2873,12 @@
       };
       setStat(`human-paper-realized-${asset}`, realized, pnlCls(Number(realized || 0)));
       setStat(`human-paper-today-${asset}`, today, pnlCls(Number(today || 0)));
+      const liveRealEl = $(`human-live-realized-${asset}`);
+      if (liveRealEl) {
+        const lr = (st.live_pnl || {}).realized_pnl_usd;
+        liveRealEl.textContent = fmtPnl(lr);
+        liveRealEl.className = lr != null ? pnlCls(Number(lr)) : 'muted';
+      }
       const mtmEl = $(`human-open-mtm-${asset}`);
       if (mtmEl) {
         mtmEl.textContent = fmtPnl(ur);
@@ -2876,7 +2915,7 @@
         gateEl.innerHTML = humanManualBookBannerHtml(asset);
       }
       const paperLog = humanPaperLogSource(st);
-      patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl);
+      patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl, st.live_pnl || {});
       return true;
     }
 
@@ -3061,9 +3100,11 @@
       const realized = paperPnl.realized_pnl_usd ?? pb.paper_realized_all_time_usd;
       const today = paperPnl.today_realized_pnl_usd;
       const ur = paperPnl.open_unrealized_pnl_usd;
+      const livePnl = st.live_pnl || {};
+      const liveReal = livePnl.realized_pnl_usd;
       const paperLog = humanPaperLogSource(st);
       const openHtml = `<div id="human-open-legs-${asset}">${humanOpenLegsInnerHtml(asset, open)}</div>`;
-      const logHtml = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset)
+      const logHtml = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset, livePnl)
         .replace(/DETAILS_ASSET/g, asset);
       const bookBanner = isSlot15HumanAsset(asset) ? '' : humanManualBookBannerHtml(asset);
       const marketHtml = humanSlot15MarketTradeHtml(asset, payload);
@@ -3088,7 +3129,8 @@
         ${marketHtml}
         <div class="cal-stats" style="margin-bottom:.55rem">
           <div><span>Paper realized</span><strong id="human-paper-realized-${asset}" class="${pnlCls(Number(realized || 0))}">${fmtPnl(realized)}</strong></div>
-          <div><span>Today</span><strong id="human-paper-today-${asset}" class="${pnlCls(Number(today || 0))}">${fmtPnl(today)}</strong></div>
+          <div><span>Live realized</span><strong id="human-live-realized-${asset}" class="${liveReal != null ? pnlCls(Number(liveReal)) : 'muted'}">${fmtPnl(liveReal)}</strong></div>
+          <div><span>Today (paper)</span><strong id="human-paper-today-${asset}" class="${pnlCls(Number(today || 0))}">${fmtPnl(today)}</strong></div>
           <div><span>Open MTM</span><strong id="human-open-mtm-${asset}" class="${ur != null ? pnlCls(Number(ur)) : 'muted'}">${fmtPnl(ur)}</strong></div>
           <div><span>Win rate</span><strong id="human-paper-wr-${asset}">${paperPnl.win_rate != null ? `${(paperPnl.win_rate * 100).toFixed(0)}%` : '—'} <span class="muted" style="font-weight:400">(${paperPnl.wins || 0}W/${paperPnl.losses || 0}L${paperPnl.pushes ? `/${paperPnl.pushes}P` : ''} · ${paperPnl.closed_legs || 0} closed)</span></strong></div>
         </div>
@@ -3129,7 +3171,7 @@
       }
       const stamp = meta.marked_at
         ? ` · marks ${time(meta.marked_at)}${meta.quote_source === 'kalshi_live' ? ' · Kalshi live' : ''}`
-        : ' · marks ~2–3s Kalshi';
+        : ' · marks ~1.5s Kalshi';
       return `<div style="font-size:.72rem;margin-bottom:.35rem"><strong>Open legs</strong> <span class="muted">${stamp}</span></div>
         <ul style="list-style:none;padding:0;margin:0;font-size:.72rem">${open.map(p => {
           const urP = p.unrealized_pnl_usd;
@@ -3202,6 +3244,20 @@
       }
       const asset = hourlyAssetForTab(activeTab);
       if (asset === 'btc' || asset === 'eth') loadHumanMarksFast(asset);
+    }
+
+    async function pollContractAsksIfNeeded() {
+      if (!isHourlyTab(activeTab)) return;
+      const now = Date.now();
+      if (contractAskInFlight || now - contractAskLastAt < CONTRACT_ASK_POLL_MS) return;
+      contractAskInFlight = true;
+      contractAskLastAt = now;
+      try {
+        await loadDaily({ force: true });
+      } catch (_) { /* keep last asks */ }
+      finally {
+        contractAskInFlight = false;
+      }
     }
 
     function renderHumanBotCompare(asset, data, botStatus) {
@@ -8310,6 +8366,7 @@
     }, KALSHI_PNL_INTERVAL_MS);
     setInterval(loadLiveMonitor, LIVE_MONITOR_INTERVAL_MS);
     setInterval(pollHumanMarksIfNeeded, HUMAN_MARKS_POLL_MS);
+    setInterval(pollContractAsksIfNeeded, CONTRACT_ASK_POLL_MS);
     setInterval(updateEdtClock, 1000);
 
     (function initDashboardZoom() {

@@ -321,18 +321,31 @@ class HumanTradeStore:
     return out
 
   def list_paper_exits(self, *, limit: int = 200) -> list[dict[str, Any]]:
-    """All paper exit rows for the manual P&L log (not capped by enter rows)."""
+    """Paper-only exit rows (legacy). Prefer list_exit_log for the dashboard."""
+    return self.list_exit_log(limit=limit, modes=("paper",))
+
+  def list_exit_log(
+    self,
+    *,
+    limit: int = 200,
+    modes: tuple[str, ...] = ("paper", "live"),
+  ) -> list[dict[str, Any]]:
+    """Closed exit rows for the manual P&L log (paper and/or live)."""
+    mode_list = [str(m).lower() for m in modes if m]
+    if not mode_list:
+      mode_list = ["paper", "live"]
+    placeholders = ",".join("?" for _ in mode_list)
     with self._connect() as conn:
       rows = conn.execute(
-        """
+        f"""
         SELECT * FROM human_trades
         WHERE action = 'exit'
-          AND lower(mode) = 'paper'
+          AND lower(mode) IN ({placeholders})
           AND status IN ('filled', 'reconciled')
         ORDER BY created_at DESC
         LIMIT ?
         """,
-        (int(limit),),
+        (*mode_list, int(limit)),
       ).fetchall()
     out: list[dict[str, Any]] = []
     for r in rows:
@@ -343,6 +356,17 @@ class HumanTradeStore:
           row["entry_context"] = json.loads(raw)
         except json.JSONDecodeError:
           pass
+      cost = row.get("cost_usd")
+      pnl = row.get("pnl_usd")
+      try:
+        cost_f = float(cost) if cost is not None else None
+        pnl_f = float(pnl) if pnl is not None else None
+      except (TypeError, ValueError):
+        cost_f = pnl_f = None
+      if cost_f is not None and cost_f > 0.009 and pnl_f is not None:
+        row["return_pct"] = round(pnl_f / cost_f * 100.0, 1)
+      else:
+        row["return_pct"] = None
       out.append(row)
     return out
 
@@ -562,6 +586,7 @@ class HumanTradeStore:
     )
     recent = self.list_trades(limit=80)
     paper_pnl = self.pnl_summary(mode="paper")
+    live_pnl = self.pnl_summary(mode="live")
     open_cost = self.open_paper_cost_usd()
     initial = float(settings.paper_bankroll_initial_usd)
     realized = float(paper_pnl.get("realized_pnl_usd") or 0.0)
@@ -577,10 +602,12 @@ class HumanTradeStore:
       paper["paper_open_cost_usd"] = open_cost
       paper["paper_expected_bankroll_usd"] = expected
       paper["paper_locked_legs"] = len(open_all)
+    exit_log = self.list_exit_log(limit=200)
     return {
       "settings": settings.to_dict(),
       "paper_bankroll": paper,
       "paper_pnl": paper_pnl,
+      "live_pnl": live_pnl,
       "open_positions": open_pos,
       "open_position_count": len(open_pos),
       "all_open_position_count": len(open_all),
@@ -589,6 +616,7 @@ class HumanTradeStore:
       "paper_recent_trades": [
         t for t in recent if str(t.get("mode") or "").lower() == "paper"
       ][:40],
-      "paper_exit_log": self.list_paper_exits(limit=200),
+      "paper_exit_log": [t for t in exit_log if str(t.get("mode") or "").lower() == "paper"],
+      "exit_log": exit_log,
       "event_ticker": event_ticker,
     }
