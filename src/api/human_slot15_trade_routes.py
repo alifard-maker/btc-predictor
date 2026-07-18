@@ -201,10 +201,10 @@ def register_human_slot15_trade_routes(
       settings = store.get_settings()
       if "mode" in body:
         require_live_password(
-          settings.mode,
-          str(body.get("mode", settings.mode)),
-          body,
-          live_bet_password(cfg),
+          current_mode=settings.mode,
+          new_mode=str(body.get("mode", settings.mode)),
+          body=body,
+          password=live_bet_password(cfg),
         )
       apply_human_settings_body(store, body, cfg=cfg)
       tab = _slot15_tab(loop, asset)
@@ -249,7 +249,12 @@ def register_human_slot15_trade_routes(
       settings = store.get_settings()
       mode = str(body.get("mode") or settings.mode).lower()
       if mode == "live":
-        require_live_password("paper", "live", body, live_bet_password(cfg))
+        require_live_password(
+          current_mode="paper",
+          new_mode="live",
+          body=body,
+          password=live_bet_password(cfg),
+        )
       tab = _slot15_tab(loop, asset)
       kalshi = loop._kalshi_for(asset) if mode == "live" else None
       out = execute_slot15_manual_enter(
@@ -284,7 +289,12 @@ def register_human_slot15_trade_routes(
       open_pos = next((p for p in store.open_positions() if p.get("id") == pos_id), None)
       mode = str((open_pos or {}).get("mode") or settings.mode).lower()
       if mode == "live":
-        require_live_password("paper", "live", body, live_bet_password(cfg))
+        require_live_password(
+          current_mode="paper",
+          new_mode="live",
+          body=body,
+          password=live_bet_password(cfg),
+        )
       tab = _slot15_tab(loop, asset)
       kalshi = loop._kalshi_for(asset)
       out = execute_slot15_manual_exit(

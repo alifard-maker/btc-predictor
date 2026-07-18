@@ -264,10 +264,10 @@ def register_human_trade_routes(
       settings = store.get_settings()
       if "mode" in body:
         require_live_password(
-          settings.mode,
-          str(body.get("mode", settings.mode)),
-          body,
-          live_bet_password(cfg),
+          current_mode=settings.mode,
+          new_mode=str(body.get("mode", settings.mode)),
+          body=body,
+          password=live_bet_password(cfg),
         )
       apply_human_settings_body(store, body, cfg=cfg)
       tab = _human_tab(loop, asset)
@@ -315,7 +315,12 @@ def register_human_trade_routes(
       settings = store.get_settings()
       mode = str(body.get("mode") or settings.mode).lower()
       if mode == "live":
-        require_live_password("paper", "live", body, live_bet_password(cfg))
+        require_live_password(
+          current_mode="paper",
+          new_mode="live",
+          body=body,
+          password=live_bet_password(cfg),
+        )
       bot_kind = str(body.get("bot_kind") or human_compare_bot_kind(asset))
       tab = _human_tab(loop, asset)
       bot_status = _bot_status_for_compare(loop, asset, tab, bot_kind)
@@ -354,7 +359,12 @@ def register_human_trade_routes(
       open_pos = next((p for p in store.open_positions() if p.get("id") == pos_id), None)
       mode = str((open_pos or {}).get("mode") or settings.mode).lower()
       if mode == "live":
-        require_live_password("paper", "live", body, live_bet_password(cfg))
+        require_live_password(
+          current_mode="paper",
+          new_mode="live",
+          body=body,
+          password=live_bet_password(cfg),
+        )
       tab = _human_tab(loop, asset)
       # Fresh Kalshi marks for paper + live exits (TAKE PROFIT re-check needs live bid).
       kalshi = loop._kalshi_for(asset)
