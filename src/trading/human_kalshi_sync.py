@@ -255,6 +255,13 @@ def sync_recent_human_live_hours_from_kalshi(
       if str(p.get("mode") or "").lower() == "live"
     ]
     has_any_live = bool(live_rows or open_live)
+    # Manual Kalshi-history pins (mixed YES/NO books) — do not overwrite.
+    pinned = any(
+      "matched Kalshi history" in str(t.get("detail") or "")
+      for t in live_exits
+    )
+    if pinned:
+      continue
     # Unsettled hour with leftover inventory: only import if the dashboard
     # has nothing yet (don't churn-rebuild open MTM every poll).
     if not settled:
