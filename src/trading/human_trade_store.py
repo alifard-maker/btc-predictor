@@ -619,7 +619,7 @@ class HumanTradeStore:
       paper["paper_open_cost_usd"] = open_cost
       paper["paper_expected_bankroll_usd"] = expected
       paper["paper_locked_legs"] = len(open_all)
-    exit_log = self.list_exit_log(limit=200)
+    exit_log = self.list_exit_log(limit=500)
     return {
       "settings": settings.to_dict(),
       "paper_bankroll": paper,

@@ -2669,7 +2669,8 @@
     }
 
     const humanTradesCache = { btc: null, eth: null, btc15: null, eth15: null };
-    const humanPaperLogExpanded = { btc: false, eth: false, btc15: false, eth15: false };
+    // null = unset (auto-open when live exits exist); boolean = user preference
+    const humanPaperLogExpanded = { btc: null, eth: null, btc15: null, eth15: null };
 
     function isHumanPaperPush(t) {
       if (String(t.action || '') !== 'exit') return false;
@@ -2715,7 +2716,37 @@
     function humanExitActionLabel(t) {
       const detail = String(t.detail || '');
       if (detail.includes('HOUR SETTLEMENT') || detail.includes('SLOT SETTLEMENT')) return 'settle';
+      if (detail.includes('Kalshi sync')) return 'kalshi';
       return t.action || '—';
+    }
+
+    /** KXBTCD-26JUL1809 → "9am EDT" (Kalshi crypto hourly suffix is Eastern). */
+    function humanEventHourLabel(eventTicker) {
+      const raw = String(eventTicker || '');
+      const m = raw.match(/-(\d{2})([A-Z]{3})(\d{2})(\d{2})(?:$|-)/i);
+      if (!m) return '';
+      const hour = Number(m[4]);
+      if (!Number.isFinite(hour) || hour < 0 || hour > 23) return '';
+      const h12 = hour % 12 === 0 ? 12 : hour % 12;
+      const ampm = hour < 12 ? 'am' : 'pm';
+      return `${h12}${ampm} EDT`;
+    }
+
+    function humanExitContractLabel(t) {
+      const strike = t.label || t.market_ticker || '—';
+      const hour = humanEventHourLabel(t.event_ticker);
+      return hour ? `${hour} · ${strike}` : strike;
+    }
+
+    function humanPaperLogRowsSorted(log) {
+      return humanPaperLogRows(log).slice().sort((a, b) => {
+        const ea = String(a.event_ticker || '');
+        const eb = String(b.event_ticker || '');
+        if (ea !== eb) return eb.localeCompare(ea); // newest hour first
+        const ta = String(a.created_at || '');
+        const tb = String(b.created_at || '');
+        return tb.localeCompare(ta);
+      });
     }
 
     function humanPaperLogSummary(paperPnl, log, livePnl) {
@@ -2730,10 +2761,16 @@
       if (pushes > 0) {
         label += ` <span class="muted" style="font-weight:400">· ${pushes} scratch${pushes === 1 ? '' : 'es'} omitted</span>`;
       }
-      const liveReal = livePnl && livePnl.realized_pnl_usd;
-      if (liveReal != null && Number(liveReal) !== 0) {
-        const cls = Number(liveReal) > 0 ? 'up' : Number(liveReal) < 0 ? 'down' : 'muted';
-        label += ` · <span class="${cls}">live ${signedPrice(Number(liveReal))}</span>`;
+      const liveToday = livePnl && livePnl.today_realized_pnl_usd;
+      if (liveToday != null && Number(liveToday) !== 0) {
+        const cls = Number(liveToday) > 0 ? 'up' : Number(liveToday) < 0 ? 'down' : 'muted';
+        label += ` · <span class="${cls}">today live ${signedPrice(Number(liveToday))}</span>`;
+      } else {
+        const liveReal = livePnl && livePnl.realized_pnl_usd;
+        if (liveReal != null && Number(liveReal) !== 0) {
+          const cls = Number(liveReal) > 0 ? 'up' : Number(liveReal) < 0 ? 'down' : 'muted';
+          label += ` · <span class="${cls}">live ${signedPrice(Number(liveReal))}</span>`;
+        }
       }
       return label;
     }
@@ -2749,13 +2786,17 @@
     }
 
     function humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset, livePnl) {
-      const visible = humanPaperLogRows(paperLog);
+      const visible = humanPaperLogRowsSorted(paperLog);
       if (!visible.length) {
         const pushes = Number(paperPnl.pushes || 0) + Number((livePnl && livePnl.pushes) || 0);
         if (pushes > 0) {
           return `<p class="muted" style="font-size:.72rem;margin-top:.5rem">No decisive exits yet — ${pushes} scratch${pushes === 1 ? '' : 'es'} omitted from this log.</p>`;
         }
         return '<p class="muted" style="font-size:.72rem;margin-top:.5rem">No exits yet — P&L appears here after Sell or hour settlement (paper + live).</p>';
+      }
+      const liveN = visible.filter(t => String(t.mode || '').toLowerCase() === 'live').length;
+      if (liveN > 0 && humanPaperLogExpanded[asset] == null) {
+        humanPaperLogExpanded[asset] = true;
       }
       return `<details id="human-paper-log-DETAILS_ASSET" style="margin-top:.65rem;font-size:.72rem">
           <summary id="human-paper-log-summary-DETAILS_ASSET">${humanPaperLogSummary(paperPnl, paperLog, livePnl)}</summary>
@@ -2778,7 +2819,7 @@
           <td>${t.created_at ? time(t.created_at) : '—'}</td>
           <td class="${modeCls}" style="font-weight:600">${mode}</td>
           <td>${humanExitActionLabel(t)}</td>
-          <td style="font-size:.65rem">${t.label || t.market_ticker || '—'}</td>
+          <td style="font-size:.65rem">${humanExitContractLabel(t)}</td>
           <td>${t.entry_price_cents != null ? t.entry_price_cents + '¢' : '—'}</td>
           <td>${t.exit_price_cents != null ? t.exit_price_cents + '¢' : '—'}</td>
           <td class="${pnl != null ? pnlCls(Number(pnl)) : 'muted'}">${pnl != null ? fmtPnl(Number(pnl)) : '—'}</td>
@@ -2799,7 +2840,10 @@
     function patchHumanPaperLog(asset, paperLog, paperPnl, pnlCls, fmtPnl, livePnl) {
       const wrap = $(`human-paper-log-wrap-${asset}`);
       const details = $(`human-paper-log-${asset}`);
-      const visible = humanPaperLogRows(paperLog);
+      const visible = humanPaperLogRowsSorted(paperLog);
+      if (visible.some(t => String(t.mode || '').toLowerCase() === 'live') && humanPaperLogExpanded[asset] == null) {
+        humanPaperLogExpanded[asset] = true;
+      }
       if (!visible.length) {
         if (wrap) {
           wrap.innerHTML = humanPaperLogTableHtml(paperLog, paperPnl, pnlCls, fmtPnl, asset, livePnl).replace(/DETAILS_ASSET/g, asset);
@@ -2826,8 +2870,9 @@
       if (summary) {
         summary.innerHTML = humanPaperLogSummary(paperPnl, paperLog, livePnl);
       }
-      if (tbody && details.open) {
+      if (tbody && (details.open || humanPaperLogExpanded[asset])) {
         tbody.innerHTML = humanPaperLogRowsHtml(visible, pnlCls, fmtPnl);
+        if (humanPaperLogExpanded[asset] && !details.open) details.open = true;
       }
       bindHumanPaperLogToggle(asset);
       return true;
@@ -2878,6 +2923,12 @@
         const lr = (st.live_pnl || {}).realized_pnl_usd;
         liveRealEl.textContent = fmtPnl(lr);
         liveRealEl.className = lr != null ? pnlCls(Number(lr)) : 'muted';
+      }
+      const liveTodayEl = $(`human-live-today-${asset}`);
+      if (liveTodayEl) {
+        const lt = (st.live_pnl || {}).today_realized_pnl_usd;
+        liveTodayEl.textContent = fmtPnl(lt);
+        liveTodayEl.className = lt != null ? pnlCls(Number(lt || 0)) : 'muted';
       }
       const mtmEl = $(`human-open-mtm-${asset}`);
       if (mtmEl) {
@@ -3130,6 +3181,7 @@
         <div class="cal-stats" style="margin-bottom:.55rem">
           <div><span>Paper realized</span><strong id="human-paper-realized-${asset}" class="${pnlCls(Number(realized || 0))}">${fmtPnl(realized)}</strong></div>
           <div><span>Live realized</span><strong id="human-live-realized-${asset}" class="${liveReal != null ? pnlCls(Number(liveReal)) : 'muted'}">${fmtPnl(liveReal)}</strong></div>
+          <div><span>Today (live)</span><strong id="human-live-today-${asset}" class="${livePnl.today_realized_pnl_usd != null ? pnlCls(Number(livePnl.today_realized_pnl_usd || 0)) : 'muted'}">${fmtPnl(livePnl.today_realized_pnl_usd)}</strong></div>
           <div><span>Today (paper)</span><strong id="human-paper-today-${asset}" class="${pnlCls(Number(today || 0))}">${fmtPnl(today)}</strong></div>
           <div><span>Open MTM</span><strong id="human-open-mtm-${asset}" class="${ur != null ? pnlCls(Number(ur)) : 'muted'}">${fmtPnl(ur)}</strong></div>
           <div><span>Win rate</span><strong id="human-paper-wr-${asset}">${paperPnl.win_rate != null ? `${(paperPnl.win_rate * 100).toFixed(0)}%` : '—'} <span class="muted" style="font-weight:400">(${paperPnl.wins || 0}W/${paperPnl.losses || 0}L${paperPnl.pushes ? `/${paperPnl.pushes}P` : ''} · ${paperPnl.closed_legs || 0} closed)</span></strong></div>

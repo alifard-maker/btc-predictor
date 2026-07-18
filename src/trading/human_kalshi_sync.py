@@ -16,6 +16,7 @@ from typing import Any
 
 from src.trading.hourly_event_time import (
   canonical_hourly_event_ticker,
+  hourly_event_settle_utc,
   market_ticker_event_ticker,
 )
 from src.trading.paper_execution import leg_pnl_usd
@@ -177,7 +178,7 @@ def _fetch_event_fills(kalshi: Any, event_ticker: str) -> list[dict[str, Any]]:
   if not kalshi or not getattr(kalshi, "authenticated", False):
     return []
   event = canonical_hourly_event_ticker(str(event_ticker))
-  fills = kalshi.list_fills(limit=500) or []
+  fills = kalshi.list_fills(limit=1000) or []
   out = []
   for f in fills:
     if not isinstance(f, dict):
@@ -188,6 +189,102 @@ def _fetch_event_fills(kalshi: Any, event_ticker: str) -> list[dict[str, Any]]:
     if canonical_hourly_event_ticker(market_ticker_event_ticker(t)) == event:
       out.append(f)
   return out
+
+
+def _live_event_pnl(store: Any, event: str) -> float:
+  total = 0.0
+  for t in store.list_trades(limit=500, event_ticker=event):
+    if str(t.get("mode") or "").lower() != "live" or t.get("action") != "exit":
+      continue
+    try:
+      total += float(t.get("pnl_usd") or 0)
+    except (TypeError, ValueError):
+      pass
+  return round(total, 2)
+
+
+def sync_recent_human_live_hours_from_kalshi(
+  store: Any,
+  *,
+  kalshi: Any,
+  asset: str = "btc",
+  lookback_fills: int = 1000,
+) -> list[dict[str, Any]]:
+  """
+  Ensure every recent BTC/ETH hourly event with Kalshi fills appears in the
+  manual live trade log (not only legs opened from the dashboard).
+  """
+  from datetime import datetime, timezone
+
+  prefix = "KXBTCD-" if str(asset).lower() == "btc" else "KXETHD-"
+  if not kalshi or not getattr(kalshi, "authenticated", False):
+    return []
+  fills = kalshi.list_fills(limit=lookback_fills) or []
+  events: set[str] = set()
+  for f in fills:
+    if not isinstance(f, dict):
+      continue
+    t = _ticker(f)
+    if not t.startswith(prefix):
+      continue
+    events.add(canonical_hourly_event_ticker(market_ticker_event_ticker(t)))
+
+  repaired: list[dict[str, Any]] = []
+  now = datetime.now(timezone.utc)
+  for event in sorted(events):
+    if not event:
+      continue
+    event_fills = [
+      f for f in fills
+      if isinstance(f, dict)
+      and canonical_hourly_event_ticker(market_ticker_event_ticker(_ticker(f))) == event
+    ]
+    legs = aggregate_yes_round_trips(event_fills, event_ticker=event)
+    if not legs:
+      continue
+    settle_at = hourly_event_settle_utc(event)
+    settled = settle_at is not None and now >= settle_at
+    live_rows = [
+      t for t in store.list_trades(limit=500, event_ticker=event)
+      if str(t.get("mode") or "").lower() == "live"
+    ]
+    live_exits = [t for t in live_rows if t.get("action") == "exit"]
+    live_enters = [t for t in live_rows if t.get("action") == "enter"]
+    open_live = [
+      p for p in store.open_positions(event)
+      if str(p.get("mode") or "").lower() == "live"
+    ]
+    has_any_live = bool(live_rows or open_live)
+    # Unsettled hour with leftover inventory: only import if the dashboard
+    # has nothing yet (don't churn-rebuild open MTM every poll).
+    if not settled:
+      if has_any_live:
+        continue
+      out = rebuild_human_live_event_from_kalshi(store, kalshi=kalshi, event_ticker=event)
+      if out.get("ok"):
+        repaired.append(out)
+      continue
+
+    kalshi_pnl = round(sum(float(g["pnl_usd"]) for g in legs.values()), 2)
+    ledger_pnl = _live_event_pnl(store, event)
+    missing = not has_any_live
+    stale = any(
+      "HOUR SETTLEMENT" in str(t.get("detail") or "")
+      or "SLOT SETTLEMENT" in str(t.get("detail") or "")
+      for t in live_exits
+    )
+    mismatched = abs(ledger_pnl - kalshi_pnl) > 0.50
+    ledger_tickers = {
+      str(t.get("market_ticker") or "")
+      for t in live_exits + live_enters + open_live
+    }
+    incomplete = any(ticker not in ledger_tickers for ticker in legs)
+    if not (missing or stale or mismatched or incomplete):
+      continue
+    out = rebuild_human_live_event_from_kalshi(store, kalshi=kalshi, event_ticker=event)
+    if out.get("ok"):
+      repaired.append(out)
+  return repaired
 
 
 def rebuild_human_live_event_from_kalshi(
@@ -201,16 +298,21 @@ def rebuild_human_live_event_from_kalshi(
   Replace live enter/exit rows for *event_ticker* with Kalshi-fill accounting.
 
   Paper rows are left alone. Used when the user traded (or sized up / sold) on Kalshi.
+  Unsold inventory on an unsettled hour stays open.
   """
   del asset  # reserved
+  from datetime import datetime, timezone
+
   event = canonical_hourly_event_ticker(str(event_ticker))
   fills = _fetch_event_fills(kalshi, event)
   legs = aggregate_yes_round_trips(fills, event_ticker=event)
   if not legs:
     return {"ok": False, "error": "no_kalshi_fills", "event_ticker": event}
 
+  settle_at = hourly_event_settle_utc(event)
+  settled = settle_at is not None and datetime.now(timezone.utc) >= settle_at
+
   removed = store.purge_mode_trades_for_event(event, mode="live")
-  # Close any leftover open live positions for this event.
   for pos in list(store.open_positions(event)):
     if str(pos.get("mode") or "").lower() == "live":
       store.close_position(str(pos["id"]))
@@ -220,12 +322,121 @@ def rebuild_human_live_event_from_kalshi(
   total_cost = 0.0
   for ticker, leg in sorted(legs.items()):
     label = label_for_ticker(ticker, kalshi)
-    pid = str(uuid.uuid4())
+    buy_ct = float(leg["buy_contracts"])
+    sell_ct = float(leg["sell_contracts"])
+    leftover = buy_ct - sell_ct
     entry_c = int(leg["entry_price_cents"] or 0)
-    exit_c = int(leg["exit_price_cents"] or 0)
-    contracts = int(leg["contracts"])
+    fees = float(leg["fees_usd"])
     cost = float(leg["cost_usd"])
+
+    # Still carrying size on an unsettled hour → keep open (no fake settle).
+    if leftover >= 0.05 and not settled:
+      open_cost = round(cost * (leftover / buy_ct), 2) if buy_ct else round(cost, 2)
+      open_ct = max(1, int(round(leftover)))
+      pid = str(uuid.uuid4())
+      store.open_position({
+        "id": pid,
+        "event_ticker": event,
+        "market_ticker": ticker,
+        "side": "yes",
+        "contracts": open_ct,
+        "entry_price_cents": entry_c,
+        "cost_usd": open_cost,
+        "signal": "KALSHI_SYNC",
+        "label": label,
+        "mode": "live",
+      })
+      store.log_trade({
+        "event_ticker": event,
+        "action": "enter",
+        "mode": "live",
+        "market_ticker": ticker,
+        "side": "yes",
+        "contracts": open_ct,
+        "price_cents": entry_c,
+        "entry_price_cents": entry_c,
+        "cost_usd": open_cost,
+        "signal": "KALSHI_SYNC",
+        "label": label,
+        "status": "filled",
+        "detail": f"Kalshi sync LIVE enter YES@{entry_c}¢ · {leftover:.2f} ct still open",
+        "position_id": pid,
+        "entry_context": {"source": "kalshi_fill_rebuild", "leg": leg, "open": True},
+      })
+      total_cost += open_cost
+      written.append({**leg, "label": label, "position_id": pid, "open": True})
+      # Also record sold portion if any
+      if sell_ct < 0.05:
+        continue
+      sold_cost = round(cost - open_cost, 2)
+      proceeds = float(leg["proceeds_usd"])
+      # Approximate closed fees as remainder
+      closed_fees = max(0.0, fees * (sell_ct / buy_ct)) if buy_ct else fees
+      pnl = round(proceeds - sold_cost - closed_fees, 2)
+      exit_c = int(leg["exit_price_cents"] or 0)
+      pid2 = str(uuid.uuid4())
+      contracts = max(1, int(round(sell_ct)))
+      store.open_position({
+        "id": pid2,
+        "event_ticker": event,
+        "market_ticker": ticker,
+        "side": "yes",
+        "contracts": contracts,
+        "entry_price_cents": entry_c,
+        "cost_usd": sold_cost,
+        "signal": "KALSHI_SYNC",
+        "label": label,
+        "mode": "live",
+      })
+      store.close_position(pid2)
+      store.log_trade({
+        "event_ticker": event,
+        "action": "enter",
+        "mode": "live",
+        "market_ticker": ticker,
+        "side": "yes",
+        "contracts": contracts,
+        "price_cents": entry_c,
+        "entry_price_cents": entry_c,
+        "cost_usd": sold_cost,
+        "signal": "KALSHI_SYNC",
+        "label": label,
+        "status": "filled",
+        "detail": f"Kalshi sync LIVE enter YES@{entry_c}¢ · {sell_ct:.2f} ct (sold portion)",
+        "position_id": pid2,
+      })
+      store.log_trade({
+        "event_ticker": event,
+        "action": "exit",
+        "mode": "live",
+        "market_ticker": ticker,
+        "side": "yes",
+        "contracts": contracts,
+        "price_cents": exit_c,
+        "entry_price_cents": entry_c,
+        "exit_price_cents": exit_c,
+        "cost_usd": sold_cost,
+        "pnl_usd": pnl,
+        "signal": "KALSHI_SYNC",
+        "label": label,
+        "status": "filled",
+        "detail": f"Kalshi sync LIVE exit @ {exit_c}¢ · P&L {pnl:+.2f} — sold on Kalshi",
+        "position_id": pid2,
+      })
+      total_pnl += pnl
+      total_cost += sold_cost
+      continue
+
+    # Flat or settled leftover → one closed round-trip (leftover after settle @ 0¢).
+    exit_c = int(leg["exit_price_cents"] or 0)
+    if leftover >= 0.05 and settled and sell_ct >= 0.05:
+      # Blended exit: sold proceeds / full buy size
+      exit_c = int(round(float(leg["proceeds_usd"]) / buy_ct * 100))
+    elif leftover >= 0.05 and settled and sell_ct < 0.05:
+      exit_c = 0
+    contracts = int(leg["contracts"])
     pnl = float(leg["pnl_usd"])
+    pid = str(uuid.uuid4())
     total_pnl += pnl
     total_cost += cost
     store.open_position({
@@ -261,6 +472,11 @@ def rebuild_human_live_event_from_kalshi(
       "position_id": pid,
       "entry_context": {"source": "kalshi_fill_rebuild", "leg": leg},
     })
+    note = (
+      "sold on Kalshi (not hour settlement)"
+      if sell_ct + 0.05 >= buy_ct
+      else "Kalshi fills + settlement on leftover"
+    )
     store.log_trade({
       "event_ticker": event,
       "action": "exit",
@@ -278,8 +494,7 @@ def rebuild_human_live_event_from_kalshi(
       "status": "filled",
       "detail": (
         f"Kalshi sync LIVE exit @ {exit_c}¢ · P&L {pnl:+.2f} "
-        f"({leg['return_pct']:+.0f}% after ${leg['fees_usd']:.2f} fees) "
-        f"— sold on Kalshi (not hour settlement)"
+        f"({leg['return_pct']:+.0f}% after ${leg['fees_usd']:.2f} fees) — {note}"
       ),
       "position_id": pid,
       "entry_context": {

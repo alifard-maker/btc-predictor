@@ -22,6 +22,7 @@ from src.trading.human_hourly_trade import (
 from src.trading.human_kalshi_sync import (
   repair_stale_human_live_settlements_from_kalshi,
   sync_open_human_live_exits_from_kalshi,
+  sync_recent_human_live_hours_from_kalshi,
 )
 from src.trading.live_mode_auth import live_bet_password, require_live_password
 
@@ -77,6 +78,7 @@ def _run_human_hour_settlement(
   try:
     sync_open_human_live_exits_from_kalshi(store, kalshi=kalshi, asset=asset)
     repair_stale_human_live_settlements_from_kalshi(store, kalshi=kalshi, asset=asset)
+    sync_recent_human_live_hours_from_kalshi(store, kalshi=kalshi, asset=asset)
   except Exception as e:
     log.warning("Human Kalshi live sync failed for %s: %s", asset, e)
   event_ticker = (tab.get("event") or {}).get("event_ticker") if tab and tab.get("ok") else None
