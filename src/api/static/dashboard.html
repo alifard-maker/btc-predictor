@@ -1179,7 +1179,10 @@
     let humanTradesLastLoadAt = { btc: 0, eth: 0, btc15: 0, eth15: 0 };
     const HUMAN_TRADES_MIN_POLL_MS = 12000;
     let humanMarksInFlight = { btc: false, eth: false, btc15: false, eth15: false };
-    const HUMAN_MARKS_POLL_MS = 2500;
+    const HUMAN_MARKS_POLL_MS = 1500;
+    const CONTRACT_ASK_POLL_MS = 5000;
+    let contractAskLastAt = 0;
+    let contractAskInFlight = false;
     let liveMonitorInFlight = false;
     let liveMonitorLastAt = 0;
     const LIVE_MONITOR_INTERVAL_MS = 3000;
