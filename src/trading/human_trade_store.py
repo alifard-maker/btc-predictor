@@ -197,6 +197,23 @@ class HumanTradeStore:
       )
     return dict(row)
 
+  def purge_mode_trades_for_event(self, event_ticker: str, *, mode: str = "live") -> int:
+    """Delete enter/exit rows for one event+mode (used when rebuilding from Kalshi)."""
+    from src.trading.hourly_event_time import canonical_hourly_event_ticker
+
+    event = canonical_hourly_event_ticker(str(event_ticker))
+    mode_l = str(mode).lower()
+    with self._connect() as conn:
+      cur = conn.execute(
+        """
+        DELETE FROM human_trades
+        WHERE event_ticker = ?
+          AND lower(mode) = ?
+        """,
+        (event, mode_l),
+      )
+      return int(cur.rowcount or 0)
+
   def update_trade_exit(
     self,
     trade_id: str,

@@ -19,6 +19,10 @@ from src.trading.human_hourly_trade import (
   preview_manual_entry,
   settle_expired_human_positions,
 )
+from src.trading.human_kalshi_sync import (
+  repair_stale_human_live_settlements_from_kalshi,
+  sync_open_human_live_exits_from_kalshi,
+)
 from src.trading.live_mode_auth import live_bet_password, require_live_password
 
 log = logging.getLogger(__name__)
@@ -68,6 +72,13 @@ def _run_human_hour_settlement(
   tab: dict[str, Any] | None,
   cfg: dict[str, Any],
 ) -> list[dict[str, Any]]:
+  kalshi = loop._kalshi_for(asset)
+  # Prefer Kalshi sell fills over invented hour settlement for live legs.
+  try:
+    sync_open_human_live_exits_from_kalshi(store, kalshi=kalshi, asset=asset)
+    repair_stale_human_live_settlements_from_kalshi(store, kalshi=kalshi, asset=asset)
+  except Exception as e:
+    log.warning("Human Kalshi live sync failed for %s: %s", asset, e)
   event_ticker = (tab.get("event") or {}).get("event_ticker") if tab and tab.get("ok") else None
   live = (tab or {}).get("live") or {}
   index_id = str(live.get("index_id") or live.get("settlement_reference") or ("ERTI" if asset == "eth" else "BRTI"))
@@ -76,7 +87,7 @@ def _run_human_hour_settlement(
     current_event_ticker=event_ticker,
     settle_price=_settle_price_from_tab(tab),
     cfg=cfg,
-    kalshi=loop._kalshi_for(asset),
+    kalshi=kalshi,
     index_id=index_id,
     asset=asset,
   )
